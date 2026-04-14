@@ -1,0 +1,88 @@
+name: Support Archive / Hardware Diagnostics
+description: Report unsupported hardware, onboarding failures, incomplete support, or hard-to-debug runtime issues using a generated Support Archive.
+title: "support: "
+labels:
+  - support
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when the integration asks for a **Support Archive**, or when you need help with unsupported / partially supported hardware.
+
+        Before submitting:
+
+        1. Open the integration in Home Assistant.
+        2. Run **Create Support Archive**.
+        3. Download the generated ZIP.
+        4. Submit this issue.
+        5. Attach the ZIP to the issue description or to the first comment after opening it.
+
+        The archive is the preferred diagnostic artifact. It is more useful than screenshots alone.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I generated a fresh Support Archive for this report.
+          required: true
+        - label: I will attach the ZIP file to this issue or the first follow-up comment.
+          required: true
+        - label: I searched existing issues first.
+          required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: 2026.4.1
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: EyeBond Local version
+      placeholder: 0.1.43
+    validations:
+      required: true
+  - type: input
+    id: archive_filename
+    attributes:
+      label: Support Archive filename
+      placeholder: abc123_20260411T153000000000Z.zip
+      description: The actual ZIP filename helps correlate the uploaded archive with the report.
+    validations:
+      required: true
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: What kind of support issue is this?
+      options:
+        - Unsupported hardware
+        - Partial support / missing entities
+        - Incorrect readings
+        - Onboarding / detection failure
+        - Controls unavailable or blocked
+        - Runtime disconnects / timeouts
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Inverter / collector model
+      placeholder: SMG 6200 + EyeBond Wi-Fi collector
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What is missing or broken?
+      description: Describe the visible symptom in Home Assistant.
+      placeholder: The device is detected, but PV and battery entities never appear.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context
+      description: Include anything the archive does not capture well, such as screenshots, a known-good vendor app behavior, or a short reproduction note.
+      placeholder: The vendor app shows values correctly; Home Assistant only gets collector metadata.

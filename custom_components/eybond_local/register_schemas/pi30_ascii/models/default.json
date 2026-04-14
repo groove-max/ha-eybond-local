@@ -1,0 +1,7 @@
+{
+  "extends": "../base.json",
+  "schema_key": "pi30_ascii_default",
+  "title": "PI30 / ASCII Default Register Schema",
+  "driver_key": "pi30",
+  "protocol_family": "pi30"
+}

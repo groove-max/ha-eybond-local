@@ -1,0 +1,415 @@
+{
+  "common": {
+    "actions": {
+      "create_support_package": "Создать архив поддержки",
+      "export_support_bundle": "Экспортировать пакет поддержки",
+      "reload_local_metadata": "Перезагрузить локальные метаданные",
+      "create_profile_draft": "Создать локальный черновик профиля",
+      "create_schema_draft": "Создать локальный черновик схемы регистров",
+      "advanced_metadata": "Расширенные инструменты метаданных"
+    },
+    "dynamic": {
+      "unknown": "Неизвестно",
+      "unknown_serial": "серийный номер неизвестен",
+      "unknown_path": "Неизвестный путь",
+      "not_available": "Недоступно",
+      "not_available_yet": "Пока недоступно",
+      "not_created_yet": "Пока не создано",
+      "not_applicable": "Не применяется",
+      "no_diagnostics_action": "Ни одно диагностическое действие ещё не выполнялось.",
+      "peer_label": "коллектор",
+      "peer_label_plural": "коллекторы",
+      "unconfirmed_inverter": "Неподтверждённый инвертор",
+      "confidence_high": "Высокая уверенность",
+      "confidence_medium": "Средняя уверенность",
+      "confidence_low": "Низкая уверенность",
+      "confidence_none": "Нет уверенности",
+      "status_ready": "Готово",
+      "status_review": "Проверить",
+      "status_already_added": "Уже добавлено",
+      "status_collector_only": "Только коллектор",
+      "status_collector_replied": "Коллектор ответил",
+      "status_unknown": "Неизвестно",
+      "welcome_autoscan_single": "Когда вы продолжите, {integration_name} автоматически начнёт сканирование через **{selected_interface}**.",
+      "welcome_autoscan_multi": "Когда вы продолжите, {integration_name} автоматически начнёт сканирование через **{selected_interface}**. При необходимости интерфейс можно изменить на экране результатов.",
+      "manual_probe_confirmed": "{peer_label_capitalized} и инвертор подтверждены с указанными ручными настройками.",
+      "manual_probe_unconfirmed_model": "Получен ответ от {peer_label}, но модель инвертора пока не подтверждена.",
+      "manual_probe_none": "Пока не подтверждён ни {peer_label}, ни инвертор.",
+      "manual_control_summary": "Если продолжить, будет создана ожидающая запись только для чтения. Сенсоры могут оставаться недоступными, пока {peer_label} не подключится и обнаружение не завершится.",
+      "manual_probe_next_actions": "Выберите **{probe_again_action_label}**, чтобы проверить ещё раз, **{edit_settings_action_label}**, чтобы изменить параметры, или **{create_pending_action_label}**, чтобы сейчас сохранить ожидающую запись только для чтения.",
+      "auto_interface_hint_single": "Home Assistant будет автоматически использовать **{selected_interface}**.",
+      "auto_interface_hint_multi": "Выберите, какой интерфейс Home Assistant должен использовать для обратного подключения {peer_label}.",
+      "default_home_assistant_interface": "интерфейс Home Assistant по умолчанию",
+      "welcome_connection_type_single": "Сначала выберите тип подключения. На следующем шаге можно будет запустить сканирование через **{selected_interface}** или сразу перейти к ручной настройке.",
+      "welcome_connection_type_multi": "Сначала выберите тип подключения. Затем мастер предложит выбрать сетевой интерфейс Home Assistant, и уже оттуда можно будет запустить сканирование или перейти к ручной настройке.",
+      "suffix_peer_connected": "{peer_label} подключён",
+      "suffix_peer_only": "только {peer_label}",
+      "result_label_unmatched": "{status_label}: {collector_ip} ({suffix})",
+      "result_label_matched": "{status_label}: {model_name} ({serial_number}) на {collector_ip} — {confidence_label}",
+      "scan_no_results_summary": "Не найдено доступных {peer_label_plural} или инверторов.",
+      "scan_no_results_next": "Используйте **{refresh_action_label}**, чтобы попробовать ещё раз, или **{manual_action_label}**, чтобы перейти к ручной настройке.",
+      "scan_all_added_summary": "Найдено **{detected_count}** кандидатов устройств, но все они уже настроены.",
+      "scan_all_added_next": "Используйте **{refresh_action_label}**, чтобы поискать снова, или **{manual_action_label}**, если вам нужен другой путь подключения.",
+      "scan_none_addable_summary": "Найдено **{detected_count}** кандидатов устройств, но ни один из них пока не готов к добавлению.",
+      "scan_none_addable_next": "Используйте **{refresh_action_label}**, чтобы попробовать ещё раз, или **{manual_action_label}**, чтобы вручную задать параметры подключения.",
+      "scan_ready_fallback": "обнаруженные инверторы",
+      "scan_ready_summary": "Найдено **{detected_count}** кандидатов устройств. **{available_count}** можно добавить сейчас, **{already_added_count}** уже настроено. Готовы сейчас: {ready_summary}.",
+      "scan_ready_next": "Выберите **{choose_action_label}**, чтобы указать, какой инвертор добавить.",
+      "scan_progress_stage_preparing": "Подготовка сканирования",
+      "scan_progress_stage_discovering": "Сканирование локальной подсети",
+      "scan_progress_stage_analyzing": "Анализ ответов коллекторов",
+      "scan_progress_stage_finalizing": "Подготовка списка обнаруженных устройств",
+      "scan_progress_detail": "Прошло {elapsed_seconds} с, осталось примерно {remaining_seconds} с.",
+      "scan_progress_hint": "Обычно сканирование занимает 5-15 секунд. Этот индикатор основан на текущей фазе и общем тайм-ауте.",
+      "choose_summary": "Прямо сейчас можно добавить **{available_count}** найденных кандидатов устройств. Уже настроенные устройства исключены.",
+      "scan_line_matched": "{index}. **{status_label}** — {model_name} · серийный номер {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
+      "scan_line_peer_connected": "{peer_label} подключён",
+      "scan_line_peer_replied": "{peer_label} ответил, ожидается обратное подключение",
+      "scan_line_already_added": "*(уже добавлено как \"{entry_title}\")*",
+      "download_support_archive": "[Скачать архив поддержки]({url})",
+      "download_file": "[Скачать файл]({url})",
+      "built_in_metadata": "Встроенные метаданные ({path})",
+      "local_override": "Локальное переопределение ({path})",
+      "external_metadata": "Внешние метаданные ({path})",
+      "control_full": "Все элементы управления включены.",
+      "control_read_only": "Только мониторинг — сущности управления не публикуются.",
+      "control_auto": "Проверенные элементы управления включаются автоматически.",
+      "control_waiting": "Только мониторинг, пока не будет подтверждено обнаружение с высокой уверенностью.",
+      "plan_template": "Шаг 1: {step_1} Шаг 2: {step_2} Шаг 3: {step_3}",
+      "profile_activation_hint": "Оставьте предложенное имя файла без изменений, если хотите, чтобы локальный черновик переопределил встроенный профиль после перезагрузки.",
+      "schema_activation_hint": "Оставьте предложенное имя файла без изменений, если хотите, чтобы локальный черновик переопределил встроенную схему регистров после перезагрузки.",
+      "return_to_diagnostics": "Вернитесь к диагностике, чтобы выполнить другое действие."
+    },
+    "support_workflow": {
+      "experimental": {
+        "level_label": "Экспериментальные локальные метаданные",
+        "summary": "Для этой записи активны локальные экспериментальные метаданные.",
+        "next_action": "Перезагрузите и проверьте изменения локальных метаданных. Если поддержка всё ещё неполная, создайте архив поддержки и отправьте ZIP-файл разработчику.",
+        "step_1": "Перезагрузите локальные метаданные.",
+        "step_2": "Убедитесь, что локальное переопределение активно, и снова проверьте инвертор.",
+        "step_3": "Если поддержка всё ещё неполная, создайте архив поддержки и отправьте ZIP-файл разработчику.",
+        "advanced_hint": "Здесь локальные экспериментальные метаданные уже активны. Используйте расширенные инструменты для доработки локального переопределения, а не как первый шаг диагностики."
+      },
+      "unknown": {
+        "level_label": "Неизвестная поддержка",
+        "summary": "Сейчас не найден ни один поддерживаемый драйвер инвертора.",
+        "next_action": "Создайте архив поддержки и отправьте ZIP-файл разработчику. Он будет содержать данные коллектора и сырой захват регистров для анализа.",
+        "step_1": "Создайте архив поддержки.",
+        "step_2": "Отправьте ZIP-файл разработчику.",
+        "step_3": "Дождитесь встроенной поддержки, прежде чем работать с локальными экспериментальными метаданными.",
+        "advanced_hint": "Не начинайте здесь с локальных черновиков. Первая цель — собрать данные, которые разработчик сможет проанализировать."
+      },
+      "pending": {
+        "level_label": "Ожидает подтверждения",
+        "summary": "Базовый драйвер известен, но инвертор пока не подтверждён.",
+        "next_action": "Создайте архив поддержки и отправьте ZIP-файл разработчику, прежде чем редактировать локальные черновики.",
+        "step_1": "Создайте архив поддержки.",
+        "step_2": "Отправьте ZIP-файл разработчику.",
+        "step_3": "Переходите к локальным черновикам только после того, как разработчик просмотрит собранные данные.",
+        "advanced_hint": "Рассматривайте локальные черновики здесь как инструмент второго этапа. Сначала подтвердите соединение или отправьте подтверждающие данные."
+      },
+      "builtin": {
+        "level_label": "Встроенная поддержка",
+        "summary": "Для этого инвертора активна встроенная поддержка.",
+        "next_action": "Используйте Создать архив поддержки только если хотите сообщить об ошибке, собрать дополнительные данные или помочь расширить поддержку для родственной модели.",
+        "step_1": "Продолжайте пользоваться встроенной поддержкой в обычном режиме.",
+        "step_2": "Создавайте архив поддержки только если нужно сообщить об ошибке или помочь расширить поддержку.",
+        "step_3": "Отправьте ZIP-файл разработчику, если вас об этом попросят.",
+        "advanced_hint": "В этом состоянии расширенные инструменты метаданных обычно не нужны. Используйте их только для осознанной экспериментальной работы."
+      },
+      "partial": {
+        "level_label": "Частичная поддержка",
+        "summary": "Инвертор доступен, но встроенная поддержка подтверждена только частично.",
+        "next_action": "Создайте архив поддержки и отправьте ZIP-файл разработчику, прежде чем создавать локальные экспериментальные черновики.",
+        "step_1": "Создайте архив поддержки.",
+        "step_2": "Отправьте ZIP-файл разработчику.",
+        "step_3": "Используйте локальные экспериментальные метаданные только если разработчик попросит об этом.",
+        "advanced_hint": "Пока не начинайте редактировать черновики. Сначала разработчик должен посмотреть архив поддержки."
+      }
+    },
+    "diagnostics_result": {
+      "support_archive_title": "Архив поддержки",
+      "support_archive_created_title": "Архив поддержки создан",
+      "coordinator_not_loaded": "Координатор не загружен.",
+      "ensure_entry_loaded": "Убедитесь, что запись загружена и инвертор обнаружен, затем попробуйте снова.",
+      "support_archive_created_status": "В каталог конфигурации Home Assistant записан объединённый архив поддержки с runtime-данными, сырыми данными захвата и анонимизированным replay-fixture.",
+      "support_archive_created_next": "Отправьте этот ZIP-файл разработчику. Создавайте локальные экспериментальные черновики только после проверки архива.",
+      "reload_local_metadata_title": "Перезагрузить локальные метаданные",
+      "wait_for_entry_loaded": "Дождитесь полной загрузки записи, затем попробуйте снова.",
+      "reload_local_metadata_triggered_title": "Перезагрузка локальных метаданных запущена",
+      "reload_local_metadata_triggered_status": "Кэши локальных метаданных очищены, и отправлен запрос на перезагрузку записи.",
+      "reload_local_metadata_triggered_next": "Обновите страницу устройства после повторного подключения записи, чтобы проверить, применились ли локальные переопределения.",
+      "support_bundle_title": "Пакет поддержки",
+      "support_bundle_exported_title": "Пакет поддержки экспортирован",
+      "support_bundle_exported_status": "Пакет поддержки записан в каталог конфигурации Home Assistant.",
+      "support_bundle_exported_next": "Используйте JSON-пакет для диагностики или как исходный материал для нового локального экспериментального черновика.",
+      "profile_draft_title": "Черновик профиля",
+      "profile_draft_unavailable_status": "Для этой записи недоступен обнаруженный профиль драйвера.",
+      "profile_draft_unavailable_next": "Запустите обнаружение ещё раз или задайте драйвер вручную перед созданием локального черновика.",
+      "profile_draft_created_title": "Локальный черновик профиля создан",
+      "profile_draft_created_status_active": "Создан локальный экспериментальный черновик профиля, который переопределит встроенный профиль после перезагрузки.",
+      "profile_draft_created_status_inactive": "Создан локальный экспериментальный черновик профиля, но он не переопределит встроенный профиль автоматически.",
+      "draft_reload_next": "Отредактируйте черновик, затем перезагрузите локальные метаданные, чтобы активировать его.",
+      "draft_rename_profile_next": "Переименуйте черновик в {name}, если хотите, чтобы он автоматически переопределил встроенный профиль, затем перезагрузите локальные метаданные.",
+      "register_schema_draft_title": "Черновик схемы регистров",
+      "register_schema_unavailable_status": "Для этой записи недоступна обнаруженная схема регистров.",
+      "register_schema_unavailable_next": "Запустите обнаружение ещё раз или задайте драйвер вручную перед созданием локального черновика.",
+      "register_schema_draft_created_title": "Локальный черновик схемы регистров создан",
+      "register_schema_draft_created_status_active": "Создан локальный экспериментальный черновик схемы регистров, который переопределит встроенную схему после перезагрузки.",
+      "register_schema_draft_created_status_inactive": "Создан локальный экспериментальный черновик схемы регистров, но он не переопределит встроенную схему автоматически.",
+      "draft_rename_schema_next": "Переименуйте черновик в {name}, если хотите, чтобы он автоматически переопределил встроенную схему, затем перезагрузите локальные метаданные."
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Добро пожаловать",
+        "description": "EyeBond Local поможет вам добавить инвертор с минимальной ручной настройкой.\n\n{welcome_hint}",
+        "data": {
+          "connection_type": "Тип подключения"
+        },
+        "data_description": {
+          "connection_type": "Выберите, каким способом Home Assistant должен подключаться к инвертору."
+        },
+        "menu_options": {
+          "auto": "Продолжить"
+        }
+      },
+      "auto": {
+        "title": "Выберите интерфейс сканирования",
+        "description": "{interface_hint}\n\nВыберите, запускать ли автопоиск сейчас или сразу перейти к ручной настройке.",
+        "data": {
+          "server_ip": "Интерфейс Home Assistant",
+          "setup_mode": "Следующий шаг"
+        },
+        "data_description": {
+          "server_ip": "Сетевой интерфейс, к которому коллектор подключится в ответ. Выберите тот, что находится в той же подсети, что и ваш инвертор.",
+          "setup_mode": "Сразу запустить автопоиск или пропустить его и открыть ручную настройку."
+        },
+        "setup_mode_options": {
+          "auto": "Запустить автопоиск",
+          "manual": "Пропустить и перейти к ручной настройке"
+        }
+      },
+      "scanning": {
+        "title": "Сканирование сети",
+        "description": "Поиск коллекторов EyeBond и инверторов в локальной сети через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
+      },
+      "scan_results": {
+        "title": "Обнаруженные устройства",
+        "description": "**Интерфейс сканирования:** {selected_scan_interface}\n\n{scan_summary}\n\n{candidate_list}\n\n{scan_next_hint}",
+        "menu_options": {
+          "choose": "Добавить обнаруженное устройство",
+          "change_scan_interface": "Изменить интерфейс сканирования",
+          "refresh_scan": "Обновить результаты сканирования",
+          "manual": "Ручная настройка"
+        }
+      },
+      "change_scan_interface": {
+        "title": "Изменить интерфейс сканирования",
+        "description": "{interface_hint}\n\nПосле этого снова запустите сканирование с выбранным интерфейсом Home Assistant.",
+        "data": {
+          "server_ip": "Интерфейс Home Assistant"
+        },
+        "data_description": {
+          "server_ip": "Выберите другой сетевой интерфейс для сканирования."
+        }
+      },
+      "choose": {
+        "title": "Выберите устройство для добавления",
+        "description": "{choose_summary}\n\nСначала показываются устройства, готовые к добавлению.",
+        "data": {
+          "result_key": "Обнаруженное устройство"
+        },
+        "data_description": {
+          "result_key": "Выберите инвертор, который хотите добавить в Home Assistant."
+        }
+      },
+      "confirm": {
+        "title": "Подтвердите обнаружение",
+        "description": "| Деталь | Значение |\n|---|---|\n| Коллектор | {collector_ip} ({collector_pn}) |\n| Инвертор | {model_name} |\n| Серийный номер | {serial_number} |\n| Драйвер | {driver_key} |\n| Обнаружение | {confidence} |\n\n{control_summary}",
+        "data": {
+          "poll_interval": "Интервал опроса"
+        },
+        "data_description": {
+          "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
+        }
+      },
+      "manual": {
+        "title": "Ручная настройка",
+        "description": "Используйте этот режим, если автообнаружение не может найти устройство, если коллектор находится удалённо или если обратное подключение должно идти через VPN / NAT.\n\nКогда вы продолжите, интеграция попробует выполнить probe с этими параметрами перед созданием записи. Если probe не подтвердит устройство, на следующем экране можно будет изменить значения и повторить попытку.",
+        "data": {
+          "server_ip": "Локальный IP-адрес слушателя",
+          "collector_ip": "IP-адрес коллектора",
+          "driver_hint": "Драйвер"
+        },
+        "data_description": {
+          "server_ip": "Локальный IPv4-адрес Home Assistant, к которому привязывается TCP-слушатель EyeBond. Для обычной локальной сети выбирайте интерфейс в той же подсети, что и коллектор.",
+          "collector_ip": "IPv4-адрес коллектора для прямой проверки. Оставьте пустым для локального широковещательного обнаружения. Для remote или NAT сценариев укажите публичный или проброшенный IPv4-адрес, ведущий к коллектору.",
+          "driver_hint": "Автообнаружение работает для большинства инверторов. Изменяйте только если это отдельно рекомендовано."
+        },
+        "sections": {
+          "advanced_connection": {
+            "name": "Расширенные параметры подключения",
+            "description": "Порты, обнаружение, heartbeat и необязательные параметры обратного вызова для remote сценариев. Для обычной локальной сети оставляйте advertised поля пустыми.",
+            "data": {
+              "tcp_port": "Локальный TCP-порт",
+              "advertised_server_ip": "Advertised IP обратного вызова",
+              "advertised_tcp_port": "Advertised TCP-порт обратного вызова",
+              "udp_port": "UDP-порт обнаружения",
+              "discovery_target": "Целевой IP-адрес для обнаружения",
+              "discovery_interval": "Интервал обнаружения",
+              "heartbeat_interval": "Интервал heartbeat"
+            },
+            "data_description": {
+              "tcp_port": "Локальный TCP-порт слушателя на Home Assistant. Значение по умолчанию: 8899.",
+              "advertised_server_ip": "IPv4-адрес, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный IP-адрес слушателя выше. Меняйте только для VPN, NAT или публичного маршрута обратного вызова.",
+              "advertised_tcp_port": "TCP-порт, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный TCP-порт выше. Меняйте только если внешний проброшенный порт отличается от локального.",
+              "udp_port": "UDP-порт для discovery redirect пакетов коллектора. Значение по умолчанию: 58899.",
+              "discovery_target": "IPv4-адрес, который получает discovery пакеты. Для локальной сети используйте broadcast подсети, для remote/NAT сценариев - конкретный IPv4-адрес для unicast.",
+              "discovery_interval": "Как часто отправлять discovery redirect пакеты, пока коллектор ещё не подключился.",
+              "heartbeat_interval": "Как часто отправлять keep-alive пакеты после подключения коллектора."
+            }
+          }
+        }
+      },
+      "manual_confirm": {
+        "title": "Результат ручного probe",
+        "description": "{probe_summary}\n\n| Деталь | Значение |\n|---|---|\n| Коллектор | {collector_ip} ({collector_pn}) |\n| Инвертор | {model_name} |\n| Серийный номер | {serial_number} |\n\n{control_summary}\n\n{next_actions_hint}",
+        "menu_options": {
+          "manual_probe_again": "Проверить ещё раз",
+          "manual_edit_settings": "Изменить параметры",
+          "manual_create_pending": "Создать ожидающую запись"
+        }
+      }
+    },
+    "progress": {
+      "scanning_network": "Сканирование локальной сети на наличие коллекторов EyeBond…"
+    },
+    "selector": {
+      "control_mode": {
+        "options": {
+          "auto": "Авто",
+          "read_only": "Только чтение",
+          "full": "Полный контроль"
+        }
+      }
+    },
+    "error": {
+      "invalid_ip": "Некорректный IPv4-адрес.",
+      "invalid_port": "Некорректный TCP-порт.",
+      "cannot_autodetect": "Автообнаружение не нашло ни одного устройства. Проверьте сетевой интерфейс и попробуйте снова или используйте ручную настройку.",
+      "invalid_selection": "Выбранный результат обнаружения больше недоступен.",
+      "already_added_candidate": "Это обнаруженное устройство уже настроено и не может быть добавлено повторно."
+    },
+    "abort": {
+      "already_configured": "Этот коллектор или инвертор уже настроен."
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_ip": "Некорректный IPv4-адрес.",
+      "invalid_port": "Некорректный TCP-порт."
+    },
+    "step": {
+      "init": {
+        "title": "Параметры EyeBond Local",
+        "description": "Выберите, чем именно вы хотите управлять для этой записи.",
+        "menu_options": {
+          "runtime": "Параметры работы и подключения",
+          "diagnostics": "Диагностика и экспериментальные метаданные"
+        }
+      },
+      "runtime": {
+        "title": "Параметры работы",
+        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}",
+        "data": {
+          "poll_interval": "Интервал опроса",
+          "control_mode": "Режим управления"
+        },
+        "data_description": {
+          "poll_interval": "Как часто считывать значения датчиков с инвертора.",
+          "control_mode": "Авто включает проверенные элементы управления, когда уверенность обнаружения высока. Только чтение отключает все управление. Полный режим включает всё."
+        },
+        "sections": {
+          "connection": {
+            "name": "Параметры подключения",
+            "description": "Настройки сетевого транспорта, включая необязательные advertised параметры обратного вызова. Для обычной локальной сети оставляйте advertised поля пустыми.",
+            "data": {
+              "server_ip": "Локальный IP-адрес слушателя",
+              "collector_ip": "IP-адрес коллектора",
+              "tcp_port": "Локальный TCP-порт",
+              "advertised_server_ip": "Advertised IP обратного вызова",
+              "advertised_tcp_port": "Advertised TCP-порт обратного вызова",
+              "udp_port": "UDP-порт обнаружения",
+              "discovery_target": "Целевой IP-адрес для обнаружения",
+              "discovery_interval": "Интервал обнаружения",
+              "heartbeat_interval": "Интервал heartbeat",
+              "driver_hint": "Драйвер"
+            },
+            "data_description": {
+              "server_ip": "Локальный IPv4-адрес Home Assistant, к которому привязывается TCP-слушатель EyeBond.",
+              "collector_ip": "Оставьте пустым для локального широковещательного обнаружения. Для remote или NAT сценариев укажите публичный или проброшенный IPv4-адрес, ведущий к коллектору.",
+              "tcp_port": "Локальный TCP-порт слушателя на Home Assistant. Значение по умолчанию: 8899.",
+              "advertised_server_ip": "IPv4-адрес, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный IP-адрес слушателя выше.",
+              "advertised_tcp_port": "TCP-порт, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный TCP-порт выше.",
+              "udp_port": "UDP-порт для discovery redirect пакетов коллектора. Значение по умолчанию: 58899.",
+              "discovery_target": "IPv4-адрес, который получает discovery пакеты. Для локальной сети используйте broadcast подсети, для remote/NAT сценариев - конкретный IPv4-адрес для unicast.",
+              "discovery_interval": "Как часто отправлять discovery redirect пакеты, пока коллектор ещё не подключился.",
+              "heartbeat_interval": "Интервал keep-alive после подключения коллектора.",
+              "driver_hint": "Автообнаружение работает для большинства инверторов."
+            }
+          }
+        }
+      },
+      "diagnostics": {
+        "title": "Диагностика и экспериментальные метаданные",
+        "description": "**Статус поддержки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Основное действие:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Рекомендуемый следующий шаг:** {support_workflow_next_action}\n\n---\n**Устройство:** {model_name} — серийный номер {serial_number}\n**Последний архив поддержки:** {support_package_path}\n**Скачать:** {support_package_download_markdown}\n**Последний пакет поддержки:** {support_bundle_path}",
+        "menu_options": {
+          "create_support_package": "Создать архив поддержки",
+          "export_support_bundle": "Экспортировать пакет поддержки",
+          "advanced_metadata": "Расширенные инструменты метаданных"
+        }
+      },
+      "advanced_metadata": {
+        "title": "Расширенные инструменты метаданных",
+        "description": "**Статус поддержки:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Драйвер:** {recommended_driver} (`{recommended_driver_key}`)\n\n| Метаданные | Встроенные | Источник | Переопределение |\n|---|---|---|---|\n| Профиль | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Схема | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Предлагаемые имена черновиков:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Последний черновик профиля:** {local_profile_draft_path}\n**Последний черновик схемы:** {local_schema_draft_path}\n**Статус:** {local_metadata_status}",
+        "menu_options": {
+          "export_support_bundle": "Экспортировать пакет поддержки",
+          "create_profile_draft": "Создать локальный черновик профиля",
+          "create_schema_draft": "Создать локальный черновик схемы регистров",
+          "reload_local_metadata": "Перезагрузить локальные метаданные",
+          "create_support_package": "Создать архив поддержки"
+        }
+      },
+      "create_profile_draft": {
+        "title": "Создать локальный черновик профиля",
+        "description": "Локальный экспериментальный профиль будет создан в `/config/eybond_local/profiles/`.\n\n| Деталь | Значение |\n|---|---|\n| Исходный профиль | {source_profile} |\n| Предлагаемое имя | {suggested_output} |\n| Текущее переопределение | {current_override} |\n\n{activation_hint}",
+        "data": {
+          "output_profile": "Имя выходного файла профиля",
+          "overwrite": "Перезаписать существующий файл"
+        },
+        "data_description": {
+          "output_profile": "Оставьте без изменений, чтобы автоматически переопределить встроенный профиль после перезагрузки.",
+          "overwrite": "Заменить файл, если он уже существует."
+        }
+      },
+      "create_schema_draft": {
+        "title": "Создать локальный черновик схемы регистров",
+        "description": "Локальная экспериментальная схема регистров будет создана в `/config/eybond_local/register_schemas/`.\n\n| Деталь | Значение |\n|---|---|\n| Исходная схема | {source_schema} |\n| Предлагаемое имя | {suggested_output} |\n| Текущее переопределение | {current_override} |\n\n{activation_hint}",
+        "data": {
+          "output_schema": "Путь к выходному файлу схемы",
+          "overwrite": "Перезаписать существующий файл"
+        },
+        "data_description": {
+          "output_schema": "Оставьте без изменений, чтобы автоматически переопределить встроенную схему после перезагрузки.",
+          "overwrite": "Заменить файл, если он уже существует."
+        }
+      },
+      "diagnostics_result": {
+        "title": "Результат диагностики",
+        "description": "**{action_title}**\n\n{status}\n\n**Путь:** `{path}`\n**Скачать:** {download_markdown}\n\n**Следующий шаг:** {next_step}"
+      }
+    }
+  }
+}

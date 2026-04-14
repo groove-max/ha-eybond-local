@@ -1,0 +1,7 @@
+{
+  "extends": "../base.json",
+  "schema_key": "modbus_smg_6200",
+  "title": "SMG 6200 Register Schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg"
+}

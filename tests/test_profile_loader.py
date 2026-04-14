@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+from custom_components.eybond_local.metadata import profile_loader
+
+
+class ProfileLoaderTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        profile_loader.set_external_profile_roots(())
+        profile_loader.load_driver_profile.cache_clear()
+
+    def test_loads_smg_profile_metadata(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+
+        self.assertEqual(profile.key, "smg_modbus")
+        self.assertEqual(profile.title, "SMG / Modbus")
+        self.assertEqual(profile.driver_key, "modbus_smg")
+        self.assertEqual(profile.protocol_family, "modbus_smg")
+        self.assertEqual(profile.source_name, "smg_modbus.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/smg_modbus.json"))
+        self.assertGreaterEqual(len(profile.groups), 4)
+        self.assertEqual(len(profile.capabilities), 33)
+        self.assertEqual(len(profile.presets), 2)
+        self.assertEqual(
+            profile.get_capability("charge_source_priority").enum_value_map[3],
+            "PV Only",
+        )
+        self.assertTrue(profile.get_capability("buzzer_mode").enabled_default)
+        self.assertEqual(profile.get_capability("low_dc_protection_soc_grid_mode").register, 341)
+        self.assertEqual(profile.get_capability("solar_battery_utility_return_soc_threshold").register, 342)
+        self.assertEqual(profile.get_capability("low_dc_cutoff_soc").register, 343)
+        self.assertEqual(
+            profile.get_capability("power_saving_mode").resolved_support_tier,
+            "blocked",
+        )
+        self.assertIn(
+            "exception_code:7",
+            profile.get_capability("power_saving_mode").support_notes,
+        )
+
+    def test_loads_pi30_profile_metadata(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii.json")
+
+        self.assertEqual(profile.key, "pi30_ascii")
+        self.assertEqual(profile.title, "PI30 / ASCII")
+        self.assertEqual(profile.driver_key, "pi30")
+        self.assertEqual(profile.protocol_family, "pi30")
+        self.assertEqual(profile.source_name, "pi30_ascii.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii.json"))
+        self.assertEqual(len(profile.groups), 3)
+        self.assertEqual(len(profile.capabilities), 18)
+        self.assertEqual(len(profile.presets), 0)
+        self.assertEqual(
+            profile.get_capability("output_source_priority").enum_value_map[2],
+            "SBU first",
+        )
+        self.assertEqual(
+            profile.get_capability("battery_float_voltage").native_step,
+            0.1,
+        )
+
+    def test_smg_max_ac_charge_current_remains_editable_under_pv_only_policy(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+        capability = profile.get_capability("max_ac_charge_current")
+        runtime_state = capability.runtime_state(
+            {
+                "battery_connected": True,
+                "charging_inactive": True,
+                "utility_charging_allowed": False,
+                "charge_source_priority": "PV Only",
+            }
+        )
+
+        self.assertTrue(runtime_state.editable)
+        self.assertNotIn(
+            "Utility charging is currently disabled by Charge Source Priority.",
+            runtime_state.reasons,
+        )
+
+    def test_smg_equalization_controls_are_not_soft_blocked_by_charge_state(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+
+        equalization_mode = profile.get_capability("battery_equalization_mode")
+        equalization_voltage = profile.get_capability("battery_equalization_voltage")
+
+        runtime_values = {
+            "battery_connected": True,
+            "battery_equalization_enabled": False,
+            "charging_active": True,
+            "charging_inactive": False,
+        }
+
+        self.assertTrue(equalization_mode.runtime_state(runtime_values).editable)
+
+        voltage_state = equalization_voltage.runtime_state(runtime_values)
+        self.assertTrue(voltage_state.visible)
+        self.assertTrue(voltage_state.editable)
+
+    def test_loads_pi30_default_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii/models/default.json")
+
+        self.assertEqual(profile.key, "pi30_ascii_default")
+        self.assertEqual(profile.title, "PI30 / ASCII Default Profile")
+        self.assertEqual(profile.driver_key, "pi30")
+        self.assertEqual(profile.protocol_family, "pi30")
+        self.assertEqual(profile.source_name, "pi30_ascii/models/default.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/default.json"))
+        self.assertEqual(len(profile.groups), 3)
+        self.assertEqual(len(profile.capabilities), 18)
+
+    def test_loads_pi30_vmii_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii/models/vmii_nxpw5kw.json")
+
+        self.assertEqual(profile.key, "pi30_ascii_vmii_nxpw5kw")
+        self.assertEqual(profile.title, "PI30 / ASCII VMII-NXPW5KW Profile")
+        self.assertEqual(profile.driver_key, "pi30")
+        self.assertEqual(profile.protocol_family, "pi30")
+        self.assertEqual(profile.source_name, "pi30_ascii/models/vmii_nxpw5kw.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/vmii_nxpw5kw.json"))
+        self.assertEqual(len(profile.groups), 3)
+        self.assertEqual(len(profile.capabilities), 18)
+
+    def test_loads_pi30_pi41_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii/models/pi41.json")
+
+        self.assertEqual(profile.key, "pi30_ascii_pi41")
+        self.assertEqual(profile.title, "PI41 / ASCII Profile")
+        self.assertEqual(profile.driver_key, "pi30")
+        self.assertEqual(profile.protocol_family, "pi30")
+        self.assertEqual(profile.source_name, "pi30_ascii/models/pi41.json")
+        self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/pi41.json"))
+        self.assertEqual(len(profile.capabilities), 18)
+
+    def test_loads_pi30_max_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii/models/pi30_max.json")
+
+        self.assertEqual(profile.key, "pi30_ascii_pi30_max")
+        self.assertEqual(profile.title, "PI30 MAX / ASCII Profile")
+        self.assertEqual(profile.source_name, "pi30_ascii/models/pi30_max.json")
+        self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/pi30_max.json"))
+        self.assertEqual(len(profile.capabilities), 18)
+
+    def test_loads_pi30_pip_gk_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii/models/pi30_pip_gk.json")
+
+        self.assertEqual(profile.key, "pi30_ascii_pi30_pip_gk")
+        self.assertEqual(profile.title, "PI30 PIP-GK / ASCII Profile")
+        self.assertEqual(profile.source_name, "pi30_ascii/models/pi30_pip_gk.json")
+        self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/pi30_pip_gk.json"))
+        self.assertEqual(len(profile.capabilities), 18)
+
+    def test_rejects_duplicate_capability_keys(self) -> None:
+        raw = {
+            "profile_key": "bad_profile",
+            "title": "Bad Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "duplicate_capability",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "first",
+                    "group": "system",
+                },
+                {
+                    "key": "duplicate_capability",
+                    "register": 101,
+                    "value_kind": "bool",
+                    "note": "second",
+                    "group": "system",
+                },
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "bad_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"profile:bad_profile:duplicate_capability:duplicate_capability",
+                ):
+                    profile_loader.load_driver_profile("bad_profile.json")
+
+    def test_rejects_unknown_support_tier(self) -> None:
+        raw = {
+            "profile_key": "bad_support_profile",
+            "title": "Bad Support Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "invalid_support",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "invalid support tier",
+                    "group": "system",
+                    "support_tier": "mystery",
+                }
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "bad_support_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"profile:bad_support_profile:unsupported_support_tier:invalid_support:mystery",
+                ):
+                    profile_loader.load_driver_profile("bad_support_profile.json")
+
+    def test_prefers_external_profile_root_when_configured(self) -> None:
+        raw = {
+            "profile_key": "smg_modbus",
+            "title": "External SMG / Modbus",
+            "driver_key": "modbus_smg",
+            "protocol_family": "modbus_smg",
+            "groups": [],
+            "capabilities": [],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "smg_modbus.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            profile_loader.set_external_profile_roots((Path(temp_dir),))
+
+            profile = profile_loader.load_driver_profile("smg_modbus.json")
+
+        self.assertEqual(profile.title, "External SMG / Modbus")
+        self.assertEqual(profile.source_scope, "external")
+        self.assertEqual(profile.source_path, str(profile_path.resolve()))
+
+
+if __name__ == "__main__":
+    unittest.main()

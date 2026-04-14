@@ -1,0 +1,55 @@
+create_local_profile_draft:
+  name: Create local profile draft
+  description: Copy one built-in EyeBond Local profile into /config/eybond_local/profiles/ for experimental editing.
+  fields:
+    source_profile:
+      name: Source profile
+      description: Built-in profile file name such as smg_modbus.json.
+      required: true
+      example: smg_modbus.json
+      selector:
+        text:
+    output_profile:
+      name: Output profile
+      description: Optional local output file name. Defaults to the source file name.
+      required: false
+      example: smg_modbus.json
+      selector:
+        text:
+    overwrite:
+      name: Overwrite existing
+      description: Replace the local draft if it already exists.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+create_local_schema_draft:
+  name: Create local register schema draft
+  description: Create a local schema overlay in /config/eybond_local/register_schemas/ that extends a built-in EyeBond Local schema.
+  fields:
+    source_schema:
+      name: Source schema
+      description: Built-in schema path such as modbus_smg/models/smg_6200.json.
+      required: true
+      example: modbus_smg/models/smg_6200.json
+      selector:
+        text:
+    output_schema:
+      name: Output schema
+      description: Optional local output schema path. Defaults to the source schema path.
+      required: false
+      example: modbus_smg/models/smg_6200.json
+      selector:
+        text:
+    overwrite:
+      name: Overwrite existing
+      description: Replace the local draft if it already exists.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+reload_local_metadata:
+  name: Reload local metadata
+  description: Clear EyeBond Local metadata caches and reload all configured EyeBond Local entries.

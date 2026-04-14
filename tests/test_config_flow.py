@@ -1,0 +1,1009 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+import sys
+import types
+import unittest
+from unittest.mock import patch, sentinel
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+def _install_homeassistant_stubs() -> None:
+    if "homeassistant" in sys.modules:
+        return
+
+    voluptuous = types.ModuleType("voluptuous")
+    ha = types.ModuleType("homeassistant")
+    config_entries = types.ModuleType("homeassistant.config_entries")
+    core = types.ModuleType("homeassistant.core")
+    data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
+    helpers = types.ModuleType("homeassistant.helpers")
+    selector = types.ModuleType("homeassistant.helpers.selector")
+
+    class ConfigFlow:
+        def __init_subclass__(cls, **kwargs):
+            return super().__init_subclass__()
+
+        def async_show_menu(self, *, step_id, menu_options, description_placeholders=None):
+            return {
+                "type": "menu",
+                "step_id": step_id,
+                "menu_options": list(menu_options),
+                "description_placeholders": description_placeholders or {},
+            }
+
+        def async_show_form(self, *, step_id, data_schema=None, errors=None, description_placeholders=None):
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": data_schema,
+                "errors": errors or {},
+                "description_placeholders": description_placeholders or {},
+            }
+
+        def async_show_progress(self, *, step_id, progress_action, progress_task, description_placeholders=None):
+            return {
+                "type": "progress",
+                "step_id": step_id,
+                "progress_action": progress_action,
+                "progress_task": progress_task,
+                "description_placeholders": description_placeholders or {},
+            }
+
+        def async_show_progress_done(self, *, next_step_id):
+            return {
+                "type": "progress_done",
+                "next_step_id": next_step_id,
+            }
+
+        def async_update_progress(self, progress):
+            self._test_progress = progress
+
+        async def async_set_unique_id(self, unique_id):
+            self._test_unique_id = unique_id
+
+        def _abort_if_unique_id_configured(self):
+            return None
+
+        def async_create_entry(self, *, title, data, options=None):
+            result = {"type": "create_entry", "title": title, "data": data}
+            if options is not None:
+                result["options"] = options
+            return result
+
+        def async_abort(self, *, reason):
+            return {"type": "abort", "reason": reason}
+
+    class OptionsFlow:
+        def async_show_menu(self, *, step_id, menu_options, description_placeholders=None):
+            return {
+                "type": "menu",
+                "step_id": step_id,
+                "menu_options": list(menu_options),
+                "description_placeholders": description_placeholders or {},
+            }
+
+        def async_show_form(self, *, step_id, data_schema=None, errors=None, description_placeholders=None):
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": data_schema,
+                "errors": errors or {},
+                "description_placeholders": description_placeholders or {},
+            }
+
+        def async_create_entry(self, *, data):
+            return {"type": "create_entry", "data": data}
+
+    def callback(func):
+        return func
+
+    def section(schema, _options=None):
+        return schema
+
+    class _SelectorConfig:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class _Selector:
+        def __init__(self, config=None):
+            self.config = config
+
+    class SelectOptionDict(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+
+    class Schema:
+        def __init__(self, schema):
+            self.schema = schema
+
+    def Required(key, default=None):
+        return key
+
+    def Optional(key, default=None):
+        return key
+
+    def All(*validators):
+        return validators
+
+    def Range(**kwargs):
+        return kwargs
+
+    def In(value):
+        return value
+
+    config_entries.ConfigFlow = ConfigFlow
+    config_entries.ConfigFlowResult = dict
+    config_entries.OptionsFlow = OptionsFlow
+    core.callback = callback
+    data_entry_flow.section = section
+
+    selector.BooleanSelector = _Selector
+    selector.NumberSelector = _Selector
+    selector.NumberSelectorConfig = _SelectorConfig
+    selector.NumberSelectorMode = types.SimpleNamespace(BOX="box", SLIDER="slider")
+    selector.SelectOptionDict = SelectOptionDict
+    selector.SelectSelector = _Selector
+    selector.SelectSelectorConfig = _SelectorConfig
+    selector.SelectSelectorMode = types.SimpleNamespace(DROPDOWN="dropdown")
+    selector.TextSelector = _Selector
+    selector.TextSelectorConfig = _SelectorConfig
+
+    voluptuous.Schema = Schema
+    voluptuous.Required = Required
+    voluptuous.Optional = Optional
+    voluptuous.All = All
+    voluptuous.Range = Range
+    voluptuous.In = In
+
+    sys.modules["voluptuous"] = voluptuous
+    sys.modules["homeassistant"] = ha
+    sys.modules["homeassistant.config_entries"] = config_entries
+    sys.modules["homeassistant.core"] = core
+    sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
+    sys.modules["homeassistant.helpers"] = helpers
+    sys.modules["homeassistant.helpers.selector"] = selector
+
+
+_install_homeassistant_stubs()
+
+
+from custom_components.eybond_local.config_flow import (
+    CONF_SETUP_MODE,
+    CONF_RESULT_KEY,
+    EybondLocalConfigFlow,
+    EybondLocalOptionsFlow,
+    _flatten_sections,
+)
+from custom_components.eybond_local.models import (
+    CollectorCandidate,
+    CollectorInfo,
+    DriverMatch,
+    OnboardingResult,
+    ProbeTarget,
+)
+
+
+class _FakeEntry:
+    def __init__(self, entry_id: str, *, server_ip: str, tcp_port: int) -> None:
+        self.entry_id = entry_id
+        self.data = {"server_ip": server_ip, "tcp_port": tcp_port}
+        self.options = {}
+
+
+class _FakeConfigEntries:
+    def __init__(self, entries=None) -> None:
+        self._entries = list(entries or [])
+        self.unloaded: list[str] = []
+        self.reloaded: list[str] = []
+
+    def async_entries(self, _domain):
+        return list(self._entries)
+
+    async def async_unload(self, entry_id: str):
+        self.unloaded.append(entry_id)
+        return True
+
+    async def async_reload(self, entry_id: str):
+        self.reloaded.append(entry_id)
+        return True
+
+
+class _FakeHass:
+    def __init__(self, entries=None) -> None:
+        self.config_entries = _FakeConfigEntries(entries)
+        self.config = types.SimpleNamespace(language="en")
+        self.executor_job_calls: list[tuple[object, tuple[object, ...]]] = []
+
+    async def async_add_executor_job(self, func, *args):
+        self.executor_job_calls.append((func, args))
+        return func(*args)
+
+    def async_create_task(self, coro):
+        return asyncio.create_task(coro)
+
+
+class _DoneTask:
+    def __init__(self, exception=None) -> None:
+        self._exception = exception
+
+    def done(self) -> bool:
+        return True
+
+    def exception(self):
+        return self._exception
+
+
+class _PendingTask:
+    def done(self) -> bool:
+        return False
+
+
+class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
+    def _make_flow(self, *, entries=None) -> EybondLocalConfigFlow:
+        flow = EybondLocalConfigFlow()
+        flow.hass = _FakeHass(entries)
+        flow.context = {}
+        flow._local_ip = "192.168.1.50"
+        flow._auto_config = {"server_ip": "192.168.1.50"}
+        flow._interface_options = [
+            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
+        ]
+        return flow
+
+    def _make_options_flow(self) -> EybondLocalOptionsFlow:
+        entry = type("_Entry", (), {})()
+        entry.data = {
+            "connection_type": "eybond",
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+            "detected_model": "SMG 6200",
+            "detected_serial": "12345",
+            "detection_confidence": "high",
+            "control_mode": "auto",
+        }
+        entry.options = {}
+        entry.runtime_data = {}
+        options = EybondLocalOptionsFlow(entry)
+        options.hass = _FakeHass()
+        options.context = {}
+        return options
+
+    async def test_scanning_without_results_routes_to_scan_results(self) -> None:
+        flow = self._make_flow()
+        flow._scan_task = _DoneTask()
+        flow._scan_progress_visible = True
+        flow._autodetect_results = {}
+
+        result = await flow.async_step_scanning()
+
+        self.assertEqual(result["type"], "progress_done")
+        self.assertEqual(result["next_step_id"], "scan_results")
+        self.assertTrue(flow._scan_error)
+
+    async def test_scanning_progress_shows_estimated_progress_bar(self) -> None:
+        flow = self._make_flow()
+        flow._scan_task = _PendingTask()
+        flow._scan_started_monotonic = 100.0
+        flow._scan_progress_stage = "discovering"
+
+        with patch(
+            "custom_components.eybond_local.config_flow.time.monotonic",
+            return_value=112.0,
+        ):
+            result = await flow.async_step_scanning()
+
+        self.assertEqual(result["type"], "progress")
+        placeholders = result["description_placeholders"]
+        self.assertEqual(placeholders["scan_progress_phase"], "Scanning the local subnet")
+        self.assertIn("[", placeholders["scan_progress_bar"])
+        self.assertIn("%", placeholders["scan_progress_bar"])
+        self.assertIn("12s elapsed", placeholders["scan_progress_detail"])
+
+    async def test_scanning_shows_progress_once_even_if_task_finishes_immediately(self) -> None:
+        flow = self._make_flow()
+
+        def _done_task(coro):
+            coro.close()
+            return _DoneTask()
+
+        flow.hass.async_create_task = _done_task
+
+        first = await flow.async_step_scanning()
+        second = await flow.async_step_scanning()
+
+        self.assertEqual(first["type"], "progress")
+        self.assertEqual(second["type"], "progress_done")
+
+    async def test_user_step_shows_connection_type_selector_only(self) -> None:
+        flow = self._make_flow()
+
+        result = await flow.async_step_user()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "user")
+        self.assertIn("connection_type", result["data_schema"].schema)
+        self.assertNotIn("server_ip", result["data_schema"].schema)
+        self.assertNotIn("setup_mode", result["data_schema"].schema)
+
+    async def test_user_step_preloads_translation_bundle_via_executor(self) -> None:
+        flow = self._make_flow()
+
+        await flow.async_step_user()
+
+        self.assertIn(
+            "_load_translation_bundle",
+            [getattr(func, "__name__", "") for func, _args in flow.hass.executor_job_calls],
+        )
+
+    async def test_user_step_single_interface_welcome_hint_mentions_selected_interface_only(self) -> None:
+        flow = self._make_flow()
+
+        result = await flow.async_step_user()
+
+        self.assertIn("192.168.1.50", result["description_placeholders"]["welcome_hint"])
+        self.assertNotIn("wizard will then ask", result["description_placeholders"]["welcome_hint"])
+
+    async def test_user_step_multi_interface_welcome_hint_mentions_interface_selection(self) -> None:
+        flow = self._make_flow()
+        flow._interface_options = [
+            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
+            {"name": "wlan0", "ip": "192.168.2.50", "label": "wlan0 - 192.168.2.50"},
+        ]
+
+        result = await flow.async_step_user()
+
+        self.assertIn("wizard will then ask", result["description_placeholders"]["welcome_hint"])
+        self.assertNotIn("192.168.1.50", result["description_placeholders"]["welcome_hint"])
+
+    async def test_user_step_routes_to_interface_selection_when_multiple_interfaces(self) -> None:
+        flow = self._make_flow()
+        flow._interface_options = [
+            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
+            {"name": "wlan0", "ip": "192.168.2.50", "label": "wlan0 - 192.168.2.50"},
+        ]
+
+        result = await flow.async_step_user({"connection_type": "eybond"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "auto")
+        self.assertEqual(flow._auto_config["connection_type"], "eybond")
+
+    async def test_auto_step_routes_directly_to_manual_when_setup_mode_is_manual(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        result = await flow.async_step_auto({"server_ip": "192.168.1.50", CONF_SETUP_MODE: "manual"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(flow._auto_config["connection_type"], "eybond")
+
+    async def test_user_step_routes_to_auto_when_one_interface(self) -> None:
+        flow = self._make_flow()
+
+        result = await flow.async_step_user({"connection_type": "eybond"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "auto")
+        self.assertEqual(flow._auto_config["connection_type"], "eybond")
+        self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
+
+    async def test_auto_step_shows_setup_mode_selector(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        result = await flow.async_step_auto()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "auto")
+        self.assertIn("setup_mode", result["data_schema"].schema)
+
+    async def test_auto_step_uses_localized_setup_mode_labels(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "ru"
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        result = await flow.async_step_auto()
+
+        selector = result["data_schema"].schema["setup_mode"]
+        labels = [option["label"] for option in selector.config.kwargs["options"]]
+        self.assertIn("Запустить автопоиск", labels)
+        self.assertIn("Пропустить и перейти к ручной настройке", labels)
+        self.assertNotIn("Auto scan first", labels)
+        self.assertNotIn("Manual setup now", labels)
+
+    async def test_auto_step_uses_localized_interface_hint(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "ru"
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        result = await flow.async_step_auto()
+
+        hint = result["description_placeholders"]["interface_hint"]
+        self.assertIn("автоматически", hint)
+        self.assertNotIn("Home Assistant will use", hint)
+
+    async def test_auto_step_starts_scanning_when_setup_mode_is_auto(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        async def _fake_scanning(user_input=None):
+            return {"type": "progress", "step_id": "scanning"}
+
+        flow.async_step_scanning = _fake_scanning
+
+        result = await flow.async_step_auto({"server_ip": "192.168.1.50", CONF_SETUP_MODE: "auto"})
+
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
+
+    async def test_change_scan_interface_preserves_connection_type(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        async def _fake_scanning(user_input=None):
+            return {"type": "progress", "step_id": "scanning"}
+
+        flow.async_step_scanning = _fake_scanning
+
+        result = await flow.async_step_change_scan_interface({"server_ip": "192.168.2.50"})
+
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(flow._auto_config["connection_type"], "eybond")
+        self.assertEqual(flow._auto_config["server_ip"], "192.168.2.50")
+
+    async def test_scan_results_without_results_still_offers_manual(self) -> None:
+        flow = self._make_flow()
+        flow._autodetect_results = {}
+        flow._scan_error = True
+
+        result = await flow.async_step_scan_results()
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "scan_results")
+        self.assertIn("refresh_scan", result["menu_options"])
+        self.assertIn("manual", result["menu_options"])
+        self.assertNotIn("choose", result["menu_options"])
+
+    async def test_scan_results_with_multiple_interfaces_offers_change_interface(self) -> None:
+        flow = self._make_flow()
+        flow._interface_options = [
+            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
+            {"name": "wlan0", "ip": "192.168.2.50", "label": "wlan0 - 192.168.2.50"},
+        ]
+        flow._autodetect_results = {}
+
+        result = await flow.async_step_scan_results()
+
+        self.assertIn("change_scan_interface", result["menu_options"])
+
+    async def test_scan_results_with_available_results_shows_menu(self) -> None:
+        flow = self._make_flow()
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(target_ip="192.168.1.14", source="udp", ip="192.168.1.14", connected=True),
+                match=DriverMatch(
+                    driver_key="pi30",
+                    protocol_family="pi30",
+                    model_name="PI30 4200",
+                    serial_number="553555355535552",
+                    probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+                ),
+                connection_mode="known_ip",
+            )
+        }
+
+        result = await flow.async_step_scan_results()
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "scan_results")
+        self.assertIn("scan_summary", result["description_placeholders"])
+        self.assertIn("choose", result["menu_options"])
+
+    async def test_choose_step_shows_selector_form(self) -> None:
+        flow = self._make_flow()
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(target_ip="192.168.1.14", source="udp", ip="192.168.1.14", connected=True),
+                match=DriverMatch(
+                    driver_key="pi30",
+                    protocol_family="pi30",
+                    model_name="PI30 4200",
+                    serial_number="553555355535552",
+                    probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+                ),
+                connection_mode="known_ip",
+            ),
+            "1": OnboardingResult(
+                collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
+                match=DriverMatch(
+                    driver_key="modbus_smg",
+                    protocol_family="modbus_smg",
+                    model_name="SMG 6200",
+                    serial_number="92632511100118",
+                    probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                ),
+                connection_mode="known_ip",
+            ),
+        }
+
+        result = await flow.async_step_choose()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "choose")
+
+    async def test_confirm_step_exposes_poll_interval_field(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+            ),
+            connection_mode="known_ip",
+        )
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "confirm")
+        self.assertIn("poll_interval", result["data_schema"].schema)
+
+    async def test_choose_step_selects_specific_result(self) -> None:
+        flow = self._make_flow()
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(target_ip="192.168.1.14", source="udp", ip="192.168.1.14", connected=True),
+                match=DriverMatch(
+                    driver_key="pi30",
+                    protocol_family="pi30",
+                    model_name="PI30 4200",
+                    serial_number="553555355535552",
+                    probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+                ),
+                connection_mode="known_ip",
+            ),
+            "1": OnboardingResult(
+                collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
+                match=DriverMatch(
+                    driver_key="modbus_smg",
+                    protocol_family="modbus_smg",
+                    model_name="SMG 6200",
+                    serial_number="92632511100118",
+                    probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                ),
+                connection_mode="known_ip",
+            ),
+        }
+
+        result = await flow.async_step_choose({CONF_RESULT_KEY: "1"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "confirm")
+        self.assertIsNotNone(flow._selected_result)
+        self.assertEqual(flow._selected_result.match.model_name, "SMG 6200")
+
+    async def test_confirm_step_persists_poll_interval_in_entry_options(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="udp",
+                ip="192.168.1.55",
+                connected=True,
+                collector=CollectorInfo(collector_pn="PN123"),
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+            ),
+            connection_mode="known_ip",
+        )
+
+        result = await flow.async_step_confirm({"poll_interval": 15})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["options"]["poll_interval"], 15)
+
+    async def test_do_scan_keeps_matching_entries_loaded(self) -> None:
+        matching = _FakeEntry("match", server_ip="192.168.1.50", tcp_port=8899)
+        other = _FakeEntry("other", server_ip="192.168.1.60", tcp_port=8899)
+        flow = self._make_flow(entries=[matching, other])
+
+        class _FakeDetector:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+            async def async_auto_detect(self, **kwargs):
+                return (OnboardingResult(),)
+
+        with patch("custom_components.eybond_local.config_flow.create_onboarding_manager", return_value=_FakeDetector()):
+            await flow._async_do_scan()
+
+        self.assertEqual(flow.hass.config_entries.unloaded, [])
+        self.assertEqual(flow.hass.config_entries.reloaded, [])
+
+    async def test_do_scan_builds_connection_spec_through_generic_builder(self) -> None:
+        flow = self._make_flow()
+
+        class _FakeDetector:
+            async def async_auto_detect(self, **kwargs):
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.config_flow.build_connection_spec_from_values",
+            return_value=sentinel.connection_spec,
+        ) as build_spec, patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ) as create_manager:
+            await flow._async_do_scan()
+
+        build_spec.assert_called_once()
+        create_manager.assert_called_once_with(
+            sentinel.connection_spec,
+            driver_hint="auto",
+        )
+
+    async def test_do_scan_publishes_determinate_progress_updates(self) -> None:
+        flow = self._make_flow()
+        seen_progress: list[float] = []
+        flow.async_update_progress = seen_progress.append
+
+        class _FakeDetector:
+            async def async_auto_detect(self, **kwargs):
+                await asyncio.sleep(0.4)
+                return (
+                    OnboardingResult(
+                        collector=CollectorCandidate(
+                            target_ip="192.168.1.55",
+                            source="udp",
+                            ip="192.168.1.55",
+                            connected=True,
+                        ),
+                        connection_mode="known_ip",
+                    ),
+                )
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            await flow._async_do_scan()
+
+        self.assertTrue(seen_progress)
+        self.assertEqual(seen_progress[-1], 1.0)
+        self.assertGreaterEqual(max(seen_progress), 0.99)
+
+    def test_scan_progress_fraction_starts_near_zero_for_discovery(self) -> None:
+        flow = self._make_flow()
+        flow._scan_progress_stage = "preparing"
+        self.assertEqual(flow._scan_progress_fraction(0.0), 0.0)
+
+        flow._scan_progress_stage = "discovering"
+        self.assertLessEqual(flow._scan_progress_fraction(0.0), 0.02)
+
+    async def test_do_scan_timeout_returns_without_hanging(self) -> None:
+        flow = self._make_flow()
+
+        class _SlowDetector:
+            async def async_auto_detect(self, **kwargs):
+                await asyncio.sleep(0.05)
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.config_flow._AUTO_SCAN_TIMEOUT",
+            0.001,
+        ), patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_SlowDetector(),
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(flow._autodetect_results, {})
+
+    async def test_probe_manual_target_builds_connection_spec_through_generic_builder(self) -> None:
+        flow = self._make_flow()
+        user_input = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "collector_ip": "192.168.1.55",
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+
+        class _FakeDetector:
+            async def async_auto_detect(self, **kwargs):
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.config_flow.build_connection_spec_from_values",
+            return_value=sentinel.connection_spec,
+        ) as build_spec, patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ) as create_manager:
+            result = await flow._async_probe_manual_target(user_input)
+
+        self.assertEqual(result.next_action, "create_pending_entry")
+        build_spec.assert_called_once()
+        create_manager.assert_called_once_with(
+            sentinel.connection_spec,
+            driver_hint="auto",
+        )
+
+    async def test_probe_manual_target_timeout_returns_pending_result(self) -> None:
+        flow = self._make_flow()
+        user_input = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "collector_ip": "192.168.1.55",
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+
+        class _SlowDetector:
+            async def async_auto_detect(self, **kwargs):
+                await asyncio.sleep(0.05)
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.config_flow._MANUAL_PROBE_TIMEOUT",
+            0.001,
+        ), patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_SlowDetector(),
+        ):
+            result = await flow._async_probe_manual_target(user_input)
+
+        self.assertEqual(result.connection_mode, "manual")
+        self.assertEqual(result.next_action, "create_pending_entry")
+        self.assertEqual(result.last_error, "manual_probe_timeout")
+
+    async def test_manual_confirm_step_exposes_retry_edit_and_create_actions(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "tcp_port": 8899,
+        }
+        flow._manual_result = OnboardingResult(connection_mode="manual")
+
+        result = await flow.async_step_manual_confirm()
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(
+            result["menu_options"],
+            ["manual_probe_again", "manual_edit_settings", "manual_create_pending"],
+        )
+
+    async def test_manual_edit_settings_returns_to_manual_form_with_previous_values(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(connection_mode="manual")
+
+        result = await flow.async_step_manual_edit_settings()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(flow._manual_defaults["collector_ip"], "192.168.1.55")
+        self.assertIsNone(flow._manual_result)
+
+    async def test_manual_probe_again_retries_with_stored_settings(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            return_value=OnboardingResult(connection_mode="manual", next_action="create_pending_entry"),
+        ) as probe_manual_target:
+            result = await flow.async_step_manual_probe_again()
+
+        probe_manual_target.assert_awaited_once_with(flow._manual_config)
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+
+    async def test_manual_create_pending_uses_stored_manual_config(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(connection_mode="manual", next_action="create_pending_entry")
+
+        result = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["title"], "EyeBond Setup Pending")
+
+    async def test_scan_results_placeholders_use_localized_choose_label(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "ru"
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(target_ip="192.168.1.14", source="udp", ip="192.168.1.14", connected=True),
+                match=DriverMatch(
+                    driver_key="pi30",
+                    protocol_family="pi30",
+                    model_name="PI30 4200",
+                    serial_number="553555355535552",
+                    probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+                ),
+                connection_mode="known_ip",
+            )
+        }
+
+        await flow._async_ensure_translation_bundle()
+
+        placeholders = flow._scan_results_placeholders()
+
+        self.assertIn("Добавить обнаруженное устройство", placeholders["scan_next_hint"])
+        self.assertNotIn("Add detected device", placeholders["scan_next_hint"])
+
+    async def test_scan_results_placeholders_use_localized_retry_actions(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.14",
+                    source="udp",
+                    ip="192.168.1.14",
+                    udp_reply="rsp>server=1;",
+                ),
+                connection_mode="known_ip",
+            )
+        }
+
+        await flow._async_ensure_translation_bundle()
+
+        placeholders = flow._scan_results_placeholders()
+
+        self.assertIn("Оновити результати сканування", placeholders["scan_next_hint"])
+        self.assertIn("Ручне налаштування", placeholders["scan_next_hint"])
+        self.assertNotIn("Refresh scan", placeholders["scan_next_hint"])
+        self.assertNotIn("Manual setup", placeholders["scan_next_hint"])
+
+    async def test_options_runtime_step_renders_branch_aware_connection_section(self) -> None:
+        options = self._make_options_flow()
+
+        result = await options.async_step_runtime()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "runtime")
+
+    async def test_options_runtime_step_preloads_translation_bundle_via_executor(self) -> None:
+        options = self._make_options_flow()
+
+        await options.async_step_runtime()
+
+        self.assertIn(
+            "_load_translation_bundle",
+            [getattr(func, "__name__", "") for func, _args in options.hass.executor_job_calls],
+        )
+
+    async def test_options_runtime_step_serializes_branch_aware_option_payload(self) -> None:
+        options = self._make_options_flow()
+
+        result = await options.async_step_runtime(
+            {
+                "poll_interval": 15,
+                "control_mode": "full",
+                "connection": {
+                    "server_ip": "192.168.1.60",
+                    "collector_ip": "192.168.1.56",
+                    "tcp_port": 8899,
+                    "advertised_server_ip": "203.0.113.10",
+                    "advertised_tcp_port": "9443",
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 4,
+                    "heartbeat_interval": 30,
+                    "driver_hint": "modbus_smg",
+                },
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["poll_interval"], 15)
+        self.assertEqual(result["data"]["control_mode"], "full")
+        self.assertEqual(result["data"]["advertised_server_ip"], "203.0.113.10")
+        self.assertEqual(result["data"]["advertised_tcp_port"], 9443)
+        self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
+        self.assertNotIn("connection", result["data"])
+
+    def test_validate_connection_inputs_uses_field_validation_metadata(self) -> None:
+        flow = self._make_flow()
+        errors = flow._validate_connection_inputs(
+            {
+                "server_ip": "not-an-ip",
+                "advertised_server_ip": "still-not-an-ip",
+                "advertised_tcp_port": "70000",
+                "collector_ip": "",
+                "discovery_target": "also-not-an-ip",
+            },
+            fields=flow._connection_branch().form_layout.manual_fields
+            + flow._connection_branch().form_layout.manual_advanced_fields,
+        )
+
+        self.assertEqual(errors["server_ip"], "invalid_ip")
+        self.assertEqual(errors["advertised_server_ip"], "invalid_ip")
+        self.assertEqual(errors["advertised_tcp_port"], "invalid_port")
+        self.assertEqual(errors["discovery_target"], "invalid_ip")
+        self.assertNotIn("collector_ip", errors)
+
+
+    def test_flatten_sections_coerces_numeric_selector_values_to_ints(self) -> None:
+        flattened = _flatten_sections(
+            {
+                "server_ip": "192.168.1.50",
+                "advanced_connection": {
+                    "tcp_port": 8899.0,
+                    "udp_port": 58899.0,
+                    "discovery_interval": 10.0,
+                    "heartbeat_interval": 60.0,
+                    "advertised_tcp_port": "9443",
+                },
+            }
+        )
+
+        self.assertEqual(flattened["advertised_tcp_port"], 9443)
+        self.assertEqual(flattened["tcp_port"], 8899)
+        self.assertEqual(flattened["udp_port"], 58899)
+        self.assertEqual(flattened["discovery_interval"], 10)
+        self.assertEqual(flattened["heartbeat_interval"], 60)
+
+
+if __name__ == "__main__":
+    unittest.main()

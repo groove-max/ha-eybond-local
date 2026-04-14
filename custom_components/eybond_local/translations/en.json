@@ -1,0 +1,415 @@
+{
+  "common": {
+    "actions": {
+      "create_support_package": "Create support archive",
+      "export_support_bundle": "Export support bundle",
+      "reload_local_metadata": "Reload local metadata",
+      "create_profile_draft": "Create local profile draft",
+      "create_schema_draft": "Create local register schema draft",
+      "advanced_metadata": "Advanced metadata tools"
+    },
+    "dynamic": {
+      "unknown": "Unknown",
+      "unknown_serial": "unknown serial",
+      "unknown_path": "Unknown path",
+      "not_available": "Not available",
+      "not_available_yet": "Not available yet",
+      "not_created_yet": "Not created yet",
+      "not_applicable": "Not applicable",
+      "no_diagnostics_action": "No diagnostics action has been run yet.",
+      "peer_label": "collector",
+      "peer_label_plural": "collectors",
+      "unconfirmed_inverter": "Unconfirmed inverter",
+      "confidence_high": "High confidence",
+      "confidence_medium": "Medium confidence",
+      "confidence_low": "Low confidence",
+      "confidence_none": "No confidence",
+      "status_ready": "Ready",
+      "status_review": "Review",
+      "status_already_added": "Already added",
+      "status_collector_only": "Collector only",
+      "status_collector_replied": "Collector replied",
+      "status_unknown": "Unknown",
+      "welcome_autoscan_single": "When you continue, {integration_name} will start scanning automatically using **{selected_interface}**.",
+      "welcome_autoscan_multi": "When you continue, {integration_name} will start scanning automatically using **{selected_interface}**. You can change the scan interface from the results screen if needed.",
+      "manual_probe_confirmed": "{peer_label_capitalized} and inverter were confirmed with the manual settings.",
+      "manual_probe_unconfirmed_model": "The {peer_label} responded, but the inverter model is still unconfirmed.",
+      "manual_probe_none": "No {peer_label} or inverter was confirmed yet.",
+      "manual_control_summary": "If you continue, a **read-only** pending entry will be created. Sensors may stay unavailable until the {peer_label} connects and detection completes.",
+      "manual_probe_next_actions": "Choose **{probe_again_action_label}** to test again, **{edit_settings_action_label}** to change the values, or **{create_pending_action_label}** to save a read-only pending entry now.",
+      "auto_interface_hint_single": "Home Assistant will use **{selected_interface}** automatically.",
+      "auto_interface_hint_multi": "Choose which Home Assistant interface the {peer_label} should connect back to.",
+      "default_home_assistant_interface": "the default Home Assistant interface",
+      "welcome_connection_type_single": "Choose the connection type first. On the next step you can start scanning using **{selected_interface}** or switch to manual setup.",
+      "welcome_connection_type_multi": "Choose the connection type first. The wizard will then ask which Home Assistant network interface to use, and from there you can start scanning or switch to manual setup.",
+      "suffix_peer_connected": "{peer_label} connected",
+      "suffix_peer_only": "{peer_label} only",
+      "result_label_unmatched": "{status_label}: {collector_ip} ({suffix})",
+      "result_label_matched": "{status_label}: {model_name} ({serial_number}) on {collector_ip} — {confidence_label}",
+      "scan_no_results_summary": "No reachable {peer_label_plural} or inverters were found.",
+      "scan_no_results_next": "Use **{refresh_action_label}** to try again, or **{manual_action_label}** to switch to manual setup.",
+      "scan_all_added_summary": "Found **{detected_count}** device candidate(s), but all of them are already configured.",
+      "scan_all_added_next": "Use **{refresh_action_label}** to look again, or **{manual_action_label}** if you intentionally need a different connection path.",
+      "scan_none_addable_summary": "Found **{detected_count}** device candidate(s), but none are ready to add yet.",
+      "scan_none_addable_next": "Use **{refresh_action_label}** to try again, or **{manual_action_label}** to override the connection settings.",
+      "scan_ready_fallback": "detected inverters",
+      "scan_ready_summary": "Found **{detected_count}** device candidate(s). **{available_count}** can be added now, **{already_added_count}** already configured. Ready now: {ready_summary}.",
+      "scan_ready_next": "Choose **{choose_action_label}** to pick which inverter to add.",
+      "scan_progress_stage_preparing": "Preparing scan",
+      "scan_progress_stage_discovering": "Scanning the local subnet",
+      "scan_progress_stage_analyzing": "Analyzing collector responses",
+      "scan_progress_stage_finalizing": "Finalizing detected devices",
+      "scan_progress_detail": "{elapsed_seconds}s elapsed, about {remaining_seconds}s remaining.",
+      "scan_progress_hint": "Most scans finish in 5-15 seconds. This progress bar is estimated from the current phase and timeout.",
+      "choose_summary": "**{available_count}** detected device candidate(s) can be added right now. Already configured devices are excluded.",
+      "scan_line_matched": "{index}. **{status_label}** — {model_name} · serial {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
+      "scan_line_peer_connected": "{peer_label} connected",
+      "scan_line_peer_replied": "{peer_label} replied, waiting for reverse connection",
+      "scan_line_already_added": "*(already added as \"{entry_title}\")*",
+      "download_support_archive": "[Download support archive]({url})",
+      "download_file": "[Download file]({url})",
+      "built_in_metadata": "Built-in metadata ({path})",
+      "local_override": "Local override ({path})",
+      "external_metadata": "External metadata ({path})",
+      "control_full": "All controls are enabled.",
+      "control_read_only": "Monitoring only — no control entities are exposed.",
+      "control_auto": "Tested controls are enabled automatically.",
+      "control_waiting": "Monitoring only until a high-confidence detection is confirmed.",
+      "plan_template": "Step 1: {step_1} Step 2: {step_2} Step 3: {step_3}",
+      "profile_activation_hint": "Leave the suggested file name unchanged if you want the local draft to override the built-in profile after reload.",
+      "schema_activation_hint": "Leave the suggested file name unchanged if you want the local draft to override the built-in register schema after reload.",
+      "return_to_diagnostics": "Return to diagnostics to run another action."
+    },
+    "support_workflow": {
+      "experimental": {
+        "level_label": "Experimental local metadata",
+        "summary": "Local experimental metadata is active for this entry.",
+        "next_action": "Reload and test the local metadata changes. If support is still incomplete, create a support archive and send the ZIP file to the developer.",
+        "step_1": "Reload local metadata.",
+        "step_2": "Confirm that the local override is active and test the inverter again.",
+        "step_3": "If support is still incomplete, create a support archive and send the ZIP file to the developer.",
+        "advanced_hint": "Advanced metadata is already active here. Use the advanced tools to iterate on the local override, not as the first troubleshooting step."
+      },
+      "unknown": {
+        "level_label": "Unknown support",
+        "summary": "No supported inverter driver is matched right now.",
+        "next_action": "Create a support archive and send the ZIP file to the developer. It will include collector evidence and generic raw register capture for review.",
+        "step_1": "Create a support archive.",
+        "step_2": "Send the ZIP file to the developer.",
+        "step_3": "Wait for built-in support before working with local experimental metadata.",
+        "advanced_hint": "Do not start with local drafts here. The first goal is to collect evidence the developer can analyze."
+      },
+      "pending": {
+        "level_label": "Pending confirmation",
+        "summary": "A driver base is known, but the inverter is not currently confirmed.",
+        "next_action": "Create a support archive and send the ZIP file to the developer before editing local drafts.",
+        "step_1": "Create a support archive.",
+        "step_2": "Send the ZIP file to the developer.",
+        "step_3": "Only move on to local drafts after the developer reviews the evidence.",
+        "advanced_hint": "Treat local drafts as a second-stage tool here. First confirm connectivity or send the support evidence."
+      },
+      "builtin": {
+        "level_label": "Built-in support",
+        "summary": "Built-in support is active for this inverter.",
+        "next_action": "Use Create Support Archive only if you want to report a bug, capture more evidence, or help extend support for a related model.",
+        "step_1": "Keep using built-in support normally.",
+        "step_2": "Create a support archive only if you need to report a bug or help extend support.",
+        "step_3": "Send the ZIP file to the developer if requested.",
+        "advanced_hint": "You usually do not need advanced metadata tools in this state. Use them only for deliberate experimental work."
+      },
+      "partial": {
+        "level_label": "Partial support",
+        "summary": "The inverter is reachable, but built-in support is only partially confirmed.",
+        "next_action": "Create a support archive and send the ZIP file to the developer before creating local experimental drafts.",
+        "step_1": "Create a support archive.",
+        "step_2": "Send the ZIP file to the developer.",
+        "step_3": "Use local experimental metadata only if the developer asks for it.",
+        "advanced_hint": "Do not start editing drafts yet. The developer should look at the support archive first."
+      }
+    },
+    "diagnostics_result": {
+      "support_archive_title": "Support Archive",
+      "support_archive_created_title": "Support Archive Created",
+      "coordinator_not_loaded": "Coordinator is not loaded.",
+      "ensure_entry_loaded": "Ensure the entry is loaded and the inverter has been detected, then try again.",
+      "support_archive_created_status": "A combined support archive with runtime data, raw capture evidence, and an anonymized replay fixture was written to the Home Assistant config directory.",
+      "support_archive_created_next": "Send this single ZIP file to the developer. Create local experimental drafts only after the archive has been reviewed.",
+      "reload_local_metadata_title": "Reload Local Metadata",
+      "wait_for_entry_loaded": "Wait for the entry to finish loading, then try again.",
+      "reload_local_metadata_triggered_title": "Local Metadata Reload Triggered",
+      "reload_local_metadata_triggered_status": "Local metadata caches were cleared and the entry reload was requested.",
+      "reload_local_metadata_triggered_next": "Refresh the device page after the entry reconnects to confirm whether local overrides were applied.",
+      "support_bundle_title": "Support Bundle",
+      "support_bundle_exported_title": "Support Bundle Exported",
+      "support_bundle_exported_status": "A support bundle was written to the Home Assistant config directory.",
+      "support_bundle_exported_next": "Use the JSON bundle for troubleshooting or as source material for a new local experimental draft.",
+      "profile_draft_title": "Profile Draft",
+      "profile_draft_unavailable_status": "No detected driver profile is available for this entry.",
+      "profile_draft_unavailable_next": "Run detection again or set a manual driver hint before creating a local draft.",
+      "profile_draft_created_title": "Local Profile Draft Created",
+      "profile_draft_created_status_active": "A local experimental profile draft was created and will override the built-in profile after reload.",
+      "profile_draft_created_status_inactive": "A local experimental profile draft was created, but it will not override the built-in profile automatically.",
+      "draft_reload_next": "Edit the draft, then reload local metadata to activate it.",
+      "draft_rename_profile_next": "Rename the draft to {name} if you want it to override the built-in profile automatically, then reload local metadata.",
+      "register_schema_draft_title": "Register Schema Draft",
+      "register_schema_unavailable_status": "No detected register schema is available for this entry.",
+      "register_schema_unavailable_next": "Run detection again or set a manual driver hint before creating a local draft.",
+      "register_schema_draft_created_title": "Local Register Schema Draft Created",
+      "register_schema_draft_created_status_active": "A local experimental register schema draft was created and will override the built-in schema after reload.",
+      "register_schema_draft_created_status_inactive": "A local experimental register schema draft was created, but it will not override the built-in schema automatically.",
+      "draft_rename_schema_next": "Rename the draft to {name} if you want it to override the built-in schema automatically, then reload local metadata."
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Welcome",
+        "description": "EyeBond Local will help you add an inverter with as little manual setup as possible.\n\n{welcome_hint}",
+        "data": {
+          "connection_type": "Connection type"
+        },
+        "data_description": {
+          "connection_type": "Choose how Home Assistant should reach the inverter."
+        },
+        "menu_options": {
+          "auto": "Continue"
+        }
+      },
+      "auto": {
+        "title": "Choose Scan Interface",
+        "description": "{interface_hint}\n\nChoose whether to start auto-scan now or switch straight to manual setup.",
+        "data": {
+          "server_ip": "Home Assistant interface",
+          "setup_mode": "Next step"
+        },
+        "data_description": {
+          "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter.",
+          "setup_mode": "Start auto-scan now, or skip it and open manual setup immediately."
+        },
+        "setup_mode_options": {
+          "auto": "Start auto-scan",
+          "manual": "Skip to manual setup"
+        }
+      },
+      "scanning": {
+        "title": "Scanning Network",
+        "description": "Looking for EyeBond collectors and inverters on the local network using **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
+      },
+      "scan_results": {
+        "title": "Detected Devices",
+        "description": "**Scan interface:** {selected_scan_interface}\n\n{scan_summary}\n\n{candidate_list}\n\n{scan_next_hint}",
+        "menu_options": {
+          "choose": "Add detected device",
+          "change_scan_interface": "Change scan interface",
+          "refresh_scan": "Refresh scan results",
+          "manual": "Manual setup"
+        }
+      },
+      "change_scan_interface": {
+        "title": "Change Scan Interface",
+        "description": "{interface_hint}\n\nThen run the scan again with the selected Home Assistant interface.",
+        "data": {
+          "server_ip": "Home Assistant interface"
+        },
+        "data_description": {
+          "server_ip": "Pick a different network interface to scan from."
+        }
+      },
+      "choose": {
+        "title": "Select Device To Add",
+        "description": "{choose_summary}\n\nReady devices are shown first.",
+        "data": {
+          "result_key": "Detected device"
+        },
+        "data_description": {
+          "result_key": "Choose the inverter you want to add to Home Assistant."
+        }
+      },
+      "confirm": {
+        "title": "Confirm Detection",
+        "description": "| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n| Driver | {driver_key} |\n| Detection | {confidence} |\n\n{control_summary}",
+        "data": {
+          "poll_interval": "Poll interval"
+        },
+        "data_description": {
+          "poll_interval": "How often to read sensor values from the inverter after the device is added."
+        }
+      },
+      "manual": {
+        "title": "Manual Setup",
+        "description": "Use this if auto-detection cannot find your device, if the collector is remote, or if callback traffic must go through VPN / NAT.\n\nWhen you continue, the integration will probe these settings before creating the entry. If the probe does not confirm the device, you can edit the values and try again from the next screen.",
+        "data": {
+          "server_ip": "Local listener IP",
+          "collector_ip": "Collector IP",
+          "driver_hint": "Driver"
+        },
+        "data_description": {
+          "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener. For normal LAN setups, choose the interface on the same subnet as the collector.",
+          "collector_ip": "Collector IPv4 address to probe directly. Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
+          "driver_hint": "Auto-detect works for most inverters. Override only if instructed."
+        },
+        "sections": {
+          "advanced_connection": {
+            "name": "Advanced connection settings",
+            "description": "Port numbers, discovery, heartbeat tuning, and optional remote callback overrides. Leave the advertised callback fields empty for normal local setups.",
+            "data": {
+              "tcp_port": "Local TCP port",
+              "advertised_server_ip": "Advertised callback IP",
+              "advertised_tcp_port": "Advertised callback TCP port",
+              "udp_port": "UDP discovery port",
+              "discovery_target": "Discovery target IP",
+              "discovery_interval": "Discovery interval",
+              "heartbeat_interval": "Heartbeat interval"
+            },
+            "data_description": {
+              "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
+              "advertised_server_ip": "IPv4 address announced inside set>server=. Leave empty to advertise the local listener IP above. Override this only for VPN, NAT, or public callback routing.",
+              "advertised_tcp_port": "TCP port announced inside set>server=. Leave empty to advertise the local TCP port above. Override this only when the forwarded external port differs from the local listener port.",
+              "udp_port": "UDP port used by collector discovery redirects. Default: 58899.",
+              "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
+              "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
+              "heartbeat_interval": "How often to send keep-alive packets after the collector connects."
+            }
+          }
+        }
+      },
+      "manual_confirm": {
+        "title": "Manual Probe Result",
+        "description": "{probe_summary}\n\n| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n\n{control_summary}\n\n{next_actions_hint}",
+        "menu_options": {
+          "manual_probe_again": "Probe again",
+          "manual_edit_settings": "Edit settings",
+          "manual_create_pending": "Create pending entry"
+        }
+      }
+    },
+    "progress": {
+      "scanning_network": "Scanning the local network for EyeBond collectors…"
+    },
+    "selector": {
+      "control_mode": {
+        "options": {
+          "auto": "Auto",
+          "read_only": "Read only",
+          "full": "Full control"
+        }
+      }
+    },
+    "error": {
+      "invalid_ip": "Invalid IPv4 address.",
+      "invalid_port": "Invalid TCP port.",
+      "cannot_autodetect": "Auto-detection did not find any devices. Check the network interface and try again, or use manual setup.",
+      "invalid_selection": "The selected detection result is no longer available.",
+      "already_added_candidate": "This detected device is already configured and cannot be added again."
+    },
+    "abort": {
+      "already_configured": "This collector or inverter is already configured."
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_ip": "Invalid IPv4 address.",
+      "invalid_port": "Invalid TCP port."
+    },
+    "step": {
+      "init": {
+        "title": "EyeBond Local Options",
+        "description": "Choose what you want to manage for this entry.",
+        "menu_options": {
+          "runtime": "Runtime and connection settings",
+          "diagnostics": "Diagnostics and experimental metadata"
+        }
+      },
+      "runtime": {
+        "title": "Runtime Settings",
+        "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}",
+        "data": {
+          "poll_interval": "Poll interval",
+          "control_mode": "Control mode"
+        },
+        "data_description": {
+          "poll_interval": "How often to read sensor values from the inverter.",
+          "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
+        },
+        "sections": {
+          "connection": {
+            "name": "Connection settings",
+            "description": "Network transport settings, including optional remote callback overrides. Leave advertised callback fields empty for normal local setups.",
+            "data": {
+              "server_ip": "Local listener IP",
+              "collector_ip": "Collector IP",
+              "tcp_port": "Local TCP port",
+              "advertised_server_ip": "Advertised callback IP",
+              "advertised_tcp_port": "Advertised callback TCP port",
+              "udp_port": "UDP discovery port",
+              "discovery_target": "Discovery target IP",
+              "discovery_interval": "Discovery interval",
+              "heartbeat_interval": "Heartbeat interval",
+              "driver_hint": "Driver"
+            },
+            "data_description": {
+              "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener.",
+              "collector_ip": "Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
+              "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
+              "advertised_server_ip": "IPv4 address announced inside set>server=. Leave empty to advertise the local listener IP above.",
+              "advertised_tcp_port": "TCP port announced inside set>server=. Leave empty to advertise the local TCP port above.",
+              "udp_port": "UDP port used by collector discovery redirects. Default: 58899.",
+              "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
+              "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
+              "heartbeat_interval": "Keep-alive interval after the collector connects.",
+              "driver_hint": "Auto-detect works for most inverters."
+            }
+          }
+        }
+      },
+      "diagnostics": {
+        "title": "Diagnostics And Experimental Metadata",
+        "description": "**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Primary action:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Recommended next:** {support_workflow_next_action}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}\n**Last support bundle:** {support_bundle_path}",
+        "menu_options": {
+          "create_support_package": "Create support archive",
+          "export_support_bundle": "Export support bundle",
+          "advanced_metadata": "Advanced metadata tools"
+        }
+      },
+      "advanced_metadata": {
+        "title": "Advanced Metadata Tools",
+        "description": "**Support status:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Driver:** {recommended_driver} (`{recommended_driver_key}`)\n\n| Metadata | Built-in | Source | Override |\n|---|---|---|---|\n| Profile | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Schema | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Suggested draft names:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Last profile draft:** {local_profile_draft_path}\n**Last schema draft:** {local_schema_draft_path}\n**Status:** {local_metadata_status}",
+        "menu_options": {
+          "export_support_bundle": "Export support bundle",
+          "create_profile_draft": "Create local profile draft",
+          "create_schema_draft": "Create local register schema draft",
+          "reload_local_metadata": "Reload local metadata",
+          "create_support_package": "Create support archive"
+        }
+      },
+      "create_profile_draft": {
+        "title": "Create Local Profile Draft",
+        "description": "A local experimental profile will be created under `/config/eybond_local/profiles/`.\n\n| Detail | Value |\n|---|---|\n| Source profile | {source_profile} |\n| Suggested name | {suggested_output} |\n| Current override | {current_override} |\n\n{activation_hint}",
+        "data": {
+          "output_profile": "Output profile file name",
+          "overwrite": "Overwrite existing file"
+        },
+        "data_description": {
+          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
+          "overwrite": "Replace the file if it already exists."
+        }
+      },
+      "create_schema_draft": {
+        "title": "Create Local Register Schema Draft",
+        "description": "A local experimental register schema will be created under `/config/eybond_local/register_schemas/`.\n\n| Detail | Value |\n|---|---|\n| Source schema | {source_schema} |\n| Suggested name | {suggested_output} |\n| Current override | {current_override} |\n\n{activation_hint}",
+        "data": {
+          "output_schema": "Output schema file path",
+          "overwrite": "Overwrite existing file"
+        },
+        "data_description": {
+          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
+          "overwrite": "Replace the file if it already exists."
+        }
+      },
+      "diagnostics_result": {
+        "title": "Diagnostics Result",
+        "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
+      }
+    }
+  }
+}

@@ -1,0 +1,277 @@
+{
+  "profile_key": "pi30_ascii",
+  "title": "PI30 / ASCII",
+  "driver_key": "pi30",
+  "protocol_family": "pi30",
+  "groups": [
+    {
+      "key": "power_source",
+      "title": "Power Source",
+      "order": 100,
+      "description": "Source priority and input behavior.",
+      "icon": "mdi:transmission-tower"
+    },
+    {
+      "key": "battery",
+      "title": "Battery Charging",
+      "order": 200,
+      "description": "Battery type and charging thresholds.",
+      "icon": "mdi:car-battery"
+    },
+    {
+      "key": "behavior",
+      "title": "Behavior Toggles",
+      "order": 300,
+      "description": "Alarm and recovery behavior switches.",
+      "icon": "mdi:tune"
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "output_source_priority",
+      "register": 0,
+      "value_kind": "enum",
+      "note": "PI30 POP command.",
+      "tested": true,
+      "title": "Output Source Priority",
+      "group": "power_source",
+      "order": 100,
+      "enum_map": {
+        "0": "Utility first",
+        "1": "Solar first",
+        "2": "SBU first"
+      },
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Changes how the inverter prioritizes utility, solar, and battery for output."
+    },
+    {
+      "key": "charger_source_priority",
+      "register": 0,
+      "value_kind": "enum",
+      "note": "PI30 PCP command.",
+      "tested": true,
+      "title": "Charge Source Priority",
+      "group": "power_source",
+      "order": 110,
+      "enum_map": {
+        "0": "Utility first",
+        "1": "Solar first",
+        "2": "Solar + Utility",
+        "3": "Only solar charging permitted"
+      },
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Changes which input source is allowed to charge the battery."
+    },
+    {
+      "key": "input_voltage_range",
+      "register": 0,
+      "value_kind": "enum",
+      "note": "PI30 PGR command.",
+      "tested": true,
+      "title": "Input Voltage Range",
+      "group": "power_source",
+      "order": 120,
+      "enum_map": {
+        "0": "Appliance",
+        "1": "UPS"
+      },
+      "enabled_default": true,
+      "change_summary": "Changes the acceptable grid input voltage window."
+    },
+    {
+      "key": "battery_type",
+      "register": 0,
+      "value_kind": "enum",
+      "note": "PI30 PBT command.",
+      "tested": true,
+      "title": "Battery Type",
+      "group": "battery",
+      "order": 200,
+      "enum_map": {
+        "0": "AGM",
+        "1": "Flooded",
+        "2": "User"
+      },
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Changes the charging profile battery chemistry."
+    },
+    {
+      "key": "battery_recharge_voltage",
+      "register": 0,
+      "value_kind": "scaled_u16",
+      "note": "PI30 PBCV command.",
+      "tested": true,
+      "title": "Battery Recharge Voltage",
+      "group": "battery",
+      "order": 210,
+      "divisor": 10,
+      "unit": "V",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Sets the voltage threshold for returning to battery charging in SBU mode."
+    },
+    {
+      "key": "battery_redischarge_voltage",
+      "register": 0,
+      "value_kind": "scaled_u16",
+      "note": "PI30 PBDV command.",
+      "tested": true,
+      "title": "Battery Redischarge Voltage",
+      "group": "battery",
+      "order": 220,
+      "divisor": 10,
+      "unit": "V",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Sets the voltage threshold for switching back from utility to battery."
+    },
+    {
+      "key": "battery_under_voltage",
+      "register": 0,
+      "value_kind": "scaled_u16",
+      "note": "PI30 PSDV command.",
+      "tested": true,
+      "title": "Battery Cut-off Voltage",
+      "group": "battery",
+      "order": 230,
+      "divisor": 10,
+      "unit": "V",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Sets the low-voltage cut-off threshold."
+    },
+    {
+      "key": "battery_bulk_voltage",
+      "register": 0,
+      "value_kind": "scaled_u16",
+      "note": "PI30 PCVV command.",
+      "tested": true,
+      "title": "Battery Bulk Voltage",
+      "group": "battery",
+      "order": 240,
+      "divisor": 10,
+      "unit": "V",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Sets the constant-voltage charging threshold."
+    },
+    {
+      "key": "battery_float_voltage",
+      "register": 0,
+      "value_kind": "scaled_u16",
+      "note": "PI30 PBFT command.",
+      "tested": true,
+      "title": "Battery Float Voltage",
+      "group": "battery",
+      "order": 250,
+      "divisor": 10,
+      "unit": "V",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Sets the float charging voltage."
+    },
+    {
+      "key": "buzzer_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEA/PDA command.",
+      "tested": true,
+      "title": "Buzzer Enabled",
+      "group": "behavior",
+      "order": 300,
+      "enabled_default": true
+    },
+    {
+      "key": "overload_bypass_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEB/PDB command.",
+      "tested": true,
+      "title": "Overload Bypass Enabled",
+      "group": "behavior",
+      "order": 310,
+      "enabled_default": true
+    },
+    {
+      "key": "power_saving_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEJ/PDJ command.",
+      "tested": true,
+      "title": "Power Saving Enabled",
+      "group": "behavior",
+      "order": 320,
+      "enabled_default": true
+    },
+    {
+      "key": "lcd_reset_to_default_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEK/PDK command.",
+      "tested": true,
+      "title": "LCD Auto Return",
+      "group": "behavior",
+      "order": 330,
+      "enabled_default": false
+    },
+    {
+      "key": "overload_restart_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEU/PDU command.",
+      "tested": true,
+      "title": "Overload Restart Enabled",
+      "group": "behavior",
+      "order": 340,
+      "enabled_default": true
+    },
+    {
+      "key": "over_temperature_restart_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEV/PDV command.",
+      "tested": true,
+      "title": "Over Temperature Restart Enabled",
+      "group": "behavior",
+      "order": 350,
+      "enabled_default": true
+    },
+    {
+      "key": "lcd_backlight_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEX/PDX command.",
+      "tested": true,
+      "title": "LCD Backlight Enabled",
+      "group": "behavior",
+      "order": 360,
+      "enabled_default": true
+    },
+    {
+      "key": "primary_source_interrupt_alarm_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEY/PDY command.",
+      "tested": true,
+      "title": "Primary Source Interrupt Alarm",
+      "group": "behavior",
+      "order": 370,
+      "enabled_default": false
+    },
+    {
+      "key": "record_fault_code_enabled",
+      "register": 0,
+      "value_kind": "bool",
+      "note": "PI30 PEZ/PDZ command.",
+      "tested": true,
+      "title": "Record Fault Code Enabled",
+      "group": "behavior",
+      "order": 380,
+      "enabled_default": false
+    }
+  ],
+  "presets": []
+}

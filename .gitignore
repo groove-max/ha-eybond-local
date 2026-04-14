@@ -1,0 +1,33 @@
+# Local-only publication prep artifacts
+.local/
+field_dumps/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Test and lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build outputs
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+.env
+
+# Notebook metadata
+.ipynb_checkpoints/
+
+# OS/editor noise
+.DS_Store

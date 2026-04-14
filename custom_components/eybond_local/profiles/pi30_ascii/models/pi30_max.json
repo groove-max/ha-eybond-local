@@ -1,0 +1,7 @@
+{
+  "extends": "./default.json",
+  "profile_key": "pi30_ascii_pi30_max",
+  "title": "PI30 MAX / ASCII Profile",
+  "driver_key": "pi30",
+  "protocol_family": "pi30"
+}

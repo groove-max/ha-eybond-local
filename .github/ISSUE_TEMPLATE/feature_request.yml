@@ -1,0 +1,56 @@
+name: Feature Request
+description: Propose a new capability, hardware family, UX improvement, or tooling enhancement.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues first.
+          required: true
+        - label: This request is scoped to EyeBond Local rather than generic Home Assistant behavior.
+          required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New hardware support
+        - New control capability
+        - New sensor / diagnostics entity
+        - Onboarding / setup UX
+        - Fixture / tooling workflow
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Explain the user problem first, not just the implementation idea.
+      placeholder: What is hard, missing, or inconvenient today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      placeholder: What would you like to see added or changed?
+    validations:
+      required: true
+  - type: textarea
+    id: hardware_context
+    attributes:
+      label: Hardware or protocol context
+      description: Include inverter family, model, collector type, or protocol details if relevant.
+      placeholder: PI30 family, VMII-NXPW5KW, SmartESS collector, etc.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Available evidence
+      description: If you already have fixtures, docs, or a Support Archive, note that here.
+      placeholder: Fixture link, protocol PDF, support archive filename, screenshots, etc.

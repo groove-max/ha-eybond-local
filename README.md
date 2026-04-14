@@ -1,0 +1,210 @@
+# EyeBond Local
+
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://www.mozilla.org/en-US/MPL/2.0/)
+
+[Українською](README.uk.md)
+
+**EyeBond Local** is a Home Assistant integration that talks directly to hybrid inverters connected through SmartESS / EyeBond Wi-Fi collectors — without going through the vendor's cloud.
+
+You get live monitoring, energy totals, and gated controls for supported inverters, all over your local network.
+
+If your inverter's stock monitoring already works through the SmartESS app, that's usually the strongest compatibility signal. The stock SmartESS monitoring also typically keeps working in parallel with EyeBond Local.
+
+> **Note:** This integration is in active development. Your inverter may need a Support Archive submission so we can confirm compatibility and decide the right next step. See [Supported Hardware](#supported-hardware) and [Getting Help](#getting-help).
+
+---
+
+## Highlights
+
+- **100% local** — no vendor cloud, no internet dependency.
+- **Guided setup wizard** with auto-discovery and a manual fallback.
+- **Safe by default** — controls stay read-only until detection is confident.
+- **Configurable polling interval** — from `2` to `3600` seconds, so updates can be much more frequent than the stock SmartESS refresh.
+- **Energy dashboard ready** — derived totals for PV, load, battery, and, on supported models, grid import/export.
+- **Open architecture** — JSON-first profiles and register schemas.
+
+---
+
+## Supported Hardware
+
+EyeBond Local works with inverters whose stock monitoring is available through **SmartESS**. This can be an external **SmartESS / EyeBond Wi-Fi collector** or a built-in Wi-Fi module that speaks the same local protocol.
+
+The stock SmartESS monitoring usually keeps working in parallel: EyeBond Local does not replace it or interfere with it.
+
+| Protocol / profile | Status | Notes |
+|---|---|---|
+| **SMG / Modbus** | Supported | Local protocol/profile used by some hybrid inverters; full monitoring + tested controls |
+| **PI30 ASCII** | Supported | PI30-family protocol; full monitoring + tested controls on supported variants |
+| **PI18 ASCII** | Experimental | PI18-family protocol; replay-tested only, not production-ready |
+
+Names such as **SMG / Modbus** and **PI30 ASCII** refer to the detected protocol or compatibility profile, not the commercial model name printed on the inverter.
+
+Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support.
+
+---
+
+## Installation
+
+### Via HACS (recommended)
+
+1. Open **HACS → Integrations**.
+2. Click the menu (three dots) → **Custom repositories**.
+3. Add `https://github.com/groove-max/ha-eybond-local` with category **Integration**.
+4. Find **EyeBond Local** in the list and click **Download**.
+5. Restart Home Assistant.
+6. Go to **Settings → Devices & Services → Add Integration** and search for **EyeBond Local**.
+
+### Manual installation
+
+1. Download the latest release.
+2. Copy `custom_components/eybond_local/` into your Home Assistant `config/custom_components/` directory.
+3. Restart Home Assistant.
+4. Add the integration from **Settings → Devices & Services**.
+
+---
+
+## Setup Walkthrough
+
+The setup wizard takes care of most of the work for you.
+
+**1. Welcome** — pick the connection type and confirm to start. The wizard tells you which Home Assistant interface it will scan from.
+
+<p align="center"><img src="docs/images/setup-01-welcome.png" alt="Welcome screen" width="320"></p>
+
+**2. Scanning** — the integration broadcasts a discovery probe on your local network. This takes 5–15 seconds.
+
+<p align="center"><img src="docs/images/setup-02-scanning.png" alt="Scanning network" width="480"></p>
+
+**3. Detected devices** — you'll see a list of found collectors and inverters with status badges:
+
+- **Ready** — confidently detected, safe to add.
+- **Review** — found but with low confidence.
+- **Collector only** — collector responded but the inverter is not yet identified.
+
+<p align="center"><img src="docs/images/setup-03-detected-devices.png" alt="Detected devices" width="320"></p>
+
+**4. Confirm** — review the detected model, serial, and driver in the summary table, then confirm.
+
+<p align="center"><img src="docs/images/setup-04-confirm.png" alt="Confirm detection" width="320"></p>
+
+If auto-detection doesn't find anything, use **Manual setup** from the results screen to enter connection details directly. You'll usually need the Wi-Fi module or collector's local IP address; the easiest place to find it is often your router's web UI. Advanced fields (ports, discovery, keep-alive) are tucked into a collapsible section so you only see what you need.
+
+<p align="center"><img src="docs/images/setup-manual.png" alt="Manual setup" width="360"></p>
+
+> **Tip:** Keep Home Assistant and the collector on the **same subnet** if you want auto-discovery, because broadcast discovery usually doesn't cross routers.
+
+### Remote / NAT Manual Setup
+
+Most users should leave these advanced fields alone. They are for cases where the collector is remote and must connect back through VPN routing or port forwarding.
+
+Use this feature only when local same-subnet discovery is not enough. If Home Assistant and the collector are on one LAN, leave the advertised callback fields empty.
+
+- **Home Assistant interface / Local listener IP**: the local IPv4 address Home Assistant binds the TCP listener to.
+- **Collector IP**: direct IPv4 address used for unicast probing. For remote/NAT setups, use the public or forwarded IPv4 that reaches the collector.
+- **Local TCP port**: the TCP listener on Home Assistant. Default: `8899`.
+- **Advertised callback IP**: the IPv4 written into `set>server=...`. Leave it empty to advertise the local listener IP. Set it only when the collector must call back through a different VPN/public/NAT-reachable address.
+- **Advertised callback TCP port**: the TCP port written into `set>server=...`. Leave it empty to advertise the local TCP port. Override it only when the externally forwarded port is different from the local listener port.
+- **UDP discovery port**: the collector discovery redirect port. Default: `58899`.
+- **Discovery target**: subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.
+- **Discovery interval / Heartbeat interval**: how often Home Assistant re-announces itself and then sends keep-alives after the collector connects.
+
+Need a full walkthrough with examples for VPN and port-forwarding setups? See [Remote / NAT Setup Guide](docs/REMOTE_SETUP.md).
+
+---
+
+## What You Get
+
+After setup, the integration adds a single device with:
+
+- **Sensors** — inverter, PV, battery, and grid measurements (power, voltage, current, temperature, frequency).
+- **Polling control** — the sensor refresh interval is configurable from `2` to `3600` seconds in the integration options.
+- **Energy totals** — derived `kWh` totals for PV production, load consumption, and battery charge/discharge, plus grid import/export on models that expose grid power. Drop them straight into the **Energy dashboard**.
+- **Binary sensors** — operating mode, faults, alarms, charging state.
+- **Controls** — `number`, `select`, `switch`, and `button` entities for supported settings (charge limits, output mode, beep, etc.). These are gated by detection confidence and start hidden until they're known to be safe.
+- **Diagnostics** — connection state, driver match, support level, and a one-click **Support Archive** export.
+
+<p align="center"><img src="docs/images/sensors.png" alt="Live sensors after setup" width="320"></p>
+
+On supported hardware, the settings screen exposes native Home Assistant controls for writable inverter options.
+
+<p align="center"><img src="docs/images/settings.png" alt="Settings and controls after setup" width="320"></p>
+
+---
+
+## Getting Help
+
+If something doesn't work, the fastest path is:
+
+1. Open the integration's **Configure → Diagnostics and experimental metadata** screen.
+2. Click **Create support archive**.
+3. Open a [GitHub issue](https://github.com/groove-max/ha-eybond-local/issues) and attach the generated ZIP.
+
+The Support Archive contains an anonymized snapshot of your inverter's state, register reads, and detection results. That's usually enough to understand compatibility and decide the next step. If your device turns out to use a different protocol or a non-standard variant, we may need more evidence or more than one iteration before support can be added.
+
+### Issue templates
+
+- **Bug Report** — for reproducible regressions on already-supported hardware.
+- **Support Archive / Hardware Diagnostics** — for unsupported hardware, onboarding failures, and partial support. Always attach the generated ZIP.
+- **Feature Request** — for new hardware support or UX improvements.
+
+---
+
+## Troubleshooting
+
+| Problem | Try this |
+|---|---|
+| Auto-scan finds nothing | Use **Change scan interface** to pick a different network interface. If you switch to **Manual setup**, find the Wi-Fi module or collector's local IP address first, usually from your router. |
+| Stuck on "Collector only" | The collector responded, but the integration still can't confidently identify the protocol, profile, or exact inverter model. Submit a Support Archive. |
+| Sensors stay unavailable | Check that the collector is on the same subnet as Home Assistant, and that nothing is blocking TCP `8899` / UDP `58899`. |
+| Remote collector replies but never connects back | Check **Advertised callback IP** and **Advertised callback TCP port** first. They must match the address and forwarded TCP port that the collector can really reach. |
+| Remote setup is flaky over the public internet | Prefer VPN over raw NAT if either side is behind CGNAT or if UDP/TCP forwarding is unreliable. |
+| Controls are missing | In **Auto** mode, controls only appear when detection confidence is high and the relevant capabilities are marked as tested. If monitoring works for a PI30-family inverter but the exact model was not matched, you can open **Runtime settings** and switch to **Full control**. This is a manual safety override that exposes every write command, so use it only at your own risk and preferably after exporting a Support Archive. |
+
+---
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Remote / NAT setup guide](docs/REMOTE_SETUP.md) — when and how to use the new callback override fields
+- [Adding a new driver / profile](docs/ADDING_DRIVERS.md) — for developers extending hardware support
+- [SMG support matrix](docs/SMG_SUPPORT_MATRIX.md)
+- [Tools and CLI scripts](tools/README.md)
+- [Contributing guide](CONTRIBUTING.md)
+
+---
+
+## Repository Layout
+
+A short orientation for people browsing the source. Full developer notes live in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- `custom_components/eybond_local/` — integration source code
+- `custom_components/eybond_local/profiles/` — declarative capability metadata (JSON)
+- `custom_components/eybond_local/register_schemas/` — read-side register layouts (JSON)
+- `docs/` — public documentation and generated reports
+- `tools/` — CLI utilities for probing, local fixture workflows, and validation
+- `.local/fixtures/catalog/` — local replay fixtures kept out of git
+- `tests/` — unit and regression tests
+
+---
+
+## Validation
+
+Quick smoke check from the repository root:
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 tools/quality_gate.py
+```
+
+The full developer workflow is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## License
+
+Licensed under [MPL-2.0](LICENSE) — a deliberate middle ground between permissive and strong-copyleft licenses:
+
+- end users can install, run, fork, and package the integration freely
+- if you distribute modified versions of covered files, those file-level changes must remain available under the same license
+- friendlier than GPL for Home Assistant users, but less "take and close" than MIT or Apache-2.0

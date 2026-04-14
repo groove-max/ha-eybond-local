@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "manual": {
+        "sections": {
+          "advanced_connection": "mdi:tune"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "runtime": {
+        "sections": {
+          "connection": "mdi:lan"
+        }
+      }
+    }
+  }
+}

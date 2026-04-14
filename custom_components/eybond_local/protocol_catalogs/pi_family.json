@@ -1,0 +1,62 @@
+{
+  "protocol_families": {
+    "PI15": "pi15",
+    "PI16": "pi16",
+    "PI18": "pi18",
+    "PI30": "pi30",
+    "PI41": "pi41"
+  },
+  "pi30_variants": [
+    {
+      "key": "pi41",
+      "protocol_ids": [
+        "PI41"
+      ],
+      "model_candidates": [],
+      "qmod_codes": [],
+      "qflag_contains_any": [],
+      "profile_name": "pi30_ascii/models/pi41.json",
+      "register_schema_name": "pi30_ascii/models/pi41.json"
+    },
+    {
+      "key": "pi30_max",
+      "match_any": [
+        {
+          "min_qpiri_fields": 28
+        },
+        {
+          "qflag_contains_any": [
+            "d"
+          ]
+        }
+      ],
+      "profile_name": "pi30_ascii/models/pi30_max.json",
+      "register_schema_name": "pi30_ascii/models/pi30_max.json"
+    },
+    {
+      "key": "pi30_pip_gk",
+      "protocol_ids": [],
+      "model_candidates": [],
+      "qmod_codes": [
+        "E"
+      ],
+      "qflag_contains_any": [],
+      "min_qpiri_fields": 25,
+      "min_qpigs_fields": 21,
+      "min_qpiws_bits": 36,
+      "profile_name": "pi30_ascii/models/pi30_pip_gk.json",
+      "register_schema_name": "pi30_ascii/models/pi30_pip_gk.json"
+    },
+    {
+      "key": "vmii_nxpw5kw",
+      "protocol_ids": [],
+      "model_candidates": [
+        "vmii-nxpw5kw"
+      ],
+      "qmod_codes": [],
+      "qflag_contains_any": [],
+      "profile_name": "pi30_ascii/models/vmii_nxpw5kw.json",
+      "register_schema_name": "pi30_ascii/models/vmii_nxpw5kw.json"
+    }
+  ]
+}

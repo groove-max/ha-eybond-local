@@ -1,0 +1,85 @@
+name: Bug Report
+description: Report a reproducible problem in a supported or partially supported flow.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues first.
+          required: true
+        - label: I am using the latest released version or current default branch.
+          required: true
+        - label: I included the relevant Home Assistant and integration versions below.
+          required: true
+        - label: If this is about unsupported hardware, onboarding evidence, or incomplete support, I will use the Support Archive template instead.
+          required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: 2026.4.1
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: EyeBond Local version
+      placeholder: 0.1.43
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Inverter / collector model
+      placeholder: SMG 6200 + EyeBond Wi-Fi collector
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Onboarding / discovery
+        - Runtime polling
+        - Entities / values
+        - Controls / writes
+        - Support archive / diagnostics
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: A concise description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, or additional context
+      description: Paste relevant logs or screenshots. Redact secrets if needed.
+      render: shell

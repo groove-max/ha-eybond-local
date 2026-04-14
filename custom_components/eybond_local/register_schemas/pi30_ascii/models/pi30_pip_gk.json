@@ -1,0 +1,7 @@
+{
+  "extends": "./default.json",
+  "schema_key": "pi30_ascii_pi30_pip_gk",
+  "title": "PI30 PIP-GK / ASCII Register Schema",
+  "driver_key": "pi30",
+  "protocol_family": "pi30"
+}

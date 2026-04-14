@@ -1,0 +1,1312 @@
+{
+  "schema_key": "modbus_smg_base",
+  "title": "SMG Register Schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "blocks": [
+    {
+      "key": "status",
+      "start": 100,
+      "count": 10
+    },
+    {
+      "key": "serial",
+      "start": 186,
+      "count": 12
+    },
+    {
+      "key": "live",
+      "start": 201,
+      "count": 34
+    },
+    {
+      "key": "config",
+      "start": 300,
+      "count": 44
+    }
+  ],
+  "scalar_registers": {
+    "rated_power_register": 643
+  },
+  "enum_tables": {
+    "mode_names": {
+      "0": "Power On",
+      "1": "Standby",
+      "2": "Mains",
+      "3": "Off-Grid",
+      "4": "Bypass",
+      "5": "Charging",
+      "6": "Fault"
+    },
+    "output_mode": {
+      "0": "Single",
+      "1": "Parallel",
+      "2": "3 Phase-P1",
+      "3": "3 Phase-P2",
+      "4": "3 Phase-P3"
+    },
+    "output_source_priority": {
+      "0": "Utility-PV-Battery",
+      "1": "PV-Utility-Battery",
+      "2": "PV-Battery-Utility"
+    },
+    "input_voltage_range": {
+      "0": "Wide Range",
+      "1": "Narrow Range"
+    },
+    "buzzer_mode": {
+      "0": "Mute",
+      "1": "Source Change, Warning, Fault",
+      "2": "Warning and Fault",
+      "3": "Fault Only"
+    },
+    "lcd_backlight_mode": {
+      "0": "Timed Off",
+      "1": "Always On"
+    },
+    "lcd_auto_return_mode": {
+      "0": "Off",
+      "1": "On"
+    },
+    "power_saving_mode": {
+      "0": "Off",
+      "1": "On"
+    },
+    "overload_restart_mode": {
+      "0": "Off",
+      "1": "On"
+    },
+    "over_temperature_restart_mode": {
+      "0": "Off",
+      "1": "On"
+    },
+    "overload_bypass_mode": {
+      "0": "Off",
+      "1": "On"
+    },
+    "battery_equalization_mode": {
+      "0": "Off",
+      "1": "On"
+    },
+    "charge_source_priority": {
+      "0": "Utility Priority",
+      "1": "PV Priority",
+      "2": "PV and Utility",
+      "3": "PV Only"
+    },
+    "turn_on_mode": {
+      "0": "Local and Remote",
+      "1": "Local Only",
+      "2": "Remote Only"
+    },
+    "remote_switch": {
+      "0": "Remote Shutdown",
+      "1": "Remote Turn-On"
+    }
+  },
+  "bit_labels": {
+    "fault_code_names": {
+      "1": "Inverter Module Over Temperature",
+      "2": "DCDC Module Over Temperature",
+      "3": "Battery Over Voltage",
+      "4": "PV Module Over Temperature",
+      "5": "Output Short Circuit",
+      "6": "Inverter Over Voltage",
+      "7": "Output Overload",
+      "8": "Bus Over Voltage",
+      "9": "Bus Soft Start Timeout",
+      "10": "PV Over Current",
+      "11": "PV Over Voltage",
+      "12": "Battery Over Current",
+      "13": "Inverter Over Current",
+      "14": "Bus Low Voltage",
+      "15": "Reserved / Vendor-Specific Fault Bit 15",
+      "16": "Inverter DC Component Too High",
+      "17": "Reserved / Vendor-Specific Fault Bit 17",
+      "18": "Output Current Zero Bias Too Large",
+      "19": "Inverter Current Zero Bias Too Large",
+      "20": "Battery Current Zero Bias Too Large",
+      "21": "PV Current Zero Bias Too Large",
+      "22": "Inverter Low Voltage",
+      "23": "Inverter Negative Power Protection",
+      "24": "Parallel Host Lost",
+      "25": "Parallel Synchronization Signal Abnormal",
+      "26": "Battery Type Incompatible",
+      "27": "Parallel Firmware Incompatible"
+    },
+    "warning_code_names": {
+      "0": "Reserved / Vendor-Specific Warning Bit 0",
+      "1": "Mains Waveform Abnormal",
+      "2": "Reserved / Vendor-Specific Warning Bit 2",
+      "3": "Mains Low Voltage",
+      "4": "Mains Over Frequency",
+      "5": "Mains Low Frequency",
+      "6": "PV Low Voltage",
+      "7": "Over Temperature",
+      "8": "Battery Low Voltage",
+      "9": "Battery Not Connected",
+      "10": "Overload",
+      "11": "Battery Equalization Charging",
+      "12": "Battery Discharged Below Recovery Point",
+      "13": "Output Power Derating",
+      "14": "Fan Blocked",
+      "15": "PV Energy Too Low To Use",
+      "16": "Parallel Communication Interrupted",
+      "17": "Single/Parallel Output Mode Mismatch",
+      "18": "Parallel Battery Voltage Difference Too Large"
+    }
+  },
+  "spec_sets": {
+    "status": [
+      {
+        "key": "fault_code",
+        "register": 100,
+        "word_count": 2,
+        "combine": "u32_high_first"
+      },
+      {
+        "key": "warning_code",
+        "register": 108,
+        "word_count": 2,
+        "combine": "u32_high_first"
+      }
+    ],
+    "live": [
+      {
+        "key": "operating_mode",
+        "register": 201,
+        "enum_table": "mode_names"
+      },
+      {
+        "key": "grid_voltage",
+        "register": 202,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_frequency",
+        "register": 203,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_power",
+        "register": 204,
+        "signed": true
+      },
+      {
+        "key": "inverter_voltage",
+        "register": 205,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_current",
+        "register": 206,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_frequency",
+        "register": 207,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "inverter_power",
+        "register": 208,
+        "signed": true
+      },
+      {
+        "key": "inverter_charging_power",
+        "register": 209,
+        "signed": true
+      },
+      {
+        "key": "output_voltage",
+        "register": 210,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_current",
+        "register": 211,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_frequency",
+        "register": 212,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "output_power",
+        "register": 213
+      },
+      {
+        "key": "output_va",
+        "register": 214
+      },
+      {
+        "key": "battery_voltage",
+        "register": 215,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_average_current",
+        "register": 216,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_average_power",
+        "register": 217,
+        "signed": true
+      },
+      {
+        "key": "pv_voltage",
+        "register": 219,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_current",
+        "register": 220,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_power",
+        "register": 223,
+        "signed": true
+      },
+      {
+        "key": "pv_charging_power",
+        "register": 224,
+        "signed": true
+      },
+      {
+        "key": "load_percent",
+        "register": 225
+      },
+      {
+        "key": "dcdc_temperature",
+        "register": 226,
+        "signed": true
+      },
+      {
+        "key": "inverter_temperature",
+        "register": 227,
+        "signed": true
+      },
+      {
+        "key": "battery_percent",
+        "register": 229
+      },
+      {
+        "key": "battery_current",
+        "register": 232,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "charge_average_current",
+        "register": 233,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_charging_current",
+        "register": 234,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      }
+    ],
+    "config": [
+      {
+        "key": "output_mode",
+        "register": 300,
+        "enum_table": "output_mode"
+      },
+      {
+        "key": "output_source_priority",
+        "register": 301,
+        "enum_table": "output_source_priority"
+      },
+      {
+        "key": "input_voltage_range",
+        "register": 302,
+        "enum_table": "input_voltage_range"
+      },
+      {
+        "key": "buzzer_mode",
+        "register": 303,
+        "enum_table": "buzzer_mode"
+      },
+      {
+        "key": "lcd_backlight_mode",
+        "register": 305,
+        "enum_table": "lcd_backlight_mode"
+      },
+      {
+        "key": "lcd_auto_return_mode",
+        "register": 306,
+        "enum_table": "lcd_auto_return_mode"
+      },
+      {
+        "key": "power_saving_mode",
+        "register": 307,
+        "enum_table": "power_saving_mode"
+      },
+      {
+        "key": "overload_restart_mode",
+        "register": 308,
+        "enum_table": "overload_restart_mode"
+      },
+      {
+        "key": "over_temperature_restart_mode",
+        "register": 309,
+        "enum_table": "over_temperature_restart_mode"
+      },
+      {
+        "key": "overload_bypass_mode",
+        "register": 310,
+        "enum_table": "overload_bypass_mode"
+      },
+      {
+        "key": "battery_equalization_mode",
+        "register": 313,
+        "enum_table": "battery_equalization_mode"
+      },
+      {
+        "key": "output_rating_voltage",
+        "register": 320,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_rating_frequency",
+        "register": 321,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "battery_overvoltage_protection_voltage",
+        "register": 323,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_bulk_voltage",
+        "register": 324,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_float_voltage",
+        "register": 325,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_redischarge_voltage",
+        "register": 326,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_under_voltage",
+        "register": 327,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_under_voltage_off_grid",
+        "register": 329,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "charge_source_priority",
+        "register": 331,
+        "enum_table": "charge_source_priority"
+      },
+      {
+        "key": "max_charge_current",
+        "register": 332,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "max_ac_charge_current",
+        "register": 333,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_equalization_voltage",
+        "register": 334,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_equalization_time",
+        "register": 335
+      },
+      {
+        "key": "battery_equalization_timeout",
+        "register": 336
+      },
+      {
+        "key": "battery_equalization_interval",
+        "register": 337
+      },
+      {
+        "key": "low_dc_protection_soc_grid_mode",
+        "register": 341
+      },
+      {
+        "key": "solar_battery_utility_return_soc_threshold",
+        "register": 342
+      },
+      {
+        "key": "low_dc_cutoff_soc",
+        "register": 343
+      }
+    ],
+    "aux_config": [
+      {
+        "key": "turn_on_mode",
+        "register": 406,
+        "enum_table": "turn_on_mode"
+      },
+      {
+        "key": "remote_switch",
+        "register": 420,
+        "enum_table": "remote_switch"
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "rated_power",
+      "name": "Rated Power",
+      "unit": "W",
+      "device_class": "power",
+      "diagnostic": true,
+      "live": false
+    },
+    {
+      "key": "output_rating_voltage",
+      "name": "Output Rating Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "output_rating_frequency",
+      "name": "Output Rating Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "output_mode",
+      "name": "Output Mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "output_source_priority",
+      "name": "Output Source Priority",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "input_voltage_range",
+      "name": "Input Voltage Range",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "buzzer_mode",
+      "name": "Buzzer Mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "lcd_backlight_mode",
+      "name": "LCD Backlight",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "lcd_auto_return_mode",
+      "name": "LCD Auto Return",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "power_saving_mode",
+      "name": "Power Saving",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "overload_restart_mode",
+      "name": "Overload Restart",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "over_temperature_restart_mode",
+      "name": "Over Temperature Restart",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "overload_bypass_mode",
+      "name": "Overload Bypass",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_equalization_mode",
+      "name": "Battery Equalization",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "turn_on_mode",
+      "name": "Turn On Mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "remote_switch",
+      "name": "Remote Switch",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charge_source_priority",
+      "name": "Charge Source Priority",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_bulk_voltage",
+      "name": "Battery Bulk Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_float_voltage",
+      "name": "Battery Float Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_redischarge_voltage",
+      "name": "Battery Redischarge Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_under_voltage",
+      "name": "Battery Under Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_overvoltage_protection_voltage",
+      "name": "Battery Overvoltage Protection",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_under_voltage_off_grid",
+      "name": "Battery Under Voltage Off-Grid",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "max_charge_current",
+      "name": "Max Charge Current",
+      "unit": "A",
+      "device_class": "current",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "max_ac_charge_current",
+      "name": "Max AC Charge Current",
+      "unit": "A",
+      "device_class": "current",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "name": "Battery Equalization Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_equalization_time",
+      "name": "Battery Equalization Time",
+      "unit": "min",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_equalization_timeout",
+      "name": "Battery Equalization Timeout",
+      "unit": "min",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_equalization_interval",
+      "name": "Battery Equalization Interval",
+      "unit": "d",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_dc_protection_soc_grid_mode",
+      "name": "Low DC Protection SOC in Grid Mode",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "name": "Return To Solar-Battery-Utility Threshold",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_dc_cutoff_soc",
+      "name": "Low DC Cut-Off SOC",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "operating_mode",
+      "name": "Operating Mode",
+      "icon": "mdi:state-machine",
+      "enabled_default": true
+    },
+    {
+      "key": "operational_state",
+      "name": "System Status",
+      "icon": "mdi:play-network-outline",
+      "enabled_default": true
+    },
+    {
+      "key": "site_mode_state",
+      "name": "Site Mode",
+      "icon": "mdi:home-lightning-bolt-outline",
+      "enabled_default": true
+    },
+    {
+      "key": "power_flow_summary",
+      "name": "Power Flow",
+      "icon": "mdi:source-branch",
+      "enabled_default": true
+    },
+    {
+      "key": "protection_state",
+      "name": "Protection Status",
+      "icon": "mdi:shield-alert-outline",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "alarm_context_state",
+      "name": "Alarm Context",
+      "icon": "mdi:alert-box-outline",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "grid_assist_state",
+      "name": "Grid Assist",
+      "icon": "mdi:transmission-tower-export",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_connection_state",
+      "name": "Battery Connection",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "fault_code",
+      "name": "Fault Code",
+      "diagnostic": true
+    },
+    {
+      "key": "warning_code",
+      "name": "Warning Code",
+      "diagnostic": true
+    },
+    {
+      "key": "fault_count",
+      "name": "Active Fault Count",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "warning_count",
+      "name": "Active Warning Count",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "fault_descriptions",
+      "name": "Fault Details",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "warning_descriptions",
+      "name": "Warning Details",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "grid_voltage",
+      "name": "Grid Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "icon": "mdi:transmission-tower",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "grid_frequency",
+      "name": "Grid Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "icon": "mdi:sine-wave",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "grid_power",
+      "name": "Grid Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:transmission-tower",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "grid_power_direction",
+      "name": "Grid Power Direction",
+      "icon": "mdi:transmission-tower",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "inverter_voltage",
+      "name": "Inverter Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "icon": "mdi:flash-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "inverter_current",
+      "name": "Inverter Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:current-ac",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "inverter_frequency",
+      "name": "Inverter Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "icon": "mdi:sine-wave",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "inverter_power",
+      "name": "Inverter Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:flash-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "inverter_charging_power",
+      "name": "Inverter Charging Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:battery-charging-medium",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "output_voltage",
+      "name": "Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "icon": "mdi:flash",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "output_current",
+      "name": "Output Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:current-ac",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "output_frequency",
+      "name": "Output Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "icon": "mdi:sine-wave",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "output_power",
+      "name": "Load Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:flash"
+    },
+    {
+      "key": "output_state",
+      "name": "Output State",
+      "icon": "mdi:flash",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "load_supply_state",
+      "name": "Load Supply",
+      "icon": "mdi:transmission-tower-import",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "output_va",
+      "name": "Output Apparent Power",
+      "unit": "VA",
+      "state_class": "measurement",
+      "icon": "mdi:flash-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "load_percent",
+      "name": "Load Percent",
+      "unit": "%",
+      "state_class": "measurement",
+      "icon": "mdi:gauge"
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "icon": "mdi:battery-medium",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_percent",
+      "name": "Battery Percent",
+      "unit": "%",
+      "device_class": "battery",
+      "state_class": "measurement",
+      "icon": "mdi:battery"
+    },
+    {
+      "key": "battery_current",
+      "name": "Battery Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:battery-arrow-up-outline",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_average_current",
+      "name": "Battery Average Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:battery-heart-variant",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_average_power",
+      "name": "Battery Average Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:battery-charging-medium",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_power_direction",
+      "name": "Battery Power Direction",
+      "icon": "mdi:battery-medium",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_role_state",
+      "name": "Battery Role",
+      "icon": "mdi:battery-heart-variant",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "charging_source_state",
+      "name": "Charging Source",
+      "icon": "mdi:battery-charging",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "charge_source_policy_state",
+      "name": "Charging Policy",
+      "icon": "mdi:tune-variant",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "charging_settings_state",
+      "name": "Charging Settings",
+      "icon": "mdi:battery-charging-medium",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "charge_average_current",
+      "name": "Charge Average Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:current-ac",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_voltage",
+      "name": "PV Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "icon": "mdi:solar-power",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_current",
+      "name": "PV Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:solar-power",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_power",
+      "name": "PV Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:solar-power"
+    },
+    {
+      "key": "pv_state",
+      "name": "PV State",
+      "icon": "mdi:solar-power-variant",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "pv_role_state",
+      "name": "PV Role",
+      "icon": "mdi:solar-power-variant-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "pv_charging_power",
+      "name": "PV Charging Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:solar-power-variant",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_charging_current",
+      "name": "PV Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "icon": "mdi:solar-power-variant-outline",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "dcdc_temperature",
+      "name": "DCDC Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "icon": "mdi:thermometer",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "inverter_temperature",
+      "name": "Inverter Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "icon": "mdi:thermometer-lines"
+    },
+    {
+      "key": "battery_settings_state",
+      "name": "Battery Settings",
+      "icon": "mdi:battery",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "output_settings_state",
+      "name": "Output Settings",
+      "icon": "mdi:flash",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "utility_role_state",
+      "name": "Utility Role",
+      "icon": "mdi:transmission-tower",
+      "diagnostic": true,
+      "enabled_default": false
+    }
+  ],
+  "binary_sensor_descriptions": [
+    {
+      "key": "configuration_safe_mode",
+      "name": "Configuration Safe Mode",
+      "icon": "mdi:shield-check-outline",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "remote_control_enabled",
+      "name": "Remote Control Enabled",
+      "icon": "mdi:remote",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalization_enabled",
+      "name": "Battery Equalization Enabled",
+      "icon": "mdi:battery-sync",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "ac_charging_allowed",
+      "name": "Utility Charging Allowed",
+      "icon": "mdi:power-plug-battery",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_only_charging",
+      "name": "PV-Only Charging Policy",
+      "icon": "mdi:solar-power-variant",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_connected",
+      "name": "Battery Connected",
+      "icon": "mdi:battery-check",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "warning_active",
+      "name": "Warnings Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "fault_active",
+      "name": "Fault Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_protection_active",
+      "name": "Battery Protection Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "grid_warning_active",
+      "name": "Grid Warning Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_warning_active",
+      "name": "PV Warning Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "thermal_warning_active",
+      "name": "Thermal Warning Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "load_protection_active",
+      "name": "Load Protection Active",
+      "device_class": "problem",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "pv_producing",
+      "name": "PV Producing",
+      "device_class": "power",
+      "icon": "mdi:solar-power",
+      "enabled_default": true
+    },
+    {
+      "key": "charging_active",
+      "name": "Charging Active",
+      "device_class": "battery_charging",
+      "icon": "mdi:battery-charging",
+      "enabled_default": true
+    },
+    {
+      "key": "battery_charging",
+      "name": "Battery Charging",
+      "device_class": "battery_charging",
+      "icon": "mdi:battery-arrow-up",
+      "enabled_default": false
+    },
+    {
+      "key": "battery_discharging",
+      "name": "Battery Discharging",
+      "device_class": "power",
+      "icon": "mdi:battery-arrow-down",
+      "enabled_default": false
+    },
+    {
+      "key": "load_active",
+      "name": "Load Active",
+      "device_class": "running",
+      "icon": "mdi:lightning-bolt",
+      "enabled_default": true
+    }
+  ]
+}

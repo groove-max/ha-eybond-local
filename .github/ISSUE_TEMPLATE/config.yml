@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/groove-max/ha-eybond-local#readme
+    about: Installation, setup, and project scope.
+  - name: Support Workflow
+    url: https://github.com/groove-max/ha-eybond-local#support-workflow
+    about: Generate a Support Archive before filing unsupported-device or diagnostics issues.
