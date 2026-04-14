@@ -286,15 +286,6 @@
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond collectors…"
     },
-    "selector": {
-      "control_mode": {
-        "options": {
-          "auto": "Auto",
-          "read_only": "Read only",
-          "full": "Full control"
-        }
-      }
-    },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",
       "invalid_port": "Invalid TCP port.",
@@ -409,6 +400,15 @@
       "diagnostics_result": {
         "title": "Diagnostics Result",
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
+      }
+    }
+  },
+  "selector": {
+    "control_mode": {
+      "options": {
+        "auto": "Auto",
+        "read_only": "Read only",
+        "full": "Full control"
       }
     }
   }

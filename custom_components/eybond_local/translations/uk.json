@@ -286,15 +286,6 @@
     "progress": {
       "scanning_network": "Сканування локальної мережі на наявність колекторів EyeBond…"
     },
-    "selector": {
-      "control_mode": {
-        "options": {
-          "auto": "Авто",
-          "read_only": "Лише читання",
-          "full": "Повний контроль"
-        }
-      }
-    },
     "error": {
       "invalid_ip": "Некоректна IPv4-адреса.",
       "invalid_port": "Некоректний TCP-порт.",
@@ -409,6 +400,15 @@
       "diagnostics_result": {
         "title": "Результат діагностики",
         "description": "**{action_title}**\n\n{status}\n\n**Шлях:** `{path}`\n**Завантажити:** {download_markdown}\n\n**Наступний крок:** {next_step}"
+      }
+    }
+  },
+  "selector": {
+    "control_mode": {
+      "options": {
+        "auto": "Авто",
+        "read_only": "Лише читання",
+        "full": "Повний контроль"
       }
     }
   }

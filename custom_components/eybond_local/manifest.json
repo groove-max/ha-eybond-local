@@ -1,13 +1,13 @@
 {
   "domain": "eybond_local",
   "name": "EyeBond Local",
-  "integration_type": "device",
   "codeowners": [
     "@groove-max"
   ],
   "config_flow": true,
-  "iot_class": "local_polling",
   "documentation": "https://github.com/groove-max/ha-eybond-local",
+  "integration_type": "device",
+  "iot_class": "local_polling",
   "issue_tracker": "https://github.com/groove-max/ha-eybond-local/issues",
   "requirements": [],
   "version": "0.1.43"

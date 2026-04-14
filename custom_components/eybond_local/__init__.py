@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+try:
+    import homeassistant.helpers.config_validation as cv
+except ModuleNotFoundError:  # Local tooling imports the package without Home Assistant installed.
+    cv = None
 
 from .const import CONF_CONNECTION_TYPE, CONF_SERVER_IP, CONNECTION_TYPE_EYBOND, PLATFORMS
 from .metadata.profile_loader import set_external_profile_roots
@@ -17,6 +22,12 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 logger = logging.getLogger(__name__)
+
+CONFIG_SCHEMA: Any = (
+    cv.config_entry_only_config_schema("eybond_local")
+    if cv is not None
+    else None
+)
 
 
 def _configure_local_metadata_roots(hass: HomeAssistant) -> None:
