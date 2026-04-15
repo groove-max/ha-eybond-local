@@ -22,6 +22,7 @@ Start with the [Contributing guide](../CONTRIBUTING.md) for the project philosop
 Then dive into one of:
 
 - [Adding A New Driver / Profile](ADDING_DRIVERS.md) — fixture-first workflow for extending hardware support
+- [Releasing](RELEASING.md) — changelog-first release flow and GitHub release notes generation
 - [Tools And CLI Scripts](../tools/README.md) — probing, fixtures, validation, doc generation
 
 ## I'm reviewing project status

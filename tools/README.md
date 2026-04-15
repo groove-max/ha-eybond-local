@@ -126,6 +126,22 @@ Refresh generated docs first, then run the quality gate:
 python3 tools/quality_gate.py --refresh-generated
 ```
 
+## I want to cut a release
+
+Render the GitHub release body for a version directly from `CHANGELOG.md`:
+
+```bash
+python3 tools/render_release_notes.py v0.1.43
+```
+
+Write the release body to a file for `gh release create --notes-file`:
+
+```bash
+python3 tools/render_release_notes.py v0.1.43 --output .local/release-notes/v0.1.43.md
+```
+
+The full maintainer flow is documented in [docs/RELEASING.md](../docs/RELEASING.md).
+
 ---
 
 ## I want to refresh generated documentation

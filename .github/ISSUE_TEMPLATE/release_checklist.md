@@ -8,7 +8,7 @@ assignees: groove-max
 
 ## Version And Metadata
 
-- [ ] Confirm the release scope and changelog summary.
+- [ ] Update `CHANGELOG.md` and confirm the release scope is reflected in the target version section.
 - [ ] Verify the version in `custom_components/eybond_local/manifest.json`.
 - [ ] Verify `hacs.json`, `README.md`, and public docs still reflect current installation/support guidance.
 - [ ] Verify `LICENSE` and repository metadata still match the intended publication state.
@@ -21,6 +21,7 @@ assignees: groove-max
 
 ## Release Notes
 
+- [ ] Render release notes from `CHANGELOG.md` with `python3 tools/render_release_notes.py vX.Y.Z --output .local/release-notes/vX.Y.Z.md`.
 - [ ] Summarize user-visible changes.
 - [ ] Call out any breaking changes or required reconfiguration.
 - [ ] Mention newly supported hardware, controls, or diagnostics if applicable.
@@ -31,7 +32,7 @@ assignees: groove-max
 - [ ] Create or verify the Git tag.
 - [ ] Publish the GitHub release.
 - [ ] Make sure the release title and tag are aligned.
-- [ ] Paste the release notes into the GitHub release body.
+- [ ] Use the rendered release notes file as the GitHub release body.
 
 ## Post-Release
 
