@@ -2081,16 +2081,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         coordinator = self._coordinator()
         if coordinator is None:
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.support_archive_title",
+                action_title=self._diagnostics_result_tr(
+                    "support_archive_title",
                     "Support Archive",
                 ),
-                status=self._tr(
-                    "common.diagnostics_result.coordinator_not_loaded",
+                status=self._diagnostics_result_tr(
+                    "coordinator_not_loaded",
                     "Coordinator is not loaded.",
                 ),
-                next_step=self._tr(
-                    "common.diagnostics_result.ensure_entry_loaded",
+                next_step=self._diagnostics_result_tr(
+                    "ensure_entry_loaded",
                     "Ensure the entry is loaded and the inverter has been detected, then try again.",
                 ),
             )
@@ -2098,18 +2098,18 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         path = await coordinator.async_export_support_package()
         download_url = str(coordinator.data.values.get("support_package_download_url") or "")
         return await self._async_show_diagnostics_result(
-            action_title=self._tr(
-                "common.diagnostics_result.support_archive_created_title",
+            action_title=self._diagnostics_result_tr(
+                "support_archive_created_title",
                 "Support Archive Created",
             ),
-            status=self._tr(
-                "common.diagnostics_result.support_archive_created_status",
+            status=self._diagnostics_result_tr(
+                "support_archive_created_status",
                 "A combined support archive with runtime data, raw capture evidence, and an anonymized replay fixture was written to the Home Assistant config directory.",
             ),
             path=path,
             download_url=download_url,
-            next_step=self._tr(
-                "common.diagnostics_result.support_archive_created_next",
+            next_step=self._diagnostics_result_tr(
+                "support_archive_created_next",
                 "Send this single ZIP file to the developer. Create local experimental drafts only after the archive has been reviewed.",
             ),
         )
@@ -2122,32 +2122,32 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         coordinator = self._coordinator()
         if coordinator is None:
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.reload_local_metadata_title",
+                action_title=self._diagnostics_result_tr(
+                    "reload_local_metadata_title",
                     "Reload Local Metadata",
                 ),
-                status=self._tr(
-                    "common.diagnostics_result.coordinator_not_loaded",
+                status=self._diagnostics_result_tr(
+                    "coordinator_not_loaded",
                     "Coordinator is not loaded.",
                 ),
-                next_step=self._tr(
-                    "common.diagnostics_result.wait_for_entry_loaded",
+                next_step=self._diagnostics_result_tr(
+                    "wait_for_entry_loaded",
                     "Wait for the entry to finish loading, then try again.",
                 ),
             )
 
         await coordinator.async_reload_local_metadata()
         return await self._async_show_diagnostics_result(
-            action_title=self._tr(
-                "common.diagnostics_result.reload_local_metadata_triggered_title",
+            action_title=self._diagnostics_result_tr(
+                "reload_local_metadata_triggered_title",
                 "Local Metadata Reload Triggered",
             ),
-            status=self._tr(
-                "common.diagnostics_result.reload_local_metadata_triggered_status",
+            status=self._diagnostics_result_tr(
+                "reload_local_metadata_triggered_status",
                 "Local metadata caches were cleared and the entry reload was requested.",
             ),
-            next_step=self._tr(
-                "common.diagnostics_result.reload_local_metadata_triggered_next",
+            next_step=self._diagnostics_result_tr(
+                "reload_local_metadata_triggered_next",
                 "Refresh the device page after the entry reconnects to confirm whether local overrides were applied.",
             ),
         )
@@ -2160,33 +2160,33 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         coordinator = self._coordinator()
         if coordinator is None:
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.support_bundle_title",
+                action_title=self._diagnostics_result_tr(
+                    "support_bundle_title",
                     "Support Bundle",
                 ),
-                status=self._tr(
-                    "common.diagnostics_result.coordinator_not_loaded",
+                status=self._diagnostics_result_tr(
+                    "coordinator_not_loaded",
                     "Coordinator is not loaded.",
                 ),
-                next_step=self._tr(
-                    "common.diagnostics_result.ensure_entry_loaded",
+                next_step=self._diagnostics_result_tr(
+                    "ensure_entry_loaded",
                     "Ensure the entry is loaded and the inverter has been detected, then try again.",
                 ),
             )
 
         path = await coordinator.async_export_support_bundle()
         return await self._async_show_diagnostics_result(
-            action_title=self._tr(
-                "common.diagnostics_result.support_bundle_exported_title",
+            action_title=self._diagnostics_result_tr(
+                "support_bundle_exported_title",
                 "Support Bundle Exported",
             ),
-            status=self._tr(
-                "common.diagnostics_result.support_bundle_exported_status",
+            status=self._diagnostics_result_tr(
+                "support_bundle_exported_status",
                 "A support bundle was written to the Home Assistant config directory.",
             ),
             path=path,
-            next_step=self._tr(
-                "common.diagnostics_result.support_bundle_exported_next",
+            next_step=self._diagnostics_result_tr(
+                "support_bundle_exported_next",
                 "Use the JSON bundle for troubleshooting or as source material for a new local experimental draft.",
             ),
         )
@@ -2200,16 +2200,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         driver = coordinator.current_driver if coordinator is not None else None
         if coordinator is None or driver is None or not driver.profile_name:
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.profile_draft_title",
+                action_title=self._diagnostics_result_tr(
+                    "profile_draft_title",
                     "Profile Draft",
                 ),
-                status=self._tr(
-                    "common.diagnostics_result.profile_draft_unavailable_status",
+                status=self._diagnostics_result_tr(
+                    "profile_draft_unavailable_status",
                     "No detected driver profile is available for this entry.",
                 ),
-                next_step=self._tr(
-                    "common.diagnostics_result.profile_draft_unavailable_next",
+                next_step=self._diagnostics_result_tr(
+                    "profile_draft_unavailable_next",
                     "Run detection again or set a manual driver hint before creating a local draft.",
                 ),
             )
@@ -2223,30 +2223,30 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 overwrite=overwrite,
             )
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.profile_draft_created_title",
+                action_title=self._diagnostics_result_tr(
+                    "profile_draft_created_title",
                     "Local Profile Draft Created",
                 ),
                 status=(
-                    self._tr(
-                        "common.diagnostics_result.profile_draft_created_status_active",
+                    self._diagnostics_result_tr(
+                        "profile_draft_created_status_active",
                         "A local experimental profile draft was created and will override the built-in profile after reload.",
                     )
                     if auto_activate
-                    else self._tr(
-                        "common.diagnostics_result.profile_draft_created_status_inactive",
+                    else self._diagnostics_result_tr(
+                        "profile_draft_created_status_inactive",
                         "A local experimental profile draft was created, but it will not override the built-in profile automatically.",
                     )
                 ),
                 path=path,
                 next_step=(
-                    self._tr(
-                        "common.diagnostics_result.draft_reload_next",
+                    self._diagnostics_result_tr(
+                        "draft_reload_next",
                         "Edit the draft, then reload local metadata to activate it.",
                     )
                     if auto_activate
-                    else self._tr(
-                        "common.diagnostics_result.draft_rename_profile_next",
+                    else self._diagnostics_result_tr(
+                        "draft_rename_profile_next",
                         "Rename the draft to {name} if you want it to override the built-in profile automatically, then reload local metadata.",
                         {"name": driver.profile_name},
                     )
@@ -2282,16 +2282,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         driver = coordinator.current_driver if coordinator is not None else None
         if coordinator is None or driver is None or not driver.register_schema_name:
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.register_schema_draft_title",
+                action_title=self._diagnostics_result_tr(
+                    "register_schema_draft_title",
                     "Register Schema Draft",
                 ),
-                status=self._tr(
-                    "common.diagnostics_result.register_schema_unavailable_status",
+                status=self._diagnostics_result_tr(
+                    "register_schema_unavailable_status",
                     "No detected register schema is available for this entry.",
                 ),
-                next_step=self._tr(
-                    "common.diagnostics_result.register_schema_unavailable_next",
+                next_step=self._diagnostics_result_tr(
+                    "register_schema_unavailable_next",
                     "Run detection again or set a manual driver hint before creating a local draft.",
                 ),
             )
@@ -2305,30 +2305,30 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 overwrite=overwrite,
             )
             return await self._async_show_diagnostics_result(
-                action_title=self._tr(
-                    "common.diagnostics_result.register_schema_draft_created_title",
+                action_title=self._diagnostics_result_tr(
+                    "register_schema_draft_created_title",
                     "Local Register Schema Draft Created",
                 ),
                 status=(
-                    self._tr(
-                        "common.diagnostics_result.register_schema_draft_created_status_active",
+                    self._diagnostics_result_tr(
+                        "register_schema_draft_created_status_active",
                         "A local experimental register schema draft was created and will override the built-in schema after reload.",
                     )
                     if auto_activate
-                    else self._tr(
-                        "common.diagnostics_result.register_schema_draft_created_status_inactive",
+                    else self._diagnostics_result_tr(
+                        "register_schema_draft_created_status_inactive",
                         "A local experimental register schema draft was created, but it will not override the built-in schema automatically.",
                     )
                 ),
                 path=path,
                 next_step=(
-                    self._tr(
-                        "common.diagnostics_result.draft_reload_next",
+                    self._diagnostics_result_tr(
+                        "draft_reload_next",
                         "Edit the draft, then reload local metadata to activate it.",
                     )
                     if auto_activate
-                    else self._tr(
-                        "common.diagnostics_result.draft_rename_schema_next",
+                    else self._diagnostics_result_tr(
+                        "draft_rename_schema_next",
                         "Rename the draft to {name} if you want it to override the built-in schema automatically, then reload local metadata.",
                         {"name": driver.register_schema_name},
                     )
@@ -2451,34 +2451,48 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
         }.get(action, action)
 
+    def _support_workflow_translation_key(self, level: str, field: str) -> str:
+        return f"common.dynamic.support_workflow_{level}_{field}"
+
+    def _diagnostics_result_tr(
+        self,
+        field: str,
+        default: str,
+        placeholders: dict[str, Any] | None = None,
+    ) -> str:
+        return self._tr(
+            f"common.dynamic.diagnostics_result_{field}",
+            default,
+            placeholders,
+        )
+
     def _localized_support_workflow(self, values: dict[str, Any]) -> dict[str, str]:
         level = str(values.get("support_workflow_level") or "unknown")
-        workflow_key = f"common.support_workflow.{level}"
         primary_action = str(values.get("support_workflow_primary_action") or "create_support_package")
         step_1 = self._tr(
-            f"{workflow_key}.step_1",
+            self._support_workflow_translation_key(level, "step_1"),
             str(values.get("support_workflow_step_1") or "Run the primary diagnostics action."),
         )
         step_2 = self._tr(
-            f"{workflow_key}.step_2",
+            self._support_workflow_translation_key(level, "step_2"),
             str(values.get("support_workflow_step_2") or "Send the ZIP file to the developer."),
         )
         step_3 = self._tr(
-            f"{workflow_key}.step_3",
+            self._support_workflow_translation_key(level, "step_3"),
             str(values.get("support_workflow_step_3") or "Use advanced metadata tools only if requested."),
         )
         return {
             "support_workflow_level": level,
             "support_workflow_level_label": self._tr(
-                f"{workflow_key}.level_label",
+                self._support_workflow_translation_key(level, "level_label"),
                 str(values.get("support_workflow_level_label") or "Unknown support"),
             ),
             "support_workflow_summary": self._tr(
-                f"{workflow_key}.summary",
+                self._support_workflow_translation_key(level, "summary"),
                 str(values.get("support_workflow_summary") or "Support status is not available yet."),
             ),
             "support_workflow_next_action": self._tr(
-                f"{workflow_key}.next_action",
+                self._support_workflow_translation_key(level, "next_action"),
                 str(values.get("support_workflow_next_action") or "Run detection or create a support archive when the inverter is available."),
             ),
             "support_workflow_step_1": step_1,
@@ -2490,7 +2504,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 {"step_1": step_1, "step_2": step_2, "step_3": step_3},
             ),
             "support_workflow_advanced_hint": self._tr(
-                f"{workflow_key}.advanced_hint",
+                self._support_workflow_translation_key(level, "advanced_hint"),
                 str(values.get("support_workflow_advanced_hint") or "Advanced metadata tools are secondary and should be used only after the primary support path is complete."),
             ),
             "support_workflow_primary_action": primary_action,
