@@ -1198,11 +1198,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         return _setup_mode_selector(
             self._tr(
-                "config.step.auto.setup_mode_options.auto",
+                "common.dynamic.setup_mode_auto",
                 "Start auto-scan",
             ),
             self._tr(
-                "config.step.auto.setup_mode_options.manual",
+                "common.dynamic.setup_mode_manual",
                 "Skip to manual setup",
             ),
         )

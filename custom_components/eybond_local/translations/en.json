@@ -65,6 +65,8 @@
       "scan_line_matched": "{index}. **{status_label}** — {model_name} · serial {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
       "scan_line_peer_connected": "{peer_label} connected",
       "scan_line_peer_replied": "{peer_label} replied, waiting for reverse connection",
+      "setup_mode_auto": "Start auto-scan",
+      "setup_mode_manual": "Skip to manual setup",
       "scan_line_already_added": "*(already added as \"{entry_title}\")*",
       "download_support_archive": "[Download support archive]({url})",
       "download_file": "[Download file]({url})",
@@ -185,10 +187,6 @@
         "data_description": {
           "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter.",
           "setup_mode": "Start auto-scan now, or skip it and open manual setup immediately."
-        },
-        "setup_mode_options": {
-          "auto": "Start auto-scan",
-          "manual": "Skip to manual setup"
         }
       },
       "scanning": {

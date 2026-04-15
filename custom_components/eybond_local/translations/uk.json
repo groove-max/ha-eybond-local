@@ -65,6 +65,8 @@
       "scan_line_matched": "{index}. **{status_label}** — {model_name} · серійний номер {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
       "scan_line_peer_connected": "{peer_label} підключений",
       "scan_line_peer_replied": "{peer_label} відповів, очікується зворотне підключення",
+      "setup_mode_auto": "Запустити автопошук",
+      "setup_mode_manual": "Пропустити й перейти до ручного налаштування",
       "scan_line_already_added": "*(вже додано як \"{entry_title}\")*",
       "download_support_archive": "[Завантажити архів підтримки]({url})",
       "download_file": "[Завантажити файл]({url})",
@@ -185,10 +187,6 @@
         "data_description": {
           "server_ip": "Мережевий інтерфейс, до якого колектор підключиться у відповідь. Виберіть той, що знаходиться в тій самій підмережі, що й ваш інвертор.",
           "setup_mode": "Одразу запустити автопошук або пропустити його і відкрити ручне налаштування."
-        },
-        "setup_mode_options": {
-          "auto": "Запустити автопошук",
-          "manual": "Пропустити й перейти до ручного налаштування"
         }
       },
       "scanning": {
