@@ -1,14 +1,12 @@
 {
   "common": {
-    "actions": {
-      "create_support_package": "Create support archive",
-      "export_support_bundle": "Export support bundle",
-      "reload_local_metadata": "Reload local metadata",
-      "create_profile_draft": "Create local profile draft",
-      "create_schema_draft": "Create local register schema draft",
-      "advanced_metadata": "Advanced metadata tools"
-    },
     "dynamic": {
+      "action_create_support_package": "Create support archive",
+      "action_export_support_bundle": "Export support bundle",
+      "action_reload_local_metadata": "Reload local metadata",
+      "action_create_profile_draft": "Create local profile draft",
+      "action_create_schema_draft": "Create local register schema draft",
+      "action_advanced_metadata": "Advanced metadata tools",
       "unknown": "Unknown",
       "unknown_serial": "unknown serial",
       "unknown_path": "Unknown path",

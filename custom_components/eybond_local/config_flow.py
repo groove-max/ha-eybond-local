@@ -2426,27 +2426,27 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     def _support_action_label(self, action: str) -> str:
         return {
             "create_support_package": self._tr(
-                "common.actions.create_support_package",
+                "common.dynamic.action_create_support_package",
                 "Create support archive",
             ),
             "export_support_bundle": self._tr(
-                "common.actions.export_support_bundle",
+                "common.dynamic.action_export_support_bundle",
                 "Export support bundle",
             ),
             "reload_local_metadata": self._tr(
-                "common.actions.reload_local_metadata",
+                "common.dynamic.action_reload_local_metadata",
                 "Reload local metadata",
             ),
             "create_profile_draft": self._tr(
-                "common.actions.create_profile_draft",
+                "common.dynamic.action_create_profile_draft",
                 "Create local profile draft",
             ),
             "create_schema_draft": self._tr(
-                "common.actions.create_schema_draft",
+                "common.dynamic.action_create_schema_draft",
                 "Create local register schema draft",
             ),
             "advanced_metadata": self._tr(
-                "common.actions.advanced_metadata",
+                "common.dynamic.action_advanced_metadata",
                 "Advanced metadata tools",
             ),
         }.get(action, action)

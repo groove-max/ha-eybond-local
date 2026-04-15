@@ -1,14 +1,12 @@
 {
   "common": {
-    "actions": {
-      "create_support_package": "Создать архив поддержки",
-      "export_support_bundle": "Экспортировать пакет поддержки",
-      "reload_local_metadata": "Перезагрузить локальные метаданные",
-      "create_profile_draft": "Создать локальный черновик профиля",
-      "create_schema_draft": "Создать локальный черновик схемы регистров",
-      "advanced_metadata": "Расширенные инструменты метаданных"
-    },
     "dynamic": {
+      "action_create_support_package": "Создать архив поддержки",
+      "action_export_support_bundle": "Экспортировать пакет поддержки",
+      "action_reload_local_metadata": "Перезагрузить локальные метаданные",
+      "action_create_profile_draft": "Создать локальный черновик профиля",
+      "action_create_schema_draft": "Создать локальный черновик схемы регистров",
+      "action_advanced_metadata": "Расширенные инструменты метаданных",
       "unknown": "Неизвестно",
       "unknown_serial": "серийный номер неизвестен",
       "unknown_path": "Неизвестный путь",
