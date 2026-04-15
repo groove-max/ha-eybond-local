@@ -106,6 +106,7 @@ _INT_FIELDS = {
 }
 logger = logging.getLogger(__name__)
 _TRANSLATIONS_DIR = Path(__file__).with_name("translations")
+_FLOW_TRANSLATIONS_DIR = Path(__file__).with_name("flow_translations")
 _AUTO_SCAN_TIMEOUT = 45.0
 _MANUAL_PROBE_TIMEOUT = 20.0
 _SCAN_PROGRESS_BAR_WIDTH = 12
@@ -145,10 +146,7 @@ async def _async_timeout(timeout_seconds: float):
         handle.cancel()
 
 
-@lru_cache(maxsize=16)
-def _load_translation_bundle(language: str) -> dict[str, Any]:
-    """Load one translation bundle for the requested language."""
-
+def _translation_candidates(language: str) -> list[str]:
     candidates: list[str] = []
     normalized = (language or "").strip()
     if normalized:
@@ -158,13 +156,16 @@ def _load_translation_bundle(language: str) -> dict[str, Any]:
         if "_" in normalized:
             candidates.append(normalized.split("_", 1)[0])
     candidates.append("en")
+    return candidates
 
+
+def _load_translation_bundle_from_dir(directory: Path, language: str) -> dict[str, Any]:
     seen: set[str] = set()
-    for candidate in candidates:
+    for candidate in _translation_candidates(language):
         if candidate in seen:
             continue
         seen.add(candidate)
-        path = _TRANSLATIONS_DIR / f"{candidate}.json"
+        path = directory / f"{candidate}.json"
         if not path.exists():
             continue
         try:
@@ -173,6 +174,26 @@ def _load_translation_bundle(language: str) -> dict[str, Any]:
             logger.exception("Failed to load translation bundle: %s", path)
             break
     return {}
+
+
+def _merge_translation_bundle(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in extra.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _merge_translation_bundle(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+@lru_cache(maxsize=16)
+def _load_translation_bundle(language: str) -> dict[str, Any]:
+    """Load one translation bundle for the requested language."""
+
+    bundle = _load_translation_bundle_from_dir(_TRANSLATIONS_DIR, language)
+    flow_bundle = _load_translation_bundle_from_dir(_FLOW_TRANSLATIONS_DIR, language)
+    return _merge_translation_bundle(bundle, flow_bundle)
 
 
 def _translation_lookup(bundle: dict[str, Any], key: str) -> Any:
