@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from ..const import DEFAULT_COLLECTOR_ADDR, DEFAULT_MODBUS_DEVICE_ADDR
@@ -24,7 +25,21 @@ from .base import InverterDriver
 
 _SMG_VARIANT_MODEL_NAMES = {
     "anenji_anj_11kw_48v_wifi_p": "Anenji ANJ-11KW-48V-WIFI-P",
+    "family_fallback": "SMG Family (Unverified Variant)",
 }
+
+_SMG_DEFAULT_RATED_POWERS = frozenset({6200})
+_SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
+_SMG_DEFAULT_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
+    RegisterValueSpec(key="device_type", register=171),
+    RegisterValueSpec(key="protocol_number", register=184),
+    RegisterValueSpec(key="max_discharge_current_protection", register=351),
+    RegisterValueSpec(key="rated_cell_count", register=644),
+)
+_SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES: tuple[tuple[str, int, int], ...] = (
+    ("device_name", 172, 12),
+    ("program_version", 626, 8),
+)
 
 
 class SmgModbusDriver(InverterDriver):
@@ -127,14 +142,32 @@ class SmgModbusDriver(InverterDriver):
                     ),
                 )
                 config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
+                rated_power = await _read_rated_power(session, schema)
             except Exception:
                 continue
 
-            if not _is_valid_smg_probe(schema, live_values, config_values, binding.variant_key):
+            if not _is_valid_smg_probe(
+                schema,
+                live_values,
+                config_values,
+                binding.variant_key,
+                rated_power=rated_power,
+            ):
                 continue
 
-            rated_power = await _read_rated_power(session, schema)
             details = dict(config_values)
+            details.update(
+                await _read_optional_specs(
+                    session,
+                    _optional_probe_specs_for_variant(binding.variant_key),
+                )
+            )
+            details.update(
+                await _read_optional_ascii_ranges(
+                    session,
+                    _optional_ascii_probe_ranges_for_variant(binding.variant_key),
+                )
+            )
             if rated_power:
                 details["rated_power"] = rated_power
 
@@ -192,6 +225,12 @@ class SmgModbusDriver(InverterDriver):
         config_block = await session.read_holding(config_block_start, config_block_count)
         values.update(_decode_block(config_block_start, config_block, config_fields))
         values.update(await _read_optional_specs(session, aux_config_fields))
+        missing_probe_details = await _read_missing_optional_probe_details(session, inverter)
+        if missing_probe_details:
+            inverter.details.update(missing_probe_details)
+            values.update(missing_probe_details)
+        values.update(_derive_inverter_clock(values))
+        values.update(_derive_pv_channel_summary(values))
 
         fault_descriptions = _decode_named_bits(
             values.get("fault_code"),
@@ -241,12 +280,12 @@ class SmgModbusDriver(InverterDriver):
         value: Any,
     ) -> Any:
         capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
-        raw_value = _encode_capability_value(capability, value)
+        raw_words = _encode_capability_words(capability, value)
 
         session = self._session(transport, inverter.probe_target)
-        await session.write_holding(capability.register, [raw_value])
+        await session.write_holding(capability.register, raw_words)
 
-        native_value = _decode_capability_value(capability, raw_value)
+        native_value = _decode_capability_value(capability, raw_words)
         inverter.details[capability.key] = native_value
         return native_value
 
@@ -318,9 +357,16 @@ def _decode_ascii_words(registers: list[int]) -> str:
             if byte in (0x00, 0xFF):
                 continue
             char = chr(byte)
-            if char.isalnum() or char in "-_/.":
+            if char.isalnum() or char in " -_/.":
                 chars.append(char)
     return "".join(chars)
+
+
+def _is_meaningful_optional_ascii_text(text: str) -> bool:
+    normalized = "".join(char for char in text if char not in " -_/.")
+    if not normalized:
+        return False
+    return any(char != "0" for char in normalized)
 
 
 def _specs_for_block(
@@ -381,6 +427,47 @@ async def _read_optional_specs(
                 raise
             continue
         decoded.update(_decode_block(spec.register, raw_values, (spec,)))
+    return decoded
+
+
+async def _read_optional_ascii_ranges(
+    session: ModbusSession,
+    ranges: tuple[tuple[str, int, int], ...],
+) -> dict[str, str]:
+    decoded: dict[str, str] = {}
+    for key, register, word_count in ranges:
+        try:
+            raw_values = await session.read_holding(register, word_count)
+        except Exception as exc:
+            if not _is_optional_spec_error(exc):
+                raise
+            continue
+        text = _decode_ascii_words(raw_values).strip()
+        if _is_meaningful_optional_ascii_text(text):
+            decoded[key] = text
+    return decoded
+
+
+async def _read_missing_optional_probe_details(
+    session: ModbusSession,
+    inverter: DetectedInverter,
+) -> dict[str, Any]:
+    missing_specs = tuple(
+        spec
+        for spec in _optional_probe_specs_for_variant(inverter.variant_key)
+        if spec.key not in inverter.details
+    )
+    missing_ascii_ranges = tuple(
+        item
+        for item in _optional_ascii_probe_ranges_for_variant(inverter.variant_key)
+        if item[0] not in inverter.details
+    )
+    if not missing_specs and not missing_ascii_ranges:
+        return {}
+
+    decoded: dict[str, Any] = {}
+    decoded.update(await _read_optional_specs(session, missing_specs))
+    decoded.update(await _read_optional_ascii_ranges(session, missing_ascii_ranges))
     return decoded
 
 
@@ -597,6 +684,83 @@ def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
         pv_role_state=derived["pv_role_state"],
         utility_role_state=derived["utility_role_state"],
     )
+    return derived
+
+
+def _derive_inverter_clock(values: dict[str, Any]) -> dict[str, Any]:
+    """Derive human-readable inverter date/time strings from optional clock registers."""
+
+    raw_parts = {
+        "year": values.pop("inverter_clock_year", None),
+        "month": values.pop("inverter_clock_month", None),
+        "day": values.pop("inverter_clock_day", None),
+        "hour": values.pop("inverter_clock_hour", None),
+        "minute": values.pop("inverter_clock_minute", None),
+        "second": values.pop("inverter_clock_second", None),
+    }
+    if not all(isinstance(part, int) for part in raw_parts.values()):
+        return {}
+
+    year = raw_parts["year"]
+    month = raw_parts["month"]
+    day = raw_parts["day"]
+    hour = raw_parts["hour"]
+    minute = raw_parts["minute"]
+    second = raw_parts["second"]
+
+    if not (2000 <= year <= 2100):
+        return {}
+
+    derived: dict[str, Any] = {}
+    try:
+        datetime(year, month, day)
+    except ValueError:
+        pass
+    else:
+        derived["inverter_date"] = f"{year:04d}-{month:02d}-{day:02d}"
+
+    if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59:
+        derived["inverter_time"] = f"{hour:02d}:{minute:02d}:{second:02d}"
+
+    return derived
+
+
+def _derive_pv_channel_summary(values: dict[str, Any]) -> dict[str, Any]:
+    """Backfill aggregate PV values when one variant only exposes per-string channels."""
+
+    derived: dict[str, Any] = {}
+
+    pv_power = values.get("pv_power")
+    if not isinstance(pv_power, (int, float)) or pv_power <= 0:
+        powers = [
+            power
+            for power in (values.get("pv1_power"), values.get("pv2_power"))
+            if isinstance(power, (int, float))
+        ]
+        if powers:
+            derived["pv_power"] = int(round(sum(powers)))
+
+    pv_voltage = values.get("pv_voltage")
+    if not isinstance(pv_voltage, (int, float)) or pv_voltage <= 0:
+        voltages = [
+            voltage
+            for voltage in (values.get("pv1_voltage"), values.get("pv2_voltage"))
+            if isinstance(voltage, (int, float))
+        ]
+        if voltages:
+            active_voltages = [voltage for voltage in voltages if voltage > 0]
+            derived["pv_voltage"] = round(max(active_voltages or voltages), 1)
+
+    pv_current = values.get("pv_current")
+    if not isinstance(pv_current, (int, float)) or pv_current <= 0:
+        currents = [
+            current
+            for current in (values.get("pv1_current"), values.get("pv2_current"))
+            if isinstance(current, (int, float))
+        ]
+        if currents:
+            derived["pv_current"] = round(sum(currents), 1)
+
     return derived
 
 
@@ -1064,23 +1228,38 @@ def _find_capability(
     raise ValueError(f"unsupported_capability:{capability_key}")
 
 
-def _encode_capability_value(capability: WriteCapability, value: Any) -> int:
+def _encode_capability_words(capability: WriteCapability, value: Any) -> list[int]:
     if capability.value_kind == "action":
-        return _encode_action_value(capability, value)
+        return [_encode_action_value(capability, value)]
     if capability.value_kind == "bool":
-        return _encode_bool_value(capability, value)
+        return [_encode_bool_value(capability, value)]
     if capability.value_kind == "enum":
-        return _encode_enum_value(capability, value)
+        return [_encode_enum_value(capability, value)]
     if capability.value_kind == "scaled_u16":
-        return _encode_scaled_u16_value(capability, value)
+        return [_encode_scaled_u16_value(capability, value)]
     if capability.value_kind == "u16":
-        return _encode_u16_value(capability, value)
+        return [_encode_u16_value(capability, value)]
+    if capability.value_kind == "u32":
+        return _encode_u32_words(capability, value)
+    if capability.value_kind == "date_words":
+        return _encode_date_words(capability, value)
+    if capability.value_kind == "time_words":
+        return _encode_time_words(capability, value)
     raise ValueError(f"unsupported_value_kind:{capability.value_kind}")
 
 
-def _decode_capability_value(capability: WriteCapability, raw_value: int) -> Any:
+def _decode_capability_value(capability: WriteCapability, raw_words: list[int]) -> Any:
+    if not raw_words:
+        raise ValueError(f"missing_raw_words:{capability.key}")
+    raw_value = raw_words[0]
     if capability.value_kind == "action":
         return raw_value
+    if capability.value_kind == "u32":
+        return _decode_u32_words(capability, raw_words)
+    if capability.value_kind == "date_words":
+        return _decode_date_words(capability, raw_words)
+    if capability.value_kind == "time_words":
+        return _decode_time_words(capability, raw_words)
     enum_map = capability.enum_value_map
     if capability.value_kind == "bool":
         if enum_map:
@@ -1175,6 +1354,95 @@ def _encode_u16_value(capability: WriteCapability, value: Any) -> int:
     return raw_value
 
 
+def _encode_u32_words(capability: WriteCapability, value: Any) -> list[int]:
+    raw_value: int
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            raw_value = int(text, 0)
+        except ValueError as exc:
+            raise ValueError(f"invalid_integer_value:{capability.key}:{value}") from exc
+    else:
+        try:
+            raw_value = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid_integer_value:{capability.key}:{value}") from exc
+
+    _validate_range(capability, raw_value)
+    if capability.word_count != 2:
+        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
+    if capability.combine != "u32_high_first":
+        raise ValueError(f"unsupported_combine:{capability.key}:{capability.combine}")
+    return [(raw_value >> 16) & 0xFFFF, raw_value & 0xFFFF]
+
+
+def _decode_u32_words(capability: WriteCapability, raw_words: list[int]) -> int:
+    if capability.word_count != 2:
+        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
+    if capability.combine != "u32_high_first":
+        raise ValueError(f"unsupported_combine:{capability.key}:{capability.combine}")
+    if len(raw_words) != 2:
+        raise ValueError(f"unexpected_word_length:{capability.key}:{len(raw_words)}")
+    return ((raw_words[0] & 0xFFFF) << 16) | (raw_words[1] & 0xFFFF)
+
+
+def _encode_date_words(capability: WriteCapability, value: Any) -> list[int]:
+    if capability.word_count != 3:
+        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            try:
+                parsed = datetime.strptime(text, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError(f"invalid_date_value:{capability.key}:{value}") from exc
+    return [parsed.year, parsed.month, parsed.day]
+
+
+def _decode_date_words(capability: WriteCapability, raw_words: list[int]) -> str:
+    if capability.word_count != 3:
+        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
+    if len(raw_words) != 3:
+        raise ValueError(f"unexpected_word_length:{capability.key}:{len(raw_words)}")
+    year, month, day = raw_words
+    datetime(year, month, day)
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _encode_time_words(capability: WriteCapability, value: Any) -> list[int]:
+    if capability.word_count != 3:
+        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        parsed = None
+        for time_format in ("%H:%M:%S", "%H:%M"):
+            try:
+                parsed = datetime.strptime(text, time_format)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            raise ValueError(f"invalid_time_value:{capability.key}:{value}")
+    return [parsed.hour, parsed.minute, parsed.second]
+
+
+def _decode_time_words(capability: WriteCapability, raw_words: list[int]) -> str:
+    if capability.word_count != 3:
+        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
+    if len(raw_words) != 3:
+        raise ValueError(f"unexpected_word_length:{capability.key}:{len(raw_words)}")
+    hour, minute, second = raw_words
+    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+        raise ValueError(f"invalid_time_words:{capability.key}:{raw_words}")
+    return f"{hour:02d}:{minute:02d}:{second:02d}"
+
+
 def _validate_range(capability: WriteCapability, raw_value: int) -> None:
     if capability.minimum is not None and raw_value < capability.minimum:
         raise ValueError(f"value_below_minimum:{capability.key}:{raw_value}")
@@ -1183,11 +1451,14 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
 
 
 _SMG_FAMILY_DISCOVERY_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
+    (171, 13),
     (277, 5),
     (338, 16),
     (389, 3),
     (607, 1),
-    (696, 8),
+    (626, 8),
+    (644, 1),
+    (696, 9),
 )
 
 _SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
@@ -1206,7 +1477,7 @@ _SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
 
 def _support_capture_notes() -> tuple[str, ...]:
     return (
-        "Includes supplemental SMG family discovery ranges for 11K-like variants: 277-281, 338-353, 389-391, 607, 696-703.",
+        "Includes supplemental SMG identity and family discovery ranges: 171-183, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
     )
 
 
@@ -1247,7 +1518,29 @@ def _schema_for_inverter(
 def _smg_bindings():
     catalog = load_driver_model_binding_catalog()
     bindings = [binding for binding in catalog.bindings.values() if binding.driver_key == "modbus_smg"]
-    return tuple(sorted(bindings, key=lambda binding: (binding.variant_key == "default", binding.variant_key)))
+    return tuple(sorted(bindings, key=_smg_binding_sort_key))
+
+
+def _smg_binding_sort_key(binding) -> tuple[int, str]:
+    if binding.variant_key == _SMG_FAMILY_FALLBACK_VARIANT:
+        return (2, binding.variant_key)
+    if binding.variant_key == "default":
+        return (1, binding.variant_key)
+    return (0, binding.variant_key)
+
+
+def _optional_probe_specs_for_variant(variant_key: str) -> tuple[RegisterValueSpec, ...]:
+    if variant_key in {"default", _SMG_FAMILY_FALLBACK_VARIANT}:
+        return _SMG_DEFAULT_OPTIONAL_PROBE_SPECS
+    return ()
+
+
+def _optional_ascii_probe_ranges_for_variant(
+    variant_key: str,
+) -> tuple[tuple[str, int, int], ...]:
+    if variant_key in {"default", _SMG_FAMILY_FALLBACK_VARIANT}:
+        return _SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES
+    return ()
 
 
 def _is_valid_smg_probe(
@@ -1255,6 +1548,8 @@ def _is_valid_smg_probe(
     live_values: dict[str, Any],
     config_values: dict[str, Any],
     variant_key: str,
+    *,
+    rated_power: int = 0,
 ) -> bool:
     if live_values.get("operating_mode") not in schema.enum_map_for("mode_names").values():
         return False
@@ -1274,8 +1569,24 @@ def _is_valid_smg_probe(
     if variant_key == "anenji_anj_11kw_48v_wifi_p":
         if config_values.get("protocol_number") not in {3, 4, 5, 6}:
             return False
+        if not _is_known_enum_value(config_values.get("turn_on_mode")):
+            return False
+        if not _is_known_enum_value(config_values.get("remote_switch")):
+            return False
+        pv_grid_connected_max_power = config_values.get("pv_grid_connected_max_power")
+        if not isinstance(pv_grid_connected_max_power, int):
+            return False
+        if not (200 <= pv_grid_connected_max_power <= 20000):
+            return False
+
+    if variant_key == "default" and rated_power not in _SMG_DEFAULT_RATED_POWERS:
+        return False
 
     return True
+
+
+def _is_known_enum_value(value: Any) -> bool:
+    return isinstance(value, str) and not value.startswith("Unknown")
 
 
 async def _read_rated_power(session: ModbusSession, schema) -> int:

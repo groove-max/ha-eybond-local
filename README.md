@@ -9,8 +9,6 @@
 
 > **Companion dashboard card:** Pair this integration with [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) for a ready-made Lovelace UI with animated power flow and history charts.
 
-[![Open EyeBond Local Card in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local-card&category=plugin)
-
 **EyeBond Local** is a Home Assistant integration that talks directly to hybrid inverters connected through SmartESS / EyeBond Wi-Fi collectors — without going through the vendor's cloud.
 
 You get live monitoring, energy totals, and gated controls for supported inverters, all over your local network.
@@ -39,17 +37,21 @@ EyeBond Local works with inverters whose stock monitoring is available through *
 
 The stock SmartESS monitoring usually keeps working in parallel: EyeBond Local does not replace it or interfere with it.
 
-| Protocol / profile | Status | Notes |
-|---|---|---|
-| **SMG / Modbus** | Supported | Local protocol/profile used by some hybrid inverters; full monitoring + tested controls |
-| **PI30 ASCII** | Supported | PI30-family protocol; full monitoring + tested controls on supported variants, including PowMr 4.2kW |
-| **PI18 ASCII** | Experimental | PI18-family protocol; replay-tested only, not production-ready |
+| Commercial model / hardware class | Internal runtime path | Status | What it means |
+|---|---|---|---|
+| **Sandisolar SD-HYM-4862HWP** | `modbus_smg` default binding | Supported | Full monitoring plus tested controls on the verified default SMG layout. In the current runtime UI this device still appears generically as `SMG 6200`, because the local Modbus surface exposes rated power but not a stronger raw commercial identifier. |
+| **Anenji ANJ-11KW-48V-WIFI-P** | `modbus_smg` model-specific variant | Supported for monitoring, cautious for controls | Built-in model-specific monitoring is active, including PV1/PV2 telemetry, inverter date/time, and native PV day/total counters. The write surface is implemented, but the new model-specific controls remain intentionally untested and stay out of normal `auto` exposure. |
+| **PowMr 4.2kW** (raw model `VMII-NXPW5KW`) | `pi30` runtime driver with SmartESS `0925` compatibility metadata | Supported | Full monitoring plus tested controls on the verified PI30-family path for this hardware. |
+| **Unknown but clearly SMG-family inverter** | `modbus_smg` `family_fallback` | Read-only fallback | Used when the inverter clearly looks SMG-family but the exact model is not yet verified. Monitoring stays available, support/archive output is explicitly marked as read-only/unverified, and built-in writes remain disabled. |
+| **PI18-family hardware** | `pi18` experimental replay path | Experimental | Replay-tested only. Useful for research and fixture work, but there is not yet a verified public hardware model that should be presented as production-ready support. |
 
-Names such as **SMG / Modbus** and **PI30 ASCII** refer to the detected protocol or compatibility profile, not the commercial model name printed on the inverter.
+Three different naming layers exist in the project, and they should not be read as the same thing:
 
-For the SMG / Modbus family, the currently tested real-world unit is branded **Sandisolar SD-HYM-4862HWP**. The integration still presents it generically as **SMG 6200** because the current local Modbus telemetry does not expose a stronger raw commercial model identifier.
+- **Commercial model name**: the name printed on the inverter, such as `Sandisolar SD-HYM-4862HWP`, `Anenji ANJ-11KW-48V-WIFI-P`, or `PowMr 4.2kW`.
+- **Internal runtime path**: the local protocol engine and binding used by the integration, such as `modbus_smg`, `pi30`, or `pi18`.
+- **Metadata owner / compatibility profile**: the declarative profile or SmartESS asset used to describe controls and readback, such as SmartESS `0925` compatibility metadata.
 
-For example, the currently tested **PowMr 4.2kW** unit reports the raw model string `VMII-NXPW5KW`, but is presented in the integration under the **PI30 ASCII** family as **PowMr 4.2kW**.
+The runtime engine may stay generic even when the commercial model is known. For example, the verified Sandisolar unit still runs through the generic SMG default path because the local protocol evidence supports that path, but does not expose a trustworthy commercial-name identifier on its own.
 
 Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support.
 
@@ -132,8 +134,8 @@ After setup, the integration adds a single device with:
 - **Polling control** — the sensor refresh interval is configurable from `2` to `3600` seconds in the integration options.
 - **Energy totals** — derived `kWh` totals for PV production, load consumption, and battery charge/discharge, plus grid import/export on models that expose grid power. Drop them straight into the **Energy dashboard**.
 - **Binary sensors** — operating mode, faults, alarms, charging state.
-- **Controls** — `number`, `select`, `switch`, and `button` entities for supported settings (charge limits, output mode, beep, etc.). These are gated by detection confidence and start hidden until they're known to be safe.
-- **Diagnostics** — connection state, driver match, support level, optional SmartESS cloud evidence export, and a one-click **Support Archive** export.
+- **Controls** — `number`, `select`, `switch`, and `button` entities for supported settings (charge limits, output mode, beep, etc.). On variants that ship model-specific tooling, this can also include dedicated actions such as **Sync Inverter Clock**. Control exposure is still gated by detection confidence and validation state.
+- **Diagnostics** — connection state, driver match, support level, optional SmartESS cloud evidence export, explicit read-only fallback markers where applicable, and a one-click **Support Archive** export.
 
 <p align="center"><img src="docs/images/sensors.png" alt="Live sensors after setup" width="320"></p>
 
@@ -182,7 +184,7 @@ The Support Archive contains an anonymized snapshot of your inverter's state, re
 | Sensors stay unavailable | Check that the collector is on the same subnet as Home Assistant, and that nothing is blocking TCP `8899` / UDP `58899`. |
 | Remote collector replies but never connects back | Check **Advertised callback IP** and **Advertised callback TCP port** first. They must match the address and forwarded TCP port that the collector can really reach. |
 | Remote setup is flaky over the public internet | Prefer VPN over raw NAT if either side is behind CGNAT or if UDP/TCP forwarding is unreliable. |
-| Controls are missing | In **Auto** mode, controls only appear when detection confidence is high and the relevant capabilities are marked as tested. If monitoring works for a PI30-family inverter but the exact model was not matched, you can open **Runtime settings** and switch to **Full control**. This is a manual safety override that exposes every write command, so use it only at your own risk and preferably after exporting a Support Archive. |
+| Controls are missing | In **Auto** mode, controls only appear when detection confidence is high and the relevant capabilities are marked as tested. Some runtime paths are intentionally read-only, such as the SMG family fallback and the current cautious Anenji write surface. If monitoring works for a PI30-family inverter but the exact model was not matched, you can open **Runtime settings** and switch to **Full control**. This is a manual safety override that exposes every write command, so use it only at your own risk and preferably after exporting a Support Archive. |
 
 ---
 

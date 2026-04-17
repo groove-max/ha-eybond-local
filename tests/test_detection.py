@@ -17,6 +17,7 @@ from custom_components.eybond_local.onboarding.detection import (
     OnboardingDetector,
     build_unicast_fallback_targets,
 )
+from custom_components.eybond_local.onboarding.driver_detection import _build_driver_match
 from custom_components.eybond_local.models import DetectedInverter
 from custom_components.eybond_local.models import (
     CollectorCandidate,
@@ -26,11 +27,29 @@ from custom_components.eybond_local.models import (
     ProbeTarget,
 )
 from custom_components.eybond_local.drivers.pi30 import Pi30Driver
+from custom_components.eybond_local.drivers.smg import SmgModbusDriver
 from custom_components.eybond_local.collector.protocol import EybondHeader
 from custom_components.eybond_local.collector.discovery import DiscoveryProbeResult
 
 
 class DetectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_build_driver_match_keeps_family_fallback_at_medium_confidence(self) -> None:
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG Family (Unverified Variant)",
+            serial_number="SMG11K240001",
+            probe_target=ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01),
+            variant_key="family_fallback",
+            details={"rated_power": 11000},
+        )
+
+        match = _build_driver_match(SmgModbusDriver(), inverter)
+
+        self.assertEqual(match.variant_key, "family_fallback")
+        self.assertEqual(match.confidence, "medium")
+        self.assertIn("family_fallback_variant", match.reasons)
+
     def test_build_unicast_fallback_targets_scans_local_24_without_server_ip(self) -> None:
         targets = build_unicast_fallback_targets(server_ip="192.168.1.50")
 

@@ -99,6 +99,23 @@
       "1": "Local Only",
       "2": "Remote Only"
     },
+    "enabled_disabled": {
+      "0": "Disabled",
+      "1": "Enabled"
+    },
+    "battery_type_base": {
+      "0": "AGM",
+      "1": "Flooded",
+      "2": "User",
+      "3": "Li1",
+      "4": "Li2",
+      "5": "Li3",
+      "6": "Li4"
+    },
+    "dry_contact_mode_base": {
+      "0": "Normal Mode",
+      "1": "Grounding Box Mode"
+    },
     "remote_switch": {
       "0": "Remote Shutdown",
       "1": "Remote Turn-On"
@@ -384,6 +401,17 @@
         "enum_table": "battery_equalization_mode"
       },
       {
+        "key": "warning_mask_i",
+        "register": 314,
+        "word_count": 2,
+        "combine": "u32_high_first"
+      },
+      {
+        "key": "dry_contact_mode",
+        "register": 316,
+        "enum_table": "dry_contact_mode_base"
+      },
+      {
         "key": "output_rating_voltage",
         "register": 320,
         "divisor": 10,
@@ -394,6 +422,11 @@
         "register": 321,
         "divisor": 100,
         "decimals": 2
+      },
+      {
+        "key": "battery_type",
+        "register": 322,
+        "enum_table": "battery_type_base"
       },
       {
         "key": "battery_overvoltage_protection_voltage",
@@ -467,6 +500,11 @@
         "register": 337
       },
       {
+        "key": "automatic_mains_output_enabled",
+        "register": 338,
+        "enum_table": "enabled_disabled"
+      },
+      {
         "key": "low_dc_protection_soc_grid_mode",
         "register": 341
       },
@@ -499,6 +537,45 @@
       "unit": "W",
       "device_class": "power",
       "diagnostic": true,
+      "live": false
+    },
+    {
+      "key": "rated_cell_count",
+      "name": "Rated Cell Count",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "protocol_number",
+      "name": "Protocol Number",
+      "icon": "mdi:numeric",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "device_type",
+      "name": "Device Type",
+      "icon": "mdi:identifier",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "device_name",
+      "name": "Device Name",
+      "icon": "mdi:card-text-outline",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "program_version",
+      "name": "Program Version",
+      "icon": "mdi:information-outline",
+      "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -597,6 +674,36 @@
       "live": false
     },
     {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "icon": "mdi:battery-cog-outline",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "warning_mask_i",
+      "name": "Warning Mask I",
+      "icon": "mdi:alert-box-outline",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "dry_contact_mode",
+      "name": "Dry Contact Mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "name": "Automatic Mains Output Enabled",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
       "key": "turn_on_mode",
       "name": "Turn On Mode",
       "diagnostic": true,
@@ -606,6 +713,22 @@
     {
       "key": "remote_switch",
       "name": "Remote Switch",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "inverter_date",
+      "name": "Inverter Date",
+      "icon": "mdi:calendar",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "inverter_time",
+      "name": "Inverter Time",
+      "icon": "mdi:clock-outline",
       "diagnostic": true,
       "enabled_default": false,
       "live": false
@@ -718,6 +841,15 @@
       "key": "battery_equalization_interval",
       "name": "Battery Equalization Interval",
       "unit": "d",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "max_discharge_current_protection",
+      "name": "Max Discharge Current Protection",
+      "unit": "A",
+      "device_class": "current",
       "diagnostic": true,
       "enabled_default": false,
       "live": false

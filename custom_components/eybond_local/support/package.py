@@ -12,6 +12,7 @@ from typing import Any
 import zipfile
 
 from ..const import LOCAL_METADATA_DIR, LOCAL_SUPPORT_PACKAGES_DIR
+from .bundle import build_support_marker
 
 
 _CLOUD_EVIDENCE_ARCHIVE_MEMBER = "evidence/cloud_evidence.json"
@@ -61,6 +62,7 @@ def export_support_package(
     """Write one combined support archive and publish one `/local` download copy."""
 
     cloud_evidence = _support_bundle_cloud_evidence(support_bundle)
+    support_marker = _support_bundle_support_marker(support_bundle)
     archived_support_bundle = _archive_support_bundle_payload(support_bundle)
 
     packages_root = support_packages_root(config_dir)
@@ -83,6 +85,7 @@ def export_support_package(
             "profile_source": profile_source,
             "register_schema_source": register_schema_source,
         },
+        "support_marker": support_marker,
         "sharing_guidance": {
             "recommended_artifact": destination.name,
             "note": (
@@ -105,13 +108,25 @@ def export_support_package(
         "",
         f"Created at: {created_at}",
         f"Entry: {entry_title} ({entry_id})",
-        "",
-        "Send this ZIP file to the developer. The main files are:",
-        "- manifest.json",
-        "- support_bundle.json",
-        "- raw_capture.json",
-        "- fixture/anonymized_fixture.json",
     ]
+    if support_marker is not None:
+        readme_lines.extend(
+            [
+                "",
+                f"Support marker: {support_marker['label']}",
+                str(support_marker.get("summary") or ""),
+            ]
+        )
+    readme_lines.extend(
+        [
+            "",
+            "Send this ZIP file to the developer. The main files are:",
+            "- manifest.json",
+            "- support_bundle.json",
+            "- raw_capture.json",
+            "- fixture/anonymized_fixture.json",
+        ]
+    )
     if cloud_evidence is not None:
         readme_lines.append("- evidence/cloud_evidence.json")
     readme_lines.extend(
@@ -163,6 +178,22 @@ def _support_bundle_cloud_evidence(support_bundle: dict[str, Any]) -> dict[str, 
     evidence = support_bundle.get("evidence") if isinstance(support_bundle, dict) else None
     cloud_evidence = evidence.get("cloud") if isinstance(evidence, dict) else None
     return cloud_evidence if isinstance(cloud_evidence, dict) else None
+
+
+def _support_bundle_support_marker(
+    support_bundle: dict[str, Any],
+) -> dict[str, Any] | None:
+    source_metadata = support_bundle.get("source_metadata") if isinstance(support_bundle, dict) else None
+    if not isinstance(source_metadata, dict):
+        return None
+
+    support_marker = source_metadata.get("support_marker")
+    if isinstance(support_marker, dict):
+        return support_marker
+
+    return build_support_marker(
+        variant_key=str(source_metadata.get("variant_key", "") or ""),
+    )
 
 
 def _archive_support_bundle_payload(support_bundle: dict[str, Any]) -> dict[str, Any]:

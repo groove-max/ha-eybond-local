@@ -38,6 +38,7 @@ class DriverModelBindingCatalogLoaderTests(unittest.TestCase):
                 ("pi18", "default"),
                 ("modbus_smg", "anenji_anj_11kw_48v_wifi_p"),
                 ("modbus_smg", "default"),
+                ("modbus_smg", "family_fallback"),
             },
         )
 
@@ -71,6 +72,22 @@ class DriverModelBindingCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(
             binding.register_schema_name,
             "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+
+    def test_resolves_smg_family_fallback_binding(self) -> None:
+        binding = resolve_driver_model_binding(
+            "modbus_smg",
+            variant_key="family_fallback",
+        )
+
+        assert binding is not None
+        self.assertEqual(
+            binding.profile_name,
+            "modbus_smg/family_fallback.json",
+        )
+        self.assertEqual(
+            binding.register_schema_name,
+            "modbus_smg/base.json",
         )
 
     def test_prime_metadata_caches_warms_catalog_driven_metadata(self) -> None:

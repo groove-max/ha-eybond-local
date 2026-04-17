@@ -89,7 +89,7 @@ class SupportBundleTests(unittest.TestCase):
             register_schema_name="pi30_ascii/models/smartess_0925_compat.json",
             variant_key="default",
             effective_owner_key="pi30",
-            effective_owner_name="PI30 / ASCII",
+            effective_owner_name="PI30-family runtime",
             smartess_family_name="SmartESS 0925",
             raw_profile_name="smartess_local/models/0925.json",
             raw_register_schema_name="smartess_local/models/0925.json",
@@ -98,13 +98,41 @@ class SupportBundleTests(unittest.TestCase):
         )
 
         self.assertEqual(raw["source_metadata"]["effective_owner_key"], "pi30")
-        self.assertEqual(raw["source_metadata"]["effective_owner_name"], "PI30 / ASCII")
+        self.assertEqual(raw["source_metadata"]["effective_owner_name"], "PI30-family runtime")
         self.assertEqual(raw["source_metadata"]["smartess_family_name"], "SmartESS 0925")
         self.assertEqual(
             raw["source_metadata"]["raw_profile_name"],
             "smartess_local/models/0925.json",
         )
         self.assertEqual(raw["source_metadata"]["smartess_protocol_asset_id"], "0925")
+
+    def test_builds_support_bundle_payload_with_family_fallback_marker(self) -> None:
+        raw = build_support_bundle_payload(
+            entry_id="entry-fallback",
+            entry_title="SMG Family",
+            connected=True,
+            collector={"collector_pn": "E5000025388419"},
+            inverter={
+                "driver_key": "modbus_smg",
+                "model_name": "SMG Family",
+                "variant_key": "family_fallback",
+                "serial_number": "92632511100118",
+                "profile_name": "modbus_smg/family_fallback.json",
+                "register_schema_name": "modbus_smg/base.json",
+            },
+            values={"operating_mode": "Off-Grid"},
+            data={"server_ip": "192.168.1.50"},
+            options={"poll_interval": 10},
+            profile_name="modbus_smg/family_fallback.json",
+            register_schema_name="modbus_smg/base.json",
+            variant_key="family_fallback",
+        )
+
+        marker = raw["source_metadata"]["support_marker"]
+        self.assertEqual(marker["key"], "read_only_unverified_smg_family")
+        self.assertEqual(marker["label"], "Read-only unverified SMG family")
+        self.assertTrue(marker["read_only"])
+        self.assertEqual(marker["verification"], "unverified")
 
     def test_exports_support_bundle_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

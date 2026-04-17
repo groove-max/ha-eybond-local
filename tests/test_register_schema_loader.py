@@ -39,8 +39,12 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.scalar_register("rated_power_register"), 643)
         self.assertEqual(schema.enum_map_for("mode_names")[3], "Off-Grid")
         self.assertEqual(schema.bit_labels_for("warning_code_names")[9], "Battery Not Connected")
-        self.assertEqual(len(schema.spec_set("config")), 29)
-        self.assertEqual(len(schema.measurement_descriptions), 86)
+        self.assertEqual(len(schema.spec_set("config")), 33)
+        self.assertEqual(len(schema.measurement_descriptions), 98)
+        self.assertEqual(schema.measurement_description("inverter_date").name, "Inverter Date")
+        self.assertEqual(schema.measurement_description("inverter_time").name, "Inverter Time")
+        self.assertEqual(schema.measurement_description("device_name").name, "Device Name")
+        self.assertEqual(schema.measurement_description("program_version").name, "Program Version")
         self.assertEqual(len(schema.binary_sensor_descriptions), 18)
 
     def test_infers_measurement_display_precision_from_register_specs(self) -> None:

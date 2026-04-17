@@ -26,6 +26,28 @@ _SMARTESS_0925_PROBABLE = "probable_0925"
 _SMARTESS_CLOUD_ONLY = "cloud_only"
 
 
+_SMARTESS_SETTING_TITLE_ALIASES: dict[str, str] = {
+    "main output priority": "output priority",
+    "output voltage setting": "output voltage",
+    "output frequency setting": "output frequency",
+    "bat_eq_time": "eq charing time",
+    "bat eq time": "eq charing time",
+    "maximum charging voltage": "bulk charging voltage (c.v voltage)",
+    "floating charge voltage": "floating charging voltage",
+    "battery overvoltage protection point": "high dc protection voltage",
+    "maximum charging current": "max.charging current",
+    "maximum mains charging current": "max.ac.charging current",
+    "battery eq mode enable": "battery eq mode",
+    "eq charging voltage": "eq charing voltage",
+    "eq timeout exit": "eq timeout exit time",
+    "eq charging interval": "eq interval time",
+    "equalization activated immediately": "forced eq charging",
+    "clean generation power": "clear record",
+    "mains mode battery low voltage protection point": "low dc protection voltage in mains mode",
+    "off-grid mode battery low voltage protection point": "low dc protection voltage in off-grid mode",
+}
+
+
 _SMARTESS_0925_SETTING_BINDINGS: dict[str, dict[str, Any]] = {
     "output priority": {
         "profile_key": "output_source_priority",
@@ -41,6 +63,10 @@ _SMARTESS_0925_SETTING_BINDINGS: dict[str, dict[str, Any]] = {
         "profile_key": "battery_type",
         "register_key": "battery_type",
         "register": 4539,
+    },
+    "high dc protection voltage": {
+        "profile_key": "battery_overvoltage_protection_voltage",
+        "register_key": "battery_overvoltage_protection_voltage",
     },
     "output frequency": {
         "profile_key": "configured_output_frequency",
@@ -947,7 +973,8 @@ def _optional_text(value: Any) -> str | None:
 
 
 def _normalize_setting_name(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split())
+    normalized = " ".join(str(value or "").strip().lower().split())
+    return _SMARTESS_SETTING_TITLE_ALIASES.get(normalized, normalized)
 
 
 def _parse_scalar(value: Any) -> Any:

@@ -46,8 +46,8 @@ class SupportMatrixTests(unittest.TestCase):
         matrix = build_profile_support_matrix(self.profile)
         markdown = render_support_matrix_markdown(matrix)
 
-        self.assertIn("# Support Matrix: SMG / Modbus", markdown)
-        self.assertIn("Generated from declarative profile metadata", markdown)
+        self.assertIn("# Support Matrix: SMG-family default runtime profile", markdown)
+        self.assertIn("implementation-level runtime report", markdown)
         self.assertIn("| `low_dc_cutoff_soc` | `343` | `battery` | `tested` | `conditional` |", markdown)
         self.assertIn("| `power_saving_mode` | `307` | `system` | `untested` | `blocked` |", markdown)
         self.assertIn("| `charge_source_priority` | `331` | `charging` | `tested` | `conditional` |", markdown)

@@ -111,6 +111,40 @@ def _sample_smartess_smg_cloud_evidence() -> dict[str, object]:
     }
 
 
+def _sample_smartess_anenji_cloud_evidence() -> dict[str, object]:
+    return {
+        "source": "smartess_cloud_probe",
+        "match": {"collector_pn": "ANJ11KW240001"},
+        "payload": {
+            "normalized": {
+                "device_settings": {
+                    "field_count": 11,
+                    "fields": [
+                        {"title": "Main Output Priority", "bucket": "cloud_only"},
+                        {"title": "Output Voltage Setting", "bucket": "cloud_only"},
+                        {
+                            "title": "Mains mode battery discharge recovery point",
+                            "bucket": "cloud_only",
+                        },
+                        {"title": "Battery Eq mode enable", "bucket": "cloud_only"},
+                        {"title": "Low DC Protection SOC In AC Mode", "bucket": "cloud_only"},
+                        {"title": "Low DC Recovery SOC In AC Mode", "bucket": "cloud_only"},
+                        {"title": "Battery Low Cut Off SOC", "bucket": "cloud_only"},
+                        {"title": "Boot method", "bucket": "cloud_only"},
+                        {"title": "Remote switch", "bucket": "cloud_only"},
+                        {"title": "Inverter Date", "bucket": "cloud_only"},
+                        {"title": "Energy-saving mode switch", "bucket": "cloud_only"},
+                        {"title": "Input Mode", "bucket": "cloud_only"},
+                        {"title": "bat_eq_time", "bucket": "cloud_only"},
+                        {"title": "Clean Generation Power", "bucket": "cloud_only"},
+                        {"title": "Equalization activated immediately", "bucket": "cloud_only"},
+                    ],
+                }
+            }
+        },
+    }
+
+
 def _find_item(raw_items: list[dict[str, object]], key: str) -> dict[str, object]:
     for item in raw_items:
         if str(item.get("key") or "") == key:
@@ -356,6 +390,56 @@ class LocalMetadataTests(unittest.TestCase):
         self.assertNotIn("low_dc_cutoff_soc", plan.profile_enable_keys)
         self.assertIn("Power Saving Mode", plan.blocked_field_titles)
         self.assertIn("Output control", plan.skipped_field_titles)
+
+    def test_resolves_smartess_smg_bridge_plan_for_active_anenji_metadata(self) -> None:
+        plan = resolve_smartess_smg_bridge_plan(
+            effective_owner_key="modbus_smg",
+            source_profile_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            source_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            cloud_evidence=_sample_smartess_anenji_cloud_evidence(),
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(
+            plan.source_profile_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertEqual(
+            plan.source_schema_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertIn("output_rating_voltage", plan.profile_enable_keys)
+        self.assertIn("battery_redischarge_voltage", plan.profile_enable_keys)
+        self.assertIn("battery_equalization_mode", plan.profile_enable_keys)
+        self.assertIn("power_saving_mode", plan.profile_enable_keys)
+        self.assertIn("battery_equalization_time", plan.profile_enable_keys)
+        self.assertIn("clear_generation_data", plan.profile_enable_keys)
+        self.assertIn("force_eq_charge", plan.profile_enable_keys)
+        self.assertIn("turn_on_mode", plan.profile_enable_keys)
+        self.assertTrue(
+            any(
+                match.cloud_title == "Input Mode" and match.profile_key == "input_mode"
+                for match in plan.matches
+            )
+        )
+        self.assertNotIn("output_source_priority", plan.profile_enable_keys)
+        self.assertIn("output_source_priority", plan.measurement_enable_keys)
+        self.assertIn("output_rating_voltage", plan.measurement_enable_keys)
+        self.assertIn("battery_redischarge_voltage", plan.measurement_enable_keys)
+        self.assertIn("battery_equalization_mode", plan.measurement_enable_keys)
+        self.assertIn("input_mode", plan.measurement_enable_keys)
+        self.assertIn("battery_equalization_time", plan.measurement_enable_keys)
+        self.assertIn("low_dc_protection_soc_grid_mode", plan.measurement_enable_keys)
+        self.assertIn(
+            "solar_battery_utility_return_soc_threshold",
+            plan.measurement_enable_keys,
+        )
+        self.assertIn("low_dc_cutoff_soc", plan.measurement_enable_keys)
+        self.assertIn("turn_on_mode", plan.measurement_enable_keys)
+        self.assertIn("remote_switch", plan.measurement_enable_keys)
+        self.assertIn("inverter_date", plan.measurement_enable_keys)
+        self.assertIn("power_saving_mode", plan.measurement_enable_keys)
 
     def test_creates_smartess_smg_bridge_files(self) -> None:
         plan = resolve_smartess_smg_bridge_plan(

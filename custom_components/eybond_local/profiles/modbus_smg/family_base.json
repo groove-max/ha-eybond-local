@@ -1,0 +1,843 @@
+{
+  "profile_key": "modbus_smg_family_base",
+  "title": "SMG / Modbus Family Base",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "conditions": {
+    "battery_connected": {
+      "key": "battery_connected",
+      "operator": "truthy",
+      "reason": "Battery is not connected."
+    },
+    "charging_inactive": {
+      "key": "charging_inactive",
+      "operator": "truthy",
+      "reason": "Stop active battery charging before changing this setting."
+    },
+    "safe_configuration_mode": {
+      "key": "configuration_safe_mode",
+      "operator": "truthy",
+      "reason": "This setting can only be changed while the inverter is in Power On, Standby, or Fault mode."
+    },
+    "fault_mode": {
+      "key": "operating_mode",
+      "operator": "eq",
+      "value": "Fault",
+      "reason": "This action is only available while the inverter is in Fault mode."
+    },
+    "remote_control_enabled": {
+      "key": "remote_control_enabled",
+      "operator": "truthy",
+      "reason": "Remote control is disabled by the current Turn On Mode setting."
+    },
+    "remote_turn_on_inactive": {
+      "key": "remote_switch",
+      "operator": "ne",
+      "value": "Remote Turn-On",
+      "reason": "Remote turn-on is already active."
+    },
+    "remote_shutdown_inactive": {
+      "key": "remote_switch",
+      "operator": "ne",
+      "value": "Remote Shutdown",
+      "reason": "Remote shutdown is already active."
+    }
+  },
+  "groups": [
+    {
+      "key": "output",
+      "title": "Output",
+      "order": 100,
+      "description": "Output priority and nominal output parameters.",
+      "icon": "mdi:transmission-tower-export"
+    },
+    {
+      "key": "charging",
+      "title": "Charging",
+      "order": 200,
+      "description": "Charging source priority and current limits.",
+      "icon": "mdi:battery-charging"
+    },
+    {
+      "key": "battery",
+      "title": "Battery",
+      "order": 300,
+      "description": "Battery settings, thresholds, and equalization behavior.",
+      "icon": "mdi:battery-cog"
+    },
+    {
+      "key": "system",
+      "title": "System",
+      "order": 400,
+      "description": "General inverter operating modes, restart behavior, and front-panel options.",
+      "icon": "mdi:cog-outline"
+    }
+  ],
+  "capability_templates": {
+    "battery_bulk_voltage": {
+      "key": "battery_bulk_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 650,
+      "title": "Battery Bulk Voltage",
+      "group": "battery",
+      "order": 200,
+      "unit": "V",
+      "device_class": "voltage",
+      "depends_on": [
+        "battery_connected",
+        "charging_active"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "battery_float_voltage",
+        "battery_redischarge_voltage"
+      ],
+      "change_summary": "Changes the target voltage used during the main battery charge stage.",
+      "note": "Battery bulk voltage in tenths of volts."
+    },
+    "battery_equalization_interval": {
+      "key": "battery_equalization_interval",
+      "value_kind": "u16",
+      "minimum": 1,
+      "maximum": 90,
+      "title": "Battery Equalization Interval",
+      "group": "battery",
+      "order": 430,
+      "unit": "d",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "change_summary": "Changes the interval between equalization cycles.",
+      "note": "Battery equalization interval in days."
+    },
+    "battery_equalization_mode": {
+      "key": "battery_equalization_mode",
+      "value_kind": "bool",
+      "title": "Battery Equalization",
+      "group": "battery",
+      "order": 190,
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "change_summary": "Enables or disables the battery equalization mode."
+    },
+    "battery_equalization_time": {
+      "key": "battery_equalization_time",
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 900,
+      "title": "Battery Equalization Time",
+      "group": "battery",
+      "order": 410,
+      "unit": "min",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "change_summary": "Changes the equalization charge duration.",
+      "note": "Battery equalization time in minutes."
+    },
+    "battery_equalization_timeout": {
+      "key": "battery_equalization_timeout",
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 900,
+      "title": "Battery Equalization Timeout",
+      "group": "battery",
+      "order": 420,
+      "unit": "min",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "change_summary": "Changes the timeout after which equalization exits automatically.",
+      "note": "Battery equalization timeout in minutes."
+    },
+    "battery_equalization_voltage": {
+      "key": "battery_equalization_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 700,
+      "title": "Battery Equalization Voltage",
+      "group": "battery",
+      "order": 400,
+      "unit": "V",
+      "device_class": "voltage",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "change_summary": "Changes the target battery equalization voltage.",
+      "note": "Battery equalization voltage in tenths of volts."
+    },
+    "battery_float_voltage": {
+      "key": "battery_float_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 650,
+      "title": "Battery Float Voltage",
+      "group": "battery",
+      "order": 210,
+      "unit": "V",
+      "device_class": "voltage",
+      "depends_on": [
+        "battery_connected",
+        "charging_active"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "battery_bulk_voltage"
+      ],
+      "change_summary": "Changes the maintenance voltage applied after bulk charging is complete.",
+      "note": "Battery float voltage in tenths of volts."
+    },
+    "battery_overvoltage_protection_voltage": {
+      "key": "battery_overvoltage_protection_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 700,
+      "title": "Battery Overvoltage Protection",
+      "group": "battery",
+      "order": 195,
+      "unit": "V",
+      "device_class": "voltage",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected",
+        "charging_active"
+      ],
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the battery overvoltage protection threshold.",
+      "note": "Battery overvoltage protection point in tenths of volts."
+    },
+    "battery_redischarge_voltage": {
+      "key": "battery_redischarge_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 650,
+      "title": "Battery Redischarge Voltage",
+      "group": "battery",
+      "order": 220,
+      "unit": "V",
+      "device_class": "voltage",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected",
+        "charging_active"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "battery_bulk_voltage",
+        "battery_float_voltage"
+      ],
+      "change_summary": "Changes the threshold at which the inverter resumes battery discharge after charging.",
+      "note": "Battery redischarge voltage in tenths of volts."
+    },
+    "battery_under_voltage": {
+      "key": "battery_under_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 650,
+      "title": "Battery Under Voltage",
+      "group": "battery",
+      "order": 230,
+      "unit": "V",
+      "device_class": "voltage",
+      "depends_on": [
+        "battery_connected",
+        "charging_active"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "output_source_priority"
+      ],
+      "change_summary": "Changes the low-battery protection threshold that can force source switching.",
+      "note": "Battery under-voltage threshold in tenths of volts."
+    },
+    "battery_under_voltage_off_grid": {
+      "key": "battery_under_voltage_off_grid",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 650,
+      "title": "Battery Under Voltage Off-Grid",
+      "group": "battery",
+      "order": 240,
+      "unit": "V",
+      "device_class": "voltage",
+      "advanced": true,
+      "depends_on": [
+        "battery_connected",
+        "charging_active"
+      ],
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the low-battery protection threshold used in off-grid mode.",
+      "note": "Battery low-voltage protection point in off-grid mode, in tenths of volts."
+    },
+    "buzzer_mode": {
+      "key": "buzzer_mode",
+      "value_kind": "enum",
+      "enabled_default": true,
+      "title": "Buzzer Mode",
+      "group": "system",
+      "order": 115,
+      "advanced": true,
+      "change_summary": "Controls when the inverter buzzer is allowed to sound.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Mute",
+          "order": 0,
+          "description": "Mute the buzzer in all situations."
+        },
+        {
+          "value": 1,
+          "label": "Source Change, Warning, Fault",
+          "order": 1,
+          "description": "Sound on input source changes and on specific warnings or faults."
+        },
+        {
+          "value": 2,
+          "label": "Warning and Fault",
+          "order": 2,
+          "description": "Sound only for specific warnings or faults."
+        },
+        {
+          "value": 3,
+          "label": "Fault Only",
+          "order": 3,
+          "description": "Sound only when a fault occurs."
+        }
+      ]
+    },
+    "charge_source_priority": {
+      "key": "charge_source_priority",
+      "value_kind": "enum",
+      "title": "Charge Source Priority",
+      "group": "charging",
+      "order": 300,
+      "enabled_default": true,
+      "depends_on": [
+        "operating_mode",
+        "battery_connected",
+        "charging_active"
+      ],
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "max_charge_current",
+        "max_ac_charge_current",
+        "utility_charging_allowed",
+        "pv_only_charging"
+      ],
+      "change_summary": "Changes which sources are allowed to charge the battery."
+    },
+    "exit_fault_mode": {
+      "key": "exit_fault_mode",
+      "value_kind": "action",
+      "action_value": 1,
+      "title": "Exit Fault Mode",
+      "group": "system",
+      "order": 900,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "visible_if": [
+        "fault_mode"
+      ],
+      "editable_if": [
+        "fault_mode"
+      ]
+    },
+    "lcd_auto_return_mode": {
+      "key": "lcd_auto_return_mode",
+      "value_kind": "bool",
+      "enabled_default": true,
+      "title": "LCD Auto Return",
+      "group": "system",
+      "order": 125,
+      "advanced": true,
+      "change_summary": "Controls whether the LCD returns to the home page automatically after one minute.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Do not return to the home page automatically."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Return to the home page automatically after one minute."
+        }
+      ]
+    },
+    "lcd_backlight_mode": {
+      "key": "lcd_backlight_mode",
+      "value_kind": "bool",
+      "enabled_default": true,
+      "title": "LCD Backlight",
+      "group": "system",
+      "order": 120,
+      "advanced": true,
+      "change_summary": "Controls whether the LCD backlight stays on continuously or turns off automatically.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Timed Off",
+          "order": 0,
+          "description": "Allow the LCD backlight to turn off automatically."
+        },
+        {
+          "value": 1,
+          "label": "Always On",
+          "order": 1,
+          "description": "Keep the LCD backlight on continuously."
+        }
+      ]
+    },
+    "low_dc_cutoff_soc": {
+      "key": "low_dc_cutoff_soc",
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Low DC Cut-Off SOC",
+      "group": "battery",
+      "order": 270,
+      "unit": "%",
+      "enabled_default": true,
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the battery SOC threshold used for low-DC cut-off."
+    },
+    "low_dc_protection_soc_grid_mode": {
+      "key": "low_dc_protection_soc_grid_mode",
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Low DC Protection SOC in Grid Mode",
+      "group": "battery",
+      "order": 250,
+      "unit": "%",
+      "enabled_default": true,
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the battery SOC threshold that triggers low-DC protection while grid mode is active."
+    },
+    "max_ac_charge_current": {
+      "key": "max_ac_charge_current",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 2000,
+      "title": "Max AC Charge Current",
+      "group": "charging",
+      "order": 320,
+      "unit": "A",
+      "device_class": "current",
+      "enabled_default": true,
+      "depends_on": [
+        "operating_mode",
+        "battery_connected",
+        "charge_source_priority",
+        "utility_charging_allowed",
+        "charging_active"
+      ],
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "charge_source_priority"
+      ],
+      "change_summary": "Changes the maximum charging current that may come from AC/utility.",
+      "note": "Maximum AC charge current in tenths of amps."
+    },
+    "max_charge_current": {
+      "key": "max_charge_current",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 2000,
+      "title": "Max Charge Current",
+      "group": "charging",
+      "order": 310,
+      "unit": "A",
+      "device_class": "current",
+      "enabled_default": true,
+      "depends_on": [
+        "operating_mode",
+        "battery_connected",
+        "charging_active"
+      ],
+      "editable_if": [
+        "battery_connected",
+        "charging_inactive"
+      ],
+      "affects": [
+        "charge_source_priority"
+      ],
+      "change_summary": "Changes the overall battery charging current limit.",
+      "note": "Maximum charge current in tenths of amps."
+    },
+    "output_mode": {
+      "key": "output_mode",
+      "value_kind": "enum",
+      "title": "Output Mode",
+      "group": "system",
+      "order": 100,
+      "advanced": true,
+      "requires_confirm": true,
+      "reboot_required": true,
+      "unsafe_while_running": true,
+      "depends_on": [
+        "operating_mode",
+        "configuration_safe_mode"
+      ],
+      "editable_if": [
+        "safe_configuration_mode"
+      ]
+    },
+    "output_rating_frequency": {
+      "key": "output_rating_frequency",
+      "value_kind": "scaled_u16",
+      "divisor": 100,
+      "minimum": 5000,
+      "maximum": 6000,
+      "title": "Output Rating Frequency",
+      "group": "output",
+      "order": 120,
+      "unit": "Hz",
+      "device_class": "frequency",
+      "advanced": true,
+      "requires_confirm": true,
+      "reboot_required": true,
+      "unsafe_while_running": true,
+      "depends_on": [
+        "operating_mode",
+        "configuration_safe_mode"
+      ],
+      "editable_if": [
+        "safe_configuration_mode"
+      ],
+      "change_summary": "Changes the nominal AC output frequency target.",
+      "note": "Output rating frequency in hundredths of Hz."
+    },
+    "output_rating_voltage": {
+      "key": "output_rating_voltage",
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 2200,
+      "maximum": 2400,
+      "title": "Output Rating Voltage",
+      "group": "output",
+      "order": 110,
+      "unit": "V",
+      "device_class": "voltage",
+      "advanced": true,
+      "requires_confirm": true,
+      "reboot_required": true,
+      "unsafe_while_running": true,
+      "depends_on": [
+        "operating_mode",
+        "configuration_safe_mode"
+      ],
+      "editable_if": [
+        "safe_configuration_mode"
+      ],
+      "change_summary": "Changes the nominal output voltage target reported by the inverter.",
+      "note": "Output rating voltage in tenths of volts."
+    },
+    "output_source_priority": {
+      "key": "output_source_priority",
+      "value_kind": "enum",
+      "title": "Output Source Priority",
+      "group": "output",
+      "order": 100,
+      "enabled_default": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "depends_on": [
+        "operating_mode"
+      ],
+      "affects": [
+        "charge_source_priority",
+        "battery_under_voltage"
+      ]
+    },
+    "over_temperature_restart_mode": {
+      "key": "over_temperature_restart_mode",
+      "value_kind": "bool",
+      "enabled_default": true,
+      "title": "Over Temperature Restart",
+      "group": "system",
+      "order": 150,
+      "advanced": true,
+      "requires_confirm": true,
+      "change_summary": "Controls whether the inverter may restart automatically after an over-temperature event.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Do not restart automatically after over-temperature."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Restart automatically after over-temperature when conditions allow."
+        }
+      ]
+    },
+    "overload_bypass_mode": {
+      "key": "overload_bypass_mode",
+      "value_kind": "bool",
+      "title": "Overload Bypass",
+      "group": "system",
+      "order": 160,
+      "advanced": true,
+      "requires_confirm": true,
+      "change_summary": "Controls whether the inverter may bypass output during overload conditions.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Do not switch to bypass automatically on overload."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Allow automatic bypass during overload conditions."
+        }
+      ]
+    },
+    "overload_restart_mode": {
+      "key": "overload_restart_mode",
+      "value_kind": "bool",
+      "enabled_default": true,
+      "title": "Overload Restart",
+      "group": "system",
+      "order": 140,
+      "advanced": true,
+      "requires_confirm": true,
+      "change_summary": "Controls whether the inverter may restart automatically after an overload event.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Do not restart automatically after overload."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Restart automatically after overload when conditions allow."
+        }
+      ]
+    },
+    "power_saving_mode": {
+      "key": "power_saving_mode",
+      "value_kind": "bool",
+      "title": "Power Saving",
+      "group": "system",
+      "order": 130,
+      "advanced": true,
+      "change_summary": "Controls whether inverter power-saving mode is enabled.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Disable inverter power-saving behavior."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Enable inverter power-saving behavior."
+        }
+      ]
+    },
+    "remote_shutdown": {
+      "key": "remote_shutdown",
+      "value_kind": "action",
+      "action_value": 0,
+      "title": "Remote Shutdown",
+      "group": "system",
+      "order": 181,
+      "advanced": true,
+      "read_key": "remote_switch",
+      "depends_on": [
+        "turn_on_mode",
+        "remote_control_enabled",
+        "remote_switch"
+      ],
+      "visible_if": [
+        "remote_control_enabled",
+        "remote_shutdown_inactive"
+      ],
+      "editable_if": [
+        "remote_control_enabled"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true
+    },
+    "remote_turn_on": {
+      "key": "remote_turn_on",
+      "value_kind": "action",
+      "action_value": 1,
+      "title": "Remote Turn-On",
+      "group": "system",
+      "order": 180,
+      "advanced": true,
+      "read_key": "remote_switch",
+      "depends_on": [
+        "turn_on_mode",
+        "remote_control_enabled",
+        "remote_switch"
+      ],
+      "visible_if": [
+        "remote_control_enabled",
+        "remote_turn_on_inactive"
+      ],
+      "editable_if": [
+        "remote_control_enabled"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true
+    },
+    "solar_battery_utility_return_soc_threshold": {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Return To Solar-Battery-Utility Threshold",
+      "group": "battery",
+      "order": 260,
+      "unit": "%",
+      "enabled_default": true,
+      "advanced": true,
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the battery SOC threshold that returns the inverter to Solar-Battery-Utility after low-DC protection."
+    },
+    "turn_on_mode": {
+      "key": "turn_on_mode",
+      "value_kind": "enum",
+      "title": "Turn On Mode",
+      "group": "system",
+      "order": 170,
+      "advanced": true,
+      "requires_confirm": true,
+      "change_summary": "Controls whether the inverter may be turned on locally, remotely, or by both methods.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Local and Remote",
+          "order": 0,
+          "description": "Allow the inverter to be turned on both locally and remotely."
+        },
+        {
+          "value": 1,
+          "label": "Local Only",
+          "order": 1,
+          "description": "Restrict turn-on to the local front panel."
+        },
+        {
+          "value": 2,
+          "label": "Remote Only",
+          "order": 2,
+          "description": "Restrict turn-on to remote control only."
+        }
+      ]
+    }
+  },
+  "capabilities": [],
+  "presets": []
+}

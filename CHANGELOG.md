@@ -23,6 +23,34 @@ the GitHub release body should be rendered from the matching version section her
 
 - Nothing yet.
 
+## [0.1.49] - 2026-04-17
+
+### Added
+
+- Added a dedicated SMG `family_fallback` runtime path with explicit read-only/unverified markers in the support workflow, support bundle, and exported support archive.
+- Added broader built-in Anenji ANJ-11KW-48V-WIFI-P monitoring, including PV1/PV2 telemetry, inverter date/time readback, native PV day/total counters, and a `Sync Inverter Clock` tooling button.
+- Added broader SMG read-side diagnostics for the verified default path, including `program_version`, `protocol_number`, `device_type`, `battery_type`, `warning_mask_i`, `dry_contact_mode`, and `automatic_mains_output_enabled`, with cautious hidden-by-default exposure for lower-value raw fields.
+
+### Changed
+
+- SMG writable metadata is now layered through shared family/base/default/model profiles with capability templates instead of one duplicated monolithic profile file.
+- The Anenji profile is now shipped as a real 47-capability model-specific control surface, but those writes remain intentionally untested and stay out of normal `auto` exposure.
+- Runtime metadata and support reporting now label internal runtime paths separately from commercial hardware names, so docs and exported reports are less misleading.
+- The daily grid-export helper now stays available when signed or direct export power keys are present, even if `solar_feed_to_grid_enabled` is missing.
+
+### Fixed
+
+- The default SMG binding now stays limited to verified 6200-class hardware; other SMG-like power classes fall back to the read-only family path instead of inheriting the default write surface.
+- Optional SMG probe diagnostics now backfill missing details during normal refresh, so the surviving probe-only sensors remain available after Home Assistant restarts.
+- Placeholder all-zero SMG `device_name` values are now suppressed instead of surfacing as misleading identifiers on the verified SMG 6200 path.
+- Local draft and SmartESS bridge generation now copy fully resolved profile JSON, so profile shims and layered metadata do not leak into generated local files.
+
+### Docs
+
+- Updated the README, Ukrainian README, SMG support docs, and generated runtime-profile reports to describe the verified default SMG path, the Anenji-specific path, and the read-only SMG family fallback more explicitly.
+- Release docs and CLI examples now use the changelog-first flow with version placeholders instead of stale hard-coded historical tags.
+- Removed the extra README card badge while keeping the companion card link in place.
+
 ## [0.1.48] - 2026-04-17
 
 ### Added

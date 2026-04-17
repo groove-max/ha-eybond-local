@@ -16,6 +16,7 @@ from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
     _support_capture_ranges,
 )
+from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
     set_external_register_schema_roots,
@@ -37,6 +38,7 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
             _support_capture_ranges(),
             (
                 (100, 10),
+                (171, 13),
                 (186, 12),
                 (201, 34),
                 (277, 5),
@@ -45,8 +47,9 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
                 (406, 1),
                 (420, 1),
                 (607, 1),
-                (643, 1),
-                (696, 8),
+                (626, 8),
+                (643, 2),
+                (696, 9),
             ),
         )
 
@@ -84,8 +87,7 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
             _support_capture_ranges("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"),
             (
                 (100, 10),
-                (171, 1),
-                (184, 1),
+                (171, 14),
                 (186, 46),
                 (252, 5),
                 (277, 5),
@@ -96,7 +98,7 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
                 (414, 18),
                 (600, 57),
                 (677, 18),
-                (696, 8),
+                (696, 9),
                 (707, 1),
                 (709, 1),
                 (858, 2),
@@ -128,7 +130,7 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             evidence["capture_notes"],
             [
-                "Includes supplemental SMG family discovery ranges for 11K-like variants: 277-281, 338-353, 389-391, 607, 696-703.",
+                "Includes supplemental SMG identity and family discovery ranges: 171-183, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
             ],
         )
         self.assertEqual(
@@ -138,9 +140,12 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["range_failures"], [])
 
         captured_by_start = {item["start"]: item for item in evidence["captured_ranges"]}
+        self.assertEqual(captured_by_start[171]["count"], 13)
         self.assertEqual(captured_by_start[300]["count"], 54)
         self.assertEqual(captured_by_start[607]["words"], [607])
-        self.assertEqual(captured_by_start[696]["count"], 8)
+        self.assertEqual(captured_by_start[626]["count"], 8)
+        self.assertEqual(captured_by_start[643]["count"], 2)
+        self.assertEqual(captured_by_start[696]["count"], 9)
         self.assertEqual(len(evidence["fixture_ranges"]), len(expected_ranges))
 
     async def test_capture_support_evidence_includes_anenji_protocol_3_10_windows(self) -> None:
@@ -193,7 +198,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
     def _anenji_registers(self) -> dict[int, int]:
         registers: dict[int, int] = {
             register: 0
-            for start, stop in ((100, 110), (198, 232), (600, 657))
+            for start, stop in ((100, 110), (198, 232), (600, 657), (696, 705))
             for register in range(start, stop)
         }
         for offset, value in _ascii_words("ANJ11KW240001", word_count=12).items():
@@ -238,8 +243,12 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 338: 2300,
                 342: 2305,
                 346: 2298,
-                351: 3600,
-                352: 67,
+                351: 649,
+                352: 1,
+                353: 7,
+                389: 667,
+                390: 0,
+                391: 0,
                 600: 5,
                 601: 2,
                 606: 2300,
@@ -262,13 +271,40 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 653: 60,
                 654: 120,
                 655: 30,
+                677: 1,
+                678: 0,
+                679: 0,
+                680: 0,
+                681: 0,
+                682: 1,
+                683: 1,
+                684: 1,
+                685: 0,
+                686: 0,
+                687: 65535,
+                688: 60927,
+                689: 0,
+                690: 0,
+                691: 11000,
+                692: 0,
                 693: 0,
                 694: 1,
+                696: 2026,
+                697: 4,
+                698: 17,
+                699: 7,
+                700: 22,
+                701: 1,
+                702: 314,
+                703: 0,
+                704: 12345,
+                707: 0,
+                709: 6,
             }
         )
         return registers
 
-    async def test_probe_selects_anenji_variant_and_read_only_profile(self) -> None:
+    async def test_probe_selects_anenji_variant_and_untested_capability_profile(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
         transport = FixtureTransport(
@@ -290,9 +326,56 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             inverter.register_schema_name,
             "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
         )
-        self.assertEqual(inverter.capabilities, ())
+        self.assertEqual(len(inverter.capability_groups), 4)
+        self.assertEqual(len(inverter.capabilities), 47)
+        self.assertEqual(inverter.get_capability("output_mode").register, 600)
+        self.assertEqual(inverter.get_capability("charge_source_priority").register, 632)
+        self.assertEqual(inverter.get_capability("force_eq_charge").register, 656)
+        self.assertEqual(inverter.get_capability("input_mode").register, 677)
+        self.assertEqual(inverter.get_capability("warning_mask_i").register, 687)
+        self.assertEqual(inverter.get_capability("turn_on_mode").register, 693)
+        self.assertEqual(inverter.get_capability("remote_turn_on").register, 694)
+        self.assertEqual(inverter.get_capability("exit_fault_mode").register, 695)
+        self.assertEqual(inverter.get_capability("inverter_date_write").register, 696)
+        self.assertEqual(inverter.get_capability("inverter_time_write").register, 699)
+        with self.assertRaises(KeyError):
+            inverter.get_capability("remote_switch")
+        self.assertTrue(all(not capability.tested for capability in inverter.capabilities))
+        self.assertTrue(
+            all(
+                not can_expose_capability(
+                    capability,
+                    control_mode="auto",
+                    detection_confidence="high",
+                )
+                for capability in inverter.capabilities
+            )
+        )
+        self.assertEqual(inverter.details["device_type"], 1)
         self.assertEqual(inverter.details["protocol_number"], 4)
+        self.assertNotIn("device_name", inverter.details)
+        self.assertNotIn("program_version", inverter.details)
+        self.assertNotIn("rated_cell_count", inverter.details)
+        self.assertNotIn("max_discharge_current_protection", inverter.details)
         self.assertEqual(inverter.details["output_mode"], "Split-Phase-P1")
+
+    async def test_probe_rejects_anenji_variant_when_variant_anchor_fields_are_invalid(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._anenji_registers()
+        registers[691] = 0
+        registers[693] = 99
+        registers[694] = 99
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        if inverter is not None:
+            self.assertNotEqual(inverter.variant_key, "anenji_anj_11kw_48v_wifi_p")
 
     async def test_read_values_uses_variant_schema_mapping(self) -> None:
         driver = SmgModbusDriver()
@@ -324,8 +407,30 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["battery_voltage"], 51.2)
         self.assertEqual(values["battery_percent"], 78)
         self.assertEqual(values["pv_power"], 2400)
+        self.assertEqual(values["pv_voltage"], 66.7)
+        self.assertEqual(values["pv_current"], 0.1)
+        self.assertEqual(values["pv1_voltage"], 64.9)
+        self.assertEqual(values["pv1_current"], 0.1)
+        self.assertEqual(values["pv1_power"], 7)
+        self.assertEqual(values["pv2_voltage"], 66.7)
+        self.assertEqual(values["pv2_current"], 0.0)
+        self.assertEqual(values["pv2_power"], 0)
+        self.assertEqual(values["input_mode"], "UPS")
+        self.assertEqual(values["parallel_pv_detection_mode"], 0)
+        self.assertEqual(values["external_ct_enabled"], "Disabled")
+        self.assertEqual(values["warning_mask_i"], 4294962687)
+        self.assertEqual(values["dry_contact_mode"], "Normal Mode")
+        self.assertEqual(values["automatic_mains_output_enabled"], "Disabled")
+        self.assertEqual(values["pv_grid_connected_max_power"], 11000)
+        self.assertEqual(values["island_detection_enabled"], "Disabled")
         self.assertEqual(values["turn_on_mode"], "Local and Remote")
         self.assertEqual(values["remote_switch"], "Remote Turn-On")
+        self.assertEqual(values["inverter_date"], "2026-04-17")
+        self.assertEqual(values["inverter_time"], "07:22:01")
+        self.assertEqual(values["pv_generation_day"], 3.14)
+        self.assertEqual(values["pv_generation_sum"], 123.45)
+        self.assertEqual(values["ground_relay_enabled"], "Disabled")
+        self.assertEqual(values["lithium_battery_activation_time"], 6)
 
     async def test_write_capability_uses_inverter_capabilities(self) -> None:
         driver = SmgModbusDriver()
@@ -349,6 +454,306 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ValueError):
             await driver.async_write_capability(transport, inverter, "remote_switch", 1)
+
+    async def test_write_u32_capability_updates_two_register_words(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        written = await driver.async_write_capability(transport, inverter, "warning_mask_i", 0x12345678)
+
+        self.assertEqual(written, 0x12345678)
+        self.assertEqual(transport._registers[687], 0x1234)
+        self.assertEqual(transport._registers[688], 0x5678)
+
+        values = await driver.async_read_values(transport, inverter)
+        self.assertEqual(values["warning_mask_i"], 0x12345678)
+
+    async def test_write_inverter_clock_capabilities_updates_date_and_time_words(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        written_date = await driver.async_write_capability(
+            transport,
+            inverter,
+            "inverter_date_write",
+            "2026-04-18",
+        )
+        written_time = await driver.async_write_capability(
+            transport,
+            inverter,
+            "inverter_time_write",
+            "08:09:10",
+        )
+
+        self.assertEqual(written_date, "2026-04-18")
+        self.assertEqual(written_time, "08:09:10")
+        self.assertEqual(transport._registers[696], 2026)
+        self.assertEqual(transport._registers[697], 4)
+        self.assertEqual(transport._registers[698], 18)
+        self.assertEqual(transport._registers[699], 8)
+        self.assertEqual(transport._registers[700], 9)
+        self.assertEqual(transport._registers[701], 10)
+
+        values = await driver.async_read_values(transport, inverter)
+        self.assertEqual(values["inverter_date"], "2026-04-18")
+        self.assertEqual(values["inverter_time"], "08:09:10")
+
+    async def test_force_eq_charge_action_writes_register_656(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        written = await driver.async_write_capability(transport, inverter, "force_eq_charge", None)
+
+        self.assertEqual(written, 1)
+        self.assertEqual(transport._registers[656], 1)
+
+
+class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
+    def _smg_family_registers(self, *, rated_power: int) -> dict[int, int]:
+        registers: dict[int, int] = {
+            register: 0
+            for start, stop in (
+                (100, 110),
+                (171, 185),
+                (186, 198),
+                (201, 235),
+                (300, 344),
+                (351, 352),
+                (406, 407),
+                (420, 421),
+                (626, 645),
+            )
+            for register in range(start, stop)
+        }
+        for offset, value in _ascii_words("SMG II 6200", word_count=12).items():
+            registers[172 + offset] = value
+        for offset, value in _ascii_words("SMG11K240001", word_count=12).items():
+            registers[186 + offset] = value
+        for offset, value in _ascii_words("U1.00", word_count=8).items():
+            registers[626 + offset] = value
+
+        registers.update(
+            {
+                171: 0x1E00,
+                184: 1,
+                201: 3,
+                202: 2300,
+                203: 5000,
+                204: 120,
+                210: 2295,
+                211: 12,
+                212: 5000,
+                213: 2500,
+                215: 512,
+                219: 650,
+                220: 10,
+                223: 800,
+                225: 40,
+                300: 0,
+                301: 1,
+                302: 0,
+                303: 3,
+                305: 1,
+                306: 1,
+                307: 0,
+                308: 1,
+                309: 1,
+                310: 0,
+                313: 1,
+                314: 0x1234,
+                315: 0x5678,
+                316: 1,
+                320: 2300,
+                321: 5000,
+                322: 2,
+                323: 620,
+                324: 560,
+                325: 540,
+                326: 520,
+                327: 480,
+                329: 470,
+                331: 1,
+                332: 600,
+                333: 200,
+                334: 580,
+                335: 60,
+                336: 120,
+                337: 30,
+                338: 1,
+                341: 25,
+                342: 45,
+                343: 15,
+                351: 80,
+                406: 0,
+                420: 1,
+                643: rated_power,
+                644: 16,
+            }
+        )
+        return registers
+
+    async def test_probe_keeps_supported_6200_layout_on_default_variant(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertEqual(inverter.model_name, "SMG 6200")
+        self.assertEqual(inverter.profile_name, "smg_modbus.json")
+        self.assertEqual(inverter.register_schema_name, "modbus_smg/models/smg_6200.json")
+        self.assertGreater(len(inverter.capabilities), 0)
+        self.assertEqual(inverter.details["protocol_number"], 1)
+        self.assertEqual(inverter.details["device_type"], 0x1E00)
+        self.assertEqual(inverter.details["device_name"], "SMG II 6200")
+        self.assertEqual(inverter.details["program_version"], "U1.00")
+        self.assertEqual(inverter.details["rated_cell_count"], 16)
+        self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
+        self.assertEqual(inverter.details["rated_power"], 6200)
+
+    async def test_probe_omits_placeholder_default_device_name(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._smg_family_registers(rated_power=6200)
+        registers[172] = 0x3030
+        registers[173] = 0x3030
+        for register in range(174, 184):
+            registers[register] = 0
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.details["protocol_number"], 1)
+        self.assertEqual(inverter.details["device_type"], 0x1E00)
+        self.assertNotIn("device_name", inverter.details)
+        self.assertEqual(inverter.details["program_version"], "U1.00")
+
+    async def test_read_values_exposes_documented_base_layout_config_diagnostics(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG 6200",
+            serial_number="SMG11K240001",
+            probe_target=target,
+            variant_key="default",
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            details={
+                "device_type": 0x1E00,
+                "protocol_number": 1,
+                "device_name": "SMG II 6200",
+                "program_version": "U1.00",
+                "max_discharge_current_protection": 80,
+                "rated_cell_count": 16,
+                "rated_power": 6200,
+            },
+            capabilities=(),
+        )
+        transport = FixtureTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["battery_type"], "User")
+        self.assertEqual(values["warning_mask_i"], 0x12345678)
+        self.assertEqual(values["dry_contact_mode"], "Grounding Box Mode")
+        self.assertEqual(values["automatic_mains_output_enabled"], "Enabled")
+
+    async def test_read_values_backfills_missing_default_probe_details(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG 6200",
+            serial_number="SMG11K240001",
+            probe_target=target,
+            variant_key="default",
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            details={
+                "rated_power": 6200,
+            },
+            capabilities=(),
+        )
+        transport = FixtureTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["protocol_number"], 1)
+        self.assertEqual(values["device_type"], 0x1E00)
+        self.assertEqual(values["device_name"], "SMG II 6200")
+        self.assertEqual(values["program_version"], "U1.00")
+        self.assertEqual(values["rated_cell_count"], 16)
+        self.assertEqual(values["max_discharge_current_protection"], 80)
+        self.assertEqual(inverter.details["protocol_number"], 1)
+        self.assertEqual(inverter.details["device_type"], 0x1E00)
+        self.assertEqual(inverter.details["device_name"], "SMG II 6200")
+        self.assertEqual(inverter.details["program_version"], "U1.00")
+        self.assertEqual(inverter.details["rated_cell_count"], 16)
+        self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
+
+    async def test_probe_falls_back_to_read_only_family_variant_for_unknown_smg_power_class(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._smg_family_registers(rated_power=11000),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "family_fallback")
+        self.assertEqual(inverter.model_name, "SMG Family (Unverified Variant)")
+        self.assertEqual(inverter.profile_name, "modbus_smg/family_fallback.json")
+        self.assertEqual(inverter.register_schema_name, "modbus_smg/base.json")
+        self.assertEqual(len(inverter.capabilities), 0)
+        self.assertEqual(len(inverter.capability_presets), 0)
+        self.assertEqual(len(inverter.capability_groups), 4)
+        self.assertEqual(inverter.details["rated_power"], 11000)
 
 
 if __name__ == "__main__":

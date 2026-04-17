@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .runtime.coordinator import EybondLocalCoordinator
 from .models import CapabilityPreset, WriteCapability
@@ -90,7 +91,25 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
             name="Create Local Register Schema Draft",
             icon="mdi:file-tree-outline",
         ),
+        _ToolingButtonSpec(
+            key="sync_inverter_clock",
+            name="Sync Inverter Clock",
+            icon="mdi:clock-sync",
+            entity_category=EntityCategory.CONFIG,
+        ),
     )
+
+
+def _clock_sync_capabilities(coordinator: EybondLocalCoordinator) -> tuple[WriteCapability, WriteCapability] | None:
+    inverter = coordinator.data.inverter
+    if inverter is None:
+        return None
+    try:
+        date_capability = inverter.get_capability("inverter_date_write")
+        time_capability = inverter.get_capability("inverter_time_write")
+    except KeyError:
+        return None
+    return date_capability, time_capability
 
 
 class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity):
@@ -200,7 +219,10 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
         self._attr_name = spec.name
         self._attr_icon = spec.icon
         self._attr_entity_category = spec.entity_category
-        self._attr_entity_registry_enabled_default = spec.enabled_default
+        if spec.key == "sync_inverter_clock":
+            self._attr_entity_registry_enabled_default = _clock_sync_capabilities(coordinator) is not None
+        else:
+            self._attr_entity_registry_enabled_default = spec.enabled_default
 
     @property
     def device_info(self):
@@ -218,12 +240,26 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return bool(self.coordinator.effective_profile_name)
         if self._spec.key == "create_local_schema_draft":
             return bool(self.coordinator.effective_register_schema_name)
+        if self._spec.key == "sync_inverter_clock":
+            snapshot = self.coordinator.data
+            if not snapshot.connected:
+                return False
+            capabilities = _clock_sync_capabilities(self.coordinator)
+            if capabilities is None:
+                return False
+            for capability in capabilities:
+                if not self.coordinator.can_expose_capability(capability):
+                    return False
+                runtime_state = capability.runtime_state(snapshot.values)
+                if not (runtime_state.visible and runtime_state.editable):
+                    return False
+            return True
         return True
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         values = self.coordinator.data.values
-        return {
+        attributes = {
             "tool_key": self._spec.key,
             "profile_name": self.coordinator.effective_profile_name,
             "register_schema_name": self.coordinator.effective_register_schema_name,
@@ -247,6 +283,13 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             "support_workflow_plan": values.get("support_workflow_plan"),
             "support_workflow_advanced_hint": values.get("support_workflow_advanced_hint"),
         }
+        if self._spec.key == "sync_inverter_clock":
+            now = dt_util.now().replace(microsecond=0)
+            attributes["target_inverter_date"] = now.strftime("%Y-%m-%d")
+            attributes["target_inverter_time"] = now.strftime("%H:%M:%S")
+            attributes["current_inverter_date"] = values.get("inverter_date")
+            attributes["current_inverter_time"] = values.get("inverter_time")
+        return attributes
 
     async def async_press(self) -> None:
         if self._spec.key == "create_support_package":
@@ -263,5 +306,8 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return
         if self._spec.key == "reload_local_metadata":
             await self.coordinator.async_reload_local_metadata()
+            return
+        if self._spec.key == "sync_inverter_clock":
+            await self.coordinator.async_sync_inverter_clock()
             return
         raise ValueError(f"unknown_tool_button:{self._spec.key}")

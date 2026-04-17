@@ -12,7 +12,7 @@ If your collector is remote, behind another router, or needs VPN / NAT callback 
 
 For deeper hardware compatibility info:
 
-- [SMG Support Matrix](SMG_SUPPORT_MATRIX.md) — what's covered for the SMG / Modbus inverter family
+- [SMG Support Matrix](SMG_SUPPORT_MATRIX.md) — verified default SMG 6200 controls plus the current Anenji and read-only fallback runtime paths
 - [Generated SMG Support Matrix](generated/SMG_SUPPORT_MATRIX.generated.md) — auto-refreshed snapshot
 
 ## I'm a developer
@@ -29,7 +29,7 @@ Then dive into one of:
 
 Generated reports live under [generated/](generated/) and are refreshed by the quality gate:
 
-- [Support Overview](generated/SUPPORT_OVERVIEW.generated.md) — high-level coverage status
+- [Support Overview](generated/SUPPORT_OVERVIEW.generated.md) — implementation-level coverage report for the runtime profiles shipped in the repository; do not read it as a commercial device matrix
 - [Generated SMG Support Matrix](generated/SMG_SUPPORT_MATRIX.generated.md) — current declarative support snapshot
 
 Local fixture-derived debug reports are intentionally kept out of the public repository. If you maintain a local catalog under `.local/fixtures/catalog/`, generate those reports locally when needed.

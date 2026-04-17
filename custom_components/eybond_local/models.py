@@ -174,6 +174,8 @@ class WriteCapability:
     register: int
     value_kind: str
     note: str
+    word_count: int = 1
+    combine: str = "u16"
     tested: bool = False
     support_tier: str = ""
     support_notes: str = ""

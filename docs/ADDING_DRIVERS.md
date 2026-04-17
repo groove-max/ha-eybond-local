@@ -122,6 +122,8 @@ Keep procedural derived runtime logic in the driver, not in HA entities or schem
 
 Create or extend a profile JSON under `custom_components/eybond_local/profiles/`.
 
+Prefer shared family-level metadata plus model overlays over copy-pasting full profiles. If multiple variants reuse the same logical controls with different register locations, put the common capability shape into `capability_templates` in the family base and materialize the variant-specific entries from the overlay. If a device is clearly in the same protocol family but still lacks verified write semantics, add a separate read-only fallback profile instead of inheriting a writable default surface prematurely.
+
 The profile should carry:
 
 - groups

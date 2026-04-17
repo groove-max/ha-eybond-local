@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import network
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_COLLECTOR_IP,
@@ -178,6 +179,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         await self.async_request_refresh()
         return result
 
+    async def async_sync_inverter_clock(self) -> dict[str, str]:
+        """Write the current Home Assistant local date/time into the inverter clock."""
+
+        now = dt_util.now().replace(microsecond=0)
+        date_value = now.strftime("%Y-%m-%d")
+        time_value = now.strftime("%H:%M:%S")
+
+        await self.async_write_capability("inverter_date_write", date_value)
+        await self.async_write_capability("inverter_time_write", time_value)
+
+        return {
+            "inverter_date": date_value,
+            "inverter_time": time_value,
+        }
+
     @property
     def detection_confidence(self) -> str:
         """Return the saved detection confidence for this entry."""
@@ -284,7 +300,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     @property
     def effective_owner_name(self) -> str:
-        """Return the actual runtime owner label for the selected effective metadata."""
+        """Return the internal runtime-path label for the selected effective metadata."""
 
         return self.effective_metadata.effective_owner_name
 
@@ -715,6 +731,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         collector = snapshot.collector
         workflow = build_support_workflow_state(
             has_inverter=snapshot.inverter is not None,
+            variant_key=getattr(snapshot.inverter, "variant_key", ""),
             effective_owner_key=metadata.effective_owner_key,
             effective_owner_name=metadata.effective_owner_name,
             smartess_family_name=metadata.smartess_family_name,

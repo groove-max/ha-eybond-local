@@ -27,6 +27,13 @@
       "variant_key": "default",
       "profile_name": "smg_modbus.json",
       "register_schema_name": "modbus_smg/models/smg_6200.json"
+    },
+    {
+      "driver_key": "modbus_smg",
+      "protocol_family": "modbus_smg",
+      "variant_key": "family_fallback",
+      "profile_name": "modbus_smg/family_fallback.json",
+      "register_schema_name": "modbus_smg/base.json"
     }
   ]
 }

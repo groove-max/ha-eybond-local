@@ -8,6 +8,7 @@ from typing import Any
 
 from ..const import CONF_SMARTESS_PROFILE_KEY, CONF_SMARTESS_PROTOCOL_ASSET_ID
 from ..models import CollectorInfo
+from ..runtime_labels import runtime_path_label
 from .profile_loader import DriverProfileMetadata, load_driver_profile
 from .register_schema_loader import load_register_schema
 from .register_schema_models import RegisterSchemaMetadata
@@ -74,9 +75,9 @@ def resolve_effective_metadata_selection(
             getattr(register_schema_metadata, "driver_key", "")
         )
 
-    effective_owner_name = _normalized_name(getattr(driver, "name", ""))
-    if not effective_owner_name and effective_owner_key:
-        effective_owner_name = _driver_name_from_key(effective_owner_key)
+    effective_owner_name = _effective_owner_name_from_key(effective_owner_key)
+    if not effective_owner_name:
+        effective_owner_name = _normalized_name(getattr(driver, "name", ""))
     smartess_family_name = (
         _smartess_driver_name(smartess_protocol) if smartess_protocol is not None else ""
     )
@@ -128,13 +129,16 @@ def _normalized_name(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _driver_name_from_key(driver_key: str) -> str:
+def _effective_owner_name_from_key(driver_key: str) -> str:
     normalized_key = _normalized_name(driver_key)
     if not normalized_key:
         return ""
+    label = runtime_path_label(normalized_key)
+    if label and label != normalized_key:
+        return label
     try:
         from ..drivers.registry import get_driver
 
         return _normalized_name(get_driver(normalized_key).name)
     except KeyError:
-        return ""
+        return normalized_key

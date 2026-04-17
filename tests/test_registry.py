@@ -43,13 +43,23 @@ class RegistryTests(unittest.TestCase):
                 self.assertEqual(descriptions[key].icon, expected_icon)
 
     def test_measurements_for_smg_do_not_include_pi30_only_keys(self) -> None:
-        keys = {description.key for description in measurements_for_driver("modbus_smg")}
+        descriptions = {
+            description.key: description
+            for description in measurements_for_driver("modbus_smg")
+        }
+        keys = set(descriptions)
 
         self.assertIn("collector_remote_ip", keys)
         self.assertIn("warning_code", keys)
         self.assertIn("battery_power", keys)
+        self.assertIn("inverter_date", keys)
+        self.assertIn("inverter_time", keys)
         self.assertNotIn("protocol_id", keys)
         self.assertNotIn("pv_generation_sum", keys)
+        self.assertTrue(descriptions["inverter_date"].diagnostic)
+        self.assertFalse(descriptions["inverter_date"].enabled_default)
+        self.assertTrue(descriptions["inverter_time"].diagnostic)
+        self.assertFalse(descriptions["inverter_time"].enabled_default)
 
     def test_measurements_for_pi30_do_not_include_smg_only_keys(self) -> None:
         descriptions = {

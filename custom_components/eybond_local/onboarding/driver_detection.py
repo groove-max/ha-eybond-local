@@ -63,7 +63,9 @@ def _build_driver_match(driver: InverterDriver, inverter: DetectedInverter) -> D
         reasons.append("serial_number_present")
     if inverter.details.get("rated_power"):
         reasons.append("rated_power_present")
-    if inverter.protocol_family and inverter.model_name and inverter.serial_number:
+    if inverter.variant_key == "family_fallback":
+        reasons.append("family_fallback_variant")
+    elif inverter.protocol_family and inverter.model_name and inverter.serial_number:
         confidence = "high"
 
     return DriverMatch(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
@@ -61,6 +62,7 @@ def load_driver_profile(profile_name: str) -> DriverProfileMetadata:
     profile_key = str(raw.get("profile_key", profile_path.stem))
     driver_key = str(raw.get("driver_key", profile_key))
     protocol_family = str(raw.get("protocol_family", driver_key))
+    capability_templates = _parse_capability_template_map(raw.get("capability_templates", {}))
 
     named_conditions = {
         key: _parse_condition(value)
@@ -77,7 +79,7 @@ def load_driver_profile(profile_name: str) -> DriverProfileMetadata:
         source_scope=_profile_source_scope(profile_path),
         groups=tuple(_parse_group(item) for item in raw.get("groups", [])),
         capabilities=tuple(
-            _parse_capability(item, named_conditions)
+            _parse_capability(item, named_conditions, capability_templates)
             for item in raw.get("capabilities", [])
         ),
         presets=tuple(
@@ -87,6 +89,13 @@ def load_driver_profile(profile_name: str) -> DriverProfileMetadata:
     )
     _validate_profile(metadata)
     return metadata
+
+
+def load_driver_profile_raw(profile_name: str) -> dict[str, Any]:
+    """Load one declarative driver profile as fully resolved raw JSON data."""
+
+    profile_path = _resolve_profile_path(profile_name)
+    return deepcopy(_load_raw_profile(profile_path))
 
 
 @lru_cache(maxsize=None)
@@ -204,50 +213,89 @@ def _parse_group(raw: Mapping[str, Any]) -> CapabilityGroup:
 def _parse_capability(
     raw: Mapping[str, Any],
     named_conditions: Mapping[str, CapabilityCondition],
+    capability_templates: Mapping[str, Mapping[str, Any]],
 ) -> WriteCapability:
+    resolved_raw = _resolve_capability_raw(raw, capability_templates)
     choices = tuple(_parse_choice(item) for item in raw.get("choices", []))
-    enum_map = _parse_enum_map(raw.get("enum_map"))
+    if not choices:
+        choices = tuple(_parse_choice(item) for item in resolved_raw.get("choices", []))
+    enum_map = _parse_enum_map(resolved_raw.get("enum_map"))
     return WriteCapability(
-        key=str(raw["key"]),
-        register=int(raw["register"]),
-        value_kind=str(raw["value_kind"]),
-        note=str(raw.get("note", "")),
-        tested=bool(raw.get("tested", False)),
-        support_tier=str(raw.get("support_tier", "")),
-        support_notes=str(raw.get("support_notes", "")),
-        action_value=_optional_int(raw.get("action_value")),
-        divisor=_optional_int(raw.get("divisor")),
-        minimum=_optional_int(raw.get("minimum")),
-        maximum=_optional_int(raw.get("maximum")),
+        key=str(resolved_raw["key"]),
+        register=int(resolved_raw["register"]),
+        value_kind=str(resolved_raw["value_kind"]),
+        note=str(resolved_raw.get("note", "")),
+        word_count=int(resolved_raw.get("word_count", 1)),
+        combine=str(resolved_raw.get("combine", "u16")),
+        tested=bool(resolved_raw.get("tested", False)),
+        support_tier=str(resolved_raw.get("support_tier", "")),
+        support_notes=str(resolved_raw.get("support_notes", "")),
+        action_value=_optional_int(resolved_raw.get("action_value")),
+        divisor=_optional_int(resolved_raw.get("divisor")),
+        minimum=_optional_int(resolved_raw.get("minimum")),
+        maximum=_optional_int(resolved_raw.get("maximum")),
         enum_map=enum_map,
         choices=choices,
         recommendations=tuple(
             _parse_recommendation(item, named_conditions)
-            for item in raw.get("recommendations", [])
+            for item in resolved_raw.get("recommendations", [])
         ),
-        title=str(raw.get("title", "")),
-        group=str(raw.get("group", "config")),
-        order=int(raw.get("order", 1000)),
-        unit=_optional_str(raw.get("unit")),
-        device_class=_optional_str(raw.get("device_class")),
-        step=_optional_float(raw.get("step")),
-        enabled_default=bool(raw.get("enabled_default", False)),
-        advanced=bool(raw.get("advanced", False)),
-        requires_confirm=bool(raw.get("requires_confirm", False)),
-        reboot_required=bool(raw.get("reboot_required", False)),
-        read_key=str(raw.get("read_key", "")),
-        depends_on=tuple(str(item) for item in raw.get("depends_on", [])),
-        affects=tuple(str(item) for item in raw.get("affects", [])),
-        exclusive_with=tuple(str(item) for item in raw.get("exclusive_with", [])),
-        change_summary=str(raw.get("change_summary", "")),
-        unsafe_while_running=bool(raw.get("unsafe_while_running", False)),
+        title=str(resolved_raw.get("title", "")),
+        group=str(resolved_raw.get("group", "config")),
+        order=int(resolved_raw.get("order", 1000)),
+        unit=_optional_str(resolved_raw.get("unit")),
+        device_class=_optional_str(resolved_raw.get("device_class")),
+        step=_optional_float(resolved_raw.get("step")),
+        enabled_default=bool(resolved_raw.get("enabled_default", False)),
+        advanced=bool(resolved_raw.get("advanced", False)),
+        requires_confirm=bool(resolved_raw.get("requires_confirm", False)),
+        reboot_required=bool(resolved_raw.get("reboot_required", False)),
+        read_key=str(resolved_raw.get("read_key", "")),
+        depends_on=tuple(str(item) for item in resolved_raw.get("depends_on", [])),
+        affects=tuple(str(item) for item in resolved_raw.get("affects", [])),
+        exclusive_with=tuple(str(item) for item in resolved_raw.get("exclusive_with", [])),
+        change_summary=str(resolved_raw.get("change_summary", "")),
+        unsafe_while_running=bool(resolved_raw.get("unsafe_while_running", False)),
         safe_operating_modes=tuple(
             str(item)
-            for item in raw.get("safe_operating_modes", ("Power On", "Standby", "Fault"))
+            for item in resolved_raw.get("safe_operating_modes", ("Power On", "Standby", "Fault"))
         ),
-        visible_if=_resolve_conditions(raw.get("visible_if", []), named_conditions),
-        editable_if=_resolve_conditions(raw.get("editable_if", []), named_conditions),
+        visible_if=_resolve_conditions(resolved_raw.get("visible_if", []), named_conditions),
+        editable_if=_resolve_conditions(resolved_raw.get("editable_if", []), named_conditions),
     )
+
+
+def _resolve_capability_raw(
+    raw: Mapping[str, Any],
+    capability_templates: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    template_name = _optional_str(raw.get("template"))
+    if not template_name:
+        return dict(raw)
+
+    template_raw = capability_templates.get(template_name)
+    if template_raw is None:
+        raise ValueError(f"unknown_capability_template:{template_name}")
+
+    resolved = {**template_raw, **raw}
+    resolved.setdefault("key", template_name)
+    return resolved
+
+
+def _parse_capability_template_map(raw_templates: Any) -> dict[str, dict[str, Any]]:
+    if not raw_templates:
+        return {}
+    if not isinstance(raw_templates, Mapping):
+        raise ValueError("invalid_capability_templates")
+
+    templates: dict[str, dict[str, Any]] = {}
+    for template_name, raw in raw_templates.items():
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"invalid_capability_template:{template_name}")
+        template = dict(raw)
+        template.setdefault("key", str(template_name))
+        templates[str(template_name)] = template
+    return templates
 
 
 def _parse_choice(raw: Mapping[str, Any]) -> CapabilityChoice:
@@ -364,6 +412,10 @@ def _merge_raw_profile(
     overlay: Mapping[str, Any],
 ) -> dict[str, Any]:
     merged = dict(base)
+    merged["capability_templates"] = _merge_named_mapping(
+        base.get("capability_templates", {}),
+        overlay.get("capability_templates", {}),
+    )
     merged["groups"] = _merge_keyed_list(
         base.get("groups", []),
         overlay.get("groups", []),
@@ -414,6 +466,23 @@ def _merge_keyed_list(
     return result
 
 
+def _merge_named_mapping(
+    base: Mapping[str, Any],
+    overlay: Mapping[str, Any],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        str(key): (dict(value) if isinstance(value, Mapping) else value)
+        for key, value in base.items()
+    }
+    for key, value in overlay.items():
+        mapped_key = str(key)
+        if mapped_key in result and isinstance(result[mapped_key], Mapping) and isinstance(value, Mapping):
+            result[mapped_key] = {**result[mapped_key], **value}
+            continue
+        result[mapped_key] = dict(value) if isinstance(value, Mapping) else value
+    return result
+
+
 def _validate_profile(profile: DriverProfileMetadata) -> None:
     """Validate a loaded declarative profile and fail early on schema issues."""
 
@@ -440,6 +509,10 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
             raise ValueError(
                 f"profile:{profile.key}:unknown_group_for_capability:"
                 f"{capability.key}:{capability.group}"
+            )
+        if capability.word_count < 1:
+            raise ValueError(
+                f"profile:{profile.key}:capability_requires_positive_word_count:{capability.key}"
             )
         if capability.value_kind == "enum" and not capability.enum_value_map:
             raise ValueError(

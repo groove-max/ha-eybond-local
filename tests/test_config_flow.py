@@ -1267,7 +1267,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options.hass.config.config_dir = tempdir
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="PI30 / ASCII",
+                effective_owner_name="PI30-family runtime",
                 effective_owner_key="pi30",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="pi30_ascii/models/smartess_0925_compat.json",
@@ -1292,7 +1292,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options.hass.config.config_dir = tempdir
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="PI30 / ASCII",
+                effective_owner_name="PI30-family runtime",
                 effective_owner_key="pi30",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="pi30_ascii/models/smartess_0925_compat.json",
@@ -1323,7 +1323,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             for key, value in build_support_workflow_state(
                 has_inverter=True,
                 effective_owner_key="modbus_smg",
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 detection_confidence="high",
                 profile_source_scope="external",
                 schema_source_scope="builtin",
@@ -1334,7 +1334,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options.hass.config.config_dir = tempdir
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 effective_owner_key="modbus_smg",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="smg_modbus.json",
@@ -1383,7 +1383,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             for key, value in build_support_workflow_state(
                 has_inverter=True,
                 effective_owner_key="modbus_smg",
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 detection_confidence="high",
                 profile_source_scope="external",
                 schema_source_scope="builtin",
@@ -1394,7 +1394,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options.hass.config.config_dir = tempdir
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 effective_owner_key="modbus_smg",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="smg_modbus.json",
@@ -1422,7 +1422,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             for key, value in build_support_workflow_state(
                 has_inverter=True,
                 effective_owner_key="modbus_smg",
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 detection_confidence="high",
                 profile_source_scope="external",
                 schema_source_scope="external",
@@ -1442,7 +1442,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             schema_path.write_text("{}\n", encoding="utf-8")
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 effective_owner_key="modbus_smg",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="smg_modbus.json",
@@ -1527,7 +1527,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options.hass.config.config_dir = tempdir
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="SMG / Modbus",
+                effective_owner_name="SMG-family runtime",
                 effective_owner_key="modbus_smg",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="smg_modbus.json",
@@ -1831,7 +1831,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options.hass.config.config_dir = tempdir
             options._config_entry.runtime_data = types.SimpleNamespace(
                 current_driver=None,
-                effective_owner_name="PI30 / ASCII",
+                effective_owner_name="PI30-family runtime",
                 effective_owner_key="pi30",
                 smartess_family_name="SmartESS 0925",
                 effective_profile_name="pi30_ascii/models/smartess_0925_compat.json",
@@ -1843,7 +1843,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
             placeholders = options._diagnostics_placeholders()
 
-        self.assertEqual(placeholders["effective_owner_name"], "PI30 / ASCII")
+        self.assertEqual(placeholders["effective_owner_name"], "PI30-family runtime")
         self.assertEqual(placeholders["effective_owner_key"], "pi30")
         self.assertEqual(placeholders["smartess_family_name"], "SmartESS 0925")
         self.assertEqual(placeholders["smartess_family_line"], "\n**SmartESS family:** SmartESS 0925")

@@ -1,0 +1,7 @@
+{
+  "extends": "modbus_smg/family_base.json",
+  "profile_key": "modbus_smg_base",
+  "title": "SMG / Modbus Base Profile",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg"
+}

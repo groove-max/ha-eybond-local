@@ -1,21 +1,33 @@
 # SMG Support Matrix
 
-This document summarizes the current support level for the `SMG / Modbus` family in `eybond_local`.
+This document summarizes the current support level for the SMG-family default runtime path in `eybond_local`.
 
 ## Source Of Truth
 
 - runtime driver: `custom_components/eybond_local/drivers/smg.py`
-- register schema: `custom_components/eybond_local/register_schemas/modbus_smg/models/smg_6200.json`
-- capability profile: `custom_components/eybond_local/profiles/smg_modbus.json`
+- shared family profile base: `custom_components/eybond_local/profiles/modbus_smg/family_base.json`
+- verified default capability profile: `custom_components/eybond_local/profiles/smg_modbus.json` (shim -> `profiles/modbus_smg/default.json`)
+- read-only family fallback profile: `custom_components/eybond_local/profiles/modbus_smg/family_fallback.json`
+- model-specific Anenji profile: `custom_components/eybond_local/profiles/modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json`
+- default register schema: `custom_components/eybond_local/register_schemas/modbus_smg/models/smg_6200.json`
+- model-specific Anenji schema: `custom_components/eybond_local/register_schemas/modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json`
 - generated export: [generated/SMG_SUPPORT_MATRIX.generated.md](generated/SMG_SUPPORT_MATRIX.generated.md)
 
-Regenerate the machine-readable Markdown export with:
+Regenerate the machine-readable Markdown export for the verified default SMG runtime profile with:
 
 ```bash
 python3 tools/export_support_matrix.py \
   --profile smg_modbus.json \
   --format markdown \
   --output docs/generated/SMG_SUPPORT_MATRIX.generated.md
+```
+
+Inspect the model-specific Anenji capability matrix with:
+
+```bash
+python3 tools/export_support_matrix.py \
+  --profile modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json \
+  --format markdown
 ```
 
 ## Human Support Categories
@@ -38,9 +50,40 @@ These human categories map approximately to machine-readable profile metadata li
 - `runtime-restricted` -> `support_tier=conditional`
 - `observed blocked` -> `support_tier=blocked`
 
+## Runtime Paths
+
+The SMG family now has three distinct built-in runtime paths.
+
+| Runtime path | When it is used | What users should expect |
+|---|---|---|
+| Verified default (`SMG 6200`) | Rated-power `6200` devices that match the known default SMG layout | Full monitoring and the tested default SMG write surface. This is the path covered by the generated matrix export below. |
+| Model-specific Anenji (`anenji_anj_11kw_48v_wifi_p`) | Devices that match the validated Anenji protocol-4 anchors | Built-in monitoring is broader than the default SMG path, including PV1/PV2, inverter date/time, and native PV counters. The writable surface is implemented but still untested, so normal `auto` mode keeps it hidden. |
+| Read-only family fallback (`family_fallback`) | Devices that clearly look SMG-family, but do not match a verified model-specific binding | Monitoring remains available, but built-in writes stay disabled. Support workflow and exported archives explicitly label this state as `Read-only unverified SMG family`. |
+
+## Verified Default SMG Diagnostics
+
+Live verification on the currently checked Sandisolar-backed SMG 6200 path supports keeping these extra diagnostics:
+
+- keep as useful diagnostics: `program_version`, `protocol_number`, `device_type`, `battery_type`, `warning_mask_i`, `dry_contact_mode`, `automatic_mains_output_enabled`
+- keep as hidden-by-default diagnostics for now: `rated_cell_count`, `max_discharge_current_protection`
+- suppress when it is only placeholder data: `device_name`
+
+The current driver also backfills missing probe-only SMG details during normal refresh, so these surviving diagnostics remain available after a Home Assistant restart instead of dropping to `unavailable` permanently.
+
+## Anenji Model-Specific Additions
+
+The rest of this document focuses on the verified default SMG 6200 write surface. The built-in Anenji runtime path adds these notable model-specific behaviors on top of the generic family support:
+
+- read-side PV channel telemetry: `pv1_voltage`, `pv1_current`, `pv1_power`, `pv2_voltage`, `pv2_current`, `pv2_power`
+- read-side system/config telemetry from the `677+` window, including `input_mode`, `remote_switch`, `ground_relay_enabled`, and `lithium_battery_activation_time`
+- read-side inverter clock decoding from `696..701` as `inverter_date` and `inverter_time`
+- native PV counters from `702` and `703..704` as `pv_generation_day` and `pv_generation_sum`
+- an untested 47-capability control surface, exposed only in manual `full` control mode
+- a dedicated `Sync Inverter Clock` tooling button that writes the current Home Assistant local date/time through the same untested clock registers when the model-specific write path is enabled
+
 ## Auto-Exposed Tested Controls
 
-These are the safest parts of the current write surface. In `auto + high confidence`, these are the controls that can appear by default.
+These are the safest parts of the verified default SMG 6200 write surface. In `auto + high confidence`, these are the controls that can appear by default.
 
 ### Output
 
@@ -127,12 +170,12 @@ Current SMG read coverage in the driver:
 
 - status block: `100`, `108`
 - live block: `201..217`, `219`, `220`, `223..227`, `229`, `232..234`
-- config block: `300..310`, `313`, `320`, `321`, `323..327`, `329`, `331..337`, `341..343`
-- auxiliary or model registers: `406`, `420`, `643`
+- config block: `300..310`, `313..316`, `320..338`, `341..343`, `351`
+- auxiliary or model registers: `171..184`, `406`, `420`, `626..644`
 
 Known uncovered candidates inside otherwise known SMG ranges:
 
 - live block: `218`, `221`, `222`, `228`, `230`, `231`
-- config block: `304`, `311`, `312`, `314..319`, `322`, `328`, `330`, `338..340`
+- config block: `304`, `311`, `312`, `317..319`, `328`, `330`, `339`, `340`
 
 These are not blockers for current Home Assistant functionality, but they remain candidates for future reverse engineering.

@@ -18,7 +18,7 @@ class SupportWorkflowTests(unittest.TestCase):
         workflow = build_support_workflow_state(
             has_inverter=True,
             effective_owner_key="modbus_smg",
-            effective_owner_name="SMG / Modbus",
+            effective_owner_name="SMG-family runtime",
             detection_confidence="high",
             profile_source_scope="builtin",
             schema_source_scope="builtin",
@@ -36,7 +36,7 @@ class SupportWorkflowTests(unittest.TestCase):
         workflow = build_support_workflow_state(
             has_inverter=True,
             effective_owner_key="modbus_smg",
-            effective_owner_name="SMG / Modbus",
+            effective_owner_name="SMG-family runtime",
             detection_confidence="low",
             profile_source_scope="builtin",
             schema_source_scope="builtin",
@@ -48,14 +48,35 @@ class SupportWorkflowTests(unittest.TestCase):
         self.assertIn("Step 2:", workflow["plan"])
         self.assertEqual(workflow["step_2"], "Send the ZIP file to the developer.")
 
+    def test_family_fallback_has_explicit_read_only_unverified_marker(self) -> None:
+        workflow = build_support_workflow_state(
+            has_inverter=True,
+            variant_key="family_fallback",
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG-family runtime",
+            detection_confidence="medium",
+            profile_source_scope="builtin",
+            schema_source_scope="builtin",
+        )
+
+        self.assertEqual(workflow["level"], "family_fallback")
+        self.assertEqual(
+            workflow["level_label"],
+            "Read-only unverified SMG family",
+        )
+        self.assertIn("read-only", workflow["step_3"])
+        self.assertIn("support archive", workflow["next_action"])
+        self.assertIn("unverified", workflow["advanced_hint"])
+
     def test_experimental_support_recommends_reload(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=True,
             effective_owner_key="modbus_smg",
-            effective_owner_name="SMG / Modbus",
+            effective_owner_name="SMG-family runtime",
             detection_confidence="high",
             profile_source_scope="external",
             schema_source_scope="builtin",
+            variant_key="family_fallback",
         )
 
         self.assertEqual(workflow["level"], "experimental")
@@ -66,6 +87,7 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_unknown_support_prefers_support_archive(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=False,
+            variant_key="",
             effective_owner_key="",
             effective_owner_name="",
             detection_confidence="none",
@@ -86,6 +108,7 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_smartess_collector_evidence_avoids_generic_unknown_support(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=False,
+            variant_key="",
             effective_owner_key="",
             effective_owner_name="",
             detection_confidence="none",
@@ -104,8 +127,9 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_known_runtime_owner_without_live_inverter_counts_as_pending(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=False,
+            variant_key="",
             effective_owner_key="pi30",
-            effective_owner_name="PI30 / ASCII",
+            effective_owner_name="PI30-family runtime",
             smartess_family_name="SmartESS 0925",
             detection_confidence="none",
             profile_source_scope="builtin",
@@ -113,7 +137,7 @@ class SupportWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(workflow["level"], "pending")
-        self.assertIn("PI30 / ASCII", workflow["summary"])
+        self.assertIn("PI30-family runtime", workflow["summary"])
         self.assertIn("SmartESS family context: SmartESS 0925.", workflow["advanced_hint"])
 
 

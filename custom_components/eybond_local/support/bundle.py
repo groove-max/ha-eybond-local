@@ -10,6 +10,24 @@ from typing import Any
 from ..const import LOCAL_METADATA_DIR, LOCAL_SUPPORT_BUNDLES_DIR
 
 
+def build_support_marker(*, variant_key: str = "") -> dict[str, Any] | None:
+    """Return one machine-readable support marker for special runtime states."""
+
+    normalized_variant_key = str(variant_key or "").strip()
+    if normalized_variant_key != "family_fallback":
+        return None
+    return {
+        "key": "read_only_unverified_smg_family",
+        "label": "Read-only unverified SMG family",
+        "read_only": True,
+        "verification": "unverified",
+        "summary": (
+            "Generic SMG family fallback metadata is active. "
+            "Built-in writes are intentionally disabled until a verified model-specific mapping exists."
+        ),
+    }
+
+
 def support_bundles_root(config_dir: Path) -> Path:
     """Return the support bundle output directory."""
 
@@ -40,6 +58,8 @@ def build_support_bundle_payload(
 ) -> dict[str, Any]:
     """Build one machine-readable support bundle payload."""
 
+    support_marker = build_support_marker(variant_key=variant_key)
+
     return {
         "bundle_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -53,6 +73,7 @@ def build_support_bundle_payload(
             "profile_name": profile_name,
             "register_schema_name": register_schema_name,
             "variant_key": variant_key,
+            "support_marker": support_marker,
             "effective_owner_key": effective_owner_key,
             "effective_owner_name": effective_owner_name,
             "smartess_family_name": smartess_family_name,

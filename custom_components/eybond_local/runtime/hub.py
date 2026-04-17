@@ -21,6 +21,7 @@ from ..drivers.registry import iter_drivers
 from ..onboarding.driver_detection import async_detect_inverter
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
 from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
+from ..runtime_labels import runtime_path_label
 from .link import EybondRuntimeLinkManager, resolve_server_ip
 
 logger = logging.getLogger(__name__)
@@ -562,7 +563,9 @@ class EybondHub:
             captures.append(
                 {
                     "driver_key": driver.key,
-                    "driver_name": driver.name,
+                    "driver_name": runtime_path_label(driver.key),
+                    "driver_implementation_name": driver.name,
+                    "runtime_path_name": runtime_path_label(driver.key),
                     "profile_name": getattr(driver, "profile_name", ""),
                     "register_schema_name": getattr(driver, "register_schema_name", ""),
                     "probe_target": {
@@ -872,7 +875,7 @@ def _decode_ascii_words(registers: list[int]) -> str:
             if byte in (0x00, 0xFF):
                 continue
             char = chr(byte)
-            if char.isalnum() or char in "-_/.":
+            if char.isalnum() or char in " -_/.":
                 chars.append(char)
     return "".join(chars)
 

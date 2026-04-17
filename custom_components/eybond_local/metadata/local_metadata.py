@@ -13,7 +13,7 @@ from ..const import (
     LOCAL_PROFILES_DIR,
     LOCAL_REGISTER_SCHEMAS_DIR,
 )
-from .profile_loader import builtin_profile_path
+from .profile_loader import load_driver_profile_raw
 from .register_schema_loader import builtin_register_schema_path, load_register_schema
 
 
@@ -206,15 +206,14 @@ def create_local_profile_draft(
     """Copy one built-in profile into the local experimental profile root."""
 
     ensure_local_metadata_dirs(config_dir)
-    source_path = builtin_profile_path(source_profile_name)
     output_name = output_profile_name or source_profile_name
     destination = local_profile_path(config_dir, output_name)
     _ensure_can_write(destination, local_profiles_root(config_dir), overwrite=overwrite)
 
-    raw = json.loads(source_path.read_text(encoding="utf-8"))
+    raw = load_driver_profile_raw(source_profile_name)
     raw.setdefault("draft_of", source_profile_name)
     raw.setdefault("experimental", True)
-    raw["title"] = str(raw.get("title", source_path.stem)) + " (Local Draft)"
+    raw["title"] = str(raw.get("title", Path(source_profile_name).stem)) + " (Local Draft)"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(_dump_json(raw), encoding="utf-8")
     return destination

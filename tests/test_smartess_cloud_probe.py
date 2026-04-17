@@ -266,6 +266,106 @@ class SmartEssCloudProbeTests(unittest.TestCase):
         self.assertEqual(max_charge_current["current_value"], 80)
         self.assertEqual(max_charge_current["value_kind"], "number")
 
+    def test_normalize_device_settings_recognizes_generic_anenji_title_aliases(self) -> None:
+        normalized = smartess_cloud_probe.normalize_device_settings(
+            {
+                "field": [
+                    {
+                        "id": "bse_eybond_ctrl_main_output_priority",
+                        "name": "Main Output Priority",
+                        "item": [
+                            {"key": "1", "val": "PV-Utility-Battery"},
+                            {"key": "2", "val": "PV-Battery-Utility"},
+                        ],
+                    },
+                    {
+                        "id": "bse_eybond_ctrl_output_voltage_setting",
+                        "name": "Output Voltage Setting",
+                        "unit": "V",
+                    },
+                    {
+                        "id": "bse_eybond_ctrl_output_frequency_setting",
+                        "name": "Output Frequency Setting",
+                        "unit": "Hz",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_maximum_charging_voltage",
+                        "name": "Maximum charging voltage",
+                        "unit": "V",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_floating_charge_voltage",
+                        "name": "Floating charge voltage",
+                        "unit": "V",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_maximum_charging_current",
+                        "name": "Maximum charging current",
+                        "unit": "A",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_battery_eq_mode_enable",
+                        "name": "Battery Eq mode enable",
+                        "item": [
+                            {"key": "0", "val": "Disable"},
+                            {"key": "1", "val": "Enable"},
+                        ],
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_battery_overvoltage_protection_point",
+                        "name": "Battery overvoltage protection point",
+                        "unit": "V",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_bat_eq_time",
+                        "name": "bat_eq_time",
+                        "unit": "min",
+                    },
+                    {
+                        "id": "sys_eybond_ctrl_clean_generation_power",
+                        "name": "Clean Generation Power",
+                        "item": [{"key": "170", "val": "Clean Generation Power"}],
+                    },
+                    {
+                        "id": "sys_eybond_ctrl_equalization_activated_immediately",
+                        "name": "Equalization activated immediately",
+                        "item": [{"key": "1", "val": "Execute Once"}],
+                    },
+                ],
+                "two_tier": {},
+            }
+        )
+
+        assert normalized is not None
+        self.assertEqual(normalized["mapped_field_count"], 11)
+        self.assertEqual(normalized["exact_0925_field_count"], 10)
+        self.assertEqual(normalized["probable_0925_field_count"], 1)
+        self.assertEqual(normalized["cloud_only_field_count"], 0)
+
+        fields = normalized["fields"]
+        self.assertEqual(fields[0]["bucket"], "exact_0925")
+        self.assertEqual(fields[0]["binding"]["register"], 4537)
+        self.assertEqual(fields[1]["bucket"], "exact_0925")
+        self.assertEqual(fields[1]["binding"]["register"], 4542)
+        self.assertEqual(fields[2]["bucket"], "exact_0925")
+        self.assertEqual(fields[2]["binding"]["register"], 4540)
+        self.assertEqual(fields[3]["bucket"], "exact_0925")
+        self.assertEqual(fields[3]["binding"]["register"], 4546)
+        self.assertEqual(fields[4]["bucket"], "exact_0925")
+        self.assertEqual(fields[4]["binding"]["register"], 4547)
+        self.assertEqual(fields[5]["bucket"], "exact_0925")
+        self.assertEqual(fields[5]["binding"]["register"], 4541)
+        self.assertEqual(fields[6]["bucket"], "exact_0925")
+        self.assertEqual(fields[6]["binding"]["register"], 5011)
+        self.assertEqual(fields[7]["bucket"], "probable_0925")
+        self.assertNotIn("asset_register", fields[7])
+        self.assertEqual(fields[8]["bucket"], "exact_0925")
+        self.assertEqual(fields[8]["binding"]["register"], 4550)
+        self.assertEqual(fields[9]["bucket"], "exact_0925")
+        self.assertEqual(fields[9]["binding"]["register"], 5001)
+        self.assertEqual(fields[10]["bucket"], "exact_0925")
+        self.assertEqual(fields[10]["binding"]["register"], 5012)
+
     def test_device_bundle_exports_cloud_evidence_into_ha_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             args = argparse.Namespace(

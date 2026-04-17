@@ -369,6 +369,16 @@ class DerivedEnergyTests(unittest.TestCase):
 
         self.assertNotIn("estimated_grid_export_energy_daily", descriptions)
 
+    def test_grid_export_daily_helper_appears_for_signed_grid_power_fallback(self) -> None:
+        descriptions = {
+            description.key
+            for description in derived_energy_cycle_descriptions_for_keys(
+                {"estimated_grid_export_energy", "grid_power"}
+            )
+        }
+
+        self.assertIn("estimated_grid_export_energy_daily", descriptions)
+
     def test_grid_export_daily_helper_appears_when_export_support_key_exists(self) -> None:
         descriptions = {
             description.key

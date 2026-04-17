@@ -7,6 +7,9 @@ from typing import Any
 from ..control_policy import normalize_confidence
 
 
+_SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
+
+
 def _workflow_state(
     *,
     level: str,
@@ -56,6 +59,7 @@ def _has_smartess_collector_hint(
 def build_support_workflow_state(
     *,
     has_inverter: bool,
+    variant_key: str = "",
     effective_owner_key: str = "",
     effective_owner_name: str = "",
     smartess_family_name: str = "",
@@ -69,6 +73,7 @@ def build_support_workflow_state(
     """Return one compact support workflow status and the recommended next step."""
 
     confidence = normalize_confidence(detection_confidence)
+    normalized_variant_key = str(variant_key or "").strip()
     owner_known = any(
         str(value or "").strip()
         for value in (effective_owner_key, effective_owner_name)
@@ -130,10 +135,10 @@ def build_support_workflow_state(
             level="pending",
             level_label="Pending confirmation",
             summary=(
-                f"A runtime metadata base is known ({effective_owner_name or effective_owner_key}), "
+                f"An internal runtime path is known ({effective_owner_name or effective_owner_key}), "
                 "but the inverter is not currently confirmed."
                 if (effective_owner_name or effective_owner_key)
-                else "A driver base is known, but the inverter is not currently confirmed."
+                else "An internal runtime path is known, but the inverter is not currently confirmed."
             ),
             next_action=(
                 "Create a support archive and send the ZIP file to the developer before "
@@ -150,6 +155,28 @@ def build_support_workflow_state(
                     if str(smartess_family_name or "").strip()
                     else ""
                 )
+            ),
+        )
+
+    if normalized_variant_key == _SMG_FAMILY_FALLBACK_VARIANT:
+        return _workflow_state(
+            level="family_fallback",
+            level_label="Read-only unverified SMG family",
+            summary=(
+                "This inverter is using the generic SMG family fallback. "
+                "Built-in writes are intentionally disabled until the exact model is verified."
+            ),
+            next_action=(
+                "Create a support archive and send the ZIP file to the developer. "
+                "This will help confirm the exact SMG-family model and move it beyond the read-only fallback."
+            ),
+            primary_action="create_support_package",
+            step_1="Create a support archive.",
+            step_2="Send the ZIP file to the developer.",
+            step_3="Treat the current SMG support as read-only until the exact model is verified.",
+            advanced_hint=(
+                "Do not create local writable drafts for this device yet. "
+                "The current fallback is intentionally read-only and unverified."
             ),
         )
 

@@ -192,6 +192,67 @@ class SupportPackageTests(unittest.TestCase):
             self.assertNotIn("evidence/cloud_evidence.json", names)
             self.assertIsNone(bundled["evidence"]["cloud"])
 
+    def test_exports_family_fallback_archive_with_explicit_support_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-fallback",
+                entry_title="SMG Family",
+                connected=True,
+                collector={"collector_pn": "E5000025388419"},
+                inverter={
+                    "driver_key": "modbus_smg",
+                    "model_name": "SMG Family",
+                    "serial_number": "92632511100118",
+                    "variant_key": "family_fallback",
+                },
+                values={"operating_mode": "Off-Grid"},
+                data={"server_ip": "192.168.1.50"},
+                options={"poll_interval": 10},
+                profile_name="modbus_smg/family_fallback.json",
+                register_schema_name="modbus_smg/base.json",
+                variant_key="family_fallback",
+            )
+
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-fallback",
+                entry_title="SMG Family",
+                support_bundle=support_bundle,
+                raw_capture={
+                    "capture_kind": "modbus_register_dump",
+                    "captured_ranges": [{"start": 201, "count": 2, "words": [1, 2]}],
+                    "range_failures": [],
+                },
+                fixture={
+                    "fixture_version": 1,
+                    "name": "smg_family_fallback_capture",
+                    "ranges": [{"start": 201, "count": 2, "values": [1, 2]}],
+                },
+                anonymized_fixture={
+                    "fixture_version": 1,
+                    "name": "smg_family_fallback_capture_anon",
+                    "ranges": [{"start": 201, "count": 2, "values": [1, 2]}],
+                    "anonymized": True,
+                },
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+                readme = archive.read("README.txt").decode("utf-8")
+                bundled = json.loads(archive.read("support_bundle.json").decode("utf-8"))
+
+            self.assertEqual(
+                manifest["support_marker"]["key"],
+                "read_only_unverified_smg_family",
+            )
+            self.assertIn("Read-only unverified SMG family", readme)
+            self.assertIn("Built-in writes are intentionally disabled", readme)
+            self.assertEqual(
+                bundled["source_metadata"]["support_marker"]["key"],
+                "read_only_unverified_smg_family",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -258,6 +258,14 @@ _DERIVED_ENERGY_CYCLE_DESCRIPTIONS: tuple[DerivedEnergyCycleDescription, ...] = 
     ),
 )
 
+_GRID_EXPORT_DAILY_FALLBACK_KEYS = frozenset(
+    {
+        "grid_power",
+        "pv_to_grid_power",
+        "solar_feed_to_grid_power",
+    }
+)
+
 
 def derived_energy_descriptions_for_keys(
     available_keys: set[str],
@@ -298,7 +306,7 @@ def derived_energy_cycle_descriptions_for_keys(
         description
         for description in _DERIVED_ENERGY_CYCLE_DESCRIPTIONS
         if description.source_key in available_keys
-        and set(description.required_keys).issubset(available_keys)
+        and _cycle_description_requirements_met(description, available_keys)
     )
 
 
@@ -421,3 +429,15 @@ def _matching_variant(
         if set(variant.source_keys).issubset(available_keys):
             return variant
     return None
+
+
+def _cycle_description_requirements_met(
+    description: DerivedEnergyCycleDescription,
+    available_keys: set[str],
+) -> bool:
+    required_keys = set(description.required_keys)
+    if required_keys.issubset(available_keys):
+        return True
+    if description.key != "estimated_grid_export_energy_daily":
+        return False
+    return bool(_GRID_EXPORT_DAILY_FALLBACK_KEYS & available_keys)

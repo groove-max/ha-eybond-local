@@ -6,11 +6,17 @@ from collections import Counter
 from typing import Any
 
 from ..metadata.profile_loader import DriverProfileMetadata
+from ..runtime_labels import runtime_profile_label
 
 
 def build_profile_support_matrix(profile: DriverProfileMetadata) -> dict[str, Any]:
     """Build a machine-readable support matrix from one loaded driver profile."""
 
+    display_title = runtime_profile_label(
+        profile_key=profile.key,
+        driver_key=profile.driver_key,
+        title=profile.title,
+    )
     capabilities: list[dict[str, Any]] = []
     for capability in sorted(
         profile.capabilities,
@@ -43,7 +49,8 @@ def build_profile_support_matrix(profile: DriverProfileMetadata) -> dict[str, An
 
     return {
         "profile_key": profile.key,
-        "title": profile.title,
+        "title": display_title,
+        "implementation_title": profile.title,
         "summary": {
             "capabilities": len(capabilities),
             "validation_state_counts": dict(sorted(validation_counts.items())),
@@ -60,7 +67,7 @@ def render_support_matrix_markdown(matrix: dict[str, Any]) -> str:
     lines = [
         f"# Support Matrix: {matrix['title']}",
         "",
-        "> Generated from declarative profile metadata. Do not edit this export manually.",
+        "> Generated from declarative profile metadata. This is an implementation-level runtime report, not a commercial device name. Do not edit this export manually.",
         "",
         f"- `profile_key`: `{matrix['profile_key']}`",
         f"- capabilities: `{matrix['summary']['capabilities']}`",

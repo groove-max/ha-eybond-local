@@ -31,7 +31,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(selection.effective_owner_key, "pi30")
-        self.assertEqual(selection.effective_owner_name, "PI30 / ASCII")
+        self.assertEqual(selection.effective_owner_name, "PI30-family runtime")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
         self.assertEqual(selection.raw_profile_name, "smartess_local/models/0925.json")
         self.assertEqual(
@@ -65,7 +65,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(selection.effective_owner_key, "pi30")
-        self.assertEqual(selection.effective_owner_name, "PI30 / ASCII")
+        self.assertEqual(selection.effective_owner_name, "PI30-family runtime")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
         self.assertEqual(selection.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(
@@ -88,7 +88,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(selection.effective_owner_key, "pi30")
-        self.assertEqual(selection.effective_owner_name, "PI30 / ASCII")
+        self.assertEqual(selection.effective_owner_name, "PI30-family runtime")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
         self.assertEqual(selection.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(
@@ -111,7 +111,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         )
 
         self.assertEqual(selection.effective_owner_key, "modbus_smg")
-        self.assertEqual(selection.effective_owner_name, "SMG / Modbus")
+        self.assertEqual(selection.effective_owner_name, "SMG-family runtime")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
         self.assertEqual(selection.raw_profile_name, "smartess_local/models/0925.json")
         self.assertEqual(selection.profile_name, "smg_modbus.json")

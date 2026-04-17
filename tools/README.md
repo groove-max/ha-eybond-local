@@ -183,19 +183,19 @@ python3 tools/quality_gate.py --refresh-generated
 
 ## I want to cut a release
 
-Render the GitHub release body for a version directly from `CHANGELOG.md`:
+`CHANGELOG.md` is the source of truth for GitHub release notes. Render the release body for one version directly from it:
 
 ```bash
-python3 tools/render_release_notes.py v0.1.43
+python3 tools/render_release_notes.py vX.Y.Z
 ```
 
 Write the release body to a file for `gh release create --notes-file`:
 
 ```bash
-python3 tools/render_release_notes.py v0.1.43 --output .local/release-notes/v0.1.43.md
+python3 tools/render_release_notes.py vX.Y.Z --output .local/release-notes/vX.Y.Z.md
 ```
 
-The full maintainer flow is documented in [docs/RELEASING.md](../docs/RELEASING.md).
+Replace `X.Y.Z` with the same version you placed in `manifest.json` and the matching changelog section. The full maintainer flow is documented in [docs/RELEASING.md](../docs/RELEASING.md).
 
 ---
 

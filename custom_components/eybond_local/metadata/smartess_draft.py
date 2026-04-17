@@ -12,7 +12,6 @@ from ..support.cloud_evidence import load_latest_cloud_evidence
 from .local_metadata import (
     _dump_json,
     _ensure_can_write,
-    builtin_profile_path,
     create_local_schema_draft,
     ensure_local_metadata_dirs,
     local_profile_path,
@@ -20,6 +19,7 @@ from .local_metadata import (
     local_register_schema_path,
     local_register_schemas_root,
 )
+from .profile_loader import load_driver_profile_raw
 from .register_schema_loader import load_register_schema
 from .smartess_protocol_catalog_loader import resolve_smartess_protocol_catalog_entry
 
@@ -112,7 +112,7 @@ def create_smartess_known_family_draft(
     )
 
     annotation = _draft_annotation(plan=plan, cloud_evidence=cloud_evidence)
-    profile_raw = json.loads(builtin_profile_path(plan.source_profile_name).read_text(encoding="utf-8"))
+    profile_raw = load_driver_profile_raw(plan.source_profile_name)
     profile_raw.setdefault("draft_of", plan.source_profile_name)
     profile_raw.setdefault("experimental", True)
     profile_raw["title"] = str(profile_raw.get("title", Path(plan.source_profile_name).stem)) + " (Local SmartESS Draft)"

@@ -45,6 +45,15 @@
       "3": "PV Only",
       "4": "PV Priority With Load Reserve"
     },
+    "input_mode": {
+      "0": "APL",
+      "1": "UPS",
+      "2": "GNT"
+    },
+    "enabled_disabled": {
+      "0": "Disabled",
+      "1": "Enabled"
+    },
     "battery_type": {
       "0": "AGM",
       "1": "Flooded",
@@ -52,6 +61,10 @@
       "4": "Li2",
       "6": "Li4",
       "8": "LiB"
+    },
+    "dry_contact_mode": {
+      "0": "Normal Mode",
+      "1": "Grounded Box Mode"
     }
   },
   "bit_labels": {
@@ -438,18 +451,116 @@
         "decimals": 1
       },
       {
-        "key": "pv_voltage",
+        "key": "pv1_voltage",
         "register": 351,
         "signed": true,
         "divisor": 10,
         "decimals": 1
       },
       {
-        "key": "pv_current",
+        "key": "pv1_current",
         "register": 352,
         "signed": true,
         "divisor": 10,
         "decimals": 1
+      },
+      {
+        "key": "pv1_power",
+        "register": 353,
+        "signed": true
+      },
+      {
+        "key": "pv2_voltage",
+        "register": 389,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_current",
+        "register": 390,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_power",
+        "register": 391,
+        "signed": true
+      },
+      {
+        "key": "input_mode",
+        "register": 677,
+        "enum_table": "input_mode"
+      },
+      {
+        "key": "buzzer_mode",
+        "register": 678,
+        "enum_table": "buzzer_mode"
+      },
+      {
+        "key": "lcd_backlight_mode",
+        "register": 679,
+        "enum_table": "lcd_backlight_mode"
+      },
+      {
+        "key": "lcd_auto_return_mode",
+        "register": 680,
+        "enum_table": "lcd_auto_return_mode"
+      },
+      {
+        "key": "power_saving_mode",
+        "register": 681,
+        "enum_table": "power_saving_mode"
+      },
+      {
+        "key": "overload_restart_mode",
+        "register": 682,
+        "enum_table": "overload_restart_mode"
+      },
+      {
+        "key": "over_temperature_restart_mode",
+        "register": 683,
+        "enum_table": "over_temperature_restart_mode"
+      },
+      {
+        "key": "overload_bypass_mode",
+        "register": 684,
+        "enum_table": "overload_bypass_mode"
+      },
+      {
+        "key": "parallel_pv_detection_mode",
+        "register": 685
+      },
+      {
+        "key": "external_ct_enabled",
+        "register": 686,
+        "enum_table": "enabled_disabled"
+      },
+      {
+        "key": "warning_mask_i",
+        "register": 687,
+        "word_count": 2,
+        "combine": "u32_high_first"
+      },
+      {
+        "key": "dry_contact_mode",
+        "register": 689,
+        "enum_table": "dry_contact_mode"
+      },
+      {
+        "key": "automatic_mains_output_enabled",
+        "register": 690,
+        "enum_table": "enabled_disabled"
+      },
+      {
+        "key": "pv_grid_connected_max_power",
+        "register": 691
+      },
+      {
+        "key": "island_detection_enabled",
+        "register": 692,
+        "enum_table": "enabled_disabled"
       },
       {
         "key": "turn_on_mode",
@@ -460,6 +571,53 @@
         "key": "remote_switch",
         "register": 694,
         "enum_table": "remote_switch"
+      },
+      {
+        "key": "inverter_clock_year",
+        "register": 696
+      },
+      {
+        "key": "inverter_clock_month",
+        "register": 697
+      },
+      {
+        "key": "inverter_clock_day",
+        "register": 698
+      },
+      {
+        "key": "inverter_clock_hour",
+        "register": 699
+      },
+      {
+        "key": "inverter_clock_minute",
+        "register": 700
+      },
+      {
+        "key": "inverter_clock_second",
+        "register": 701
+      },
+      {
+        "key": "pv_generation_day",
+        "register": 702,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_generation_sum",
+        "register": 703,
+        "word_count": 2,
+        "combine": "u32_high_first",
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "ground_relay_enabled",
+        "register": 707,
+        "enum_table": "enabled_disabled"
+      },
+      {
+        "key": "lithium_battery_activation_time",
+        "register": 709
       }
     ]
   },
@@ -521,6 +679,148 @@
       "diagnostic": true,
       "enabled_default": false,
       "live": true
+    },
+    {
+      "key": "pv1_voltage",
+      "name": "PV1 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv1_current",
+      "name": "PV1 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv1_power",
+      "name": "PV1 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv2_voltage",
+      "name": "PV2 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv2_current",
+      "name": "PV2 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv2_power",
+      "name": "PV2 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "input_mode",
+      "name": "Input Mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "parallel_pv_detection_mode",
+      "name": "Parallel PV Detection Mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "external_ct_enabled",
+      "name": "External CT Enabled",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "warning_mask_i",
+      "name": "Warning Mask I",
+      "icon": "mdi:alert-box-outline",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "dry_contact_mode",
+      "name": "Dry Contact",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "name": "Automatic Mains Output Enabled",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "pv_grid_connected_max_power",
+      "name": "PV Grid-Connected Max Power",
+      "unit": "W",
+      "device_class": "power",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "island_detection_enabled",
+      "name": "Island Detection Enabled",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "pv_generation_day",
+      "name": "PV Generation Day",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "pv_generation_sum",
+      "name": "PV Generation Sum",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "ground_relay_enabled",
+      "name": "Ground Relay Enabled",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "lithium_battery_activation_time",
+      "name": "Lithium Battery Activation Time",
+      "unit": "min",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
     },
     {
       "key": "battery_type",

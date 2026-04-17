@@ -1,0 +1,9 @@
+{
+  "extends": "modbus_smg/family_base.json",
+  "profile_key": "modbus_smg_family_fallback",
+  "title": "SMG Family Read-Only Fallback",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capabilities": [],
+  "presets": []
+}

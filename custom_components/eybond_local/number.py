@@ -31,7 +31,7 @@ async def async_setup_entry(
     async_add_entities(
         EybondCapabilityNumber(coordinator, capability)
         for capability in capabilities
-        if capability.value_kind in {"scaled_u16", "u16"}
+        if capability.value_kind in {"scaled_u16", "u16", "u32"}
         if coordinator.can_expose_capability(capability)
     )
 

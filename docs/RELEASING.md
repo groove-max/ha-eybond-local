@@ -7,7 +7,7 @@ The source of truth for release notes is [CHANGELOG.md](../CHANGELOG.md), not th
 ## Release Workflow
 
 1. Keep incoming work under `## [Unreleased]` in [CHANGELOG.md](../CHANGELOG.md).
-2. When cutting a release, move the relevant notes into a new version section whose number matches [custom_components/eybond_local/manifest.json](../custom_components/eybond_local/manifest.json).
+2. When cutting a release, decide the target version, update [custom_components/eybond_local/manifest.json](../custom_components/eybond_local/manifest.json), and move the relevant notes into a new changelog section with the same version number.
 3. Run the public validation gate:
 
 ```bash
@@ -23,23 +23,25 @@ python3 tools/quality_gate.py --refresh-generated
 5. Render the GitHub release body from the matching changelog section:
 
 ```bash
-python3 tools/render_release_notes.py v0.1.43 --output .local/release-notes/v0.1.43.md
+python3 tools/render_release_notes.py vX.Y.Z --output .local/release-notes/vX.Y.Z.md
 ```
 
 6. Create and push the tag:
 
 ```bash
-git tag v0.1.43
-git push origin v0.1.43
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 7. Publish the GitHub release from the rendered notes:
 
 ```bash
-gh release create v0.1.43 \
-  --title "v0.1.43" \
-  --notes-file .local/release-notes/v0.1.43.md
+gh release create vX.Y.Z \
+  --title "vX.Y.Z" \
+  --notes-file .local/release-notes/vX.Y.Z.md
 ```
+
+Replace `X.Y.Z` with the same version used in the manifest and changelog.
 
 ## Writing Good Release Notes
 

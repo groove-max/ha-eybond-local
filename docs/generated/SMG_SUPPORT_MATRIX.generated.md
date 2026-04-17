@@ -1,6 +1,6 @@
-# Support Matrix: SMG / Modbus
+# Support Matrix: SMG-family default runtime profile
 
-> Generated from declarative profile metadata. Do not edit this export manually.
+> Generated from declarative profile metadata. This is an implementation-level runtime report, not a commercial device name. Do not edit this export manually.
 
 - `profile_key`: `smg_modbus`
 - capabilities: `33`

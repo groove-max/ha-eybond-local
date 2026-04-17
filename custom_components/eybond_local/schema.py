@@ -306,7 +306,7 @@ def entity_kind_for_capability(capability: WriteCapability) -> str:
         return "switch"
     if capability.value_kind == "enum":
         return "select"
-    if capability.value_kind in {"scaled_u16", "u16"}:
+    if capability.value_kind in {"scaled_u16", "u16", "u32"}:
         return "number"
     if capability.value_kind == "action":
         return "button"

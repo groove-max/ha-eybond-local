@@ -1,9 +1,7 @@
 {
+  "extends": "./anenji_anj_11kw_48v_wifi_p.variant.json",
   "profile_key": "modbus_smg_anenji_anj_11kw_48v_wifi_p",
-  "title": "Anenji ANJ-11KW-48V-WIFI-P (Read-Only Draft)",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P",
   "driver_key": "modbus_smg",
-  "protocol_family": "modbus_smg",
-  "groups": [],
-  "capabilities": [],
-  "presets": []
+  "protocol_family": "modbus_smg"
 }

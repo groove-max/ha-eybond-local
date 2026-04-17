@@ -1,0 +1,646 @@
+{
+  "extends": "../family_base.json",
+  "profile_key": "modbus_smg_anenji_anj_11kw_48v_wifi_p_variant",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P Variant Profile",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "conditions": {
+    "not_off_grid_mode": {
+      "key": "operating_mode",
+      "operator": "ne",
+      "value": "Off-Grid",
+      "reason": "This action is only valid outside Off-Grid mode."
+    }
+  },
+  "capabilities": [
+    {
+      "key": "output_mode",
+      "template": "output_mode",
+      "register": 600,
+      "change_summary": "Changes the inverter output topology mode reported by the Anenji 600+ configuration block.",
+      "note": "Output mode according to the Anenji protocol 4 configuration block.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Single",
+          "order": 0,
+          "description": "Single inverter output mode."
+        },
+        {
+          "value": 1,
+          "label": "Parallel",
+          "order": 1,
+          "description": "Parallel-capable output mode."
+        },
+        {
+          "value": 2,
+          "label": "3 Phase-P1",
+          "order": 2,
+          "description": "Three-phase mode, phase 1."
+        },
+        {
+          "value": 3,
+          "label": "3 Phase-P2",
+          "order": 3,
+          "description": "Three-phase mode, phase 2."
+        },
+        {
+          "value": 4,
+          "label": "3 Phase-P3",
+          "order": 4,
+          "description": "Three-phase mode, phase 3."
+        },
+        {
+          "value": 5,
+          "label": "Split-Phase-P1",
+          "order": 5,
+          "description": "Split-phase mode, phase 1."
+        },
+        {
+          "value": 6,
+          "label": "Split-Phase-P2",
+          "order": 6,
+          "description": "Split-phase mode, phase 2."
+        }
+      ]
+    },
+    {
+      "key": "output_source_priority",
+      "template": "output_source_priority",
+      "register": 601,
+      "change_summary": "Changes how the inverter prioritizes PV, battery, and utility when powering the load.",
+      "note": "Output source priority according to the Anenji 600+ configuration block.",
+      "choices": [
+        {
+          "value": 1,
+          "label": "PV-Utility-Battery",
+          "order": 1,
+          "description": "Prefer PV first, then utility, then battery."
+        },
+        {
+          "value": 2,
+          "label": "PV-Battery-Utility",
+          "order": 2,
+          "description": "Prefer PV first, then battery, then utility."
+        },
+        {
+          "value": 3,
+          "label": "PV-Utility-Battery (Grid-Tied PV)",
+          "order": 3,
+          "description": "Prefer PV first with grid-tied PV behavior enabled."
+        }
+      ]
+    },
+    {
+      "key": "output_rating_voltage",
+      "template": "output_rating_voltage",
+      "register": 606
+    },
+    {
+      "key": "output_rating_frequency",
+      "template": "output_rating_frequency",
+      "register": 607
+    },
+    {
+      "key": "force_eq_charge",
+      "register": 656,
+      "value_kind": "action",
+      "action_value": 1,
+      "title": "Force Eq Charge",
+      "group": "battery",
+      "order": 435,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Starts one manual battery equalization cycle immediately.",
+      "note": "Write register 656 with value 1 to force one equalization charge cycle."
+    },
+    {
+      "key": "input_mode",
+      "register": 677,
+      "value_kind": "enum",
+      "title": "Input Mode",
+      "group": "system",
+      "order": 110,
+      "enabled_default": true,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the AC input operating mode used by the inverter.",
+      "note": "Input mode according to the Anenji extended system register set.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "APL",
+          "order": 0,
+          "description": "APL input mode."
+        },
+        {
+          "value": 1,
+          "label": "UPS",
+          "order": 1,
+          "description": "UPS input mode."
+        },
+        {
+          "value": 2,
+          "label": "GNT",
+          "order": 2,
+          "description": "Generator-oriented input mode."
+        }
+      ]
+    },
+    {
+      "key": "buzzer_mode",
+      "template": "buzzer_mode",
+      "register": 678,
+      "requires_confirm": true,
+      "note": "Buzzer mode according to the Anenji extended system register set."
+    },
+    {
+      "key": "lcd_backlight_mode",
+      "template": "lcd_backlight_mode",
+      "register": 679,
+      "requires_confirm": true,
+      "note": "LCD backlight behavior according to the Anenji extended system register set."
+    },
+    {
+      "key": "lcd_auto_return_mode",
+      "template": "lcd_auto_return_mode",
+      "register": 680,
+      "requires_confirm": true,
+      "note": "LCD auto-return behavior according to the Anenji extended system register set."
+    },
+    {
+      "key": "power_saving_mode",
+      "template": "power_saving_mode",
+      "register": 681,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "note": "Power saving flag according to the Anenji extended system register set."
+    },
+    {
+      "key": "overload_restart_mode",
+      "template": "overload_restart_mode",
+      "register": 682,
+      "unsafe_while_running": true,
+      "note": "Overload restart flag according to the Anenji extended system register set."
+    },
+    {
+      "key": "over_temperature_restart_mode",
+      "template": "over_temperature_restart_mode",
+      "register": 683,
+      "unsafe_while_running": true,
+      "note": "Over-temperature restart flag according to the Anenji extended system register set."
+    },
+    {
+      "key": "overload_bypass_mode",
+      "template": "overload_bypass_mode",
+      "register": 684,
+      "unsafe_while_running": true,
+      "note": "Overload bypass flag according to the Anenji extended system register set."
+    },
+    {
+      "key": "external_ct_enabled",
+      "register": 686,
+      "value_kind": "bool",
+      "title": "External CT Enabled",
+      "group": "system",
+      "order": 165,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Controls whether the external current transformer input is enabled.",
+      "note": "External CT enable flag according to the Anenji extended system register set.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disabled",
+          "order": 0,
+          "description": "Disable the external CT input."
+        },
+        {
+          "value": 1,
+          "label": "Enabled",
+          "order": 1,
+          "description": "Enable the external CT input."
+        }
+      ]
+    },
+    {
+      "key": "warning_mask_i",
+      "register": 687,
+      "value_kind": "u32",
+      "word_count": 2,
+      "combine": "u32_high_first",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "title": "Warning Mask I",
+      "group": "system",
+      "order": 165,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Changes which warning bits are allowed to appear on the inverter.",
+      "note": "Write registers 687..688 as a high-word-first unsigned 32-bit mask; bits set to 0 are blocked and bits set to 1 are shown normally."
+    },
+    {
+      "key": "dry_contact_mode",
+      "register": 689,
+      "value_kind": "enum",
+      "title": "Dry Contact",
+      "group": "system",
+      "order": 166,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the operating mode of the dry-contact output.",
+      "note": "Dry contact mode according to the Anenji extended system register set.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Normal Mode",
+          "order": 0,
+          "description": "Use the normal dry-contact mode."
+        },
+        {
+          "value": 1,
+          "label": "Grounded Box Mode",
+          "order": 1,
+          "description": "Use the grounded-box dry-contact mode."
+        }
+      ]
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "register": 690,
+      "value_kind": "bool",
+      "title": "Automatic Mains Output",
+      "group": "system",
+      "order": 167,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Controls whether AC output starts automatically when the power button is not pressed.",
+      "note": "Automatic mains output enable flag according to the Anenji extended system register set.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Manual Start Required",
+          "order": 0,
+          "description": "Do not enable AC output automatically."
+        },
+        {
+          "value": 1,
+          "label": "Automatic Output Enabled",
+          "order": 1,
+          "description": "Allow AC output to start automatically."
+        }
+      ]
+    },
+    {
+      "key": "pv_grid_connected_max_power",
+      "register": 691,
+      "value_kind": "u16",
+      "minimum": 200,
+      "maximum": 11000,
+      "title": "PV Grid-Connected Max Power",
+      "group": "output",
+      "order": 130,
+      "unit": "W",
+      "device_class": "power",
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the maximum power allowed for PV grid-connected operation.",
+      "note": "PV grid-connected maximum power in whole watts, limited to the rated power of this 11 kW model."
+    },
+    {
+      "key": "island_detection_enabled",
+      "register": 692,
+      "value_kind": "bool",
+      "title": "Island Detection Enabled",
+      "group": "system",
+      "order": 168,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Controls whether island detection is enabled.",
+      "note": "Island detection enable flag according to the Anenji extended system register set.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disabled",
+          "order": 0,
+          "description": "Disable island detection."
+        },
+        {
+          "value": 1,
+          "label": "Enabled",
+          "order": 1,
+          "description": "Enable island detection."
+        }
+      ]
+    },
+    {
+      "key": "turn_on_mode",
+      "template": "turn_on_mode",
+      "register": 693,
+      "note": "Turn-on mode according to the Anenji extended system register set."
+    },
+    {
+      "key": "remote_turn_on",
+      "template": "remote_turn_on",
+      "register": 694,
+      "change_summary": "Requests remote turn-on through the Anenji extended remote control register.",
+      "note": "Write register 694 with value 1 to request remote turn-on."
+    },
+    {
+      "key": "remote_shutdown",
+      "template": "remote_shutdown",
+      "register": 694,
+      "change_summary": "Requests remote shutdown through the Anenji extended remote control register.",
+      "note": "Write register 694 with value 0 to request remote shutdown."
+    },
+    {
+      "key": "exit_fault_mode",
+      "template": "exit_fault_mode",
+      "register": 695,
+      "change_summary": "Sends the inverter command that exits the fault lock state when supported by the current fault condition.",
+      "note": "Write register 695 with value 1 to request exit from the fault lock state."
+    },
+    {
+      "key": "inverter_date_write",
+      "register": 696,
+      "value_kind": "date_words",
+      "word_count": 3,
+      "title": "Inverter Date Write",
+      "group": "system",
+      "order": 901,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "read_key": "inverter_date",
+      "change_summary": "Writes the inverter date registers from a YYYY-MM-DD value.",
+      "note": "Write registers 696..698 with year, month, and day values."
+    },
+    {
+      "key": "inverter_time_write",
+      "register": 699,
+      "value_kind": "time_words",
+      "word_count": 3,
+      "title": "Inverter Time Write",
+      "group": "system",
+      "order": 902,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "read_key": "inverter_time",
+      "change_summary": "Writes the inverter time registers from an HH:MM:SS value.",
+      "note": "Write registers 699..701 with hour, minute, and second values."
+    },
+    {
+      "key": "ground_relay_enabled",
+      "register": 707,
+      "value_kind": "bool",
+      "title": "Ground Relay Enabled",
+      "group": "system",
+      "order": 910,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Controls whether the ground relay is enabled.",
+      "note": "Ground relay enable flag according to the Anenji extended system register set.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disabled",
+          "order": 0,
+          "description": "Disable the ground relay."
+        },
+        {
+          "value": 1,
+          "label": "Enabled",
+          "order": 1,
+          "description": "Enable the ground relay."
+        }
+      ]
+    },
+    {
+      "key": "lithium_battery_activation_time",
+      "register": 709,
+      "value_kind": "u16",
+      "minimum": 6,
+      "maximum": 300,
+      "title": "Lithium Battery Activation Time",
+      "group": "battery",
+      "order": 440,
+      "unit": "min",
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the lithium battery activation time.",
+      "note": "Lithium battery activation time in minutes according to the Anenji extended system register set."
+    },
+    {
+      "key": "clear_generation_data",
+      "register": 705,
+      "value_kind": "action",
+      "action_value": 170,
+      "title": "Clear Generation Data",
+      "group": "system",
+      "order": 920,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Clears the inverter's stored generation counters.",
+      "note": "Write register 705 with value 0xAA to clear all generation data."
+    },
+    {
+      "key": "reset_user_parameters",
+      "register": 706,
+      "value_kind": "action",
+      "action_value": 170,
+      "title": "Reset User Parameters",
+      "group": "system",
+      "order": 930,
+      "advanced": true,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "visible_if": [
+        "not_off_grid_mode"
+      ],
+      "editable_if": [
+        "not_off_grid_mode"
+      ],
+      "change_summary": "Restores user parameters to their defaults when the inverter is not in Off-Grid mode.",
+      "note": "Write register 706 with value 0xAA to reset user parameters to their defaults."
+    },
+    {
+      "key": "battery_type",
+      "register": 630,
+      "value_kind": "enum",
+      "title": "Battery Type",
+      "group": "battery",
+      "order": 180,
+      "advanced": true,
+      "requires_confirm": true,
+      "change_summary": "Changes the battery chemistry profile.",
+      "note": "Battery type according to the Anenji 630+ configuration block.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "AGM",
+          "order": 0,
+          "description": "Absorbent Glass Mat battery profile."
+        },
+        {
+          "value": 1,
+          "label": "Flooded",
+          "order": 1,
+          "description": "Flooded lead-acid battery profile."
+        },
+        {
+          "value": 2,
+          "label": "User",
+          "order": 2,
+          "description": "User-defined battery profile."
+        },
+        {
+          "value": 4,
+          "label": "Li2",
+          "order": 4,
+          "description": "Lithium profile 2."
+        },
+        {
+          "value": 6,
+          "label": "Li4",
+          "order": 6,
+          "description": "Lithium profile 4."
+        },
+        {
+          "value": 8,
+          "label": "LiB",
+          "order": 8,
+          "description": "Lithium BMS profile."
+        }
+      ]
+    },
+    {
+      "key": "battery_equalization_mode",
+      "template": "battery_equalization_mode",
+      "register": 651,
+      "note": "Battery equalization enable flag according to the Anenji 650+ configuration block."
+    },
+    {
+      "key": "battery_overvoltage_protection_voltage",
+      "template": "battery_overvoltage_protection_voltage",
+      "register": 631
+    },
+    {
+      "key": "battery_bulk_voltage",
+      "template": "battery_bulk_voltage",
+      "register": 637
+    },
+    {
+      "key": "battery_float_voltage",
+      "template": "battery_float_voltage",
+      "register": 638
+    },
+    {
+      "key": "battery_redischarge_voltage",
+      "template": "battery_redischarge_voltage",
+      "register": 643
+    },
+    {
+      "key": "battery_under_voltage",
+      "template": "battery_under_voltage",
+      "register": 644
+    },
+    {
+      "key": "battery_under_voltage_off_grid",
+      "template": "battery_under_voltage_off_grid",
+      "register": 646
+    },
+    {
+      "key": "low_dc_protection_soc_grid_mode",
+      "template": "low_dc_protection_soc_grid_mode",
+      "register": 647,
+      "note": "Raw unsigned percent threshold from the Anenji 640+ configuration block."
+    },
+    {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "template": "solar_battery_utility_return_soc_threshold",
+      "register": 648,
+      "note": "Raw unsigned percent threshold from the Anenji 640+ configuration block."
+    },
+    {
+      "key": "low_dc_cutoff_soc",
+      "template": "low_dc_cutoff_soc",
+      "register": 650,
+      "note": "Raw unsigned percent threshold from the Anenji 650+ configuration block."
+    },
+    {
+      "key": "charge_source_priority",
+      "template": "charge_source_priority",
+      "register": 632,
+      "note": "Charge source priority according to the Anenji 630+ configuration block.",
+      "choices": [
+        {
+          "value": 1,
+          "label": "PV Priority",
+          "order": 1,
+          "description": "Prefer PV charging when solar power is available."
+        },
+        {
+          "value": 2,
+          "label": "PV and Utility",
+          "order": 2,
+          "description": "Allow both PV and utility charging."
+        },
+        {
+          "value": 3,
+          "label": "PV Only",
+          "order": 3,
+          "description": "Restrict charging to PV only."
+        },
+        {
+          "value": 4,
+          "label": "PV Priority With Load Reserve",
+          "order": 4,
+          "description": "Prefer PV charging while reserving PV for the load when needed."
+        }
+      ]
+    },
+    {
+      "key": "max_charge_current",
+      "template": "max_charge_current",
+      "register": 640
+    },
+    {
+      "key": "max_ac_charge_current",
+      "template": "max_ac_charge_current",
+      "register": 641
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "template": "battery_equalization_voltage",
+      "register": 652
+    },
+    {
+      "key": "battery_equalization_time",
+      "template": "battery_equalization_time",
+      "register": 653
+    },
+    {
+      "key": "battery_equalization_timeout",
+      "template": "battery_equalization_timeout",
+      "register": 654
+    },
+    {
+      "key": "battery_equalization_interval",
+      "template": "battery_equalization_interval",
+      "register": 655
+    }
+  ],
+  "presets": []
+}

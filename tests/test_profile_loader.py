@@ -21,6 +21,22 @@ class ProfileLoaderTests(unittest.TestCase):
         profile_loader.set_external_profile_roots(())
         profile_loader.load_driver_profile.cache_clear()
 
+    def test_loads_modbus_smg_base_profile_metadata(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/base.json")
+
+        self.assertEqual(profile.key, "modbus_smg_base")
+        self.assertEqual(profile.title, "SMG / Modbus Base Profile")
+        self.assertEqual(profile.driver_key, "modbus_smg")
+        self.assertEqual(profile.protocol_family, "modbus_smg")
+        self.assertEqual(profile.source_name, "modbus_smg/base.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/modbus_smg/base.json"))
+        self.assertEqual(len(profile.groups), 4)
+        self.assertEqual(len(profile.capabilities), 0)
+        self.assertEqual(len(profile.presets), 0)
+
     def test_loads_smg_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 
@@ -256,6 +272,62 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(len(profile.capabilities), 0)
         self.assertEqual(len(profile.presets), 0)
 
+    def test_loads_anenji_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+
+        self.assertEqual(profile.key, "modbus_smg_anenji_anj_11kw_48v_wifi_p")
+        self.assertEqual(profile.title, "Anenji ANJ-11KW-48V-WIFI-P")
+        self.assertEqual(profile.driver_key, "modbus_smg")
+        self.assertEqual(profile.protocol_family, "modbus_smg")
+        self.assertEqual(profile.source_name, "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(
+            profile.source_path.endswith(
+                "profiles/modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"
+            )
+        )
+        self.assertEqual(len(profile.groups), 4)
+        self.assertEqual(len(profile.capabilities), 47)
+        self.assertEqual(len(profile.presets), 0)
+
+        self.assertEqual(profile.get_capability("output_mode").register, 600)
+        self.assertEqual(profile.get_capability("output_mode").enum_value_map[6], "Split-Phase-P2")
+        self.assertEqual(profile.get_capability("force_eq_charge").register, 656)
+        self.assertEqual(profile.get_capability("input_mode").register, 677)
+        self.assertEqual(profile.get_capability("input_mode").enum_value_map[2], "GNT")
+        self.assertEqual(profile.get_capability("warning_mask_i").word_count, 2)
+        self.assertEqual(profile.get_capability("warning_mask_i").combine, "u32_high_first")
+        self.assertEqual(profile.get_capability("output_source_priority").register, 601)
+        self.assertEqual(
+            profile.get_capability("output_source_priority").enum_value_map[3],
+            "PV-Utility-Battery (Grid-Tied PV)",
+        )
+        self.assertEqual(profile.get_capability("charge_source_priority").register, 632)
+        self.assertEqual(
+            profile.get_capability("charge_source_priority").enum_value_map[4],
+            "PV Priority With Load Reserve",
+        )
+        self.assertEqual(profile.get_capability("battery_type").register, 630)
+        self.assertEqual(profile.get_capability("battery_type").enum_value_map[8], "LiB")
+        self.assertEqual(profile.get_capability("turn_on_mode").register, 693)
+        self.assertEqual(profile.get_capability("remote_turn_on").register, 694)
+        self.assertEqual(profile.get_capability("exit_fault_mode").register, 695)
+        self.assertEqual(profile.get_capability("inverter_date_write").register, 696)
+        self.assertEqual(profile.get_capability("inverter_date_write").word_count, 3)
+        self.assertEqual(profile.get_capability("inverter_time_write").register, 699)
+        self.assertEqual(profile.get_capability("inverter_time_write").word_count, 3)
+        self.assertEqual(profile.get_capability("clear_generation_data").register, 705)
+        self.assertEqual(profile.get_capability("reset_user_parameters").register, 706)
+        self.assertEqual(profile.get_capability("ground_relay_enabled").register, 707)
+        self.assertEqual(profile.get_capability("lithium_battery_activation_time").maximum, 300)
+        self.assertEqual(profile.get_capability("battery_equalization_mode").register, 651)
+        self.assertFalse(profile.get_capability("output_source_priority").tested)
+        self.assertFalse(profile.get_capability("remote_turn_on").tested)
+        with self.assertRaises(KeyError):
+            profile.get_capability("remote_switch")
+
     def test_rejects_duplicate_capability_keys(self) -> None:
         raw = {
             "profile_key": "bad_profile",
@@ -388,6 +460,52 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.source_path, str(child_path.resolve()))
         self.assertEqual(profile.driver_key, "pi30")
         self.assertEqual(profile.get_capability("output_source_priority").register, 1)
+
+    def test_capability_templates_materialize_variant_capabilities(self) -> None:
+        raw = {
+            "profile_key": "templated_profile",
+            "title": "Templated Profile",
+            "driver_key": "modbus_smg",
+            "protocol_family": "modbus_smg",
+            "groups": [{"key": "system", "title": "System"}],
+            "capability_templates": {
+                "turn_on_mode": {
+                    "value_kind": "enum",
+                    "title": "Turn On Mode",
+                    "group": "system",
+                    "order": 100,
+                    "requires_confirm": True,
+                    "choices": [
+                        {"value": 0, "label": "Local and Remote"},
+                        {"value": 1, "label": "Local Only"},
+                    ],
+                }
+            },
+            "capabilities": [
+                {
+                    "key": "turn_on_mode",
+                    "template": "turn_on_mode",
+                    "register": 693,
+                    "note": "Variant-specific register placement.",
+                }
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "templated_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                profile = profile_loader.load_driver_profile("templated_profile.json")
+
+        capability = profile.get_capability("turn_on_mode")
+
+        self.assertEqual(capability.register, 693)
+        self.assertEqual(capability.display_name, "Turn On Mode")
+        self.assertTrue(capability.requires_confirm)
+        self.assertEqual(capability.enum_value_map[0], "Local and Remote")
+        self.assertEqual(capability.note, "Variant-specific register placement.")
 
 
 if __name__ == "__main__":
