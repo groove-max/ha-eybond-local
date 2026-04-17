@@ -18,6 +18,9 @@ from custom_components.eybond_local.metadata.pi_family import (
 )
 
 
+_PI30_SMARTESS_DEFAULT = "pi30_ascii/models/smartess_0925_compat.json"
+
+
 class PiFamilyTests(unittest.TestCase):
     def test_classify_pi_protocol_maps_known_families(self) -> None:
         self.assertEqual(classify_pi_protocol("PI16"), "pi16")
@@ -29,7 +32,13 @@ class PiFamilyTests(unittest.TestCase):
     def test_build_pi_model_name_prefers_model_number(self) -> None:
         self.assertEqual(
             build_pi_model_name("PI30", {"model_number": "VMII-NXPW5KW", "output_rating_active_power": 5000}),
-            "VMII-NXPW5KW",
+            "PowMr 4.2kW",
+        )
+
+    def test_build_pi_model_name_keeps_unknown_model_number(self) -> None:
+        self.assertEqual(
+            build_pi_model_name("PI30", {"model_number": "MKS2-4200", "output_rating_active_power": 4200}),
+            "MKS2-4200",
         )
 
     def test_build_pi_model_name_falls_back_to_protocol_and_power(self) -> None:
@@ -46,15 +55,15 @@ class PiFamilyTests(unittest.TestCase):
 
         assert identity is not None
         self.assertEqual(identity.family_key, "pi30")
-        self.assertEqual(identity.model_name, "VMII-NXPW5KW")
+        self.assertEqual(identity.model_name, "PowMr 4.2kW")
         self.assertEqual(identity.variant_key, "vmii_nxpw5kw")
 
     def test_resolve_pi30_metadata_names_uses_vmii_overlay(self) -> None:
         names = resolve_pi30_metadata_names(
             {"protocol_id": "PI30", "model_number": "VMII-NXPW5KW"},
-            "VMII-NXPW5KW",
-            default_profile_name="pi30_ascii/models/default.json",
-            default_register_schema_name="pi30_ascii/models/default.json",
+            "PowMr 4.2kW",
+            default_profile_name=_PI30_SMARTESS_DEFAULT,
+            default_register_schema_name=_PI30_SMARTESS_DEFAULT,
         )
 
         self.assertEqual(names.profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
@@ -64,8 +73,8 @@ class PiFamilyTests(unittest.TestCase):
         names = resolve_pi30_metadata_names(
             {"protocol_id": "PI41", "output_rating_active_power": 5000},
             "PI41 5000",
-            default_profile_name="pi30_ascii/models/default.json",
-            default_register_schema_name="pi30_ascii/models/default.json",
+            default_profile_name=_PI30_SMARTESS_DEFAULT,
+            default_register_schema_name=_PI30_SMARTESS_DEFAULT,
         )
 
         self.assertEqual(names.profile_name, "pi30_ascii/models/pi41.json")
@@ -75,8 +84,8 @@ class PiFamilyTests(unittest.TestCase):
         names = resolve_pi30_metadata_names(
             {"protocol_id": "PI30", "qpiri_field_count": 28},
             "PI30 5000",
-            default_profile_name="pi30_ascii/models/default.json",
-            default_register_schema_name="pi30_ascii/models/default.json",
+            default_profile_name=_PI30_SMARTESS_DEFAULT,
+            default_register_schema_name=_PI30_SMARTESS_DEFAULT,
         )
 
         self.assertEqual(names.profile_name, "pi30_ascii/models/pi30_max.json")
@@ -92,8 +101,8 @@ class PiFamilyTests(unittest.TestCase):
                 "qpiws_bit_count": 36,
             },
             "PI30 5000",
-            default_profile_name="pi30_ascii/models/default.json",
-            default_register_schema_name="pi30_ascii/models/default.json",
+            default_profile_name=_PI30_SMARTESS_DEFAULT,
+            default_register_schema_name=_PI30_SMARTESS_DEFAULT,
         )
 
         self.assertEqual(names.profile_name, "pi30_ascii/models/pi30_pip_gk.json")
@@ -103,12 +112,12 @@ class PiFamilyTests(unittest.TestCase):
         names = resolve_pi30_metadata_names(
             {"protocol_id": "PI30", "model_number": "MKS2-4200"},
             "MKS2-4200",
-            default_profile_name="pi30_ascii/models/default.json",
-            default_register_schema_name="pi30_ascii/models/default.json",
+            default_profile_name=_PI30_SMARTESS_DEFAULT,
+            default_register_schema_name=_PI30_SMARTESS_DEFAULT,
         )
 
-        self.assertEqual(names.profile_name, "pi30_ascii/models/default.json")
-        self.assertEqual(names.register_schema_name, "pi30_ascii/models/default.json")
+        self.assertEqual(names.profile_name, _PI30_SMARTESS_DEFAULT)
+        self.assertEqual(names.register_schema_name, _PI30_SMARTESS_DEFAULT)
 
     def test_resolve_pi_identity_detects_pi30_max_from_qpiri_or_qflag(self) -> None:
         identity = resolve_pi_identity(

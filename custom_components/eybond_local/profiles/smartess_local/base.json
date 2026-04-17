@@ -1,0 +1,9 @@
+{
+  "profile_key": "smartess_local_base",
+  "title": "SmartESS Local Profile",
+  "driver_key": "smartess_local",
+  "protocol_family": "smartess_local",
+  "groups": [],
+  "capabilities": [],
+  "presets": []
+}

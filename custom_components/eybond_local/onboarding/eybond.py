@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..collector.discovery import async_probe_target
+from ..collector.smartess_local import SmartEssLocalSession, SmartEssProtocolDescriptor
 from ..collector.transport import SharedEybondTransport
 from ..connection.models import EybondConnectionSpec
 from ..const import (
@@ -20,6 +21,7 @@ from ..const import (
     DEFAULT_UDP_PORT,
     DRIVER_HINT_AUTO,
 )
+from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
 from .driver_detection import DetectedDriverContext, async_detect_inverter
 from ..models import CollectorCandidate, OnboardingResult
 
@@ -42,6 +44,21 @@ class DiscoveryTarget:
 
     ip: str
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class SmartEssOnboardingProbe:
+    """Best-effort SmartESS collector metadata captured during onboarding."""
+
+    collector_version: str = ""
+    protocol_descriptor: SmartEssProtocolDescriptor | None = None
+    known_protocol: SmartEssProtocolCatalogEntry | None = None
+
+    @property
+    def selected_device_address(self) -> int | None:
+        if self.known_protocol is None or not self.known_protocol.device_addresses:
+            return None
+        return self.known_protocol.device_addresses[0]
 
 
 def build_default_discovery_targets(
@@ -308,6 +325,10 @@ class OnboardingDetector:
                 candidate.ip = candidate.collector.remote_ip
                 transport.set_collector_ip(candidate.ip)
 
+            smartess_probe = await _async_probe_smartess_onboarding(transport)
+            if candidate.collector is not None and smartess_probe is not None:
+                _apply_smartess_probe_to_collector(candidate.collector, smartess_probe)
+
             warnings = []
             if not heartbeat_seen:
                 warnings.append("collector_heartbeat_not_observed")
@@ -323,6 +344,10 @@ class OnboardingDetector:
                     next_action="manual_driver_selection",
                     last_error=str(exc),
                 )
+
+            if smartess_probe is not None:
+                _apply_smartess_probe_to_match(context.match.details, smartess_probe)
+                _apply_smartess_probe_to_match(context.inverter.details, smartess_probe)
 
             return OnboardingResult(
                 collector=candidate,
@@ -398,3 +423,81 @@ def _is_retryable_detection_error(error: str) -> bool:
             "unexpected_length",
         )
     )
+
+
+async def _async_probe_smartess_onboarding(transport: Any) -> SmartEssOnboardingProbe | None:
+    """Collect SmartESS query 5 and query 14 metadata without affecting onboarding success."""
+
+    session = SmartEssLocalSession(transport)
+    collector_version = ""
+    protocol_descriptor: SmartEssProtocolDescriptor | None = None
+    known_protocol: SmartEssProtocolCatalogEntry | None = None
+
+    try:
+        collector_version = await session.query_collector_version()
+    except Exception as exc:
+        logger.debug("SmartESS onboarding query 5 failed error=%s", exc)
+
+    try:
+        protocol_descriptor = await session.query_protocol_descriptor()
+        known_protocol = load_smartess_protocol_catalog().protocols.get(protocol_descriptor.asset_id)
+    except Exception as exc:
+        logger.debug("SmartESS onboarding query 14 failed error=%s", exc)
+
+    if not collector_version and protocol_descriptor is None:
+        return None
+
+    return SmartEssOnboardingProbe(
+        collector_version=collector_version,
+        protocol_descriptor=protocol_descriptor,
+        known_protocol=known_protocol,
+    )
+
+
+def _apply_smartess_probe_to_collector(
+    collector: Any,
+    probe: SmartEssOnboardingProbe,
+) -> None:
+    """Persist SmartESS onboarding metadata onto collector info."""
+
+    if probe.collector_version:
+        collector.smartess_collector_version = probe.collector_version
+
+    descriptor = probe.protocol_descriptor
+    if descriptor is not None:
+        collector.smartess_protocol_raw_id = descriptor.raw_id
+        collector.smartess_protocol_asset_id = descriptor.asset_id
+        collector.smartess_protocol_asset_name = descriptor.asset_name
+        collector.smartess_protocol_suffix = descriptor.suffix
+
+    if probe.known_protocol is not None:
+        collector.smartess_protocol_profile_key = probe.known_protocol.profile_key
+        collector.smartess_protocol_name = (
+            probe.known_protocol.proto_name or collector.smartess_protocol_asset_name
+        )
+        collector.smartess_device_address = probe.selected_device_address
+
+
+def _apply_smartess_probe_to_match(
+    details: dict[str, Any],
+    probe: SmartEssOnboardingProbe,
+) -> None:
+    """Persist SmartESS onboarding metadata onto one details mapping."""
+
+    if probe.collector_version:
+        details.setdefault("smartess_collector_version", probe.collector_version)
+
+    descriptor = probe.protocol_descriptor
+    if descriptor is not None:
+        details.setdefault("smartess_protocol_raw_id", descriptor.raw_id)
+        details.setdefault("smartess_protocol_asset_id", descriptor.asset_id)
+        details.setdefault("smartess_protocol_asset_name", descriptor.asset_name)
+        if descriptor.suffix:
+            details.setdefault("smartess_protocol_suffix", descriptor.suffix)
+
+    if probe.known_protocol is not None:
+        details.setdefault("smartess_profile_key", probe.known_protocol.profile_key)
+        if probe.known_protocol.proto_name:
+            details.setdefault("smartess_protocol_name", probe.known_protocol.proto_name)
+        if probe.selected_device_address is not None:
+            details.setdefault("smartess_device_address", probe.selected_device_address)

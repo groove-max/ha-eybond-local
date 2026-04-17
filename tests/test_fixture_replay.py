@@ -131,7 +131,7 @@ class FixtureReplayTests(unittest.TestCase):
 
         self.assertEqual(context.inverter.driver_key, "pi30")
         self.assertEqual(context.inverter.protocol_family, "pi30")
-        self.assertEqual(context.inverter.model_name, "VMII-NXPW5KW")
+        self.assertEqual(context.inverter.model_name, "PowMr 4.2kW")
         self.assertEqual(context.inverter.variant_key, "pi30_max")
         self.assertEqual(context.inverter.profile_name, "pi30_ascii/models/pi30_max.json")
         self.assertEqual(context.inverter.register_schema_name, "pi30_ascii/models/pi30_max.json")

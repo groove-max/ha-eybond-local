@@ -408,6 +408,14 @@ class CollectorInfo:
     collector_pn_digits: str = ""
     heartbeat_age_seconds: float | None = None
     heartbeat_fresh: bool | None = None
+    smartess_collector_version: str = ""
+    smartess_protocol_raw_id: str = ""
+    smartess_protocol_asset_id: str = ""
+    smartess_protocol_asset_name: str = ""
+    smartess_protocol_suffix: str = ""
+    smartess_protocol_profile_key: str = ""
+    smartess_protocol_name: str = ""
+    smartess_device_address: int | None = None
 
 
 @dataclass(slots=True)

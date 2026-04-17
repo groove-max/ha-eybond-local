@@ -71,6 +71,14 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             collector_pn_digits=collector.collector_pn_digits,
             heartbeat_age_seconds=collector.heartbeat_age_seconds,
             heartbeat_fresh=collector.heartbeat_fresh,
+            smartess_collector_version=collector.smartess_collector_version,
+            smartess_protocol_raw_id=collector.smartess_protocol_raw_id,
+            smartess_protocol_asset_id=collector.smartess_protocol_asset_id,
+            smartess_protocol_asset_name=collector.smartess_protocol_asset_name,
+            smartess_protocol_suffix=collector.smartess_protocol_suffix,
+            smartess_protocol_profile_key=collector.smartess_protocol_profile_key,
+            smartess_protocol_name=collector.smartess_protocol_name,
+            smartess_device_address=collector.smartess_device_address,
         )
     )
 

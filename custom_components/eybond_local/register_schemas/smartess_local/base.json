@@ -1,0 +1,30 @@
+{
+  "schema_key": "smartess_local_base",
+  "title": "SmartESS Local Register Schema",
+  "driver_key": "smartess_local",
+  "protocol_family": "smartess_local",
+  "blocks": [
+    {
+      "key": "status",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "serial",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "live",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "config",
+      "start": 0,
+      "count": 0
+    }
+  ],
+  "measurement_descriptions": [],
+  "binary_sensor_descriptions": []
+}

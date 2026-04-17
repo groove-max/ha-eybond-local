@@ -133,6 +133,23 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(len(profile.groups), 3)
         self.assertEqual(len(profile.capabilities), 18)
 
+    def test_loads_pi30_smartess_0925_compat_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("pi30_ascii/models/smartess_0925_compat.json")
+
+        self.assertEqual(profile.key, "pi30_ascii_smartess_0925_compat")
+        self.assertEqual(profile.title, "SmartESS 0925 Compatibility Profile")
+        self.assertEqual(profile.driver_key, "pi30")
+        self.assertEqual(profile.protocol_family, "pi30")
+        self.assertEqual(profile.source_name, "pi30_ascii/models/smartess_0925_compat.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(
+            profile.source_path.endswith("profiles/pi30_ascii/models/smartess_0925_compat.json")
+        )
+        self.assertEqual(len(profile.groups), 3)
+        self.assertEqual(len(profile.capabilities), 18)
+
     def test_loads_pi30_vmii_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 
@@ -182,6 +199,62 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.source_name, "pi30_ascii/models/pi30_pip_gk.json")
         self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/pi30_pip_gk.json"))
         self.assertEqual(len(profile.capabilities), 18)
+
+    def test_loads_smartess_0925_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smartess_local/models/0925.json")
+
+        self.assertEqual(profile.key, "smartess_0925")
+        self.assertEqual(profile.title, "SmartESS 0925 Profile")
+        self.assertEqual(profile.driver_key, "smartess_local")
+        self.assertEqual(profile.protocol_family, "smartess_local")
+        self.assertEqual(profile.source_name, "smartess_local/models/0925.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/smartess_local/models/0925.json"))
+        self.assertEqual(len(profile.groups), 5)
+        self.assertEqual(len(profile.capabilities), 30)
+        self.assertEqual(len(profile.presets), 0)
+        self.assertEqual(profile.get_capability("output_source_priority").enum_value_map[4], "SUF")
+        self.assertEqual(profile.get_capability("input_voltage_range").enum_value_map[2], "Generator")
+        self.assertEqual(profile.get_capability("battery_type").enum_value_map[6], "Li4")
+        self.assertEqual(profile.get_capability("max_total_charge_current").register, 4541)
+        self.assertEqual(profile.get_capability("power_saving_enabled").register, 5003)
+        self.assertEqual(profile.get_capability("battery_equalization_mode").register, 5011)
+        self.assertEqual(profile.get_capability("force_battery_equalization").register, 5012)
+        self.assertEqual(profile.get_capability("restore_defaults").register, 5016)
+
+    def test_loads_smartess_0921_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smartess_local/models/0921.json")
+
+        self.assertEqual(profile.key, "smartess_0921")
+        self.assertEqual(profile.title, "SmartESS 0921 Profile")
+        self.assertEqual(profile.driver_key, "smartess_local")
+        self.assertEqual(profile.protocol_family, "smartess_local")
+        self.assertEqual(profile.source_name, "smartess_local/models/0921.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/smartess_local/models/0921.json"))
+        self.assertEqual(len(profile.groups), 0)
+        self.assertEqual(len(profile.capabilities), 0)
+        self.assertEqual(len(profile.presets), 0)
+
+    def test_loads_smartess_0912_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smartess_local/models/0912.json")
+
+        self.assertEqual(profile.key, "smartess_0912")
+        self.assertEqual(profile.title, "SmartESS 0912 Profile")
+        self.assertEqual(profile.driver_key, "smartess_local")
+        self.assertEqual(profile.protocol_family, "smartess_local")
+        self.assertEqual(profile.source_name, "smartess_local/models/0912.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(profile.source_path.endswith("profiles/smartess_local/models/0912.json"))
+        self.assertEqual(len(profile.groups), 0)
+        self.assertEqual(len(profile.capabilities), 0)
+        self.assertEqual(len(profile.presets), 0)
 
     def test_rejects_duplicate_capability_keys(self) -> None:
         raw = {
@@ -268,6 +341,53 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.title, "External SMG / Modbus")
         self.assertEqual(profile.source_scope, "external")
         self.assertEqual(profile.source_path, str(profile_path.resolve()))
+
+    def test_external_profile_relative_extends_falls_back_to_builtin_parent(self) -> None:
+        builtin_parent = {
+            "profile_key": "pi30_ascii",
+            "title": "Builtin PI30 / ASCII",
+            "driver_key": "pi30",
+            "protocol_family": "pi30",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "output_source_priority",
+                    "register": 1,
+                    "value_kind": "enum",
+                    "note": "builtin",
+                    "group": "system",
+                    "enum_map": {"1": "Utility first"},
+                }
+            ],
+            "presets": [],
+        }
+        external_child = {
+            "extends": "../../pi30_ascii.json",
+            "profile_key": "pi30_ascii_smartess_0925_compat",
+            "title": "External SmartESS 0925 Compat",
+        }
+
+        with tempfile.TemporaryDirectory() as builtin_dir, tempfile.TemporaryDirectory() as external_dir:
+            builtin_root = Path(builtin_dir)
+            external_root = Path(external_dir)
+            (builtin_root / "pi30_ascii.json").write_text(json.dumps(builtin_parent), encoding="utf-8")
+            child_path = external_root / "pi30_ascii" / "models" / "smartess_0925_compat.json"
+            child_path.parent.mkdir(parents=True, exist_ok=True)
+            child_path.write_text(json.dumps(external_child), encoding="utf-8")
+
+            with mock.patch.object(profile_loader, "PROFILES_DIR", builtin_root):
+                profile_loader.set_external_profile_roots((external_root,))
+                profile_loader.load_driver_profile.cache_clear()
+
+                profile = profile_loader.load_driver_profile(
+                    "pi30_ascii/models/smartess_0925_compat.json"
+                )
+
+        self.assertEqual(profile.title, "External SmartESS 0925 Compat")
+        self.assertEqual(profile.source_scope, "external")
+        self.assertEqual(profile.source_path, str(child_path.resolve()))
+        self.assertEqual(profile.driver_key, "pi30")
+        self.assertEqual(profile.get_capability("output_source_priority").register, 1)
 
 
 if __name__ == "__main__":

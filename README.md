@@ -5,6 +5,12 @@
 
 [Українською](README.uk.md)
 
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
+
+> **Companion dashboard card:** Pair this integration with [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) for a ready-made Lovelace UI with animated power flow and history charts.
+
+[![Open EyeBond Local Card in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local-card&category=plugin)
+
 **EyeBond Local** is a Home Assistant integration that talks directly to hybrid inverters connected through SmartESS / EyeBond Wi-Fi collectors — without going through the vendor's cloud.
 
 You get live monitoring, energy totals, and gated controls for supported inverters, all over your local network.
@@ -20,6 +26,7 @@ If your inverter's stock monitoring already works through the SmartESS app, that
 - **100% local** — no vendor cloud, no internet dependency.
 - **Guided setup wizard** with auto-discovery and a manual fallback.
 - **Safe by default** — controls stay read-only until detection is confident.
+- **Optional SmartESS cloud assist** — collects reusable cloud evidence for diagnostics and metadata hints without bypassing local safety gates.
 - **Configurable polling interval** — from `2` to `3600` seconds, so updates can be much more frequent than the stock SmartESS refresh.
 - **Energy dashboard ready** — derived totals for PV, load, battery, and, on supported models, grid import/export.
 - **Open architecture** — JSON-first profiles and register schemas.
@@ -35,10 +42,14 @@ The stock SmartESS monitoring usually keeps working in parallel: EyeBond Local d
 | Protocol / profile | Status | Notes |
 |---|---|---|
 | **SMG / Modbus** | Supported | Local protocol/profile used by some hybrid inverters; full monitoring + tested controls |
-| **PI30 ASCII** | Supported | PI30-family protocol; full monitoring + tested controls on supported variants |
+| **PI30 ASCII** | Supported | PI30-family protocol; full monitoring + tested controls on supported variants, including PowMr 4.2kW |
 | **PI18 ASCII** | Experimental | PI18-family protocol; replay-tested only, not production-ready |
 
 Names such as **SMG / Modbus** and **PI30 ASCII** refer to the detected protocol or compatibility profile, not the commercial model name printed on the inverter.
+
+For the SMG / Modbus family, the currently tested real-world unit is branded **Sandisolar SD-HYM-4862HWP**. The integration still presents it generically as **SMG 6200** because the current local Modbus telemetry does not expose a stronger raw commercial model identifier.
+
+For example, the currently tested **PowMr 4.2kW** unit reports the raw model string `VMII-NXPW5KW`, but is presented in the integration under the **PI30 ASCII** family as **PowMr 4.2kW**.
 
 Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support.
 
@@ -122,13 +133,25 @@ After setup, the integration adds a single device with:
 - **Energy totals** — derived `kWh` totals for PV production, load consumption, and battery charge/discharge, plus grid import/export on models that expose grid power. Drop them straight into the **Energy dashboard**.
 - **Binary sensors** — operating mode, faults, alarms, charging state.
 - **Controls** — `number`, `select`, `switch`, and `button` entities for supported settings (charge limits, output mode, beep, etc.). These are gated by detection confidence and start hidden until they're known to be safe.
-- **Diagnostics** — connection state, driver match, support level, and a one-click **Support Archive** export.
+- **Diagnostics** — connection state, driver match, support level, optional SmartESS cloud evidence export, and a one-click **Support Archive** export.
 
 <p align="center"><img src="docs/images/sensors.png" alt="Live sensors after setup" width="320"></p>
 
 On supported hardware, the settings screen exposes native Home Assistant controls for writable inverter options.
 
 <p align="center"><img src="docs/images/settings.png" alt="Settings and controls after setup" width="320"></p>
+
+---
+
+## SmartESS Cloud Assist
+
+When local detection only reaches a collector-only or low-confidence state, EyeBond Local can optionally query SmartESS cloud for the same collector identity and store reusable cloud evidence JSON under `/config/eybond_local/cloud_evidence/`.
+
+- **Credentials are used only for the live fetch** — the integration does not keep a persistent SmartESS cloud login session.
+- **Cloud evidence improves diagnostics and metadata planning** — it does not unlock local write controls by itself.
+- **Create support archive can reuse saved evidence automatically** or refresh it inline while the ZIP is being built.
+- **Export SmartESS cloud evidence** is the standalone advanced action when you want the evidence itself for review or experimental metadata work.
+- **Evidence files stay on disk until you remove them manually**. The latest matching file for the entry is reused automatically.
 
 ---
 
@@ -140,7 +163,7 @@ If something doesn't work, the fastest path is:
 2. Click **Create support archive**.
 3. Open a [GitHub issue](https://github.com/groove-max/ha-eybond-local/issues) and attach the generated ZIP.
 
-The Support Archive contains an anonymized snapshot of your inverter's state, register reads, and detection results. That's usually enough to understand compatibility and decide the next step. If your device turns out to use a different protocol or a non-standard variant, we may need more evidence or more than one iteration before support can be added.
+The Support Archive contains an anonymized snapshot of your inverter's state, register reads, and detection results. When matching SmartESS cloud evidence is already saved, the archive includes it automatically, and the same screen can refresh that evidence inline before the ZIP is written. That's usually enough to understand compatibility and decide the next step. If your device turns out to use a different protocol or a non-standard variant, we may need more evidence or more than one iteration before support can be added.
 
 ### Issue templates
 

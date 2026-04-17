@@ -35,17 +35,44 @@ def _workflow_state(
     }
 
 
+def _has_smartess_collector_hint(
+    *,
+    smartess_protocol_asset_id: str = "",
+    smartess_profile_key: str = "",
+    smartess_collector_version: str = "",
+) -> bool:
+    """Return true when onboarding captured any SmartESS-side collector evidence."""
+
+    return any(
+        str(value or "").strip()
+        for value in (
+            smartess_protocol_asset_id,
+            smartess_profile_key,
+            smartess_collector_version,
+        )
+    )
+
+
 def build_support_workflow_state(
     *,
     has_inverter: bool,
-    driver_name: str = "",
+    effective_owner_key: str = "",
+    effective_owner_name: str = "",
+    smartess_family_name: str = "",
     detection_confidence: str | None = None,
     profile_source_scope: str = "",
     schema_source_scope: str = "",
+    smartess_protocol_asset_id: str = "",
+    smartess_profile_key: str = "",
+    smartess_collector_version: str = "",
 ) -> dict[str, str]:
     """Return one compact support workflow status and the recommended next step."""
 
     confidence = normalize_confidence(detection_confidence)
+    owner_known = any(
+        str(value or "").strip()
+        for value in (effective_owner_key, effective_owner_name)
+    )
     if profile_source_scope == "external" or schema_source_scope == "external":
         return _workflow_state(
             level="experimental",
@@ -62,7 +89,27 @@ def build_support_workflow_state(
             advanced_hint="Advanced metadata is already active here. Use the advanced tools to iterate on the local override, not as the first troubleshooting step.",
         )
 
-    if not has_inverter and not driver_name:
+    if not has_inverter and not owner_known:
+        if _has_smartess_collector_hint(
+            smartess_protocol_asset_id=smartess_protocol_asset_id,
+            smartess_profile_key=smartess_profile_key,
+            smartess_collector_version=smartess_collector_version,
+        ):
+            return _workflow_state(
+                level="smartess_pending",
+                level_label="SmartESS collector evidence",
+                summary="The collector exposed SmartESS metadata, but no local inverter driver is matched yet.",
+                next_action=(
+                    "Create a support archive and send the ZIP file to the developer. "
+                    "SmartESS app support can still rely on a separate cloud-normalized "
+                    "identity even when the local descriptor is generic, missing, or incomplete."
+                ),
+                primary_action="create_support_package",
+                step_1="Create a support archive.",
+                step_2="Send the ZIP file to the developer.",
+                step_3="Treat the local SmartESS descriptor as collector evidence only until a built-in mapping is confirmed.",
+                advanced_hint="Do not treat a generic or missing local SmartESS descriptor as proof that the inverter is unsupported in the SmartESS app.",
+            )
         return _workflow_state(
             level="unknown",
             level_label="Unknown support",
@@ -82,7 +129,12 @@ def build_support_workflow_state(
         return _workflow_state(
             level="pending",
             level_label="Pending confirmation",
-            summary="A driver base is known, but the inverter is not currently confirmed.",
+            summary=(
+                f"A runtime metadata base is known ({effective_owner_name or effective_owner_key}), "
+                "but the inverter is not currently confirmed."
+                if (effective_owner_name or effective_owner_key)
+                else "A driver base is known, but the inverter is not currently confirmed."
+            ),
             next_action=(
                 "Create a support archive and send the ZIP file to the developer before "
                 "editing local drafts."
@@ -91,7 +143,14 @@ def build_support_workflow_state(
             step_1="Create a support archive.",
             step_2="Send the ZIP file to the developer.",
             step_3="Only move on to local drafts after the developer reviews the evidence.",
-            advanced_hint="Treat local drafts as a second-stage tool here. First confirm connectivity or send the support evidence.",
+            advanced_hint=(
+                "Treat local drafts as a second-stage tool here. First confirm connectivity or send the support evidence."
+                + (
+                    f" SmartESS family context: {smartess_family_name}."
+                    if str(smartess_family_name or "").strip()
+                    else ""
+                )
+            ),
         )
 
     if confidence == "high":

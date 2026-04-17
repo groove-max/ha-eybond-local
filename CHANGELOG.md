@@ -9,19 +9,47 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
-- Add new user-visible features here.
+- Nothing yet.
 
 ### Changed
 
-- Add behavior changes, refactors, or support expansions here.
+- Nothing yet.
 
 ### Fixed
 
-- Add bug fixes and regressions here.
+- Nothing yet.
 
 ### Docs
 
-- Add documentation-only changes here.
+- Nothing yet.
+
+## [0.1.48] - 2026-04-17
+
+### Added
+
+- Added optional SmartESS cloud assist for onboarding and diagnostics, including reusable cloud-evidence export for one collector identity.
+- Added JSON-first SmartESS protocol and model-binding catalogs plus imported SmartESS assets `0912`, `0921`, and `0925` for metadata ownership, diagnostics, and local draft tooling.
+- Added SmartESS local collector helpers for collector query/set commands, protocol-id parsing from query `14`, and known-family metadata planning.
+- Added read-only SMG model coverage and wider support-archive capture windows for Anenji ANJ-11KW-48V-WIFI-P / Protocol 3-10 devices.
+
+### Changed
+
+- `Create support archive` is now the main diagnostics flow and can include saved SmartESS cloud evidence automatically or refresh it inline before the ZIP is built.
+- Runtime diagnostics, support export, and local draft tooling now resolve effective profile/register-schema ownership from saved or live SmartESS metadata hints, so imported SmartESS assets can be used before a native SmartESS runtime driver exists.
+- PI30 default metadata now uses the canonical SmartESS `0925` compatibility paths, while user-facing naming presents raw `VMII-NXPW5KW` devices as PowMr 4.2kW.
+- Advanced metadata tools now focus on raw JSON export plus SmartESS draft and bridge generation instead of duplicating routine archive and reload actions.
+
+### Fixed
+
+- Metadata cache priming now also warms catalog-driven metadata, avoiding blocking file reads when Home Assistant starts or reloads local overrides.
+- Support archives now store matching SmartESS cloud evidence only once inside the ZIP under `evidence/cloud_evidence.json`.
+- Support-archive raw register capture now follows the effective schema name, so model-specific SMG evidence windows are not dropped for variant overlays.
+- External relative metadata overrides can now fall back to built-in parent profile and schema files when the local parent file is missing.
+
+### Docs
+
+- Public docs now explain SmartESS cloud evidence, inline archive refresh, and the retention behavior of saved cloud-evidence files.
+- Public docs now call out PowMr 4.2kW and Sandisolar SD-HYM-4862HWP as the currently verified commercial examples for the PI30 and SMG families.
 
 ## [0.1.43] - 2026-04-15
 

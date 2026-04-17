@@ -62,12 +62,50 @@
       },
       "confirm": {
         "title": "Підтвердьте виявлення",
-        "description": "| Деталь | Значення |\n|---|---|\n| Колектор | {collector_ip} ({collector_pn}) |\n| Інвертор | {model_name} |\n| Серійний номер | {serial_number} |\n| Драйвер | {driver_key} |\n| Виявлення | {confidence} |\n\n{control_summary}",
+        "description": "| Деталь | Значення |\n|---|---|\n| Колектор | {collector_ip} ({collector_pn}) |\n| Інвертор | {model_name} |\n| Серійний номер | {serial_number} |\n| Драйвер | {driver_key} |\n| Виявлення | {confidence} |\n\n{smartess_cloud_summary}\n\n{control_summary}",
         "data": {
           "poll_interval": "Інтервал опитування"
         },
         "data_description": {
           "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
+        }
+      },
+      "confirm_without_cloud_assist": {
+        "title": "Підтвердьте виявлення",
+        "description": "| Деталь | Значення |\n|---|---|\n| Колектор | {collector_ip} ({collector_pn}) |\n| Інвертор | {model_name} |\n| Серійний номер | {serial_number} |\n| Драйвер | {driver_key} |\n| Виявлення | {confidence} |\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "data": {
+          "poll_interval": "Інтервал опитування"
+        },
+        "data_description": {
+          "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
+        }
+      },
+      "smartess_cloud_assist_choice": {
+        "title": "Уточнити через SmartESS cloud",
+        "description": "{smartess_cloud_offer_summary}\n\n**PN колектора:** {collector_pn}\n**Останні хмарні дані:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "menu_options": {
+          "smartess_cloud_assist": "Використати SmartESS cloud assist",
+          "confirm_without_cloud_assist": "Продовжити без SmartESS cloud assist"
+        }
+      },
+      "smartess_cloud_assist": {
+        "title": "SmartESS Cloud Assist",
+        "description": "Інтеграція виконає вхід до SmartESS cloud, визначить ідентичність пристрою для колектора `{collector_pn}` та збереже придатні для повторного використання хмарні дані для майстра налаштування.\n\n{smartess_cloud_offer_summary}\n\n**Останні хмарні дані:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "data": {
+          "username": "Ім'я користувача SmartESS",
+          "password": "Пароль SmartESS"
+        },
+        "data_description": {
+          "username": "Ім'я облікового запису SmartESS, що використовується в мобільному застосунку.",
+          "password": "Пароль облікового запису SmartESS. Він використовується лише для цього кроку cloud assist у майстрі налаштування."
+        }
+      },
+      "smartess_cloud_assist_summary": {
+        "title": "Результат SmartESS cloud",
+        "description": "{smartess_cloud_mapping_table}\n\n{smartess_cloud_identity_table}\n\n{smartess_cloud_detail_summary}\n\n{smartess_cloud_settings_table}\n\n{smartess_cloud_highlights_table}\n\n**Збережені хмарні дані:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "menu_options": {
+          "confirm": "Продовжити до локального підтвердження",
+          "manual_confirm": "Продовжити до локального підтвердження"
         }
       },
       "manual": {
@@ -110,10 +148,11 @@
       },
       "manual_confirm": {
         "title": "Результат ручного probe",
-        "description": "{probe_summary}\n\n| Деталь | Значення |\n|---|---|\n| Колектор | {collector_ip} ({collector_pn}) |\n| Інвертор | {model_name} |\n| Серійний номер | {serial_number} |\n\n{control_summary}\n\n{next_actions_hint}",
+        "description": "{probe_summary}\n\n| Деталь | Значення |\n|---|---|\n| Колектор | {collector_ip} ({collector_pn}) |\n| Інвертор | {model_name} |\n| Серійний номер | {serial_number} |\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{next_actions_hint}",
         "menu_options": {
           "manual_probe_again": "Перевірити ще раз",
           "manual_edit_settings": "Змінити параметри",
+          "manual_smartess_cloud_assist": "Уточнити через SmartESS cloud",
           "manual_create_pending": "Створити очікуючий запис"
         }
       }
@@ -190,22 +229,87 @@
       },
       "diagnostics": {
         "title": "Діагностика та експериментальні метадані",
-        "description": "**Статус підтримки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Основна дія:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Рекомендований наступний крок:** {support_workflow_next_action}\n\n---\n**Пристрій:** {model_name} — серійний номер {serial_number}\n**Останній архів підтримки:** {support_package_path}\n**Завантажити:** {support_package_download_markdown}\n**Останній пакет підтримки:** {support_bundle_path}",
+        "description": "**Потрібно поділитися діагностикою?** Виберіть нижче **{support_archive_action_label}**. Буде створено один ZIP з runtime-даними, сирими даними захоплення, анонімізованим replay-fixture і відповідними SmartESS cloud evidence, якщо вони доступні.\n\n**Статус підтримки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Основна дія для поточного стану:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Рекомендований наступний крок:** {support_workflow_next_action}\n\n{smartess_cloud_diagnostics_hint}\n\n---\n**Пристрій:** {model_name} — серійний номер {serial_number}\n**Останній архів підтримки:** {support_package_path}\n**Завантажити:** {support_package_download_markdown}\n**Останній пакет підтримки:** {support_bundle_path}\n**Останні хмарні дані:** {cloud_evidence_path}",
         "menu_options": {
           "create_support_package": "Створити архів підтримки",
           "export_support_bundle": "Експортувати пакет підтримки",
+          "reload_local_metadata": "Перезавантажити локальні метадані",
+          "rollback_local_metadata": "Відкотити локальні метадані",
+          "export_smartess_cloud_evidence": "Експортувати хмарні дані SmartESS",
           "advanced_metadata": "Розширені інструменти метаданих"
         }
       },
       "advanced_metadata": {
         "title": "Розширені інструменти метаданих",
-        "description": "**Статус підтримки:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Драйвер:** {recommended_driver} (`{recommended_driver_key}`)\n\n| Метадані | Вбудовані | Джерело | Перевизначення |\n|---|---|---|---|\n| Профіль | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Схема | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Запропоновані назви чернеток:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Остання чернетка профілю:** {local_profile_draft_path}\n**Остання чернетка схеми:** {local_schema_draft_path}\n**Статус:** {local_metadata_status}",
+        "description": "**Цей екран призначений для створення чернеток і сирого JSON-експорту.**\n\n**Статус підтримки:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Власник runtime-метаданих:** {effective_owner_name} (`{effective_owner_key}`){smartess_family_line}\n\n| Метадані | Вбудовані | Джерело | Перевизначення |\n|---|---|---|---|\n| Профіль | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Схема | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Запропоновані назви чернеток:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Останні хмарні дані:** {cloud_evidence_path}\n**Остання чернетка профілю:** {local_profile_draft_path}\n**Остання чернетка схеми:** {local_schema_draft_path}\n**Статус:** {local_metadata_status}",
         "menu_options": {
+          "export_smartess_cloud_evidence": "Експортувати хмарні дані SmartESS",
           "export_support_bundle": "Експортувати пакет підтримки",
+          "create_smartess_smg_bridge": "Створити SmartESS bridge для SMG",
+          "create_smartess_draft": "Створити чернетку SmartESS",
           "create_profile_draft": "Створити локальну чернетку профілю",
           "create_schema_draft": "Створити локальну чернетку схеми регістрів",
           "reload_local_metadata": "Перезавантажити локальні метадані",
+          "rollback_local_metadata": "Відкотити локальні метадані",
           "create_support_package": "Створити архів підтримки"
+        }
+      },
+      "create_support_package": {
+        "title": "Створити архів підтримки",
+        "description": "Цей крок збирає архів підтримки в одному сценарії. Якщо відповідні SmartESS cloud evidence уже збережені, їх буде додано автоматично. Якщо потрібен свіжий пакет хмарних даних SmartESS, виберіть нижче **{refresh_mode_label}** і введіть облікові дані тут, не залишаючи цей екран.\n\n| Деталь | Значення |\n|---|---|\n| Collector PN | {collector_pn} |\n| Поточні cloud evidence | {cloud_evidence_path} |\n| План архіву | {smartess_archive_plan_summary} |",
+        "data": {
+          "smartess_cloud_mode": "Хмарні дані SmartESS",
+          "username": "Ім'я користувача SmartESS",
+          "password": "Пароль SmartESS"
+        },
+        "data_description": {
+          "smartess_cloud_mode": "Виберіть, чи використовувати вже збережені SmartESS cloud evidence, оновити їх прямо в цьому кроці або зібрати архів без них.",
+          "username": "Потрібно лише якщо ви хочете отримати або оновити SmartESS cloud evidence прямо в цьому кроці.",
+          "password": "Потрібно лише якщо ви хочете отримати або оновити SmartESS cloud evidence прямо в цьому кроці. Він використовується лише для цієї live-дії."
+        }
+      },
+      "rollback_local_metadata": {
+        "title": "Відкат локальних метаданих",
+        "description": "Наведені нижче активні керовані файли локального перевизначення буде видалено, після чого запис знову завантажиться на вбудованих метаданих.\n\n| Деталь | Значення |\n|---|---|\n| Активних файлів перевизначення | {rollback_target_count} |\n| Перевизначення профілю | {rollback_profile_path} |\n| Перевизначення схеми | {rollback_schema_path} |\n\nБуде змінено лише поточні активні перевизначення всередині `/config/eybond_local/`. Неактивні чернетки та cloud evidence залишаться без змін."
+      },
+      "export_smartess_cloud_evidence": {
+        "title": "Експортувати хмарні дані SmartESS",
+        "description": "Інтеграція виконає вхід у хмару SmartESS, визначить ідентичність пристрою для колектора `{collector_pn}` і збереже повторно використовуваний пакет cloud evidence у `/config/eybond_local/cloud_evidence/`. Використовуйте цей окремий крок, коли самі cloud evidence потрібні для розширених інструментів метаданих або для перегляду без створення архіву підтримки.\n\n**Останні хмарні дані:** {cloud_evidence_path}",
+        "data": {
+          "username": "Ім'я користувача SmartESS",
+          "password": "Пароль SmartESS"
+        },
+        "data_description": {
+          "username": "Назва облікового запису SmartESS, що використовується в мобільному застосунку.",
+          "password": "Пароль облікового запису SmartESS. Він використовується лише для цього кроку живого експорту."
+        }
+      },
+      "create_smartess_smg_bridge": {
+        "title": "Створити SmartESS Bridge Для SMG",
+        "description": "Буде згенеровано локальний SmartESS-backed SMG bridge draft на основі останніх відповідних хмарних даних без зміни активного runtime owner.\n\n| Деталь | Значення |\n|---|---|\n| Bridge | {bridge_label} |\n| Причина | {reason} |\n| Збіглі controls | {matched_controls} |\n| Збіглі readback | {matched_readbacks} |\n| Заблоковані поля без змін | {blocked_fields} |\n| Невідображені cloud fields | {skipped_fields} |\n| Вихідний профіль | {source_profile} |\n| Вихідна схема | {source_schema} |\n| Хмарні дані | {cloud_evidence_path} |\n| Перевизначення профілю | {profile_override} |\n| Перевизначення схеми | {schema_override} |",
+        "data": {
+          "output_profile": "Назва вихідного файла профілю",
+          "output_schema": "Шлях до вихідного файла схеми",
+          "overwrite": "Перезаписати наявні файли"
+        },
+        "data_description": {
+          "output_profile": "Залиште без змін, щоб автоматично перевизначити вбудований профіль після перезавантаження.",
+          "output_schema": "Залиште без змін, щоб автоматично перевизначити вбудовану схему після перезавантаження.",
+          "overwrite": "Замінити файли, якщо вони вже існують."
+        }
+      },
+      "create_smartess_draft": {
+        "title": "Створити чернетку SmartESS",
+        "description": "Локальну чернетку SmartESS буде згенеровано з останніх відповідних хмарних даних.\n\n| Деталь | Значення |\n|---|---|\n| Розпізнане сімейство | {driver_label} |\n| Причина | {reason} |\n| Вихідний профіль | {source_profile} |\n| Вихідна схема | {source_schema} |\n| Хмарні дані | {cloud_evidence_path} |\n| Перевизначення профілю | {profile_override} |\n| Перевизначення схеми | {schema_override} |",
+        "data": {
+          "output_profile": "Назва вихідного файла профілю",
+          "output_schema": "Шлях до вихідного файла схеми",
+          "overwrite": "Перезаписати наявні файли"
+        },
+        "data_description": {
+          "output_profile": "Залиште без змін, щоб автоматично перевизначити вбудований профіль після перезавантаження.",
+          "output_schema": "Залиште без змін, щоб автоматично перевизначити вбудовану схему після перезавантаження.",
+          "overwrite": "Замінити файли, якщо вони вже існують."
         }
       },
       "create_profile_draft": {

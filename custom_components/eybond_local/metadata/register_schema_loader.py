@@ -79,7 +79,7 @@ def _load_raw_schema(schema_path: Path) -> dict[str, Any]:
 
     parent_ref_str = str(parent_ref)
     if parent_ref_str.startswith(("./", "../")):
-        parent_path = (schema_path.parent / parent_ref_str).resolve()
+        parent_path = _resolve_relative_parent_schema_path(schema_path, parent_ref_str)
     else:
         parent_path = _resolve_schema_path(parent_ref_str)
     parent_raw = _load_raw_schema(parent_path)
@@ -130,6 +130,27 @@ def builtin_register_schema_path(schema_name: str) -> Path:
     """Return the built-in register schema path, bypassing external overrides."""
 
     return (REGISTER_SCHEMAS_DIR / schema_name).resolve()
+
+
+def _resolve_relative_parent_schema_path(schema_path: Path, parent_ref: str) -> Path:
+    candidate = (schema_path.parent / parent_ref).resolve()
+    if candidate.is_file():
+        return candidate
+
+    resolved_schema_path = schema_path.resolve()
+    for root in _EXTERNAL_REGISTER_SCHEMA_ROOTS:
+        resolved_root = root.resolve()
+        if not _is_within_root(resolved_schema_path, resolved_root):
+            continue
+        relative_schema_path = resolved_schema_path.relative_to(resolved_root)
+        builtin_schema_path = (REGISTER_SCHEMAS_DIR / relative_schema_path).resolve()
+        if not _is_within_root(builtin_schema_path, REGISTER_SCHEMAS_DIR):
+            continue
+        builtin_candidate = (builtin_schema_path.parent / parent_ref).resolve()
+        if _is_within_root(builtin_candidate, REGISTER_SCHEMAS_DIR) and builtin_candidate.is_file():
+            return builtin_candidate
+
+    return candidate
 
 
 def _register_schema_source_scope(schema_path: Path) -> str:

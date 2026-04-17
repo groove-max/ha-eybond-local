@@ -18,6 +18,22 @@ from custom_components.eybond_local.support.bundle import (
 )
 
 
+def _sample_cloud_evidence() -> dict[str, object]:
+    return {
+        "evidence_version": 1,
+        "source": "smartess_cloud_probe",
+        "match": {"entry_id": "entry123", "collector_pn": "E5000025388419"},
+        "device_identity": {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        },
+        "summary": {"actions": ["device_list", "device_detail"]},
+        "payload": {"request": {"command": "device-bundle"}},
+    }
+
+
 def _sample_support_bundle_payload() -> dict[str, object]:
     return build_support_bundle_payload(
         entry_id="entry123",
@@ -38,6 +54,7 @@ def _sample_support_bundle_payload() -> dict[str, object]:
         profile_name="smg_modbus.json",
         register_schema_name="modbus_smg/models/smg_6200.json",
         variant_key="default",
+        cloud_evidence=_sample_cloud_evidence(),
     )
 
 
@@ -49,6 +66,45 @@ class SupportBundleTests(unittest.TestCase):
         self.assertEqual(raw["source_metadata"]["profile_name"], "smg_modbus.json")
         self.assertEqual(raw["source_metadata"]["variant_key"], "default")
         self.assertEqual(raw["runtime"]["values"]["operating_mode"], "Off-Grid")
+        self.assertEqual(raw["evidence"]["cloud"]["source"], "smartess_cloud_probe")
+
+    def test_builds_support_bundle_payload_with_smartess_raw_effective_split(self) -> None:
+        raw = build_support_bundle_payload(
+            entry_id="entry-smartess",
+            entry_title="SmartESS 0925",
+            connected=True,
+            collector={"collector_pn": "E5000025388419"},
+            inverter={
+                "driver_key": "pi30",
+                "model_name": "SmartESS 0925",
+                "variant_key": "default",
+                "serial_number": "92632511100118",
+                "profile_name": "pi30_ascii/models/smartess_0925_compat.json",
+                "register_schema_name": "pi30_ascii/models/smartess_0925_compat.json",
+            },
+            values={"operating_mode": "Off-Grid"},
+            data={"server_ip": "192.168.1.50"},
+            options={"poll_interval": 10},
+            profile_name="pi30_ascii/models/smartess_0925_compat.json",
+            register_schema_name="pi30_ascii/models/smartess_0925_compat.json",
+            variant_key="default",
+            effective_owner_key="pi30",
+            effective_owner_name="PI30 / ASCII",
+            smartess_family_name="SmartESS 0925",
+            raw_profile_name="smartess_local/models/0925.json",
+            raw_register_schema_name="smartess_local/models/0925.json",
+            smartess_protocol_asset_id="0925",
+            smartess_profile_key="smartess_0925",
+        )
+
+        self.assertEqual(raw["source_metadata"]["effective_owner_key"], "pi30")
+        self.assertEqual(raw["source_metadata"]["effective_owner_name"], "PI30 / ASCII")
+        self.assertEqual(raw["source_metadata"]["smartess_family_name"], "SmartESS 0925")
+        self.assertEqual(
+            raw["source_metadata"]["raw_profile_name"],
+            "smartess_local/models/0925.json",
+        )
+        self.assertEqual(raw["source_metadata"]["smartess_protocol_asset_id"], "0925")
 
     def test_exports_support_bundle_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -68,6 +124,7 @@ class SupportBundleTests(unittest.TestCase):
                 profile_name=payload["source_metadata"]["profile_name"],
                 register_schema_name=payload["source_metadata"]["register_schema_name"],
                 variant_key=payload["source_metadata"]["variant_key"],
+                cloud_evidence=payload["evidence"]["cloud"],
             )
 
             self.assertEqual(path.suffix, ".json")
@@ -81,6 +138,10 @@ class SupportBundleTests(unittest.TestCase):
                 "modbus_smg/models/smg_6200.json",
             )
             self.assertEqual(raw["runtime"]["values"]["operating_mode"], "Off-Grid")
+            self.assertEqual(
+                raw["evidence"]["cloud"]["device_identity"]["devcode"],
+                2376,
+            )
 
 
 if __name__ == "__main__":

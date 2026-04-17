@@ -1,0 +1,673 @@
+{
+  "extends": "../base.json",
+  "schema_key": "smartess_0925",
+  "title": "SmartESS 0925 Register Schema",
+  "driver_key": "smartess_local",
+  "protocol_family": "smartess_local",
+  "blocks": [
+    {
+      "key": "live",
+      "start": 4501,
+      "count": 14
+    },
+    {
+      "key": "rating",
+      "start": 4517,
+      "count": 12
+    },
+    {
+      "key": "status",
+      "start": 4529,
+      "count": 2
+    },
+    {
+      "key": "serial",
+      "start": 4531,
+      "count": 4
+    },
+    {
+      "key": "config_state",
+      "start": 4535,
+      "count": 18
+    },
+    {
+      "key": "energy",
+      "start": 4554,
+      "count": 8
+    },
+    {
+      "key": "config",
+      "start": 5001,
+      "count": 33
+    },
+    {
+      "key": "time_settings",
+      "start": 6030,
+      "count": 6
+    }
+  ],
+  "spec_sets": {
+    "live": [
+      {
+        "key": "working_state",
+        "register": 4501
+      },
+      {
+        "key": "ac_input_voltage",
+        "register": 4502,
+        "divisor": 10
+      },
+      {
+        "key": "ac_input_frequency",
+        "register": 4503,
+        "divisor": 10
+      },
+      {
+        "key": "pv_input_voltage",
+        "register": 4504,
+        "divisor": 10
+      },
+      {
+        "key": "pv_input_power",
+        "register": 4505
+      },
+      {
+        "key": "battery_voltage",
+        "register": 4506,
+        "divisor": 10
+      },
+      {
+        "key": "battery_capacity",
+        "register": 4507
+      },
+      {
+        "key": "charging_current",
+        "register": 4508
+      },
+      {
+        "key": "battery_discharge_current",
+        "register": 4509
+      },
+      {
+        "key": "output_voltage",
+        "register": 4510,
+        "divisor": 10
+      },
+      {
+        "key": "output_frequency",
+        "register": 4511,
+        "divisor": 10
+      },
+      {
+        "key": "output_apparent_power",
+        "register": 4512
+      },
+      {
+        "key": "output_active_power",
+        "register": 4513
+      },
+      {
+        "key": "ac_output_load",
+        "register": 4514
+      }
+    ],
+    "rating": [
+      {
+        "key": "machine_type",
+        "register": 4517
+      },
+      {
+        "key": "main_cpu_version",
+        "register": 4518
+      },
+      {
+        "key": "secondary_cpu_version",
+        "register": 4519
+      },
+      {
+        "key": "battery_piece",
+        "register": 4520
+      },
+      {
+        "key": "nominal_output_apparent_power",
+        "register": 4521
+      },
+      {
+        "key": "nominal_output_active_power",
+        "register": 4522
+      },
+      {
+        "key": "nominal_ac_voltage",
+        "register": 4523
+      },
+      {
+        "key": "nominal_ac_current",
+        "register": 4524
+      },
+      {
+        "key": "rated_battery_voltage",
+        "register": 4525,
+        "divisor": 10
+      },
+      {
+        "key": "nominal_output_voltage",
+        "register": 4526
+      },
+      {
+        "key": "nominal_output_frequency",
+        "register": 4527,
+        "divisor": 10
+      },
+      {
+        "key": "nominal_output_current",
+        "register": 4528
+      }
+    ],
+    "status": [
+      {
+        "key": "error_code_1",
+        "register": 4529
+      },
+      {
+        "key": "alarm_code_1",
+        "register": 4530
+      }
+    ],
+    "serial": [
+      {
+        "key": "id1",
+        "register": 4531
+      },
+      {
+        "key": "id2",
+        "register": 4532
+      },
+      {
+        "key": "id3",
+        "register": 4533
+      },
+      {
+        "key": "id4",
+        "register": 4534
+      }
+    ],
+    "config_state": [
+      {
+        "key": "setting_state",
+        "register": 4535
+      },
+      {
+        "key": "charger_source_priority",
+        "register": 4536,
+        "enum_map": {
+          "0": "Utility",
+          "1": "Solar",
+          "2": "Utility or Solar",
+          "3": "Solar only"
+        }
+      },
+      {
+        "key": "output_source_priority",
+        "register": 4537,
+        "enum_map": {
+          "0": "Utility",
+          "1": "Solar",
+          "2": "SBU",
+          "3": "SUB",
+          "4": "SUF"
+        }
+      },
+      {
+        "key": "input_voltage_range",
+        "register": 4538,
+        "enum_map": {
+          "0": "Appliances",
+          "1": "UPS",
+          "2": "Generator"
+        }
+      },
+      {
+        "key": "battery_type",
+        "register": 4539,
+        "enum_map": {
+          "0": "AGM",
+          "1": "Flooded",
+          "2": "User",
+          "3": "Li1",
+          "4": "Li2",
+          "5": "Li3",
+          "6": "Li4"
+        }
+      },
+      {
+        "key": "configured_output_frequency",
+        "register": 4540,
+        "enum_map": {
+          "0": "50 Hz",
+          "1": "60 Hz"
+        }
+      },
+      {
+        "key": "max_total_charge_current",
+        "register": 4541
+      },
+      {
+        "key": "configured_output_voltage",
+        "register": 4542,
+        "enum_map": {
+          "220": "220 V",
+          "230": "230 V",
+          "240": "240 V"
+        }
+      },
+      {
+        "key": "max_utility_charge_current",
+        "register": 4543
+      },
+      {
+        "key": "utility_return_voltage_sbu",
+        "register": 4544,
+        "divisor": 10
+      },
+      {
+        "key": "battery_return_voltage_sbu",
+        "register": 4545,
+        "divisor": 10
+      },
+      {
+        "key": "bulk_charging_voltage",
+        "register": 4546,
+        "divisor": 10
+      },
+      {
+        "key": "floating_charging_voltage",
+        "register": 4547,
+        "divisor": 10
+      },
+      {
+        "key": "low_battery_cutoff_voltage",
+        "register": 4548,
+        "divisor": 10
+      },
+      {
+        "key": "battery_equalization_voltage",
+        "register": 4549,
+        "divisor": 10
+      },
+      {
+        "key": "battery_equalized_time",
+        "register": 4550
+      },
+      {
+        "key": "battery_equalized_timeout",
+        "register": 4551
+      },
+      {
+        "key": "battery_equalization_interval",
+        "register": 4552
+      }
+    ],
+    "energy": [
+      {
+        "key": "today_energy",
+        "register": 4554,
+        "word_count": 2,
+        "combine": "u32_high_first",
+        "divisor": 100
+      },
+      {
+        "key": "month_energy",
+        "register": 4556,
+        "word_count": 2,
+        "combine": "u32_high_first",
+        "divisor": 100
+      },
+      {
+        "key": "year_energy",
+        "register": 4558,
+        "word_count": 2,
+        "combine": "u32_high_first",
+        "divisor": 100
+      },
+      {
+        "key": "all_energy",
+        "register": 4560,
+        "word_count": 2,
+        "combine": "u32_high_first",
+        "divisor": 100
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "working_state",
+      "name": "Working State"
+    },
+    {
+      "key": "ac_input_voltage",
+      "name": "AC Input Voltage",
+      "unit": "V"
+    },
+    {
+      "key": "ac_input_frequency",
+      "name": "AC Input Frequency",
+      "unit": "Hz"
+    },
+    {
+      "key": "pv_input_voltage",
+      "name": "PV Input Voltage",
+      "unit": "V"
+    },
+    {
+      "key": "pv_input_power",
+      "name": "PV Input Power",
+      "unit": "W"
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V"
+    },
+    {
+      "key": "battery_capacity",
+      "name": "Battery Capacity",
+      "unit": "%"
+    },
+    {
+      "key": "charging_current",
+      "name": "Battery Charging Current",
+      "unit": "A"
+    },
+    {
+      "key": "battery_discharge_current",
+      "name": "Battery Discharge Current",
+      "unit": "A"
+    },
+    {
+      "key": "output_voltage",
+      "name": "Output Voltage",
+      "unit": "V"
+    },
+    {
+      "key": "output_frequency",
+      "name": "Output Frequency",
+      "unit": "Hz"
+    },
+    {
+      "key": "output_apparent_power",
+      "name": "Output Apparent Power",
+      "unit": "VA"
+    },
+    {
+      "key": "output_active_power",
+      "name": "Output Active Power",
+      "unit": "W"
+    },
+    {
+      "key": "ac_output_load",
+      "name": "AC Output Load",
+      "unit": "%"
+    },
+    {
+      "key": "machine_type",
+      "name": "Machine Type",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "main_cpu_version",
+      "name": "Main CPU Version",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "secondary_cpu_version",
+      "name": "Secondary CPU Version",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_piece",
+      "name": "Battery Piece",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_output_apparent_power",
+      "name": "Nominal Output Apparent Power",
+      "unit": "VA",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_output_active_power",
+      "name": "Nominal Output Active Power",
+      "unit": "W",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_ac_voltage",
+      "name": "Nominal AC Voltage",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_ac_current",
+      "name": "Nominal AC Current",
+      "unit": "A",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "rated_battery_voltage",
+      "name": "Rated Battery Voltage",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_output_voltage",
+      "name": "Nominal Output Voltage",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_output_frequency",
+      "name": "Nominal Output Frequency",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "nominal_output_current",
+      "name": "Nominal Output Current",
+      "unit": "A",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "error_code_1",
+      "name": "Error Code 1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "alarm_code_1",
+      "name": "Alarm Code 1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "id1",
+      "name": "ID 1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "id2",
+      "name": "ID 2",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "id3",
+      "name": "ID 3",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "id4",
+      "name": "ID 4",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "setting_state",
+      "name": "Setting State",
+      "live": false,
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "charger_source_priority",
+      "name": "Charger Source Priority",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "output_source_priority",
+      "name": "Output Source Priority",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "input_voltage_range",
+      "name": "AC Input Range",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "configured_output_frequency",
+      "name": "Configured Output Frequency",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "max_total_charge_current",
+      "name": "Max Total Charge Current",
+      "unit": "A",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "configured_output_voltage",
+      "name": "Configured Output Voltage",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "max_utility_charge_current",
+      "name": "Max Utility Charge Current",
+      "unit": "A",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "utility_return_voltage_sbu",
+      "name": "Utility Return Voltage (SBU)",
+      "unit": "V",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_return_voltage_sbu",
+      "name": "Battery Return Voltage (SBU)",
+      "unit": "V",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "bulk_charging_voltage",
+      "name": "Bulk Charging Voltage",
+      "unit": "V",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "floating_charging_voltage",
+      "name": "Floating Charging Voltage",
+      "unit": "V",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "low_battery_cutoff_voltage",
+      "name": "Low Battery Cut-off Voltage",
+      "unit": "V",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "name": "Battery Equalization Voltage",
+      "unit": "V",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_equalized_time",
+      "name": "Battery Equalized Time",
+      "unit": "min",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_equalized_timeout",
+      "name": "Battery Equalized Timeout",
+      "unit": "min",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_equalization_interval",
+      "name": "Battery Equalization Interval",
+      "unit": "day",
+      "live": false,
+      "enabled_default": false
+    },
+    {
+      "key": "today_energy",
+      "name": "Today Energy",
+      "unit": "kWh"
+    },
+    {
+      "key": "month_energy",
+      "name": "Month Energy",
+      "unit": "kWh",
+      "live": false
+    },
+    {
+      "key": "year_energy",
+      "name": "Year Energy",
+      "unit": "kWh",
+      "live": false
+    },
+    {
+      "key": "all_energy",
+      "name": "All Energy",
+      "unit": "kWh",
+      "live": false,
+      "state_class": "total_increasing"
+    }
+  ],
+  "binary_sensor_descriptions": []
+}

@@ -34,10 +34,10 @@
 | `buzzer_mode` | `303` | `system` | `tested` | `standard` |  |
 | `lcd_backlight_mode` | `305` | `system` | `tested` | `standard` |  |
 | `lcd_auto_return_mode` | `306` | `system` | `tested` | `standard` |  |
-| `power_saving_mode` | `307` | `system` | `untested` | `blocked` | Observed on the real SMG 6200 to return Modbus exception_code:7 during write attempts. |
+| `power_saving_mode` | `307` | `system` | `untested` | `blocked` | Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts. |
 | `overload_restart_mode` | `308` | `system` | `tested` | `standard` |  |
 | `over_temperature_restart_mode` | `309` | `system` | `tested` | `standard` |  |
-| `overload_bypass_mode` | `310` | `system` | `untested` | `blocked` | Observed on the real SMG 6200 to return Modbus exception_code:7 during write attempts. |
+| `overload_bypass_mode` | `310` | `system` | `untested` | `blocked` | Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts. |
 | `turn_on_mode` | `406` | `system` | `tested` | `standard` |  |
 | `remote_turn_on` | `420` | `system` | `untested` | `conditional` |  |
 | `remote_shutdown` | `420` | `system` | `untested` | `conditional` |  |

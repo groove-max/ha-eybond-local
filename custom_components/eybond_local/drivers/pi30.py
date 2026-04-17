@@ -28,6 +28,7 @@ from ..payload.pi30 import (
     parse_qt_clock,
     parse_serial_number,
 )
+from ..metadata.model_binding_catalog_loader import resolve_driver_model_binding
 from ..metadata.pi_family import resolve_pi_identity, resolve_pi30_metadata_names
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
@@ -143,13 +144,19 @@ class Pi30Driver(InverterDriver):
 
     key = "pi30"
     name = "PI30 / ASCII"
-    profile_name = "pi30_ascii/models/default.json"
-    register_schema_name = "pi30_ascii/models/default.json"
     probe_targets = (
         ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
         ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
         ProbeTarget(devcode=0x0102, collector_addr=0xFF, device_addr=0),
     )
+
+    @property
+    def profile_name(self) -> str:
+        return _pi30_default_binding().profile_name
+
+    @property
+    def register_schema_name(self) -> str:
+        return _pi30_default_binding().register_schema_name
 
     @property
     def measurements(self):
@@ -309,21 +316,30 @@ def _schema_for_inverter(
 
 
 def _resolve_pi30_schema_name(values: dict[str, Any], model_name: str) -> str:
+    default_binding = _pi30_default_binding()
     return resolve_pi30_metadata_names(
         values,
         model_name,
-        default_profile_name=Pi30Driver.profile_name,
-        default_register_schema_name=Pi30Driver.register_schema_name,
+        default_profile_name=default_binding.profile_name,
+        default_register_schema_name=default_binding.register_schema_name,
     ).register_schema_name
 
 
 def _resolve_pi30_profile_name(values: dict[str, Any], model_name: str) -> str:
+    default_binding = _pi30_default_binding()
     return resolve_pi30_metadata_names(
         values,
         model_name,
-        default_profile_name=Pi30Driver.profile_name,
-        default_register_schema_name=Pi30Driver.register_schema_name,
+        default_profile_name=default_binding.profile_name,
+        default_register_schema_name=default_binding.register_schema_name,
     ).profile_name
+
+
+def _pi30_default_binding():
+    binding = resolve_driver_model_binding("pi30")
+    if binding is None:
+        raise RuntimeError("missing_model_binding:pi30")
+    return binding
 
 
 async def _async_collect_values(

@@ -1,0 +1,7 @@
+{
+  "extends": "../../pi30_ascii/base.json",
+  "schema_key": "pi30_ascii_smartess_0925_compat",
+  "title": "SmartESS 0925 Compatibility Register Schema",
+  "driver_key": "pi30",
+  "protocol_family": "pi30"
+}

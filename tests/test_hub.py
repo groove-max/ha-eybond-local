@@ -162,7 +162,7 @@ class HubSnapshotTests(unittest.TestCase):
         hub._inverter = DetectedInverter(
             driver_key="pi30",
             protocol_family="pi30",
-            model_name="VMII-NXPW5KW",
+            model_name="PowMr 4.2kW",
             variant_key="vmii_nxpw5kw",
             serial_number="553555355535552",
             probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
@@ -197,7 +197,7 @@ class HubSnapshotTests(unittest.TestCase):
         hub._inverter = DetectedInverter(
             driver_key="pi30",
             protocol_family="pi30",
-            model_name="VMII-NXPW5KW",
+            model_name="PowMr 4.2kW",
             variant_key="vmii_nxpw5kw",
             serial_number="553555355535552",
             probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),

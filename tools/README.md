@@ -43,6 +43,61 @@ python3 tools/collector_fc_probe.py \
   --fcode 1
 ```
 
+> `smartess_cloud_probe.py` is a maintainer and support tool. Normal Home Assistant setup does not require it.
+> Passing `--password` on the command line can leave credentials in your shell history, so use it only on a trusted machine and clean up history afterward if needed.
+
+Query the SmartESS cloud with the same signing scheme the Android app uses:
+
+```bash
+python3 tools/smartess_cloud_probe.py list-devices \
+  --username <smartess_user> \
+  --password <smartess_password> \
+  --pn <collector_pn> \
+  --pagesize 50
+```
+
+Fetch the cloud-backed live detail payload for one device identity:
+
+```bash
+python3 tools/smartess_cloud_probe.py device-detail \
+  --username <smartess_user> \
+  --password <smartess_password> \
+  --pn <collector_pn> \
+  --sn <device_sn> \
+  --devcode 0x0102 \
+  --devaddr 0x05
+```
+
+Fetch the device list plus detail/settings/energy-flow for one identity in a single run:
+
+```bash
+python3 tools/smartess_cloud_probe.py device-bundle \
+  --username <smartess_user> \
+  --password <smartess_password> \
+  --pn <collector_pn> \
+  --sn <device_sn> \
+  --devcode 0x0102 \
+  --devaddr 0x05
+```
+
+Write the same SmartESS bundle into Home Assistant's local `cloud_evidence` store so the next support bundle/archive export can pick it up automatically:
+
+```bash
+python3 tools/smartess_cloud_probe.py device-bundle \
+  --username <smartess_user> \
+  --password <smartess_password> \
+  --pn <cloud_device_pn> \
+  --sn <device_sn> \
+  --devcode 0x0102 \
+  --devaddr 0x05 \
+  --collector-pn <local_collector_pn> \
+  --cloud-evidence-config-dir /config
+```
+
+If the local entry uses the same `collector_pn`, the next advanced `Export Support Bundle` JSON export or `Create Support Archive` action will include that cloud evidence automatically.
+
+Saved cloud-evidence files stay under `/config/eybond_local/cloud_evidence/` until you remove them manually. EyeBond Local automatically reuses the latest matching file for the entry.
+
 Capture Modbus registers through the collector transport:
 
 ```bash

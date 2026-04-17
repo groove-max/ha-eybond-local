@@ -49,9 +49,13 @@ def _prime_metadata_caches() -> None:
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Initialize shared loader state for the integration."""
 
-    _configure_local_metadata_roots(hass)
-    await hass.async_add_executor_job(_prime_metadata_caches)
-    await async_setup_services(hass)
+    try:
+        _configure_local_metadata_roots(hass)
+        await hass.async_add_executor_job(_prime_metadata_caches)
+        await async_setup_services(hass)
+    except Exception:
+        logger.exception("Failed to initialize EyeBond Local integration bootstrap")
+        raise
     return True
 
 
@@ -157,9 +161,68 @@ def _default_enabled_unique_ids(entry_id: str) -> set[str]:
     return expected
 
 
+def _default_enabled_unique_ids_for_current_runtime(
+    entry_id: str,
+    driver,
+    inverter,
+    can_expose_capability,
+    can_expose_preset,
+) -> set[str]:
+    """Return default-enabled unique_ids for the currently detected runtime metadata."""
+
+    from .derived_energy import default_enabled_derived_energy_keys
+    from .drivers.registry import binary_sensors_for_driver, measurements_for_driver
+    from .schema import entity_kind_for_capability
+
+    driver_key = driver.key if driver is not None else None
+    measurement_descriptions = measurements_for_driver(driver_key)
+    binary_sensor_descriptions = binary_sensors_for_driver(driver_key)
+    capabilities = (
+        inverter.capabilities
+        if inverter is not None
+        else (driver.write_capabilities if driver is not None else ())
+    )
+    presets = (
+        inverter.capability_presets
+        if inverter is not None
+        else (driver.capability_presets if driver is not None else ())
+    )
+
+    expected: set[str] = set()
+    for measurement in measurement_descriptions:
+        if measurement.enabled_default:
+            expected.add(_entity_unique_id(entry_id, "sensor", measurement.key))
+
+    for key in default_enabled_derived_energy_keys():
+        expected.add(_entity_unique_id(entry_id, "sensor", key))
+
+    for description in binary_sensor_descriptions:
+        if description.enabled_default:
+            expected.add(_entity_unique_id(entry_id, "binary_sensor", description.key))
+
+    for capability in capabilities:
+        if not capability.enabled_default:
+            continue
+        if not can_expose_capability(capability):
+            continue
+        entity_kind = entity_kind_for_capability(capability)
+        if entity_kind in {"select", "number", "switch", "button"}:
+            expected.add(_entity_unique_id(entry_id, entity_kind, capability.key))
+
+    for preset in presets:
+        if preset.advanced:
+            continue
+        if not can_expose_preset(preset):
+            continue
+        expected.add(_preset_unique_id(entry_id, preset.key))
+
+    return expected
+
+
 async def _async_self_heal_enabled_defaults(
     hass: HomeAssistant,
     entry: ConfigEntry,
+    coordinator,
 ) -> None:
     """Re-enable newly default-enabled entities that were previously auto-disabled."""
 
@@ -168,8 +231,12 @@ async def _async_self_heal_enabled_defaults(
 
     registry = er.async_get(hass)
     expected_unique_ids = await hass.async_add_executor_job(
-        _default_enabled_unique_ids,
+        _default_enabled_unique_ids_for_current_runtime,
         entry.entry_id,
+        coordinator.current_driver,
+        coordinator.data.inverter,
+        coordinator.can_expose_capability,
+        coordinator.can_expose_preset,
     )
     for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
         if entity_entry.unique_id not in expected_unique_ids:
@@ -273,19 +340,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     from .runtime.coordinator import EybondLocalCoordinator
 
-    _configure_local_metadata_roots(hass)
-    await hass.async_add_executor_job(_prime_metadata_caches)
-    await _async_self_heal_server_ip(hass, entry)
-    await _async_self_heal_enabled_defaults(hass, entry)
-    coordinator = EybondLocalCoordinator(hass, entry)
-    await coordinator.async_setup()
-    entry.runtime_data = coordinator
-    await coordinator.async_refresh()
-    await _async_cleanup_obsolete_entities(hass, entry, coordinator)
+    try:
+        _configure_local_metadata_roots(hass)
+        await hass.async_add_executor_job(_prime_metadata_caches)
+        await _async_self_heal_server_ip(hass, entry)
+        coordinator = EybondLocalCoordinator(hass, entry)
+        await coordinator.async_setup()
+        entry.runtime_data = coordinator
+        await coordinator.async_refresh()
+        await _async_self_heal_enabled_defaults(hass, entry, coordinator)
+        await _async_cleanup_obsolete_entities(hass, entry, coordinator)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    coordinator.async_sync_device_registry()
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        coordinator.async_sync_device_registry()
+        entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    except Exception:
+        logger.exception("Failed to set up EyeBond Local entry %s", entry.entry_id)
+        raise
     return True
 
 

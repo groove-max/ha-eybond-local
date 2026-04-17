@@ -13,8 +13,18 @@ from ..models import (
     decimals_for_divisor,
 )
 from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
+from ..metadata.model_binding_catalog_loader import (
+    load_driver_model_binding_catalog,
+    resolve_driver_model_binding,
+)
+from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+
+
+_SMG_VARIANT_MODEL_NAMES = {
+    "anenji_anj_11kw_48v_wifi_p": "Anenji ANJ-11KW-48V-WIFI-P",
+}
 
 
 class SmgModbusDriver(InverterDriver):
@@ -22,8 +32,6 @@ class SmgModbusDriver(InverterDriver):
 
     key = "modbus_smg"
     name = "SMG / Modbus"
-    profile_name = "smg_modbus.json"
-    register_schema_name = "modbus_smg/models/smg_6200.json"
     probe_targets = (
         ProbeTarget(
             devcode=0x0001,
@@ -31,6 +39,14 @@ class SmgModbusDriver(InverterDriver):
             device_addr=DEFAULT_MODBUS_DEVICE_ADDR,
         ),
     )
+
+    @property
+    def profile_name(self) -> str:
+        return _smg_default_binding().profile_name
+
+    @property
+    def register_schema_name(self) -> str:
+        return _smg_default_binding().register_schema_name
 
     @property
     def measurements(self):
@@ -62,63 +78,82 @@ class SmgModbusDriver(InverterDriver):
         transport,
         target: ProbeTarget,
     ) -> DetectedInverter | None:
-        schema = self.register_schema_metadata
-        if schema is None:
-            return None
-        serial_block_start = schema.block("serial").start
-        serial_block_count = schema.block("serial").count
-        live_block_start = schema.block("live").start
-        live_block_count = schema.block("live").count
-        config_block_start = schema.block("config").start
-        config_block_count = schema.block("config").count
-        live_fields = schema.spec_set("live")
-        config_fields = schema.spec_set("config")
-        aux_config_fields = schema.spec_set("aux_config")
-        mode_names = schema.enum_map_for("mode_names")
-        rated_power_register = schema.scalar_register("rated_power_register")
-
         session = self._session(transport, target)
+        for binding in _smg_bindings():
+            try:
+                schema = load_register_schema(binding.register_schema_name)
+            except Exception:
+                continue
 
-        serial_block = await session.read_holding(serial_block_start, serial_block_count)
-        serial_number = _decode_ascii_words(serial_block)
-        if len(serial_number) < 6:
-            return None
+            try:
+                profile = load_driver_profile(binding.profile_name) if binding.profile_name else None
+            except Exception:
+                continue
 
-        live_block = await session.read_holding(live_block_start, live_block_count)
-        live_values = _decode_block(live_block_start, live_block, live_fields)
-        if live_values.get("operating_mode") not in mode_names.values():
-            return None
+            try:
+                serial_block = await session.read_holding(
+                    schema.block("serial").start,
+                    schema.block("serial").count,
+                )
+                serial_number = _decode_ascii_words(serial_block)
+                if len(serial_number) < 6:
+                    continue
 
-        config_block = await session.read_holding(config_block_start, config_block_count)
-        config_values = _decode_block(config_block_start, config_block, config_fields)
-        if config_values.get("output_rating_voltage", 0) <= 0:
-            return None
-        if config_values.get("output_rating_frequency", 0) <= 0:
-            return None
-        config_values.update(await _read_optional_specs(session, aux_config_fields))
+                live_block = await session.read_holding(
+                    schema.block("live").start,
+                    schema.block("live").count,
+                )
+                live_values = _decode_block(
+                    schema.block("live").start,
+                    live_block,
+                    _specs_for_block(
+                        schema.spec_set("live"),
+                        schema.block("live").start,
+                        schema.block("live").count,
+                    ),
+                )
 
-        rated_power = 0
-        try:
-            rated_power = (await session.read_holding(rated_power_register, 1))[0]
-        except ModbusError:
-            pass
+                config_block = await session.read_holding(
+                    schema.block("config").start,
+                    schema.block("config").count,
+                )
+                config_values = _decode_block(
+                    schema.block("config").start,
+                    config_block,
+                    _specs_for_block(
+                        schema.spec_set("config"),
+                        schema.block("config").start,
+                        schema.block("config").count,
+                    ),
+                )
+                config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
+            except Exception:
+                continue
 
-        details = dict(config_values)
-        if rated_power:
-            details["rated_power"] = rated_power
+            if not _is_valid_smg_probe(schema, live_values, config_values, binding.variant_key):
+                continue
 
-        model_name = f"SMG {rated_power}" if rated_power else "SMG"
-        return DetectedInverter(
-            driver_key=self.key,
-            protocol_family="modbus_smg",
-            model_name=model_name,
-            serial_number=serial_number,
-            probe_target=target,
-            details=details,
-            capability_groups=self.capability_groups,
-            capabilities=self.write_capabilities,
-            capability_presets=self.capability_presets,
-        )
+            rated_power = await _read_rated_power(session, schema)
+            details = dict(config_values)
+            if rated_power:
+                details["rated_power"] = rated_power
+
+            return DetectedInverter(
+                driver_key=self.key,
+                protocol_family="modbus_smg",
+                model_name=_smg_model_name(binding.variant_key, rated_power),
+                serial_number=serial_number,
+                probe_target=target,
+                variant_key=binding.variant_key,
+                details=details,
+                profile_name=binding.profile_name,
+                register_schema_name=binding.register_schema_name,
+                capability_groups=profile.groups if profile is not None else (),
+                capabilities=profile.capabilities if profile is not None else (),
+                capability_presets=profile.presets if profile is not None else (),
+            )
+
+        return None
 
     async def async_read_values(
         self,
@@ -129,7 +164,7 @@ class SmgModbusDriver(InverterDriver):
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
     ) -> dict[str, Any]:
-        schema = self.register_schema_metadata
+        schema = _schema_for_inverter(inverter, self.register_schema_name)
         if schema is None:
             return {}
         status_block_start = schema.block("status").start
@@ -138,9 +173,9 @@ class SmgModbusDriver(InverterDriver):
         live_block_count = schema.block("live").count
         config_block_start = schema.block("config").start
         config_block_count = schema.block("config").count
-        status_fields = schema.spec_set("status")
-        live_fields = schema.spec_set("live")
-        config_fields = schema.spec_set("config")
+        status_fields = _specs_for_block(schema.spec_set("status"), status_block_start, status_block_count)
+        live_fields = _specs_for_block(schema.spec_set("live"), live_block_start, live_block_count)
+        config_fields = _specs_for_block(schema.spec_set("config"), config_block_start, config_block_count)
         aux_config_fields = schema.spec_set("aux_config")
         fault_code_names = schema.bit_labels_for("fault_code_names")
         warning_code_names = schema.bit_labels_for("warning_code_names")
@@ -176,8 +211,8 @@ class SmgModbusDriver(InverterDriver):
         values["fault_descriptions"] = ", ".join(fault_descriptions) if fault_descriptions else "None"
         values["warning_descriptions"] = ", ".join(warning_descriptions) if warning_descriptions else "None"
 
-        warning_low = status_block[108 - status_block_start + 1]
-        battery_present = not bool(warning_low & (1 << 9))
+        warning_code = values.get("warning_code")
+        battery_present = not (isinstance(warning_code, int) and bool(warning_code & (1 << 9)))
         values["battery_connected"] = battery_present
         values["battery_connection_state"] = "Connected" if battery_present else "Not Connected"
         if not battery_present:
@@ -205,7 +240,7 @@ class SmgModbusDriver(InverterDriver):
         capability_key: str,
         value: Any,
     ) -> Any:
-        capability = _find_capability(capability_key, self.write_capabilities)
+        capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
         raw_value = _encode_capability_value(capability, value)
 
         session = self._session(transport, inverter.probe_target)
@@ -223,7 +258,8 @@ class SmgModbusDriver(InverterDriver):
         """Capture raw SMG register evidence for support packages."""
 
         session = self._session(transport, inverter.probe_target)
-        ranges = _support_capture_ranges()
+        schema_name = inverter.register_schema_name or self.register_schema_name
+        ranges = _support_capture_ranges(schema_name)
         captured_ranges: list[dict[str, Any]] = []
         fixture_ranges: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
@@ -256,6 +292,7 @@ class SmgModbusDriver(InverterDriver):
             "driver_key": self.key,
             "model_name": inverter.model_name,
             "serial_number": inverter.serial_number,
+            "capture_notes": list(_support_capture_notes()),
             "planned_ranges": [
                 {"start": start, "count": count}
                 for start, count in ranges
@@ -284,6 +321,19 @@ def _decode_ascii_words(registers: list[int]) -> str:
             if char.isalnum() or char in "-_/.":
                 chars.append(char)
     return "".join(chars)
+
+
+def _specs_for_block(
+    specs: tuple[RegisterValueSpec, ...],
+    start_register: int,
+    register_count: int,
+) -> tuple[RegisterValueSpec, ...]:
+    block_end = start_register + register_count
+    return tuple(
+        spec
+        for spec in specs
+        if start_register <= spec.register and (spec.register + spec.word_count) <= block_end
+    )
 
 
 def _decode_block(
@@ -415,6 +465,7 @@ def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
         "Utility Priority",
         "PV Priority",
         "PV and Utility",
+        "PV Priority With Load Reserve",
     }
     derived["utility_charging_allowed"] = utility_charging_allowed
     derived["ac_charging_allowed"] = utility_charging_allowed
@@ -1131,8 +1182,37 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
         raise ValueError(f"value_above_maximum:{capability.key}:{raw_value}")
 
 
-def _support_capture_ranges() -> tuple[tuple[int, int], ...]:
-    schema = load_register_schema(SmgModbusDriver.register_schema_name)
+_SMG_FAMILY_DISCOVERY_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
+    (277, 5),
+    (338, 16),
+    (389, 3),
+    (607, 1),
+    (696, 8),
+)
+
+_SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
+    "modbus_smg_anenji_anj_11kw_48v_wifi_p": (
+        (326, 2),
+        (338, 18),
+        (376, 18),
+        (414, 18),
+        (677, 18),
+        (707, 1),
+        (709, 1),
+        (858, 2),
+    ),
+}
+
+
+def _support_capture_notes() -> tuple[str, ...]:
+    return (
+        "Includes supplemental SMG family discovery ranges for 11K-like variants: 277-281, 338-353, 389-391, 607, 696-703.",
+    )
+
+
+def _support_capture_ranges(schema_name: str | None = None) -> tuple[tuple[int, int], ...]:
+    default_binding = _smg_default_binding()
+    schema = load_register_schema(schema_name or default_binding.register_schema_name)
     planned: list[tuple[int, int]] = [
         (schema.block("status").start, schema.block("status").count),
         (schema.block("serial").start, schema.block("serial").count),
@@ -1145,9 +1225,80 @@ def _support_capture_ranges() -> tuple[tuple[int, int], ...]:
     )
     planned.extend(
         (register, 1)
-        for register in sorted(set(schema.scalar_registers.values()))
+        for register in sorted({value for value in schema.scalar_registers.values() if value > 0})
     )
+    planned.extend(_SMG_FAMILY_DISCOVERY_CAPTURE_RANGES)
+    planned.extend(_SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES.get(schema.key, ()))
     return _merge_capture_ranges(planned)
+
+
+def _schema_for_inverter(
+    inverter: DetectedInverter | None,
+    fallback_schema_name: str,
+):
+    schema_name = fallback_schema_name
+    if inverter is not None and inverter.register_schema_name:
+        schema_name = inverter.register_schema_name
+    if not schema_name:
+        return None
+    return load_register_schema(schema_name)
+
+
+def _smg_bindings():
+    catalog = load_driver_model_binding_catalog()
+    bindings = [binding for binding in catalog.bindings.values() if binding.driver_key == "modbus_smg"]
+    return tuple(sorted(bindings, key=lambda binding: (binding.variant_key == "default", binding.variant_key)))
+
+
+def _is_valid_smg_probe(
+    schema,
+    live_values: dict[str, Any],
+    config_values: dict[str, Any],
+    variant_key: str,
+) -> bool:
+    if live_values.get("operating_mode") not in schema.enum_map_for("mode_names").values():
+        return False
+    if config_values.get("output_rating_voltage", 0) <= 0:
+        return False
+    if config_values.get("output_rating_frequency", 0) <= 0:
+        return False
+
+    output_mode = config_values.get("output_mode")
+    if isinstance(output_mode, str) and output_mode.startswith("Unknown"):
+        return False
+
+    output_source_priority = config_values.get("output_source_priority")
+    if isinstance(output_source_priority, str) and output_source_priority.startswith("Unknown"):
+        return False
+
+    if variant_key == "anenji_anj_11kw_48v_wifi_p":
+        if config_values.get("protocol_number") not in {3, 4, 5, 6}:
+            return False
+
+    return True
+
+
+async def _read_rated_power(session: ModbusSession, schema) -> int:
+    rated_power_register = schema.scalar_registers.get("rated_power_register", 0)
+    if rated_power_register <= 0:
+        return 0
+    try:
+        return (await session.read_holding(rated_power_register, 1))[0]
+    except ModbusError:
+        return 0
+
+
+def _smg_model_name(variant_key: str, rated_power: int) -> str:
+    if variant_key in _SMG_VARIANT_MODEL_NAMES:
+        return _SMG_VARIANT_MODEL_NAMES[variant_key]
+    return f"SMG {rated_power}" if rated_power else "SMG"
+
+
+def _smg_default_binding():
+    binding = resolve_driver_model_binding("modbus_smg")
+    if binding is None:
+        raise RuntimeError("missing_model_binding:modbus_smg")
+    return binding
 
 
 def _merge_capture_ranges(

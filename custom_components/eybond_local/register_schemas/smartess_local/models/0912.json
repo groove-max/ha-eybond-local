@@ -1,0 +1,6146 @@
+{
+  "extends": "../base.json",
+  "schema_key": "smartess_0912",
+  "title": "SmartESS 0912 Register Schema",
+  "driver_key": "smartess_local",
+  "protocol_family": "smartess_local",
+  "blocks": [
+    {
+      "key": "live",
+      "start": 0,
+      "count": 92
+    },
+    {
+      "key": "status",
+      "start": 95,
+      "count": 35
+    },
+    {
+      "key": "serial",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "config",
+      "start": 1000,
+      "count": 116
+    },
+    {
+      "key": "update_flags",
+      "start": 1998,
+      "count": 3
+    },
+    {
+      "key": "dc_pv_live",
+      "start": 3050,
+      "count": 24
+    }
+  ],
+  "spec_sets": {
+    "live": [
+      {
+        "key": "battery_power",
+        "register": 0,
+        "signed": true
+      },
+      {
+        "key": "battery_voltage",
+        "register": 1,
+        "divisor": 10
+      },
+      {
+        "key": "battery_current",
+        "register": 2,
+        "divisor": 10,
+        "signed": true
+      },
+      {
+        "key": "battery_soc",
+        "register": 3,
+        "divisor": 100
+      },
+      {
+        "key": "soh",
+        "register": 4
+      },
+      {
+        "key": "battery_status",
+        "register": 5,
+        "enum_map": {
+          "0": "runing",
+          "1": "alarm",
+          "2": "fault"
+        }
+      },
+      {
+        "key": "battery_capacity",
+        "register": 6
+      },
+      {
+        "key": "bms_fault_code_1",
+        "register": 7
+      },
+      {
+        "key": "bms_fault_code_2",
+        "register": 8
+      },
+      {
+        "key": "bms_alarm_code_1",
+        "register": 9
+      },
+      {
+        "key": "bms_alarm_code_2",
+        "register": 10
+      },
+      {
+        "key": "highest_temperature_of_battery",
+        "register": 11,
+        "signed": true
+      },
+      {
+        "key": "battery_residual_energy",
+        "register": 12,
+        "divisor": 100
+      },
+      {
+        "key": "residual_capacity_of_battery",
+        "register": 13
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv1_photovoltaic_power",
+        "register": 15
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv1_pv_voltage",
+        "register": 16,
+        "divisor": 10
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv1_photovoltaic_current",
+        "register": 17,
+        "divisor": 10
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv2_photovoltaic_power",
+        "register": 18
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv2_pv_voltage",
+        "register": 19,
+        "divisor": 10
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv2_photovoltaic_current",
+        "register": 20,
+        "divisor": 10
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv3_photovoltaic_power",
+        "register": 21
+      },
+      {
+        "key": "ac_busbar_photovoltaic_pv3_pv_voltage",
+        "register": 22,
+        "divisor": 10
+      },
+      {
+        "key": "ac_busbar_photovoltaicpv3_photovoltaic_current",
+        "register": 23,
+        "divisor": 10
+      },
+      {
+        "key": "r_bypass_load_power",
+        "register": 35
+      },
+      {
+        "key": "bypass_load_power_s",
+        "register": 36
+      },
+      {
+        "key": "t_bypass_load_power",
+        "register": 37
+      },
+      {
+        "key": "bypass_r_load_voltage",
+        "register": 38,
+        "divisor": 10
+      },
+      {
+        "key": "bypass_the_load_voltage_s",
+        "register": 39,
+        "divisor": 10
+      },
+      {
+        "key": "bypass_t_load_voltage",
+        "register": 40,
+        "divisor": 10
+      },
+      {
+        "key": "bypass_r_load_current",
+        "register": 41,
+        "divisor": 10
+      },
+      {
+        "key": "bypass_s_load_current",
+        "register": 42,
+        "divisor": 10
+      },
+      {
+        "key": "bypass_t_load_current",
+        "register": 43,
+        "divisor": 10
+      },
+      {
+        "key": "grid_power_r",
+        "register": 50,
+        "signed": true
+      },
+      {
+        "key": "grid_power_s",
+        "register": 51,
+        "signed": true
+      },
+      {
+        "key": "grid_power_t",
+        "register": 52,
+        "signed": true
+      },
+      {
+        "key": "power_grid_voltage_r",
+        "register": 53,
+        "divisor": 10
+      },
+      {
+        "key": "power_grid_voltage_s",
+        "register": 54,
+        "divisor": 10
+      },
+      {
+        "key": "power_grid_voltage_t",
+        "register": 55,
+        "divisor": 10
+      },
+      {
+        "key": "the_grid_current_r",
+        "register": 56,
+        "divisor": 10,
+        "signed": true
+      },
+      {
+        "key": "the_grid_current_s",
+        "register": 57,
+        "divisor": 10,
+        "signed": true
+      },
+      {
+        "key": "the_grid_current_t",
+        "register": 58,
+        "divisor": 10,
+        "signed": true
+      },
+      {
+        "key": "the_grid_frequency_r",
+        "register": 59,
+        "divisor": 100
+      },
+      {
+        "key": "the_grid_frequency_s",
+        "register": 60,
+        "divisor": 100
+      },
+      {
+        "key": "the_grid_frequency_t",
+        "register": 61,
+        "divisor": 100
+      },
+      {
+        "key": "the_generator_power_r",
+        "register": 65
+      },
+      {
+        "key": "the_generator_power_s",
+        "register": 66
+      },
+      {
+        "key": "the_generator_power_t",
+        "register": 67
+      },
+      {
+        "key": "the_generator_voltage_r",
+        "register": 68,
+        "divisor": 10
+      },
+      {
+        "key": "the_generator_voltage_s",
+        "register": 69,
+        "divisor": 10
+      },
+      {
+        "key": "the_generator_voltage_t",
+        "register": 70,
+        "divisor": 10
+      },
+      {
+        "key": "generator_current_r",
+        "register": 71,
+        "divisor": 10
+      },
+      {
+        "key": "generator_current_s",
+        "register": 72,
+        "divisor": 10
+      },
+      {
+        "key": "generator_current_t",
+        "register": 73,
+        "divisor": 10
+      },
+      {
+        "key": "the_generator_voltage_frequency_r",
+        "register": 74,
+        "divisor": 100
+      },
+      {
+        "key": "the_generator_voltage_frequency_s",
+        "register": 75,
+        "divisor": 100
+      },
+      {
+        "key": "the_generator_voltage_frequency_t",
+        "register": 76,
+        "divisor": 100
+      },
+      {
+        "key": "backup_power_r_load",
+        "register": 80
+      },
+      {
+        "key": "backup_load_power_s",
+        "register": 81
+      },
+      {
+        "key": "backup_power_t_load",
+        "register": 82
+      },
+      {
+        "key": "backup_r_load_voltage",
+        "register": 83,
+        "divisor": 10
+      },
+      {
+        "key": "backup_s_load_voltage",
+        "register": 84,
+        "divisor": 10
+      },
+      {
+        "key": "backup_t_load_voltage",
+        "register": 85,
+        "divisor": 10
+      },
+      {
+        "key": "backup_r_load_current",
+        "register": 86,
+        "divisor": 10
+      },
+      {
+        "key": "backup_s_load_current",
+        "register": 87,
+        "divisor": 10
+      },
+      {
+        "key": "backup_t_load_current",
+        "register": 88,
+        "divisor": 10
+      },
+      {
+        "key": "backup_frequency_r",
+        "register": 89,
+        "divisor": 100
+      },
+      {
+        "key": "backup_frequency_s",
+        "register": 90,
+        "divisor": 100
+      },
+      {
+        "key": "backup_frequency_t",
+        "register": 91,
+        "divisor": 100
+      }
+    ],
+    "status": [
+      {
+        "key": "system_state",
+        "register": 95,
+        "enum_map": {
+          "0": "runing",
+          "1": "alarm",
+          "2": "fault"
+        }
+      },
+      {
+        "key": "ems_fault_code",
+        "register": 96
+      },
+      {
+        "key": "bms_fault_code1",
+        "register": 98
+      },
+      {
+        "key": "bms_fault_code2",
+        "register": 99
+      },
+      {
+        "key": "bms_fault_code1_100",
+        "register": 100
+      },
+      {
+        "key": "bms_fault_code2_101",
+        "register": 101
+      },
+      {
+        "key": "hybrid_makes_fault_code_1",
+        "register": 102
+      },
+      {
+        "key": "hybrid_makes_the_alarm_code_1",
+        "register": 104
+      },
+      {
+        "key": "system_time_year",
+        "register": 107
+      },
+      {
+        "key": "system_time_month",
+        "register": 108
+      },
+      {
+        "key": "system_time_day",
+        "register": 109
+      },
+      {
+        "key": "system_time_h",
+        "register": 110
+      },
+      {
+        "key": "system_time_m",
+        "register": 111
+      },
+      {
+        "key": "system_time_s",
+        "register": 112
+      },
+      {
+        "key": "grid_standards",
+        "register": 114,
+        "divisor": 10,
+        "enum_map": {
+          "0": "VDE4105",
+          "1": "AS4777",
+          "2": "CQC"
+        }
+      },
+      {
+        "key": "ems_version_number",
+        "register": 115
+      },
+      {
+        "key": "bms_version_number",
+        "register": 116
+      },
+      {
+        "key": "hybrid_makes_the_version_number",
+        "register": 117
+      },
+      {
+        "key": "system_type",
+        "register": 118
+      },
+      {
+        "key": "production_date_year",
+        "register": 119
+      },
+      {
+        "key": "production_date_month",
+        "register": 120
+      },
+      {
+        "key": "production_date_day",
+        "register": 121
+      },
+      {
+        "key": "serial_number",
+        "register": 122
+      },
+      {
+        "key": "system_version_number",
+        "register": 123
+      },
+      {
+        "key": "whether_access_to_the_motor",
+        "register": 124,
+        "enum_map": {
+          "0": "Not connected to the generator equipment",
+          "1": "Connected to the generator equipment"
+        }
+      },
+      {
+        "key": "pcs_temperature",
+        "register": 125,
+        "divisor": 10,
+        "signed": true
+      },
+      {
+        "key": "battery_temperature",
+        "register": 126,
+        "signed": true
+      },
+      {
+        "key": "cabinet_temperature",
+        "register": 127,
+        "signed": true
+      },
+      {
+        "key": "hybrid_makes_s_version_number",
+        "register": 128
+      },
+      {
+        "key": "hybrid_makes_t_version_number",
+        "register": 129
+      }
+    ],
+    "config": [
+      {
+        "key": "system_time_year_1000",
+        "register": 1000
+      },
+      {
+        "key": "system_time_month_1001",
+        "register": 1001
+      },
+      {
+        "key": "system_time_day_1002",
+        "register": 1002
+      },
+      {
+        "key": "system_time_h_1003",
+        "register": 1003
+      },
+      {
+        "key": "system_time_m_1004",
+        "register": 1004
+      },
+      {
+        "key": "system_time_s_1005",
+        "register": 1005
+      },
+      {
+        "key": "system_type_1010",
+        "register": 1010
+      },
+      {
+        "key": "working_mode",
+        "register": 1011,
+        "enum_map": {
+          "0": "Matching load patterns",
+          "1": "peak valley model",
+          "2": "electric model"
+        }
+      },
+      {
+        "key": "battery_type",
+        "register": 1012
+      },
+      {
+        "key": "off_grid_switch",
+        "register": 1014,
+        "enum_map": {
+          "0": "enable",
+          "1": "disable"
+        }
+      },
+      {
+        "key": "grid_discharge_limits",
+        "register": 1015
+      },
+      {
+        "key": "charging_grid_limit",
+        "register": 1016
+      },
+      {
+        "key": "ammeter_enable",
+        "register": 1017,
+        "enum_map": {
+          "0": "enable",
+          "1": "disable"
+        }
+      },
+      {
+        "key": "maximum_charging_voltage_dc",
+        "register": 1023,
+        "divisor": 10
+      },
+      {
+        "key": "maximum_charging_current_dc",
+        "register": 1024,
+        "divisor": 10
+      },
+      {
+        "key": "minimum_discharge_voltage_dc",
+        "register": 1025,
+        "divisor": 10
+      },
+      {
+        "key": "maximum_discharge_current_dc",
+        "register": 1026,
+        "divisor": 10
+      },
+      {
+        "key": "depth_of_discharge",
+        "register": 1027
+      },
+      {
+        "key": "battery_capacity_1028",
+        "register": 1028
+      },
+      {
+        "key": "1_start_h_charging_period",
+        "register": 1031
+      },
+      {
+        "key": "1_start_m_charging_period",
+        "register": 1032
+      },
+      {
+        "key": "charging_time_1_the_end_of_the_h",
+        "register": 1033
+      },
+      {
+        "key": "1_the_end_of_the_m_charging_period",
+        "register": 1034
+      },
+      {
+        "key": "charging_time_2_began_to_h",
+        "register": 1035
+      },
+      {
+        "key": "charging_time_2_began_to_m",
+        "register": 1036
+      },
+      {
+        "key": "charging_time_2_the_end_of_the_h",
+        "register": 1037
+      },
+      {
+        "key": "charging_time_2_end_m",
+        "register": 1038
+      },
+      {
+        "key": "charging_time_3_began_to_h",
+        "register": 1039
+      },
+      {
+        "key": "charging_time_3_began_to_m",
+        "register": 1040
+      },
+      {
+        "key": "charging_time_3_the_end_of_the_h",
+        "register": 1041
+      },
+      {
+        "key": "charging_time_3_end_m",
+        "register": 1042
+      },
+      {
+        "key": "1_start_h_discharge_period",
+        "register": 1043
+      },
+      {
+        "key": "1_start_m_discharge_period",
+        "register": 1044
+      },
+      {
+        "key": "1_the_end_of_the_h_discharge_period",
+        "register": 1045
+      },
+      {
+        "key": "1_end_m_discharge_period",
+        "register": 1046
+      },
+      {
+        "key": "discharge_time_2_began_to_h",
+        "register": 1047
+      },
+      {
+        "key": "discharge_time_2_began_to_m",
+        "register": 1048
+      },
+      {
+        "key": "discharge_time_2_the_end_of_the_h",
+        "register": 1049
+      },
+      {
+        "key": "discharge_time_2_end_m",
+        "register": 1050
+      },
+      {
+        "key": "discharge_time_3_began_to_h",
+        "register": 1051
+      },
+      {
+        "key": "3_m",
+        "register": 1052
+      },
+      {
+        "key": "discharge_time_3_end_of_h",
+        "register": 1053
+      },
+      {
+        "key": "discharge_time_3_end_m",
+        "register": 1054
+      },
+      {
+        "key": "grid_standards_set",
+        "register": 1057,
+        "enum_map": {
+          "0": "VDE4105",
+          "1": "AS4777",
+          "2": "CQC"
+        }
+      },
+      {
+        "key": "vde_grid_over_voltage_protection_value",
+        "register": 1058,
+        "divisor": 10
+      },
+      {
+        "key": "overvoltage_protection_time_vde_grid",
+        "register": 1059
+      },
+      {
+        "key": "vde_grid_under_voltage_protection_value",
+        "register": 1060,
+        "divisor": 10
+      },
+      {
+        "key": "vde_grid_under_voltage_protection_time",
+        "register": 1061
+      },
+      {
+        "key": "vde_power_grid_frequency_protection_value",
+        "register": 1062,
+        "divisor": 100
+      },
+      {
+        "key": "vde_grid_frequency_protection_time",
+        "register": 1063
+      },
+      {
+        "key": "vde_low_frequency_protection_value_of_the_grid",
+        "register": 1064,
+        "divisor": 100
+      },
+      {
+        "key": "low_frequency_protection_time_vde_grid",
+        "register": 1065
+      },
+      {
+        "key": "vde_grid_average_voltage_protection_value",
+        "register": 1066,
+        "divisor": 10
+      },
+      {
+        "key": "the_average_voltage_protection_time_vde_grid",
+        "register": 1067
+      },
+      {
+        "key": "vde_grid_output_recovery_time",
+        "register": 1068
+      },
+      {
+        "key": "vde_1_active_power_reactive_power_curve_points",
+        "register": 1069
+      },
+      {
+        "key": "vde_point_2_active_power_reactive_power_curve",
+        "register": 1070
+      },
+      {
+        "key": "vde_reactive_power_curve_point_3_active_power",
+        "register": 1071
+      },
+      {
+        "key": "vde_4_active_power_reactive_power_curve_points",
+        "register": 1072
+      },
+      {
+        "key": "vde_point_5_active_power_reactive_power_curve",
+        "register": 1073
+      },
+      {
+        "key": "vde_point_6_active_power_reactive_power_curve",
+        "register": 1074
+      },
+      {
+        "key": "vde_7_active_power_reactive_power_curve_points",
+        "register": 1075
+      },
+      {
+        "key": "vde_reactive_power_curve_point_8_active_power",
+        "register": 1076
+      },
+      {
+        "key": "vde_point_9_active_power_reactive_power_curve",
+        "register": 1077
+      },
+      {
+        "key": "vde_10_active_power_reactive_power_curve_points",
+        "register": 1078
+      },
+      {
+        "key": "vde_reactive_power_curve_point_1_power_factor",
+        "register": 1079,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_2_power_factor",
+        "register": 1080,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_3_power_factor",
+        "register": 1081,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_4_power_factor",
+        "register": 1082,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_5_power_factor",
+        "register": 1083,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_6_power_factor",
+        "register": 1084,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_7_power_factor",
+        "register": 1085,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_8_power_factor",
+        "register": 1086,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_9_power_factor",
+        "register": 1087,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "vde_reactive_power_curve_point_10_to_the_power_factor",
+        "register": 1088,
+        "divisor": 100,
+        "signed": true
+      },
+      {
+        "key": "over_voltage_protection_value_as4777_grid",
+        "register": 1093,
+        "divisor": 10
+      },
+      {
+        "key": "overvoltage_protection_time_as4777_grid",
+        "register": 1094
+      },
+      {
+        "key": "as4777_grid_under_voltage_protection_value",
+        "register": 1095,
+        "divisor": 10
+      },
+      {
+        "key": "as4777_grid_under_voltage_protection_time",
+        "register": 1096
+      },
+      {
+        "key": "as4777_power_grid_frequency_protection_value",
+        "register": 1097,
+        "divisor": 100
+      },
+      {
+        "key": "as4777_grid_frequency_protection_time",
+        "register": 1098
+      },
+      {
+        "key": "as4777_low_frequency_protection_value_of_the_grid",
+        "register": 1099,
+        "divisor": 100
+      },
+      {
+        "key": "low_frequency_protection_time_as4777_grid",
+        "register": 1100
+      },
+      {
+        "key": "as4777_grid_output_recovery_time",
+        "register": 1103
+      },
+      {
+        "key": "cqc_grid_over_voltage_protection_value",
+        "register": 1107,
+        "divisor": 10
+      },
+      {
+        "key": "cqc_grid_overvoltage_protection_time",
+        "register": 1108
+      },
+      {
+        "key": "cqc_grid_under_voltage_protection_value",
+        "register": 1109,
+        "divisor": 10
+      },
+      {
+        "key": "cqc_grid_under_voltage_protection_time",
+        "register": 1110
+      },
+      {
+        "key": "cqc_grid_frequency_protection_value",
+        "register": 1111,
+        "divisor": 100
+      },
+      {
+        "key": "cqc_grid_frequency_protection_time",
+        "register": 1112
+      },
+      {
+        "key": "cqc_low_frequency_protection_value_of_the_grid",
+        "register": 1113,
+        "divisor": 100
+      },
+      {
+        "key": "low_frequency_protection_time_cqc_grid",
+        "register": 1114
+      },
+      {
+        "key": "cqc_grid_output_recovery_time",
+        "register": 1115
+      }
+    ],
+    "update_flags": [
+      {
+        "key": "charger_to_start_the_update_logo",
+        "register": 1998,
+        "enum_map": {
+          "0": "stop",
+          "1": "start"
+        }
+      },
+      {
+        "key": "pcs_to_start_the_update_logo",
+        "register": 1999,
+        "enum_map": {
+          "0": "stop",
+          "1": "start"
+        }
+      },
+      {
+        "key": "ems_to_start_the_update_logo",
+        "register": 2000,
+        "enum_map": {
+          "0": "stop",
+          "1": "start"
+        }
+      }
+    ],
+    "dc_pv_live": [
+      {
+        "key": "dc_busbar_photovoltaic_pv1_photovoltaic_power",
+        "register": 3050
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv1_pv_voltage",
+        "register": 3051,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv1_photovoltaic_current",
+        "register": 3052,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv2_photovoltaic_power",
+        "register": 3053
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv2_pv_voltage",
+        "register": 3054,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv2_photovoltaic_current",
+        "register": 3055,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv3_photovoltaic_power",
+        "register": 3056
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv3_pv_voltage",
+        "register": 3057,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv3_photovoltaic_current",
+        "register": 3058,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv4_photovoltaic_power",
+        "register": 3059
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv4_pv_voltage",
+        "register": 3060,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv4_photovoltaic_current",
+        "register": 3061,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv5_photovoltaic_power",
+        "register": 3062
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv5_pv_voltage",
+        "register": 3063,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv5_photovoltaic_current",
+        "register": 3064,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv6_photovoltaic_power",
+        "register": 3065
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv6_pv_voltage",
+        "register": 3066,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv6_photovoltaic_current",
+        "register": 3067,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv7_photovoltaic_power",
+        "register": 3068
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv7_pv_voltage",
+        "register": 3069,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv7_photovoltaic_current",
+        "register": 3070,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv8_photovoltaic_power",
+        "register": 3071
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv8_pv_voltage",
+        "register": 3072,
+        "divisor": 10
+      },
+      {
+        "key": "dc_busbar_photovoltaic_pv8_photovoltaic_current",
+        "register": 3073,
+        "divisor": 10
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "battery_power",
+      "name": "battery power",
+      "unit": "W"
+    },
+    {
+      "key": "battery_voltage",
+      "name": "battery voltage",
+      "unit": "V"
+    },
+    {
+      "key": "battery_current",
+      "name": "battery current",
+      "unit": "A"
+    },
+    {
+      "key": "battery_soc",
+      "name": "battery SOC"
+    },
+    {
+      "key": "soh",
+      "name": "SOH"
+    },
+    {
+      "key": "battery_status",
+      "name": "battery status"
+    },
+    {
+      "key": "battery_capacity",
+      "name": "battery capacity",
+      "unit": "Ah"
+    },
+    {
+      "key": "bms_fault_code_1",
+      "name": "BMS fault code 1"
+    },
+    {
+      "key": "bms_fault_code_2",
+      "name": "BMS fault code 2"
+    },
+    {
+      "key": "bms_alarm_code_1",
+      "name": "BMS alarm code 1"
+    },
+    {
+      "key": "bms_alarm_code_2",
+      "name": "BMS alarm code 2"
+    },
+    {
+      "key": "highest_temperature_of_battery",
+      "name": "highest temperature of battery",
+      "unit": "°C"
+    },
+    {
+      "key": "battery_residual_energy",
+      "name": "battery residual energy",
+      "unit": "kWh"
+    },
+    {
+      "key": "residual_capacity_of_battery",
+      "name": "residual capacity of battery",
+      "unit": "Ah"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv1_photovoltaic_power",
+      "name": "Ac busbar photovoltaic PV1 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv1_pv_voltage",
+      "name": "Ac busbar photovoltaic PV1 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv1_photovoltaic_current",
+      "name": "Ac busbar photovoltaic PV1 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv2_photovoltaic_power",
+      "name": "Ac busbar photovoltaic PV2 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv2_pv_voltage",
+      "name": "Ac busbar photovoltaic PV2 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv2_photovoltaic_current",
+      "name": "Ac busbar photovoltaic PV2 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv3_photovoltaic_power",
+      "name": "Ac busbar photovoltaic PV3 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "ac_busbar_photovoltaic_pv3_pv_voltage",
+      "name": "Ac busbar photovoltaic PV3 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "ac_busbar_photovoltaicpv3_photovoltaic_current",
+      "name": "Ac busbar photovoltaicPV3 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv1_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV1 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv1_pv_voltage",
+      "name": "Dc busbar photovoltaic PV1 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv1_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV1 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv2_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV2 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv2_pv_voltage",
+      "name": "Dc busbar photovoltaic PV2 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv2_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV2 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv3_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV3 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv3_pv_voltage",
+      "name": "Dc busbar photovoltaic PV3 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv3_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV3 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv4_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV4 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv4_pv_voltage",
+      "name": "Dc busbar photovoltaic PV4 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv4_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV4 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv5_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV5 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv5_pv_voltage",
+      "name": "Dc busbar photovoltaic PV5 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv5_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV5 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv6_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV6 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv6_pv_voltage",
+      "name": "Dc busbar photovoltaic PV6 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv6_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV6 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv7_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV7 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv7_pv_voltage",
+      "name": "Dc busbar photovoltaic PV7 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv7_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV7 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv8_photovoltaic_power",
+      "name": "Dc busbar photovoltaic PV8 photovoltaic power",
+      "unit": "W"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv8_pv_voltage",
+      "name": "Dc busbar photovoltaic PV8 pv voltage",
+      "unit": "V"
+    },
+    {
+      "key": "dc_busbar_photovoltaic_pv8_photovoltaic_current",
+      "name": "Dc busbar photovoltaic PV8 photovoltaic current",
+      "unit": "A"
+    },
+    {
+      "key": "r_bypass_load_power",
+      "name": "_R BYPASS load power",
+      "unit": "W"
+    },
+    {
+      "key": "bypass_load_power_s",
+      "name": "BYPASS load power _S",
+      "unit": "W"
+    },
+    {
+      "key": "t_bypass_load_power",
+      "name": "_T BYPASS load power",
+      "unit": "W"
+    },
+    {
+      "key": "bypass_r_load_voltage",
+      "name": "BYPASS _R load voltage",
+      "unit": "V"
+    },
+    {
+      "key": "bypass_the_load_voltage_s",
+      "name": "BYPASS the load voltage _S",
+      "unit": "V"
+    },
+    {
+      "key": "bypass_t_load_voltage",
+      "name": "BYPASS _T load voltage",
+      "unit": "V"
+    },
+    {
+      "key": "bypass_r_load_current",
+      "name": "BYPASS _R load current",
+      "unit": "A"
+    },
+    {
+      "key": "bypass_s_load_current",
+      "name": "BYPASS _S load current",
+      "unit": "A"
+    },
+    {
+      "key": "bypass_t_load_current",
+      "name": "BYPASS _T load current",
+      "unit": "A"
+    },
+    {
+      "key": "grid_power_r",
+      "name": "Grid power _R",
+      "unit": "W"
+    },
+    {
+      "key": "grid_power_s",
+      "name": "Grid power _S",
+      "unit": "W"
+    },
+    {
+      "key": "grid_power_t",
+      "name": "Grid power _T",
+      "unit": "W"
+    },
+    {
+      "key": "power_grid_voltage_r",
+      "name": "Power grid voltage _R",
+      "unit": "V"
+    },
+    {
+      "key": "power_grid_voltage_s",
+      "name": "Power grid voltage _S",
+      "unit": "V"
+    },
+    {
+      "key": "power_grid_voltage_t",
+      "name": "Power grid voltage _T",
+      "unit": "V"
+    },
+    {
+      "key": "the_grid_current_r",
+      "name": "The grid current _R",
+      "unit": "A"
+    },
+    {
+      "key": "the_grid_current_s",
+      "name": "The grid current _S",
+      "unit": "A"
+    },
+    {
+      "key": "the_grid_current_t",
+      "name": "The grid current _T",
+      "unit": "A"
+    },
+    {
+      "key": "the_grid_frequency_r",
+      "name": "The grid frequency _R",
+      "unit": "Hz"
+    },
+    {
+      "key": "the_grid_frequency_s",
+      "name": "The grid frequency _S",
+      "unit": "Hz"
+    },
+    {
+      "key": "the_grid_frequency_t",
+      "name": "The grid frequency _T",
+      "unit": "Hz"
+    },
+    {
+      "key": "the_generator_power_r",
+      "name": "The generator power _R",
+      "unit": "W"
+    },
+    {
+      "key": "the_generator_power_s",
+      "name": "The generator power _S",
+      "unit": "W"
+    },
+    {
+      "key": "the_generator_power_t",
+      "name": "The generator power _T",
+      "unit": "W"
+    },
+    {
+      "key": "the_generator_voltage_r",
+      "name": "The generator voltage _R",
+      "unit": "V"
+    },
+    {
+      "key": "the_generator_voltage_s",
+      "name": "The generator voltage _S",
+      "unit": "V"
+    },
+    {
+      "key": "the_generator_voltage_t",
+      "name": "The generator voltage _T",
+      "unit": "V"
+    },
+    {
+      "key": "generator_current_r",
+      "name": "Generator current _R",
+      "unit": "A"
+    },
+    {
+      "key": "generator_current_s",
+      "name": "Generator current _S",
+      "unit": "A"
+    },
+    {
+      "key": "generator_current_t",
+      "name": "Generator current _T",
+      "unit": "A"
+    },
+    {
+      "key": "the_generator_voltage_frequency_r",
+      "name": "The generator voltage frequency _R",
+      "unit": "Hz"
+    },
+    {
+      "key": "the_generator_voltage_frequency_s",
+      "name": "The generator voltage frequency _S",
+      "unit": "Hz"
+    },
+    {
+      "key": "the_generator_voltage_frequency_t",
+      "name": "The generator voltage frequency _T",
+      "unit": "Hz"
+    },
+    {
+      "key": "backup_power_r_load",
+      "name": "BACKUP power _R load",
+      "unit": "W"
+    },
+    {
+      "key": "backup_load_power_s",
+      "name": "BACKUP load power _S",
+      "unit": "W"
+    },
+    {
+      "key": "backup_power_t_load",
+      "name": "BACKUP power _T load",
+      "unit": "W"
+    },
+    {
+      "key": "backup_r_load_voltage",
+      "name": "BACKUP _R load voltage",
+      "unit": "V"
+    },
+    {
+      "key": "backup_s_load_voltage",
+      "name": "BACKUP _S load voltage",
+      "unit": "V"
+    },
+    {
+      "key": "backup_t_load_voltage",
+      "name": "BACKUP _T load voltage",
+      "unit": "V"
+    },
+    {
+      "key": "backup_r_load_current",
+      "name": "BACKUP _R load current",
+      "unit": "A"
+    },
+    {
+      "key": "backup_s_load_current",
+      "name": "BACKUP _S load current",
+      "unit": "A"
+    },
+    {
+      "key": "backup_t_load_current",
+      "name": "BACKUP _T load current",
+      "unit": "A"
+    },
+    {
+      "key": "backup_frequency_r",
+      "name": "BACKUP frequency _R",
+      "unit": "Hz"
+    },
+    {
+      "key": "backup_frequency_s",
+      "name": "BACKUP frequency _S",
+      "unit": "Hz"
+    },
+    {
+      "key": "backup_frequency_t",
+      "name": "BACKUP frequency _T",
+      "unit": "Hz"
+    },
+    {
+      "key": "system_state",
+      "name": "system state",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "ems_fault_code",
+      "name": "EMS fault code",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_fault_code1",
+      "name": "BMS fault code1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_fault_code2",
+      "name": "BMS fault code2",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_fault_code1_100",
+      "name": "BMS fault code1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_fault_code2_101",
+      "name": "BMS fault code2",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "hybrid_makes_fault_code_1",
+      "name": "Hybrid - makes fault code 1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "hybrid_makes_the_alarm_code_1",
+      "name": "Hybrid - makes the alarm code 1",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_time_year",
+      "name": "system time - year",
+      "unit": "year",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_time_month",
+      "name": "system time - month",
+      "unit": "month",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_time_day",
+      "name": "system time - day",
+      "unit": "day",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_time_h",
+      "name": "system time - H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_time_m",
+      "name": "system time - M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_time_s",
+      "name": "system time - S",
+      "unit": "s",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "grid_standards",
+      "name": "grid standards",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "ems_version_number",
+      "name": "EMS - version number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_version_number",
+      "name": "BMS - version number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "hybrid_makes_the_version_number",
+      "name": "Hybrid - makes the version number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_type",
+      "name": "system type",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "production_date_year",
+      "name": "Production date - year",
+      "unit": "year",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "production_date_month",
+      "name": "Production date - month",
+      "unit": "month",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "production_date_day",
+      "name": "Production date - day",
+      "unit": "day",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "serial_number",
+      "name": "serial number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "system_version_number",
+      "name": "system version number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "whether_access_to_the_motor",
+      "name": "Whether access to the motor",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "pcs_temperature",
+      "name": "PCS temperature",
+      "unit": "°C",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_temperature",
+      "name": "Battery temperature",
+      "unit": "°C",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "cabinet_temperature",
+      "name": "cabinet temperature",
+      "unit": "°C",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "hybrid_makes_s_version_number",
+      "name": "Hybrid - makes - S version number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "hybrid_makes_t_version_number",
+      "name": "Hybrid - makes - T version number",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "register_200",
+      "name": "Register 200",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_201",
+      "name": "Register 201",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_202",
+      "name": "Register 202",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_203",
+      "name": "Register 203",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_204",
+      "name": "Register 204",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_205",
+      "name": "Register 205",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_206",
+      "name": "Register 206",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_207",
+      "name": "Register 207",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_208",
+      "name": "Register 208",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_209",
+      "name": "Register 209",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_210",
+      "name": "Register 210",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_211",
+      "name": "Register 211",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_212",
+      "name": "Register 212",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_213",
+      "name": "Register 213",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_214",
+      "name": "Register 214",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_215",
+      "name": "Register 215",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_216",
+      "name": "Register 216",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_217",
+      "name": "Register 217",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_218",
+      "name": "Register 218",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_219",
+      "name": "Register 219",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_220",
+      "name": "Register 220",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_221",
+      "name": "Register 221",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_222",
+      "name": "Register 222",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_223",
+      "name": "Register 223",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_224",
+      "name": "Register 224",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_225",
+      "name": "Register 225",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_226",
+      "name": "Register 226",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_227",
+      "name": "Register 227",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_228",
+      "name": "Register 228",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_229",
+      "name": "Register 229",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_230",
+      "name": "Register 230",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_231",
+      "name": "Register 231",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_232",
+      "name": "Register 232",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_233",
+      "name": "Register 233",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_234",
+      "name": "Register 234",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_235",
+      "name": "Register 235",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_236",
+      "name": "Register 236",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_237",
+      "name": "Register 237",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_238",
+      "name": "Register 238",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_239",
+      "name": "Register 239",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_240",
+      "name": "Register 240",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_241",
+      "name": "Register 241",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_242",
+      "name": "Register 242",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_243",
+      "name": "Register 243",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_244",
+      "name": "Register 244",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_245",
+      "name": "Register 245",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_246",
+      "name": "Register 246",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_247",
+      "name": "Register 247",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_248",
+      "name": "Register 248",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_249",
+      "name": "Register 249",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_250",
+      "name": "Register 250",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_251",
+      "name": "Register 251",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_252",
+      "name": "Register 252",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_253",
+      "name": "Register 253",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_254",
+      "name": "Register 254",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_255",
+      "name": "Register 255",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_256",
+      "name": "Register 256",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_257",
+      "name": "Register 257",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_258",
+      "name": "Register 258",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_259",
+      "name": "Register 259",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_260",
+      "name": "Register 260",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_261",
+      "name": "Register 261",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_262",
+      "name": "Register 262",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_263",
+      "name": "Register 263",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_264",
+      "name": "Register 264",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_265",
+      "name": "Register 265",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_266",
+      "name": "Register 266",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_267",
+      "name": "Register 267",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_268",
+      "name": "Register 268",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_269",
+      "name": "Register 269",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_270",
+      "name": "Register 270",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_271",
+      "name": "Register 271",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_272",
+      "name": "Register 272",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_273",
+      "name": "Register 273",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_274",
+      "name": "Register 274",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_275",
+      "name": "Register 275",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_276",
+      "name": "Register 276",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_277",
+      "name": "Register 277",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_278",
+      "name": "Register 278",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_279",
+      "name": "Register 279",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_280",
+      "name": "Register 280",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_281",
+      "name": "Register 281",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_282",
+      "name": "Register 282",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_283",
+      "name": "Register 283",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_284",
+      "name": "Register 284",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_285",
+      "name": "Register 285",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_286",
+      "name": "Register 286",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_287",
+      "name": "Register 287",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_288",
+      "name": "Register 288",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_289",
+      "name": "Register 289",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_290",
+      "name": "Register 290",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_291",
+      "name": "Register 291",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_292",
+      "name": "Register 292",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_293",
+      "name": "Register 293",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_294",
+      "name": "Register 294",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_295",
+      "name": "Register 295",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_296",
+      "name": "Register 296",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_297",
+      "name": "Register 297",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_298",
+      "name": "Register 298",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_299",
+      "name": "Register 299",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_300",
+      "name": "Register 300",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_301",
+      "name": "Register 301",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_302",
+      "name": "Register 302",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_303",
+      "name": "Register 303",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_304",
+      "name": "Register 304",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_305",
+      "name": "Register 305",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_306",
+      "name": "Register 306",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_307",
+      "name": "Register 307",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_308",
+      "name": "Register 308",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_309",
+      "name": "Register 309",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_310",
+      "name": "Register 310",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_311",
+      "name": "Register 311",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_312",
+      "name": "Register 312",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_313",
+      "name": "Register 313",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_314",
+      "name": "Register 314",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_315",
+      "name": "Register 315",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_316",
+      "name": "Register 316",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_317",
+      "name": "Register 317",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_318",
+      "name": "Register 318",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_319",
+      "name": "Register 319",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_320",
+      "name": "Register 320",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_321",
+      "name": "Register 321",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_322",
+      "name": "Register 322",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_323",
+      "name": "Register 323",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_324",
+      "name": "Register 324",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_325",
+      "name": "Register 325",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_326",
+      "name": "Register 326",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_327",
+      "name": "Register 327",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_328",
+      "name": "Register 328",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_329",
+      "name": "Register 329",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_330",
+      "name": "Register 330",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_331",
+      "name": "Register 331",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_332",
+      "name": "Register 332",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_333",
+      "name": "Register 333",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_334",
+      "name": "Register 334",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_335",
+      "name": "Register 335",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_336",
+      "name": "Register 336",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_337",
+      "name": "Register 337",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_338",
+      "name": "Register 338",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_339",
+      "name": "Register 339",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_340",
+      "name": "Register 340",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_341",
+      "name": "Register 341",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_342",
+      "name": "Register 342",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_343",
+      "name": "Register 343",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_344",
+      "name": "Register 344",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_345",
+      "name": "Register 345",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_346",
+      "name": "Register 346",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_347",
+      "name": "Register 347",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_348",
+      "name": "Register 348",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_349",
+      "name": "Register 349",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_350",
+      "name": "Register 350",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_351",
+      "name": "Register 351",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_352",
+      "name": "Register 352",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_353",
+      "name": "Register 353",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_354",
+      "name": "Register 354",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_355",
+      "name": "Register 355",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_356",
+      "name": "Register 356",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_357",
+      "name": "Register 357",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_358",
+      "name": "Register 358",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_359",
+      "name": "Register 359",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_360",
+      "name": "Register 360",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_361",
+      "name": "Register 361",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_362",
+      "name": "Register 362",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_363",
+      "name": "Register 363",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_364",
+      "name": "Register 364",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_365",
+      "name": "Register 365",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_366",
+      "name": "Register 366",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_367",
+      "name": "Register 367",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_368",
+      "name": "Register 368",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_369",
+      "name": "Register 369",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_370",
+      "name": "Register 370",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_371",
+      "name": "Register 371",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_372",
+      "name": "Register 372",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_373",
+      "name": "Register 373",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_374",
+      "name": "Register 374",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_375",
+      "name": "Register 375",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_376",
+      "name": "Register 376",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_377",
+      "name": "Register 377",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_378",
+      "name": "Register 378",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_379",
+      "name": "Register 379",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_380",
+      "name": "Register 380",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_381",
+      "name": "Register 381",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_382",
+      "name": "Register 382",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_383",
+      "name": "Register 383",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_384",
+      "name": "Register 384",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_385",
+      "name": "Register 385",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_386",
+      "name": "Register 386",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_387",
+      "name": "Register 387",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_388",
+      "name": "Register 388",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_389",
+      "name": "Register 389",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_390",
+      "name": "Register 390",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_391",
+      "name": "Register 391",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_392",
+      "name": "Register 392",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_393",
+      "name": "Register 393",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_394",
+      "name": "Register 394",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_395",
+      "name": "Register 395",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_396",
+      "name": "Register 396",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_397",
+      "name": "Register 397",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_398",
+      "name": "Register 398",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_399",
+      "name": "Register 399",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_400",
+      "name": "Register 400",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_401",
+      "name": "Register 401",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_402",
+      "name": "Register 402",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_403",
+      "name": "Register 403",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_404",
+      "name": "Register 404",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_405",
+      "name": "Register 405",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_406",
+      "name": "Register 406",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_407",
+      "name": "Register 407",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_408",
+      "name": "Register 408",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_409",
+      "name": "Register 409",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_410",
+      "name": "Register 410",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_411",
+      "name": "Register 411",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_412",
+      "name": "Register 412",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_413",
+      "name": "Register 413",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_414",
+      "name": "Register 414",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_415",
+      "name": "Register 415",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_416",
+      "name": "Register 416",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_417",
+      "name": "Register 417",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_418",
+      "name": "Register 418",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_419",
+      "name": "Register 419",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_420",
+      "name": "Register 420",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_421",
+      "name": "Register 421",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_422",
+      "name": "Register 422",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_423",
+      "name": "Register 423",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_424",
+      "name": "Register 424",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_425",
+      "name": "Register 425",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_426",
+      "name": "Register 426",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_427",
+      "name": "Register 427",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_428",
+      "name": "Register 428",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_429",
+      "name": "Register 429",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_430",
+      "name": "Register 430",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_431",
+      "name": "Register 431",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_432",
+      "name": "Register 432",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_433",
+      "name": "Register 433",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_434",
+      "name": "Register 434",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_435",
+      "name": "Register 435",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_436",
+      "name": "Register 436",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_437",
+      "name": "Register 437",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_438",
+      "name": "Register 438",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_439",
+      "name": "Register 439",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_440",
+      "name": "Register 440",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_441",
+      "name": "Register 441",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_442",
+      "name": "Register 442",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_443",
+      "name": "Register 443",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_444",
+      "name": "Register 444",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_445",
+      "name": "Register 445",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_446",
+      "name": "Register 446",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_447",
+      "name": "Register 447",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_448",
+      "name": "Register 448",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_449",
+      "name": "Register 449",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_450",
+      "name": "Register 450",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_451",
+      "name": "Register 451",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_452",
+      "name": "Register 452",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_453",
+      "name": "Register 453",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_454",
+      "name": "Register 454",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_455",
+      "name": "Register 455",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_456",
+      "name": "Register 456",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_457",
+      "name": "Register 457",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_458",
+      "name": "Register 458",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_459",
+      "name": "Register 459",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_460",
+      "name": "Register 460",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_461",
+      "name": "Register 461",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_462",
+      "name": "Register 462",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_463",
+      "name": "Register 463",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_464",
+      "name": "Register 464",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_465",
+      "name": "Register 465",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_466",
+      "name": "Register 466",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_467",
+      "name": "Register 467",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_468",
+      "name": "Register 468",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_469",
+      "name": "Register 469",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_470",
+      "name": "Register 470",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_471",
+      "name": "Register 471",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_472",
+      "name": "Register 472",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_473",
+      "name": "Register 473",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_474",
+      "name": "Register 474",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_475",
+      "name": "Register 475",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_476",
+      "name": "Register 476",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_477",
+      "name": "Register 477",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_478",
+      "name": "Register 478",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_479",
+      "name": "Register 479",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_480",
+      "name": "Register 480",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_481",
+      "name": "Register 481",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_482",
+      "name": "Register 482",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_483",
+      "name": "Register 483",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_484",
+      "name": "Register 484",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_485",
+      "name": "Register 485",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_486",
+      "name": "Register 486",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_487",
+      "name": "Register 487",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_488",
+      "name": "Register 488",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_489",
+      "name": "Register 489",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_490",
+      "name": "Register 490",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_491",
+      "name": "Register 491",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_492",
+      "name": "Register 492",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_493",
+      "name": "Register 493",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_494",
+      "name": "Register 494",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_495",
+      "name": "Register 495",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_496",
+      "name": "Register 496",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_497",
+      "name": "Register 497",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_498",
+      "name": "Register 498",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_499",
+      "name": "Register 499",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_500",
+      "name": "Register 500",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_501",
+      "name": "Register 501",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_502",
+      "name": "Register 502",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_503",
+      "name": "Register 503",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_504",
+      "name": "Register 504",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_505",
+      "name": "Register 505",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_506",
+      "name": "Register 506",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_507",
+      "name": "Register 507",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_508",
+      "name": "Register 508",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_509",
+      "name": "Register 509",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_510",
+      "name": "Register 510",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_511",
+      "name": "Register 511",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_512",
+      "name": "Register 512",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_513",
+      "name": "Register 513",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_514",
+      "name": "Register 514",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_515",
+      "name": "Register 515",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_516",
+      "name": "Register 516",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_517",
+      "name": "Register 517",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_518",
+      "name": "Register 518",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_519",
+      "name": "Register 519",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_520",
+      "name": "Register 520",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_521",
+      "name": "Register 521",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_522",
+      "name": "Register 522",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_523",
+      "name": "Register 523",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_524",
+      "name": "Register 524",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_525",
+      "name": "Register 525",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_526",
+      "name": "Register 526",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_527",
+      "name": "Register 527",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_528",
+      "name": "Register 528",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_529",
+      "name": "Register 529",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_530",
+      "name": "Register 530",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_531",
+      "name": "Register 531",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_532",
+      "name": "Register 532",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_533",
+      "name": "Register 533",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_534",
+      "name": "Register 534",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_535",
+      "name": "Register 535",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_536",
+      "name": "Register 536",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_537",
+      "name": "Register 537",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_538",
+      "name": "Register 538",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_539",
+      "name": "Register 539",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_540",
+      "name": "Register 540",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_541",
+      "name": "Register 541",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_542",
+      "name": "Register 542",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_543",
+      "name": "Register 543",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_544",
+      "name": "Register 544",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_545",
+      "name": "Register 545",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_546",
+      "name": "Register 546",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_547",
+      "name": "Register 547",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_548",
+      "name": "Register 548",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_549",
+      "name": "Register 549",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_550",
+      "name": "Register 550",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_551",
+      "name": "Register 551",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_552",
+      "name": "Register 552",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_553",
+      "name": "Register 553",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_554",
+      "name": "Register 554",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_555",
+      "name": "Register 555",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_556",
+      "name": "Register 556",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_557",
+      "name": "Register 557",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_558",
+      "name": "Register 558",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_559",
+      "name": "Register 559",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_560",
+      "name": "Register 560",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_561",
+      "name": "Register 561",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_562",
+      "name": "Register 562",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_563",
+      "name": "Register 563",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_564",
+      "name": "Register 564",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_565",
+      "name": "Register 565",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_566",
+      "name": "Register 566",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_567",
+      "name": "Register 567",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_568",
+      "name": "Register 568",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_569",
+      "name": "Register 569",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_570",
+      "name": "Register 570",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_571",
+      "name": "Register 571",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_572",
+      "name": "Register 572",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_573",
+      "name": "Register 573",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_574",
+      "name": "Register 574",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_575",
+      "name": "Register 575",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_576",
+      "name": "Register 576",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_577",
+      "name": "Register 577",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_578",
+      "name": "Register 578",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_579",
+      "name": "Register 579",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_580",
+      "name": "Register 580",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_581",
+      "name": "Register 581",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_582",
+      "name": "Register 582",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_583",
+      "name": "Register 583",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_584",
+      "name": "Register 584",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_585",
+      "name": "Register 585",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_586",
+      "name": "Register 586",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_587",
+      "name": "Register 587",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_588",
+      "name": "Register 588",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_589",
+      "name": "Register 589",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_590",
+      "name": "Register 590",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_591",
+      "name": "Register 591",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_592",
+      "name": "Register 592",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_593",
+      "name": "Register 593",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_594",
+      "name": "Register 594",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_595",
+      "name": "Register 595",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_596",
+      "name": "Register 596",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_597",
+      "name": "Register 597",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_598",
+      "name": "Register 598",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_599",
+      "name": "Register 599",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_600",
+      "name": "Register 600",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_601",
+      "name": "Register 601",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_602",
+      "name": "Register 602",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_603",
+      "name": "Register 603",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_604",
+      "name": "Register 604",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_605",
+      "name": "Register 605",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_606",
+      "name": "Register 606",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_607",
+      "name": "Register 607",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_608",
+      "name": "Register 608",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_609",
+      "name": "Register 609",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_610",
+      "name": "Register 610",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_611",
+      "name": "Register 611",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_612",
+      "name": "Register 612",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_613",
+      "name": "Register 613",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_614",
+      "name": "Register 614",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_615",
+      "name": "Register 615",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_616",
+      "name": "Register 616",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_617",
+      "name": "Register 617",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_618",
+      "name": "Register 618",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_619",
+      "name": "Register 619",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_620",
+      "name": "Register 620",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_621",
+      "name": "Register 621",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_622",
+      "name": "Register 622",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_623",
+      "name": "Register 623",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_624",
+      "name": "Register 624",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_625",
+      "name": "Register 625",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_626",
+      "name": "Register 626",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_627",
+      "name": "Register 627",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_628",
+      "name": "Register 628",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_629",
+      "name": "Register 629",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_630",
+      "name": "Register 630",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_631",
+      "name": "Register 631",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_632",
+      "name": "Register 632",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_633",
+      "name": "Register 633",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_634",
+      "name": "Register 634",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_635",
+      "name": "Register 635",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_636",
+      "name": "Register 636",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_637",
+      "name": "Register 637",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_638",
+      "name": "Register 638",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_639",
+      "name": "Register 639",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_640",
+      "name": "Register 640",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_641",
+      "name": "Register 641",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_642",
+      "name": "Register 642",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_643",
+      "name": "Register 643",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_644",
+      "name": "Register 644",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_645",
+      "name": "Register 645",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_646",
+      "name": "Register 646",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_647",
+      "name": "Register 647",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_648",
+      "name": "Register 648",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_649",
+      "name": "Register 649",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_650",
+      "name": "Register 650",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_651",
+      "name": "Register 651",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_652",
+      "name": "Register 652",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_653",
+      "name": "Register 653",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_654",
+      "name": "Register 654",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_655",
+      "name": "Register 655",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_656",
+      "name": "Register 656",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_657",
+      "name": "Register 657",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_658",
+      "name": "Register 658",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_659",
+      "name": "Register 659",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_660",
+      "name": "Register 660",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_661",
+      "name": "Register 661",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_662",
+      "name": "Register 662",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_663",
+      "name": "Register 663",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_664",
+      "name": "Register 664",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_665",
+      "name": "Register 665",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_666",
+      "name": "Register 666",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_667",
+      "name": "Register 667",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_668",
+      "name": "Register 668",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_669",
+      "name": "Register 669",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_670",
+      "name": "Register 670",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_671",
+      "name": "Register 671",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_672",
+      "name": "Register 672",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_673",
+      "name": "Register 673",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_674",
+      "name": "Register 674",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_675",
+      "name": "Register 675",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_676",
+      "name": "Register 676",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_677",
+      "name": "Register 677",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_678",
+      "name": "Register 678",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_679",
+      "name": "Register 679",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_680",
+      "name": "Register 680",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_681",
+      "name": "Register 681",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_682",
+      "name": "Register 682",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_683",
+      "name": "Register 683",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_684",
+      "name": "Register 684",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_685",
+      "name": "Register 685",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_686",
+      "name": "Register 686",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_687",
+      "name": "Register 687",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_688",
+      "name": "Register 688",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_689",
+      "name": "Register 689",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_690",
+      "name": "Register 690",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_691",
+      "name": "Register 691",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_692",
+      "name": "Register 692",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_693",
+      "name": "Register 693",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_694",
+      "name": "Register 694",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_695",
+      "name": "Register 695",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_696",
+      "name": "Register 696",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_697",
+      "name": "Register 697",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_698",
+      "name": "Register 698",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_699",
+      "name": "Register 699",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_700",
+      "name": "Register 700",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_701",
+      "name": "Register 701",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_702",
+      "name": "Register 702",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_703",
+      "name": "Register 703",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_704",
+      "name": "Register 704",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_705",
+      "name": "Register 705",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_706",
+      "name": "Register 706",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_707",
+      "name": "Register 707",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_708",
+      "name": "Register 708",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_709",
+      "name": "Register 709",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_710",
+      "name": "Register 710",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_711",
+      "name": "Register 711",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_712",
+      "name": "Register 712",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_713",
+      "name": "Register 713",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_714",
+      "name": "Register 714",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_715",
+      "name": "Register 715",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_716",
+      "name": "Register 716",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_717",
+      "name": "Register 717",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_718",
+      "name": "Register 718",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_719",
+      "name": "Register 719",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_720",
+      "name": "Register 720",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_721",
+      "name": "Register 721",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_722",
+      "name": "Register 722",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_723",
+      "name": "Register 723",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_724",
+      "name": "Register 724",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_725",
+      "name": "Register 725",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_726",
+      "name": "Register 726",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_727",
+      "name": "Register 727",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_728",
+      "name": "Register 728",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_729",
+      "name": "Register 729",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_730",
+      "name": "Register 730",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_731",
+      "name": "Register 731",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_732",
+      "name": "Register 732",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_733",
+      "name": "Register 733",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_734",
+      "name": "Register 734",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_735",
+      "name": "Register 735",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_736",
+      "name": "Register 736",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_737",
+      "name": "Register 737",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_738",
+      "name": "Register 738",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_739",
+      "name": "Register 739",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_740",
+      "name": "Register 740",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_741",
+      "name": "Register 741",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_742",
+      "name": "Register 742",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_743",
+      "name": "Register 743",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_744",
+      "name": "Register 744",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_745",
+      "name": "Register 745",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_746",
+      "name": "Register 746",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_747",
+      "name": "Register 747",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_748",
+      "name": "Register 748",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_749",
+      "name": "Register 749",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_750",
+      "name": "Register 750",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_751",
+      "name": "Register 751",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_752",
+      "name": "Register 752",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_753",
+      "name": "Register 753",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_754",
+      "name": "Register 754",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_755",
+      "name": "Register 755",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_756",
+      "name": "Register 756",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_757",
+      "name": "Register 757",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_758",
+      "name": "Register 758",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_759",
+      "name": "Register 759",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_760",
+      "name": "Register 760",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_761",
+      "name": "Register 761",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_762",
+      "name": "Register 762",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_763",
+      "name": "Register 763",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_764",
+      "name": "Register 764",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_765",
+      "name": "Register 765",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_766",
+      "name": "Register 766",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_767",
+      "name": "Register 767",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_768",
+      "name": "Register 768",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_769",
+      "name": "Register 769",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_770",
+      "name": "Register 770",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_771",
+      "name": "Register 771",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_772",
+      "name": "Register 772",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_773",
+      "name": "Register 773",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_774",
+      "name": "Register 774",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_775",
+      "name": "Register 775",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_776",
+      "name": "Register 776",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_777",
+      "name": "Register 777",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_778",
+      "name": "Register 778",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_779",
+      "name": "Register 779",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_780",
+      "name": "Register 780",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_781",
+      "name": "Register 781",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_782",
+      "name": "Register 782",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_783",
+      "name": "Register 783",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_784",
+      "name": "Register 784",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_785",
+      "name": "Register 785",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_786",
+      "name": "Register 786",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_787",
+      "name": "Register 787",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_788",
+      "name": "Register 788",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_789",
+      "name": "Register 789",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_790",
+      "name": "Register 790",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_791",
+      "name": "Register 791",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_792",
+      "name": "Register 792",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_793",
+      "name": "Register 793",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_794",
+      "name": "Register 794",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_795",
+      "name": "Register 795",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_796",
+      "name": "Register 796",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_797",
+      "name": "Register 797",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_798",
+      "name": "Register 798",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_799",
+      "name": "Register 799",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_800",
+      "name": "Register 800",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_801",
+      "name": "Register 801",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_802",
+      "name": "Register 802",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_803",
+      "name": "Register 803",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_804",
+      "name": "Register 804",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_805",
+      "name": "Register 805",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_806",
+      "name": "Register 806",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_807",
+      "name": "Register 807",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_808",
+      "name": "Register 808",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_809",
+      "name": "Register 809",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_810",
+      "name": "Register 810",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_811",
+      "name": "Register 811",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_812",
+      "name": "Register 812",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_813",
+      "name": "Register 813",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_814",
+      "name": "Register 814",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_815",
+      "name": "Register 815",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_816",
+      "name": "Register 816",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_817",
+      "name": "Register 817",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_818",
+      "name": "Register 818",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_819",
+      "name": "Register 819",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_820",
+      "name": "Register 820",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_821",
+      "name": "Register 821",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_822",
+      "name": "Register 822",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_823",
+      "name": "Register 823",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_824",
+      "name": "Register 824",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_825",
+      "name": "Register 825",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_826",
+      "name": "Register 826",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_827",
+      "name": "Register 827",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_828",
+      "name": "Register 828",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_829",
+      "name": "Register 829",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_830",
+      "name": "Register 830",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_831",
+      "name": "Register 831",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_832",
+      "name": "Register 832",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_833",
+      "name": "Register 833",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_834",
+      "name": "Register 834",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_835",
+      "name": "Register 835",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_836",
+      "name": "Register 836",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_837",
+      "name": "Register 837",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_838",
+      "name": "Register 838",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_839",
+      "name": "Register 839",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_840",
+      "name": "Register 840",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_841",
+      "name": "Register 841",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_842",
+      "name": "Register 842",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_843",
+      "name": "Register 843",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_844",
+      "name": "Register 844",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_845",
+      "name": "Register 845",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_846",
+      "name": "Register 846",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_847",
+      "name": "Register 847",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_848",
+      "name": "Register 848",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_849",
+      "name": "Register 849",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_850",
+      "name": "Register 850",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_851",
+      "name": "Register 851",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_852",
+      "name": "Register 852",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_853",
+      "name": "Register 853",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_854",
+      "name": "Register 854",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_855",
+      "name": "Register 855",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_856",
+      "name": "Register 856",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_857",
+      "name": "Register 857",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_858",
+      "name": "Register 858",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_859",
+      "name": "Register 859",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_860",
+      "name": "Register 860",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_861",
+      "name": "Register 861",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_862",
+      "name": "Register 862",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_863",
+      "name": "Register 863",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_864",
+      "name": "Register 864",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_865",
+      "name": "Register 865",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_866",
+      "name": "Register 866",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_867",
+      "name": "Register 867",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_868",
+      "name": "Register 868",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_869",
+      "name": "Register 869",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_870",
+      "name": "Register 870",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_871",
+      "name": "Register 871",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_872",
+      "name": "Register 872",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_873",
+      "name": "Register 873",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_874",
+      "name": "Register 874",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_875",
+      "name": "Register 875",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_876",
+      "name": "Register 876",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_877",
+      "name": "Register 877",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_878",
+      "name": "Register 878",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_879",
+      "name": "Register 879",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_880",
+      "name": "Register 880",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_881",
+      "name": "Register 881",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_882",
+      "name": "Register 882",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_883",
+      "name": "Register 883",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_884",
+      "name": "Register 884",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_885",
+      "name": "Register 885",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_886",
+      "name": "Register 886",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_887",
+      "name": "Register 887",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_888",
+      "name": "Register 888",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_889",
+      "name": "Register 889",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_890",
+      "name": "Register 890",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_891",
+      "name": "Register 891",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_892",
+      "name": "Register 892",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_893",
+      "name": "Register 893",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_894",
+      "name": "Register 894",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_895",
+      "name": "Register 895",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_896",
+      "name": "Register 896",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_897",
+      "name": "Register 897",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_898",
+      "name": "Register 898",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_899",
+      "name": "Register 899",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_900",
+      "name": "Register 900",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_901",
+      "name": "Register 901",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_902",
+      "name": "Register 902",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_903",
+      "name": "Register 903",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_904",
+      "name": "Register 904",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_905",
+      "name": "Register 905",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_906",
+      "name": "Register 906",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_907",
+      "name": "Register 907",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_908",
+      "name": "Register 908",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_909",
+      "name": "Register 909",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_910",
+      "name": "Register 910",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_911",
+      "name": "Register 911",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_912",
+      "name": "Register 912",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_913",
+      "name": "Register 913",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_914",
+      "name": "Register 914",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_915",
+      "name": "Register 915",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_916",
+      "name": "Register 916",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_917",
+      "name": "Register 917",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_918",
+      "name": "Register 918",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_919",
+      "name": "Register 919",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_920",
+      "name": "Register 920",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_921",
+      "name": "Register 921",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_922",
+      "name": "Register 922",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_923",
+      "name": "Register 923",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_924",
+      "name": "Register 924",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_925",
+      "name": "Register 925",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_926",
+      "name": "Register 926",
+      "unit": "kWh"
+    },
+    {
+      "key": "register_981",
+      "name": "是否接入发电机"
+    },
+    {
+      "key": "register_982",
+      "name": "电池功率",
+      "unit": "w"
+    },
+    {
+      "key": "register_983",
+      "name": "电网功率",
+      "unit": "w"
+    },
+    {
+      "key": "register_984",
+      "name": "光伏功率",
+      "unit": "w"
+    },
+    {
+      "key": "backup",
+      "name": "BACKUP 功率",
+      "unit": "w"
+    },
+    {
+      "key": "bypass",
+      "name": "BYPASS 功率",
+      "unit": "w"
+    },
+    {
+      "key": "register_987",
+      "name": "发电机功率",
+      "unit": "w"
+    },
+    {
+      "key": "soc",
+      "name": "SOC"
+    },
+    {
+      "key": "system_time_year_1000",
+      "name": "system time - year",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "system_time_month_1001",
+      "name": "system time - month",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "system_time_day_1002",
+      "name": "system time - day",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "system_time_h_1003",
+      "name": "system time - H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "system_time_m_1004",
+      "name": "system time - M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "system_time_s_1005",
+      "name": "system time - S",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "system_type_1010",
+      "name": "system type",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "working_mode",
+      "name": "Working mode",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_type",
+      "name": "battery type",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "off_grid_switch",
+      "name": "Off-grid switch",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "grid_discharge_limits",
+      "name": "Grid discharge limits",
+      "unit": "W",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_grid_limit",
+      "name": "Charging grid limit",
+      "unit": "W",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "ammeter_enable",
+      "name": "ammeter enable",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "maximum_charging_voltage_dc",
+      "name": "Maximum charging voltage (dc)",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "maximum_charging_current_dc",
+      "name": "Maximum charging current (dc)",
+      "unit": "A",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "minimum_discharge_voltage_dc",
+      "name": "Minimum discharge voltage (dc)",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "maximum_discharge_current_dc",
+      "name": "maximum discharge current (dc)",
+      "unit": "A",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "depth_of_discharge",
+      "name": "depth of discharge",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "battery_capacity_1028",
+      "name": "Battery capacity",
+      "unit": "Ah",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_start_h_charging_period",
+      "name": "1 - start H charging period",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_start_m_charging_period",
+      "name": "1 - start M charging period",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_1_the_end_of_the_h",
+      "name": "Charging time 1 - the end of the H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_the_end_of_the_m_charging_period",
+      "name": "1 - the end of the M charging period",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_2_began_to_h",
+      "name": "Charging time 2 - began to H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_2_began_to_m",
+      "name": "Charging time 2 - began to M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_2_the_end_of_the_h",
+      "name": "Charging time 2 - the end of the H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_2_end_m",
+      "name": "Charging time 2 - end M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_3_began_to_h",
+      "name": "Charging time 3 - began to H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_3_began_to_m",
+      "name": "Charging time 3 - began to M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_3_the_end_of_the_h",
+      "name": "Charging time 3 - the end of the H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charging_time_3_end_m",
+      "name": "Charging time 3 - end M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_start_h_discharge_period",
+      "name": "1 - start H discharge period",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_start_m_discharge_period",
+      "name": "1 - start M discharge period",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_the_end_of_the_h_discharge_period",
+      "name": "1 - the end of the H discharge period",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "1_end_m_discharge_period",
+      "name": "1 - end M discharge period",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_2_began_to_h",
+      "name": "Discharge time 2 - began to H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_2_began_to_m",
+      "name": "Discharge time 2 - began to M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_2_the_end_of_the_h",
+      "name": "Discharge time 2 - the end of the H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_2_end_m",
+      "name": "Discharge time 2 - end M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_3_began_to_h",
+      "name": "Discharge time 3 - began to H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "3_m",
+      "name": "放电时间段 3-开始 M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_3_end_of_h",
+      "name": "Discharge time 3 - end of H",
+      "unit": "H",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "discharge_time_3_end_m",
+      "name": "Discharge time 3 - end M",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "grid_standards_set",
+      "name": "Grid standards set",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_grid_over_voltage_protection_value",
+      "name": "VDE - grid over voltage protection value",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "overvoltage_protection_time_vde_grid",
+      "name": "Overvoltage protection time VDE - grid",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_grid_under_voltage_protection_value",
+      "name": "VDE - grid under-voltage protection value",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_grid_under_voltage_protection_time",
+      "name": "VDE - grid under-voltage protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_power_grid_frequency_protection_value",
+      "name": "VDE - power grid frequency protection value",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_grid_frequency_protection_time",
+      "name": "VDE - grid frequency protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_low_frequency_protection_value_of_the_grid",
+      "name": "VDE - low frequency protection value of the grid",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_frequency_protection_time_vde_grid",
+      "name": "Low frequency protection time VDE - grid",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_grid_average_voltage_protection_value",
+      "name": "VDE - grid average voltage protection value",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "the_average_voltage_protection_time_vde_grid",
+      "name": "The average voltage protection time VDE - grid",
+      "unit": "M",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_grid_output_recovery_time",
+      "name": "VDE - grid output recovery time",
+      "unit": "s",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_1_active_power_reactive_power_curve_points",
+      "name": "VDE - 1 - active power reactive power curve points",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_point_2_active_power_reactive_power_curve",
+      "name": "VDE - point 2 - active power reactive power curve",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_3_active_power",
+      "name": "VDE - reactive power curve point 3 - active power",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_4_active_power_reactive_power_curve_points",
+      "name": "VDE - 4 - active power reactive power curve points",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_point_5_active_power_reactive_power_curve",
+      "name": "VDE - point 5 - active power reactive power curve",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_point_6_active_power_reactive_power_curve",
+      "name": "VDE - point 6 - active power reactive power curve",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_7_active_power_reactive_power_curve_points",
+      "name": "VDE - 7 - active power reactive power curve points",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_8_active_power",
+      "name": "VDE - reactive power curve point 8 - active power",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_point_9_active_power_reactive_power_curve",
+      "name": "VDE - point 9 - active power reactive power curve",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_10_active_power_reactive_power_curve_points",
+      "name": "VDE - 10 - active power reactive power curve points",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_1_power_factor",
+      "name": "VDE - reactive power curve point 1 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_2_power_factor",
+      "name": "VDE - reactive power curve point 2 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_3_power_factor",
+      "name": "VDE - reactive power curve point 3 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_4_power_factor",
+      "name": "VDE - reactive power curve point 4 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_5_power_factor",
+      "name": "VDE - reactive power curve point 5 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_6_power_factor",
+      "name": "VDE - reactive power curve point 6 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_7_power_factor",
+      "name": "VDE - reactive power curve point 7 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_8_power_factor",
+      "name": "VDE - reactive power curve point 8 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_9_power_factor",
+      "name": "VDE - reactive power curve point 9 - power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "vde_reactive_power_curve_point_10_to_the_power_factor",
+      "name": "VDE - reactive power curve point 10 to the power factor",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "over_voltage_protection_value_as4777_grid",
+      "name": "Over voltage protection value AS4777 - grid",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "overvoltage_protection_time_as4777_grid",
+      "name": "Overvoltage protection time AS4777 - grid",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "as4777_grid_under_voltage_protection_value",
+      "name": "AS4777 - grid under-voltage protection value",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "as4777_grid_under_voltage_protection_time",
+      "name": "AS4777 - grid under-voltage protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "as4777_power_grid_frequency_protection_value",
+      "name": "AS4777 - power grid frequency protection value",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "as4777_grid_frequency_protection_time",
+      "name": "AS4777 - grid frequency protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "as4777_low_frequency_protection_value_of_the_grid",
+      "name": "AS4777 - low frequency protection value of the grid",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_frequency_protection_time_as4777_grid",
+      "name": "Low frequency protection time AS4777 - grid",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "as4777_grid_output_recovery_time",
+      "name": "AS4777 - grid output recovery time",
+      "unit": "s",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_over_voltage_protection_value",
+      "name": "CQC - grid over voltage protection value",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_overvoltage_protection_time",
+      "name": "CQC - grid overvoltage protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_under_voltage_protection_value",
+      "name": "CQC - grid under-voltage protection value",
+      "unit": "V",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_under_voltage_protection_time",
+      "name": "CQC - grid under-voltage protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_frequency_protection_value",
+      "name": "CQC - grid frequency protection value",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_frequency_protection_time",
+      "name": "CQC - grid frequency protection time",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_low_frequency_protection_value_of_the_grid",
+      "name": "CQC - low frequency protection value of the grid",
+      "unit": "Hz",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_frequency_protection_time_cqc_grid",
+      "name": "Low frequency protection time CQC - grid",
+      "unit": "ms",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "cqc_grid_output_recovery_time",
+      "name": "CQC - grid output recovery time",
+      "unit": "s",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "charger_to_start_the_update_logo",
+      "name": "CHARGER to start the update logo",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "pcs_to_start_the_update_logo",
+      "name": "PCS to start the update logo",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "ems_to_start_the_update_logo",
+      "name": "EMS to start the update logo",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    }
+  ],
+  "binary_sensor_descriptions": []
+}

@@ -24,6 +24,14 @@ When deciding where new logic belongs, use this order:
 
 Do not add user-facing metadata to a Python driver if the same information can live in JSON.
 
+## Metadata Ownership Rule
+
+When one imported SmartESS asset and one runtime compatibility overlay both exist, keep them as separate metadata names.
+
+- Raw imported SmartESS asset truth belongs under `custom_components/eybond_local/profiles/smartess_local/models/` and `custom_components/eybond_local/register_schemas/smartess_local/models/`.
+- Effective runtime compatibility overlays stay under the actual runtime family namespace, for example `pi30_ascii/models/smartess_0925_compat.json`.
+- Do not keep or introduce SmartESS-namespaced default aliases once the canonical runtime compatibility overlay exists.
+
 ## Key Project Paths
 
 Core integration code:

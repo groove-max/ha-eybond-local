@@ -11,9 +11,11 @@ from .const import (
     SERVICE_CREATE_LOCAL_SCHEMA_DRAFT,
     SERVICE_RELOAD_LOCAL_METADATA,
 )
-from .metadata.local_metadata import create_local_profile_draft, create_local_schema_draft
-from .metadata.profile_loader import clear_profile_loader_cache
-from .metadata.register_schema_loader import clear_register_schema_loader_cache
+from .metadata.local_metadata import (
+    clear_local_metadata_loader_caches,
+    create_local_profile_draft,
+    create_local_schema_draft,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -103,8 +105,7 @@ async def _async_handle_reload_local_metadata(
     hass: HomeAssistant,
     call: ServiceCall,
 ) -> dict[str, str | int]:
-    clear_profile_loader_cache()
-    clear_register_schema_loader_cache()
+    clear_local_metadata_loader_caches()
 
     reloaded = 0
     for entry in hass.config_entries.async_entries(DOMAIN):

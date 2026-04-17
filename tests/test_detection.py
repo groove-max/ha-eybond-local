@@ -26,6 +26,7 @@ from custom_components.eybond_local.models import (
     ProbeTarget,
 )
 from custom_components.eybond_local.drivers.pi30 import Pi30Driver
+from custom_components.eybond_local.collector.protocol import EybondHeader
 from custom_components.eybond_local.collector.discovery import DiscoveryProbeResult
 
 
@@ -123,7 +124,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         detected = DetectedInverter(
             driver_key="pi30",
             protocol_family="pi30",
-            model_name="PI30 4200",
+            model_name="PowMr 4.2kW",
             serial_number="553555355535552",
             probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
             details={"protocol_id": "PI30"},
@@ -153,7 +154,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                         match=DriverMatch(
                             driver_key="pi30",
                             protocol_family="pi30",
-                            model_name="PI30 4200",
+                            model_name="PowMr 4.2kW",
                             serial_number="553555355535552",
                             probe_target=detected.probe_target,
                         ),
@@ -202,7 +203,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         detected = DetectedInverter(
             driver_key="pi30",
             protocol_family="pi30",
-            model_name="PI30 4200",
+            model_name="PowMr 4.2kW",
             serial_number="553555355535552",
             probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
             details={"protocol_id": "PI30"},
@@ -232,7 +233,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                         match=DriverMatch(
                             driver_key="pi30",
                             protocol_family="pi30",
-                            model_name="PI30 4200",
+                            model_name="PowMr 4.2kW",
                             serial_number="553555355535552",
                             probe_target=detected.probe_target,
                         ),
@@ -248,6 +249,199 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("collector_heartbeat_not_observed", result.warnings)
+
+    async def test_detect_target_collects_smartess_metadata_on_successful_match(self) -> None:
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")
+
+        class FakeTransport:
+            def __init__(self, *, host: str, port: int, request_timeout: float, heartbeat_interval: float, collector_ip: str) -> None:
+                self.collector_ip = collector_ip
+                self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            def set_collector_ip(self, collector_ip: str) -> None:
+                self.collector_ip = collector_ip
+
+            async def wait_until_connected(self, timeout: float) -> bool:
+                return True
+
+            async def wait_until_heartbeat(self, timeout: float) -> bool:
+                return True
+
+            async def async_send_collector(
+                self,
+                *,
+                fcode: int,
+                payload: bytes = b"",
+                devcode: int = 0,
+                collector_addr: int = 1,
+            ) -> tuple[EybondHeader, bytes]:
+                responses = {
+                    (2, b"\x05"): b"\x00\x051.2.3",
+                    (2, b"\x0e"): b"\x00\x0e0925#SD-HYM-4862HWP",
+                }
+                response = responses[(fcode, payload)]
+                return (
+                    EybondHeader(
+                        tid=1,
+                        devcode=devcode,
+                        wire_len=len(response) + 2,
+                        devaddr=collector_addr,
+                        fcode=fcode,
+                    ),
+                    response,
+                )
+
+        detected = DetectedInverter(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="PowMr 4.2kW",
+            serial_number="553555355535552",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+            details={},
+        )
+
+        with (
+            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                new=AsyncMock(
+                    return_value=DiscoveryProbeResult(
+                        target_ip="192.168.1.255",
+                        message="set>server=192.168.1.50:8899;",
+                        local_port=40000,
+                        reply="rsp>server=2;",
+                        reply_from="192.168.1.14:58899",
+                    )
+                ),
+            ),
+            patch.object(
+                detector,
+                "_async_detect_driver_with_retries",
+                new=AsyncMock(
+                    return_value=DetectedDriverContext(
+                        driver=Pi30Driver(),
+                        inverter=detected,
+                        match=DriverMatch(
+                            driver_key="pi30",
+                            protocol_family="pi30",
+                            model_name="PowMr 4.2kW",
+                            serial_number="553555355535552",
+                            probe_target=detected.probe_target,
+                            details={},
+                        ),
+                    )
+                ),
+            ),
+        ):
+            result = await detector._async_detect_target(
+                target,
+                discovery_timeout=0.1,
+                connect_timeout=0.1,
+                heartbeat_timeout=0.1,
+            )
+
+        assert result.collector is not None
+        assert result.collector.collector is not None
+        assert result.match is not None
+        self.assertEqual(result.collector.collector.smartess_collector_version, "1.2.3")
+        self.assertEqual(result.collector.collector.smartess_protocol_asset_id, "0925")
+        self.assertEqual(result.collector.collector.smartess_protocol_profile_key, "smartess_0925")
+        self.assertEqual(result.collector.collector.smartess_device_address, 5)
+        self.assertEqual(result.match.details["smartess_collector_version"], "1.2.3")
+        self.assertEqual(result.match.details["smartess_protocol_asset_id"], "0925")
+        self.assertEqual(result.match.details["smartess_profile_key"], "smartess_0925")
+        self.assertEqual(result.match.details["smartess_device_address"], 5)
+
+    async def test_detect_target_keeps_smartess_metadata_when_no_driver_matches(self) -> None:
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")
+
+        class FakeTransport:
+            def __init__(self, *, host: str, port: int, request_timeout: float, heartbeat_interval: float, collector_ip: str) -> None:
+                self.collector_ip = collector_ip
+                self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            def set_collector_ip(self, collector_ip: str) -> None:
+                self.collector_ip = collector_ip
+
+            async def wait_until_connected(self, timeout: float) -> bool:
+                return True
+
+            async def wait_until_heartbeat(self, timeout: float) -> bool:
+                return True
+
+            async def async_send_collector(
+                self,
+                *,
+                fcode: int,
+                payload: bytes = b"",
+                devcode: int = 0,
+                collector_addr: int = 1,
+            ) -> tuple[EybondHeader, bytes]:
+                responses = {
+                    (2, b"\x05"): b"\x00\x052.0.1",
+                    (2, b"\x0e"): b"\x00\x0e0911#PVInverter",
+                }
+                response = responses[(fcode, payload)]
+                return (
+                    EybondHeader(
+                        tid=1,
+                        devcode=devcode,
+                        wire_len=len(response) + 2,
+                        devaddr=collector_addr,
+                        fcode=fcode,
+                    ),
+                    response,
+                )
+
+        with (
+            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                new=AsyncMock(
+                    return_value=DiscoveryProbeResult(
+                        target_ip="192.168.1.255",
+                        message="set>server=192.168.1.50:8899;",
+                        local_port=40000,
+                        reply="rsp>server=2;",
+                        reply_from="192.168.1.14:58899",
+                    )
+                ),
+            ),
+            patch.object(
+                detector,
+                "_async_detect_driver_with_retries",
+                new=AsyncMock(side_effect=RuntimeError("no_supported_driver_matched")),
+            ),
+        ):
+            result = await detector._async_detect_target(
+                target,
+                discovery_timeout=0.1,
+                connect_timeout=0.1,
+                heartbeat_timeout=0.1,
+            )
+
+        self.assertEqual(result.next_action, "manual_driver_selection")
+        self.assertEqual(result.last_error, "no_supported_driver_matched")
+        assert result.collector is not None
+        assert result.collector.collector is not None
+        self.assertEqual(result.collector.collector.smartess_collector_version, "2.0.1")
+        self.assertEqual(result.collector.collector.smartess_protocol_asset_id, "0911")
+        self.assertEqual(result.collector.collector.smartess_protocol_profile_key, "smartess_0911")
+        self.assertEqual(result.collector.collector.smartess_device_address, 3)
 
 
 if __name__ == "__main__":

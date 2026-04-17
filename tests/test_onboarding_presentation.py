@@ -24,6 +24,7 @@ from custom_components.eybond_local.onboarding.presentation import (
     build_scan_results_placeholders,
     confidence_label,
     default_control_summary,
+    has_smartess_collector_hint,
     result_label,
     result_placeholders,
     scan_result_sort_key,
@@ -64,11 +65,29 @@ class OnboardingPresentationTests(unittest.TestCase):
             )
         )
 
+    def _smartess_hint_result(self) -> OnboardingResult:
+        return OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.57",
+                source="autodetect",
+                ip="192.168.1.57",
+                connected=True,
+                collector=CollectorInfo(
+                    collector_pn="PN789",
+                    smartess_collector_version="8.50.12.3",
+                    smartess_protocol_asset_id="0000",
+                ),
+            )
+        )
+
     def test_status_code_and_label_follow_result_shape(self) -> None:
         self.assertEqual(scan_result_status_code(self._matched_result()), "ready")
         self.assertEqual(scan_result_status_code(self._matched_result(confidence="medium")), "review")
+        self.assertTrue(has_smartess_collector_hint(self._smartess_hint_result()))
+        self.assertEqual(scan_result_status_code(self._smartess_hint_result()), "smartess_hint")
         self.assertEqual(scan_result_status_code(self._collector_only_result()), "collector_only")
         self.assertEqual(scan_result_status_code(self._collector_only_result(replied=True)), "collector_replied")
+        self.assertEqual(scan_result_status_label(self._smartess_hint_result()), "SmartESS hint")
         self.assertEqual(scan_result_status_label(self._matched_result()), "Ready")
         self.assertEqual(scan_result_status_label(self._matched_result(), already_added=True), "Already added")
 
@@ -89,6 +108,10 @@ class OnboardingPresentationTests(unittest.TestCase):
         self.assertEqual(placeholders["confidence"], "Medium confidence")
         self.assertEqual(placeholders["control_summary"], "The integration will start in **monitoring-only** mode.")
 
+        smartess_label = result_label(self._smartess_hint_result(), display=EYBOND_CONNECTION_DISPLAY_METADATA)
+        self.assertIn("SmartESS hint", smartess_label)
+        self.assertIn("SmartESS metadata", smartess_label)
+
     def test_scan_results_placeholders_cover_empty_and_ready_states(self) -> None:
         empty = build_scan_results_placeholders(
             display=EYBOND_CONNECTION_DISPLAY_METADATA,
@@ -104,13 +127,26 @@ class OnboardingPresentationTests(unittest.TestCase):
             detected_count=3,
             available_count=2,
             already_added_count=1,
-            ready_model_names=["SMG 6200", "SMG 6200", "VM II 5kW"],
+            ready_model_names=["SMG 6200", "SMG 6200", "PowMr 4.2kW"],
         )
 
         self.assertIn("No reachable collectors or inverters", empty["scan_summary"])
         self.assertIn("2", ready["scan_summary"])
-        self.assertIn("SMG 6200, VM II 5kW", ready["scan_summary"])
+        self.assertIn("SMG 6200, PowMr 4.2kW", ready["scan_summary"])
         self.assertIn("Choose **Add detected device**", ready["scan_next_hint"])
+
+    def test_scan_results_placeholders_cover_pending_smartess_state(self) -> None:
+        pending = build_scan_results_placeholders(
+            display=EYBOND_CONNECTION_DISPLAY_METADATA,
+            selected_scan_interface="eth0 - 192.168.1.50",
+            detected_count=1,
+            available_count=1,
+            already_added_count=0,
+            ready_model_names=[],
+        )
+
+        self.assertIn("local inverter matching is still pending", pending["scan_summary"])
+        self.assertIn("save a pending entry", pending["scan_next_hint"])
 
     def test_scan_result_line_includes_existing_entry_hint(self) -> None:
         line = build_scan_result_line(
@@ -121,6 +157,14 @@ class OnboardingPresentationTests(unittest.TestCase):
         )
         self.assertIn("Already added", line)
         self.assertIn('already added as "EyeBond Local (192.168.1.56)"', line)
+
+        smartess_line = build_scan_result_line(
+            2,
+            self._smartess_hint_result(),
+            display=EYBOND_CONNECTION_DISPLAY_METADATA,
+        )
+        self.assertIn("SmartESS hint", smartess_line)
+        self.assertIn("SmartESS metadata", smartess_line)
 
     def test_simple_choose_and_confidence_helpers(self) -> None:
         placeholders = build_choose_placeholders(4)

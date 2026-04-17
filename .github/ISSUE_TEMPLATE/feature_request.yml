@@ -47,7 +47,7 @@ body:
     attributes:
       label: Hardware or protocol context
       description: Include inverter family, model, collector type, or protocol details if relevant.
-      placeholder: PI30 family, VMII-NXPW5KW, SmartESS collector, etc.
+      placeholder: PI30 family, PowMr 4.2kW, SmartESS collector, etc.
   - type: textarea
     id: evidence
     attributes:

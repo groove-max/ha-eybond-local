@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from ..const import (
     CONF_COLLECTOR_IP,
+    CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
     CONF_CONTROL_MODE,
@@ -28,6 +29,9 @@ from ..const import (
     CONF_HEARTBEAT_INTERVAL,
     CONF_POLL_INTERVAL,
     CONF_SERVER_IP,
+    CONF_SMARTESS_COLLECTOR_VERSION,
+    CONF_SMARTESS_PROFILE_KEY,
+    CONF_SMARTESS_PROTOCOL_ASSET_ID,
     CONF_TCP_PORT,
     CONF_UDP_PORT,
     DEFAULT_COLLECTOR_IP,
@@ -52,12 +56,32 @@ from ..control_policy import (
 from ..drivers.registry import get_driver
 from ..drivers.registry import all_write_capabilities
 from ..fixtures.utils import anonymize_fixture_json, build_command_fixture_responses
-from ..metadata.local_metadata import create_local_profile_draft, create_local_schema_draft
+from ..metadata.effective_metadata import resolve_effective_metadata_selection
+from ..metadata.local_metadata import (
+    clear_local_metadata_loader_caches,
+    create_local_profile_draft,
+    create_local_schema_draft,
+    rollback_local_metadata_overrides,
+)
+from ..metadata.smartess_draft import (
+    SmartEssKnownFamilyDraftPlan,
+    create_smartess_known_family_draft,
+    resolve_smartess_known_family_draft_plan,
+)
+from ..metadata.smartess_smg_bridge import (
+    SmartEssSmgBridgePlan,
+    create_smartess_smg_bridge_draft,
+    resolve_smartess_smg_bridge_plan,
+)
 from ..models import CapabilityPreset, RuntimeSnapshot, WriteCapability
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
 from ..schema import build_runtime_ui_schema
 from ..support.bundle import build_support_bundle_payload, export_support_bundle
+from ..support.cloud_evidence import (
+    fetch_and_export_smartess_device_bundle_cloud_evidence,
+    load_latest_cloud_evidence,
+)
 from ..support.package import export_support_package
 from ..support.workflow import build_support_workflow_state
 
@@ -242,24 +266,151 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return None
 
     @property
+    def effective_metadata(self):
+        """Return the effective metadata selection for the current entry state."""
+
+        return resolve_effective_metadata_selection(
+            inverter=self.data.inverter,
+            driver=self.current_driver,
+            collector=self.data.collector,
+            entry_data=self.config_entry.data,
+        )
+
+    @property
+    def effective_owner_key(self) -> str:
+        """Return the actual runtime owner key for the selected effective metadata."""
+
+        return self.effective_metadata.effective_owner_key
+
+    @property
+    def effective_owner_name(self) -> str:
+        """Return the actual runtime owner label for the selected effective metadata."""
+
+        return self.effective_metadata.effective_owner_name
+
+    @property
+    def smartess_family_name(self) -> str:
+        """Return the SmartESS family label when collector hints resolved one."""
+
+        return self.effective_metadata.smartess_family_name
+
+    @property
+    def smartess_raw_profile_name(self) -> str:
+        """Return the raw SmartESS asset profile name when available."""
+
+        return self.effective_metadata.raw_profile_name
+
+    @property
+    def smartess_raw_register_schema_name(self) -> str:
+        """Return the raw SmartESS asset schema name when available."""
+
+        return self.effective_metadata.raw_register_schema_name
+
+    @property
+    def effective_profile_metadata(self):
+        """Return the loaded effective profile metadata when available."""
+
+        return self.effective_metadata.profile_metadata
+
+    @property
+    def effective_register_schema_metadata(self):
+        """Return the loaded effective register schema metadata when available."""
+
+        return self.effective_metadata.register_schema_metadata
+
+    @property
     def effective_profile_name(self) -> str:
         """Return the effective detected profile name when available."""
 
-        inverter = self.data.inverter
-        if inverter is not None and inverter.profile_name:
-            return inverter.profile_name
-        driver = self.current_driver
-        return getattr(driver, "profile_name", "") if driver is not None else ""
+        return self.effective_metadata.profile_name
 
     @property
     def effective_register_schema_name(self) -> str:
         """Return the effective detected register schema name when available."""
 
-        inverter = self.data.inverter
-        if inverter is not None and inverter.register_schema_name:
-            return inverter.register_schema_name
-        driver = self.current_driver
-        return getattr(driver, "register_schema_name", "") if driver is not None else ""
+        return self.effective_metadata.register_schema_name
+
+    @property
+    def smartess_collector_pn(self) -> str:
+        """Return the collector PN used for SmartESS cloud evidence matching."""
+
+        return (
+            getattr(self.data.collector, "collector_pn", "")
+            or str(self.config_entry.data.get(CONF_COLLECTOR_PN, "") or "")
+        )
+
+    @property
+    def smartess_cloud_export_available(self) -> bool:
+        """Return whether SmartESS cloud export can be attempted for this entry."""
+
+        return bool(self.smartess_collector_pn)
+
+    @property
+    def smartess_cloud_evidence_path(self) -> str:
+        """Return the latest saved SmartESS cloud evidence path for this entry."""
+
+        record = self._latest_smartess_cloud_evidence_record()
+        return str(record.path) if record is not None else ""
+
+    @property
+    def smartess_known_family_draft_plan(self) -> SmartEssKnownFamilyDraftPlan | None:
+        """Return one safe SmartESS known-family draft plan when available."""
+
+        collector = self.data.collector
+        record = self._latest_smartess_cloud_evidence_record()
+        return resolve_smartess_known_family_draft_plan(
+            smartess_protocol_asset_id=(
+                getattr(collector, "smartess_protocol_asset_id", "")
+                or str(self.config_entry.data.get(CONF_SMARTESS_PROTOCOL_ASSET_ID, "") or "")
+            ),
+            smartess_profile_key=(
+                getattr(collector, "smartess_protocol_profile_key", "")
+                or str(self.config_entry.data.get(CONF_SMARTESS_PROFILE_KEY, "") or "")
+            ),
+            cloud_evidence=record.payload if record is not None else None,
+        )
+
+    @property
+    def smartess_smg_bridge_plan(self) -> SmartEssSmgBridgePlan | None:
+        """Return one safe SmartESS-backed SMG bridge plan when available."""
+
+        record = self._latest_smartess_cloud_evidence_record()
+        return resolve_smartess_smg_bridge_plan(
+            effective_owner_key=self.effective_owner_key,
+            source_profile_name=self.effective_profile_name,
+            source_schema_name=self.effective_register_schema_name,
+            source_profile_path=str(getattr(self.effective_profile_metadata, "source_path", "") or ""),
+            source_schema_path=str(getattr(self.effective_register_schema_metadata, "source_path", "") or ""),
+            cloud_evidence=record.payload if record is not None else None,
+        )
+
+    async def async_export_smartess_cloud_evidence(
+        self,
+        *,
+        username: str,
+        password: str,
+    ) -> str:
+        """Fetch and persist one SmartESS cloud-evidence bundle for this entry."""
+
+        collector_pn = self.smartess_collector_pn
+        if not collector_pn:
+            raise RuntimeError("smartess_collector_pn_not_available")
+
+        record = await self.hass.async_add_executor_job(
+            lambda: fetch_and_export_smartess_device_bundle_cloud_evidence(
+                config_dir=Path(self.hass.config.config_dir),
+                username=username,
+                password=password,
+                collector_pn=collector_pn,
+                source="smartess_cloud_diagnostics",
+                entry_id=self.config_entry.entry_id,
+            )
+        )
+        self._publish_tooling_values(
+            cloud_evidence_path=str(record.path),
+            local_metadata_status="SmartESS cloud evidence exported",
+        )
+        return str(record.path)
 
     async def async_export_support_bundle(self) -> str:
         """Export one JSON support bundle for the current entry."""
@@ -278,9 +429,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 options=support_bundle_payload["entry"]["options"],
                 profile_name=support_bundle_payload["source_metadata"]["profile_name"],
                 register_schema_name=support_bundle_payload["source_metadata"]["register_schema_name"],
+                cloud_evidence=support_bundle_payload["evidence"]["cloud"],
             )
         )
         self._publish_tooling_values(
+            cloud_evidence_path=str(
+                support_bundle_payload["runtime"]["values"].get("cloud_evidence_path") or ""
+            ),
             support_bundle_path=str(path),
             local_metadata_status="Support bundle exported",
         )
@@ -288,6 +443,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     async def async_export_support_package(self) -> str:
         """Export one combined support archive with raw capture and replay fixture."""
+
+        return await self.async_export_support_package_with_cloud_refresh()
+
+    async def async_export_support_package_with_cloud_refresh(
+        self,
+        *,
+        smartess_username: str = "",
+        smartess_password: str = "",
+    ) -> str:
+        """Export one support archive, optionally refreshing SmartESS cloud evidence first."""
+
+        wants_cloud_refresh = bool(smartess_username or smartess_password)
+        if wants_cloud_refresh:
+            if not smartess_username or not smartess_password:
+                raise RuntimeError("smartess_credentials_required")
+            await self.async_export_smartess_cloud_evidence(
+                username=smartess_username,
+                password=smartess_password,
+            )
 
         support_bundle_payload = self._build_support_bundle_payload()
         driver = self.current_driver
@@ -302,8 +476,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             }
         fixture = self._build_support_fixture(raw_capture)
         anonymized_fixture = anonymize_fixture_json(fixture) if fixture is not None else None
-        profile_metadata = getattr(driver, "profile_metadata", None)
-        register_schema_metadata = getattr(driver, "register_schema_metadata", None)
+        profile_metadata = self.effective_profile_metadata
+        register_schema_metadata = self.effective_register_schema_metadata
 
         export_result = await self.hass.async_add_executor_job(
             lambda: export_support_package(
@@ -323,6 +497,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         absolute_download_url = self._absolute_local_download_url(relative_download_url)
         download_url = absolute_download_url or relative_download_url
         self._publish_tooling_values(
+            cloud_evidence_path=str(
+                support_bundle_payload["runtime"]["values"].get("cloud_evidence_path") or ""
+            ),
             support_package_path=str(path),
             support_package_download_path=str(export_result.download_path or ""),
             support_package_download_url=download_url,
@@ -405,8 +582,105 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     async def async_reload_local_metadata(self) -> None:
         """Reload the current config entry after local metadata changes."""
 
+        clear_local_metadata_loader_caches()
         self._publish_tooling_values(local_metadata_status="Reloading local metadata")
         await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+
+    async def async_rollback_local_metadata(self) -> tuple[str, ...]:
+        """Remove active managed local overrides and reload the entry."""
+
+        removed_paths = await self.hass.async_add_executor_job(
+            lambda: rollback_local_metadata_overrides(
+                config_dir=Path(self.hass.config.config_dir),
+                profile_name=self.effective_profile_name or None,
+                schema_name=self.effective_register_schema_name or None,
+                profile_metadata=self.effective_profile_metadata,
+                schema_metadata=self.effective_register_schema_metadata,
+            )
+        )
+        clear_local_metadata_loader_caches()
+        self._publish_tooling_values(local_metadata_status="Rolling back local metadata")
+        await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+        return tuple(str(path) for path in removed_paths)
+
+    async def async_create_smartess_known_family_draft_named(
+        self,
+        output_profile_name: str | None = None,
+        output_schema_name: str | None = None,
+        *,
+        overwrite: bool = True,
+    ) -> tuple[str, str]:
+        """Create local profile/schema drafts from latest SmartESS known-family evidence."""
+
+        record = self._latest_smartess_cloud_evidence_record()
+        if record is None:
+            raise RuntimeError("smartess_cloud_evidence_not_available")
+
+        plan = self.smartess_known_family_draft_plan
+        if plan is None:
+            raise RuntimeError("smartess_known_family_not_resolved")
+
+        profile_path, schema_path = await self.hass.async_add_executor_job(
+            lambda: create_smartess_known_family_draft(
+                config_dir=Path(self.hass.config.config_dir),
+                plan=plan,
+                cloud_evidence=record.payload,
+                output_profile_name=output_profile_name,
+                output_schema_name=output_schema_name,
+                overwrite=overwrite,
+            )
+        )
+        self._publish_tooling_values(
+            cloud_evidence_path=str(record.path),
+            local_profile_draft_path=str(profile_path),
+            local_schema_draft_path=str(schema_path),
+            local_metadata_status="SmartESS local draft created",
+        )
+        return str(profile_path), str(schema_path)
+
+    async def async_create_smartess_smg_bridge_named(
+        self,
+        output_profile_name: str | None = None,
+        output_schema_name: str | None = None,
+        *,
+        overwrite: bool = True,
+    ) -> tuple[str, str]:
+        """Create one SmartESS-backed SMG bridge draft pair."""
+
+        record = self._latest_smartess_cloud_evidence_record()
+        if record is None:
+            raise RuntimeError("smartess_cloud_evidence_not_available")
+
+        plan = self.smartess_smg_bridge_plan
+        if plan is None:
+            raise RuntimeError("smartess_smg_bridge_not_resolved")
+
+        profile_path, schema_path = await self.hass.async_add_executor_job(
+            lambda: create_smartess_smg_bridge_draft(
+                config_dir=Path(self.hass.config.config_dir),
+                plan=plan,
+                cloud_evidence=record.payload,
+                output_profile_name=output_profile_name,
+                output_schema_name=output_schema_name,
+                overwrite=overwrite,
+            )
+        )
+        self._publish_tooling_values(
+            cloud_evidence_path=str(record.path),
+            local_profile_draft_path=str(profile_path),
+            local_schema_draft_path=str(schema_path),
+            local_metadata_status="SmartESS SMG bridge created",
+        )
+        return str(profile_path), str(schema_path)
+
+    def _latest_smartess_cloud_evidence_record(self):
+        """Return the latest SmartESS cloud-evidence record for this entry."""
+
+        return load_latest_cloud_evidence(
+            Path(self.hass.config.config_dir),
+            entry_id=self.config_entry.entry_id,
+            collector_pn=self.smartess_collector_pn,
+        )
 
     def _publish_tooling_values(self, **values: Any) -> None:
         """Publish in-memory tooling results into coordinator snapshot values."""
@@ -437,13 +711,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Return user-facing support workflow guidance for the current entry."""
 
         snapshot = snapshot or self.data
-        driver = self.current_driver
+        metadata = self.effective_metadata
+        collector = snapshot.collector
         workflow = build_support_workflow_state(
             has_inverter=snapshot.inverter is not None,
-            driver_name=getattr(driver, "name", ""),
+            effective_owner_key=metadata.effective_owner_key,
+            effective_owner_name=metadata.effective_owner_name,
+            smartess_family_name=metadata.smartess_family_name,
             detection_confidence=self.detection_confidence,
-            profile_source_scope=getattr(getattr(driver, "profile_metadata", None), "source_scope", ""),
-            schema_source_scope=getattr(getattr(driver, "register_schema_metadata", None), "source_scope", ""),
+            profile_source_scope=getattr(metadata.profile_metadata, "source_scope", ""),
+            schema_source_scope=getattr(metadata.register_schema_metadata, "source_scope", ""),
+            smartess_protocol_asset_id=(
+                getattr(collector, "smartess_protocol_asset_id", "")
+                or str(self.config_entry.data.get(CONF_SMARTESS_PROTOCOL_ASSET_ID, "") or "")
+            ),
+            smartess_profile_key=(
+                getattr(collector, "smartess_protocol_profile_key", "")
+                or str(self.config_entry.data.get(CONF_SMARTESS_PROFILE_KEY, "") or "")
+            ),
+            smartess_collector_version=(
+                getattr(collector, "smartess_collector_version", "")
+                or str(self.config_entry.data.get(CONF_SMARTESS_COLLECTOR_VERSION, "") or "")
+            ),
         )
         return {
             "support_workflow_level": workflow["level"],
@@ -460,8 +749,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     def _build_support_bundle_payload(self) -> dict[str, Any]:
         inverter = self.data.inverter
-        driver = self.current_driver
+        metadata = self.effective_metadata
+        smartess_protocol = metadata.smartess_protocol
         values = dict(self.data.values)
+        cloud_evidence_record = load_latest_cloud_evidence(
+            Path(self.hass.config.config_dir),
+            entry_id=self.config_entry.entry_id,
+            collector_pn=(
+                getattr(self.data.collector, "collector_pn", "")
+                or str(self.config_entry.data.get(CONF_COLLECTOR_PN, "") or "")
+            ),
+        )
+        cloud_evidence = None
+        if cloud_evidence_record is not None:
+            cloud_evidence = cloud_evidence_record.payload
+            values["cloud_evidence_path"] = str(cloud_evidence_record.path)
         inverter_payload = None
         if inverter is not None:
             values["ui_schema"] = build_runtime_ui_schema(inverter, self.data.values)
@@ -475,9 +777,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             values=values,
             data=dict(self.config_entry.data),
             options=dict(self.config_entry.options),
-            profile_name=getattr(inverter, "profile_name", "") or getattr(driver, "profile_name", ""),
-            register_schema_name=getattr(inverter, "register_schema_name", "") or getattr(driver, "register_schema_name", ""),
+            profile_name=metadata.profile_name,
+            register_schema_name=metadata.register_schema_name,
             variant_key=getattr(inverter, "variant_key", ""),
+            effective_owner_key=metadata.effective_owner_key,
+            effective_owner_name=metadata.effective_owner_name,
+            smartess_family_name=metadata.smartess_family_name,
+            raw_profile_name=metadata.raw_profile_name,
+            raw_register_schema_name=metadata.raw_register_schema_name,
+            smartess_protocol_asset_id=getattr(smartess_protocol, "asset_id", ""),
+            smartess_profile_key=getattr(smartess_protocol, "profile_key", ""),
+            cloud_evidence=cloud_evidence,
         )
 
     def _collector_payload(self) -> dict[str, Any] | None:
@@ -492,6 +802,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "last_udp_reply": self.data.collector.last_udp_reply,
             "last_udp_reply_from": self.data.collector.last_udp_reply_from,
             "last_devcode": self.data.collector.last_devcode,
+            "smartess_collector_version": self.data.collector.smartess_collector_version,
+            "smartess_protocol_raw_id": self.data.collector.smartess_protocol_raw_id,
+            "smartess_protocol_asset_id": self.data.collector.smartess_protocol_asset_id,
+            "smartess_protocol_asset_name": self.data.collector.smartess_protocol_asset_name,
+            "smartess_protocol_suffix": self.data.collector.smartess_protocol_suffix,
+            "smartess_protocol_profile_key": self.data.collector.smartess_protocol_profile_key,
+            "smartess_protocol_name": self.data.collector.smartess_protocol_name,
+            "smartess_device_address": self.data.collector.smartess_device_address,
         }
 
     @staticmethod

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,30 @@ from ..const import (
 )
 from .profile_loader import builtin_profile_path
 from .register_schema_loader import builtin_register_schema_path, load_register_schema
+
+
+@dataclass(frozen=True, slots=True)
+class LocalMetadataRollbackPaths:
+    """Active managed local override files that can be safely rolled back."""
+
+    profile_path: Path | None = None
+    schema_path: Path | None = None
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        """Return all active rollback targets in stable order."""
+
+        return tuple(path for path in (self.profile_path, self.schema_path) if path is not None)
+
+
+def clear_local_metadata_loader_caches() -> None:
+    """Clear profile and register-schema loader caches used by local overrides."""
+
+    from .profile_loader import clear_profile_loader_cache
+    from .register_schema_loader import clear_register_schema_loader_cache
+
+    clear_profile_loader_cache()
+    clear_register_schema_loader_cache()
 
 
 def local_metadata_root(config_dir: Path) -> Path:
@@ -98,6 +123,77 @@ def local_register_schema_override_details(
         path_factory=local_register_schema_path,
         kind="register schema",
     )
+
+
+def resolve_local_metadata_rollback_paths(
+    *,
+    config_dir: Path,
+    profile_name: str | None = None,
+    schema_name: str | None = None,
+    profile_metadata: Any = None,
+    schema_metadata: Any = None,
+) -> LocalMetadataRollbackPaths:
+    """Resolve active managed local override files that can be removed safely."""
+
+    profiles_root = local_profiles_root(config_dir)
+    schemas_root = local_register_schemas_root(config_dir)
+    return LocalMetadataRollbackPaths(
+        profile_path=_resolve_active_local_override_path(
+            config_dir=config_dir,
+            source_name=profile_name,
+            metadata=profile_metadata,
+            root=profiles_root,
+            path_factory=local_profile_path,
+        ),
+        schema_path=_resolve_active_local_override_path(
+            config_dir=config_dir,
+            source_name=schema_name,
+            metadata=schema_metadata,
+            root=schemas_root,
+            path_factory=local_register_schema_path,
+        ),
+    )
+
+
+def rollback_local_metadata_overrides(
+    *,
+    config_dir: Path,
+    profile_name: str | None = None,
+    schema_name: str | None = None,
+    profile_metadata: Any = None,
+    schema_metadata: Any = None,
+) -> tuple[Path, ...]:
+    """Remove the active managed local overrides for one entry."""
+
+    rollback_paths = resolve_local_metadata_rollback_paths(
+        config_dir=config_dir,
+        profile_name=profile_name,
+        schema_name=schema_name,
+        profile_metadata=profile_metadata,
+        schema_metadata=schema_metadata,
+    )
+    removed_paths: list[Path] = []
+
+    if rollback_paths.profile_path is not None:
+        rollback_paths.profile_path.unlink()
+        removed_paths.append(rollback_paths.profile_path)
+        _prune_empty_local_metadata_dirs(
+            rollback_paths.profile_path.parent,
+            local_profiles_root(config_dir),
+        )
+
+    if rollback_paths.schema_path is not None:
+        rollback_paths.schema_path.unlink()
+        removed_paths.append(rollback_paths.schema_path)
+        _prune_empty_local_metadata_dirs(
+            rollback_paths.schema_path.parent,
+            local_register_schemas_root(config_dir),
+        )
+
+    if not removed_paths:
+        raise RuntimeError("local_metadata_rollback_not_available")
+
+    return tuple(removed_paths)
 
 
 def create_local_profile_draft(
@@ -205,6 +301,48 @@ def _normalize_relative_name(name: str) -> str:
     raw = str(name).replace("\\", "/").strip().lstrip("/")
     parts = [part for part in raw.split("/") if part and part != "."]
     return "/".join(parts)
+
+
+def _resolve_active_local_override_path(
+    *,
+    config_dir: Path,
+    source_name: str | None,
+    metadata: Any,
+    root: Path,
+    path_factory,
+) -> Path | None:
+    if not source_name or metadata is None:
+        return None
+    if str(getattr(metadata, "source_scope", "") or "").strip() != "external":
+        return None
+
+    expected_path = path_factory(config_dir, source_name)
+    if not _is_within_root(expected_path, root):
+        return None
+
+    source_path = str(getattr(metadata, "source_path", "") or "").strip()
+    if source_path:
+        try:
+            resolved_source_path = Path(source_path).resolve()
+        except OSError:
+            return None
+        if resolved_source_path != expected_path:
+            return None
+
+    if not expected_path.exists():
+        return None
+    return expected_path
+
+
+def _prune_empty_local_metadata_dirs(path: Path, root: Path) -> None:
+    current = path.resolve()
+    resolved_root = root.resolve()
+    while current != resolved_root and _is_within_root(current, resolved_root):
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
 
 
 def _dump_json(raw: dict[str, Any]) -> str:

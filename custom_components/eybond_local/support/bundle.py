@@ -29,6 +29,14 @@ def build_support_bundle_payload(
     profile_name: str,
     register_schema_name: str,
     variant_key: str = "",
+    effective_owner_key: str = "",
+    effective_owner_name: str = "",
+    smartess_family_name: str = "",
+    raw_profile_name: str = "",
+    raw_register_schema_name: str = "",
+    smartess_protocol_asset_id: str = "",
+    smartess_profile_key: str = "",
+    cloud_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one machine-readable support bundle payload."""
 
@@ -45,12 +53,22 @@ def build_support_bundle_payload(
             "profile_name": profile_name,
             "register_schema_name": register_schema_name,
             "variant_key": variant_key,
+            "effective_owner_key": effective_owner_key,
+            "effective_owner_name": effective_owner_name,
+            "smartess_family_name": smartess_family_name,
+            "raw_profile_name": raw_profile_name,
+            "raw_register_schema_name": raw_register_schema_name,
+            "smartess_protocol_asset_id": smartess_protocol_asset_id,
+            "smartess_profile_key": smartess_profile_key,
         },
         "runtime": {
             "connected": connected,
             "collector": collector,
             "inverter": inverter,
             "values": values,
+        },
+        "evidence": {
+            "cloud": cloud_evidence,
         },
     }
 
@@ -69,6 +87,7 @@ def export_support_bundle(
     profile_name: str,
     register_schema_name: str,
     variant_key: str = "",
+    cloud_evidence: dict[str, Any] | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Write one JSON support bundle under the local support bundle directory."""
@@ -93,6 +112,7 @@ def export_support_bundle(
         profile_name=profile_name,
         register_schema_name=register_schema_name,
         variant_key=variant_key,
+        cloud_evidence=cloud_evidence,
     )
     destination.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False) + "\n",

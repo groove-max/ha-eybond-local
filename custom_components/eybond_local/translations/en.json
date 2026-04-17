@@ -62,12 +62,50 @@
       },
       "confirm": {
         "title": "Confirm Detection",
-        "description": "| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n| Driver | {driver_key} |\n| Detection | {confidence} |\n\n{control_summary}",
+        "description": "| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n| Driver | {driver_key} |\n| Detection | {confidence} |\n\n{smartess_cloud_summary}\n\n{control_summary}",
         "data": {
           "poll_interval": "Poll interval"
         },
         "data_description": {
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
+        }
+      },
+      "confirm_without_cloud_assist": {
+        "title": "Confirm Detection",
+        "description": "| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n| Driver | {driver_key} |\n| Detection | {confidence} |\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "data": {
+          "poll_interval": "Poll interval"
+        },
+        "data_description": {
+          "poll_interval": "How often to read sensor values from the inverter after the device is added."
+        }
+      },
+      "smartess_cloud_assist_choice": {
+        "title": "Refine With SmartESS Cloud",
+        "description": "{smartess_cloud_offer_summary}\n\n**Collector PN:** {collector_pn}\n**Last cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "menu_options": {
+          "smartess_cloud_assist": "Use SmartESS cloud assist",
+          "confirm_without_cloud_assist": "Continue without cloud assist"
+        }
+      },
+      "smartess_cloud_assist": {
+        "title": "SmartESS Cloud Assist",
+        "description": "The integration will authenticate against SmartESS cloud, resolve the device identity for collector `{collector_pn}`, and store reusable onboarding cloud evidence.\n\n{smartess_cloud_offer_summary}\n\n**Last cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "data": {
+          "username": "SmartESS username",
+          "password": "SmartESS password"
+        },
+        "data_description": {
+          "username": "The SmartESS account name used by the mobile app.",
+          "password": "The SmartESS account password. It is used only for this live onboarding assist step."
+        }
+      },
+      "smartess_cloud_assist_summary": {
+        "title": "SmartESS Cloud Result",
+        "description": "{smartess_cloud_mapping_table}\n\n{smartess_cloud_identity_table}\n\n{smartess_cloud_detail_summary}\n\n{smartess_cloud_settings_table}\n\n{smartess_cloud_highlights_table}\n\n**Saved cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "menu_options": {
+          "confirm": "Continue to local confirmation",
+          "manual_confirm": "Continue to local confirmation"
         }
       },
       "manual": {
@@ -110,10 +148,11 @@
       },
       "manual_confirm": {
         "title": "Manual Probe Result",
-        "description": "{probe_summary}\n\n| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n\n{control_summary}\n\n{next_actions_hint}",
+        "description": "{probe_summary}\n\n| Detail | Value |\n|---|---|\n| Collector | {collector_ip} ({collector_pn}) |\n| Inverter | {model_name} |\n| Serial | {serial_number} |\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{next_actions_hint}",
         "menu_options": {
           "manual_probe_again": "Probe again",
           "manual_edit_settings": "Edit settings",
+          "manual_smartess_cloud_assist": "Refine via SmartESS cloud",
           "manual_create_pending": "Create pending entry"
         }
       }
@@ -190,22 +229,87 @@
       },
       "diagnostics": {
         "title": "Diagnostics And Experimental Metadata",
-        "description": "**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Primary action:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Recommended next:** {support_workflow_next_action}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}\n**Last support bundle:** {support_bundle_path}",
+        "description": "**Need to share diagnostics?** Choose **{support_archive_action_label}** below. It creates one ZIP with runtime data, raw capture evidence, an anonymized replay fixture, and matching SmartESS cloud evidence when available.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Primary action for the current state:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Recommended next:** {support_workflow_next_action}\n\n{smartess_cloud_diagnostics_hint}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}\n**Last support bundle:** {support_bundle_path}\n**Last cloud evidence:** {cloud_evidence_path}",
         "menu_options": {
           "create_support_package": "Create support archive",
           "export_support_bundle": "Export support bundle",
+          "reload_local_metadata": "Reload local metadata",
+          "rollback_local_metadata": "Rollback local metadata",
+          "export_smartess_cloud_evidence": "Export SmartESS cloud evidence",
           "advanced_metadata": "Advanced metadata tools"
         }
       },
       "advanced_metadata": {
         "title": "Advanced Metadata Tools",
-        "description": "**Support status:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Driver:** {recommended_driver} (`{recommended_driver_key}`)\n\n| Metadata | Built-in | Source | Override |\n|---|---|---|---|\n| Profile | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Schema | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Suggested draft names:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Last profile draft:** {local_profile_draft_path}\n**Last schema draft:** {local_schema_draft_path}\n**Status:** {local_metadata_status}",
+        "description": "**Use this screen for draft generation and raw JSON export.**\n\n**Support status:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Runtime owner:** {effective_owner_name} (`{effective_owner_key}`){smartess_family_line}\n\n| Metadata | Built-in | Source | Override |\n|---|---|---|---|\n| Profile | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Schema | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Suggested draft names:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Last cloud evidence:** {cloud_evidence_path}\n**Last profile draft:** {local_profile_draft_path}\n**Last schema draft:** {local_schema_draft_path}\n**Status:** {local_metadata_status}",
         "menu_options": {
+          "export_smartess_cloud_evidence": "Export SmartESS cloud evidence",
           "export_support_bundle": "Export support bundle",
+          "create_smartess_smg_bridge": "Create SmartESS SMG bridge",
+          "create_smartess_draft": "Create SmartESS draft",
           "create_profile_draft": "Create local profile draft",
           "create_schema_draft": "Create local register schema draft",
           "reload_local_metadata": "Reload local metadata",
+          "rollback_local_metadata": "Rollback local metadata",
           "create_support_package": "Create support archive"
+        }
+      },
+      "create_support_package": {
+        "title": "Create Support Archive",
+        "description": "This step builds the support archive in one flow. If matching SmartESS cloud evidence is already saved, it will be included automatically. If you need a fresh SmartESS cloud bundle, choose **{refresh_mode_label}** below and enter the credentials here instead of leaving this screen first.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
+        "data": {
+          "smartess_cloud_mode": "SmartESS cloud evidence",
+          "username": "SmartESS username",
+          "password": "SmartESS password"
+        },
+        "data_description": {
+          "smartess_cloud_mode": "Choose whether to use saved SmartESS cloud evidence, refresh it now inside this step, or build the archive without it.",
+          "username": "Only needed when fetching or refreshing SmartESS cloud evidence in this step.",
+          "password": "Only needed when fetching or refreshing SmartESS cloud evidence in this step. It is used only for this live action."
+        }
+      },
+      "rollback_local_metadata": {
+        "title": "Rollback Local Metadata",
+        "description": "The active managed local metadata override files below will be removed and the entry will be reloaded onto the built-in metadata again.\n\n| Detail | Value |\n|---|---|\n| Active override files | {rollback_target_count} |\n| Profile override | {rollback_profile_path} |\n| Schema override | {rollback_schema_path} |\n\nOnly the currently active overrides inside `/config/eybond_local/` are touched. Inactive drafts and cloud evidence are left unchanged."
+      },
+      "export_smartess_cloud_evidence": {
+        "title": "Export SmartESS Cloud Evidence",
+        "description": "The integration will authenticate against SmartESS cloud, resolve the device identity for collector `{collector_pn}`, and store a reusable cloud evidence bundle under `/config/eybond_local/cloud_evidence/`. Use this standalone step when you need the cloud evidence itself for Advanced metadata tools or for review without creating a support archive yet.\n\n**Last cloud evidence:** {cloud_evidence_path}",
+        "data": {
+          "username": "SmartESS username",
+          "password": "SmartESS password"
+        },
+        "data_description": {
+          "username": "The SmartESS account name used by the mobile app.",
+          "password": "The SmartESS account password. It is used only for this live export step."
+        }
+      },
+      "create_smartess_smg_bridge": {
+        "title": "Create SmartESS SMG Bridge",
+        "description": "A local SmartESS-backed SMG bridge draft will be generated from the latest matching cloud evidence without changing the active runtime owner.\n\n| Detail | Value |\n|---|---|\n| Bridge | {bridge_label} |\n| Reason | {reason} |\n| Matched controls | {matched_controls} |\n| Matched readbacks | {matched_readbacks} |\n| Blocked fields left unchanged | {blocked_fields} |\n| Unmapped cloud fields | {skipped_fields} |\n| Source profile | {source_profile} |\n| Source schema | {source_schema} |\n| Cloud evidence | {cloud_evidence_path} |\n| Profile override | {profile_override} |\n| Schema override | {schema_override} |",
+        "data": {
+          "output_profile": "Output profile file name",
+          "output_schema": "Output schema file path",
+          "overwrite": "Overwrite existing files"
+        },
+        "data_description": {
+          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
+          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
+          "overwrite": "Replace the files if they already exist."
+        }
+      },
+      "create_smartess_draft": {
+        "title": "Create SmartESS Draft",
+        "description": "A local SmartESS draft will be generated from the latest matching cloud evidence.\n\n| Detail | Value |\n|---|---|\n| Recognized family | {driver_label} |\n| Reason | {reason} |\n| Source profile | {source_profile} |\n| Source schema | {source_schema} |\n| Cloud evidence | {cloud_evidence_path} |\n| Profile override | {profile_override} |\n| Schema override | {schema_override} |",
+        "data": {
+          "output_profile": "Output profile file name",
+          "output_schema": "Output schema file path",
+          "overwrite": "Overwrite existing files"
+        },
+        "data_description": {
+          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
+          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
+          "overwrite": "Replace the files if they already exist."
         }
       },
       "create_profile_draft": {

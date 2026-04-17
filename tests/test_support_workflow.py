@@ -17,7 +17,8 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_builtin_support_prefers_support_archive_for_extra_evidence(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=True,
-            driver_name="SMG / Modbus",
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG / Modbus",
             detection_confidence="high",
             profile_source_scope="builtin",
             schema_source_scope="builtin",
@@ -34,7 +35,8 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_partial_support_recommends_support_archive(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=True,
-            driver_name="SMG / Modbus",
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG / Modbus",
             detection_confidence="low",
             profile_source_scope="builtin",
             schema_source_scope="builtin",
@@ -49,7 +51,8 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_experimental_support_recommends_reload(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=True,
-            driver_name="SMG / Modbus",
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG / Modbus",
             detection_confidence="high",
             profile_source_scope="external",
             schema_source_scope="builtin",
@@ -63,7 +66,8 @@ class SupportWorkflowTests(unittest.TestCase):
     def test_unknown_support_prefers_support_archive(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=False,
-            driver_name="",
+            effective_owner_key="",
+            effective_owner_name="",
             detection_confidence="none",
             profile_source_scope="",
             schema_source_scope="",
@@ -78,6 +82,39 @@ class SupportWorkflowTests(unittest.TestCase):
             workflow["step_3"],
             "Wait for built-in support before working with local experimental metadata.",
         )
+
+    def test_smartess_collector_evidence_avoids_generic_unknown_support(self) -> None:
+        workflow = build_support_workflow_state(
+            has_inverter=False,
+            effective_owner_key="",
+            effective_owner_name="",
+            detection_confidence="none",
+            profile_source_scope="",
+            schema_source_scope="",
+            smartess_protocol_asset_id="0000",
+            smartess_collector_version="8.50.12.3",
+        )
+
+        self.assertEqual(workflow["level"], "smartess_pending")
+        self.assertEqual(workflow["level_label"], "SmartESS collector evidence")
+        self.assertEqual(workflow["primary_action"], "create_support_package")
+        self.assertIn("SmartESS app support", workflow["next_action"])
+        self.assertIn("collector evidence", workflow["step_3"])
+
+    def test_known_runtime_owner_without_live_inverter_counts_as_pending(self) -> None:
+        workflow = build_support_workflow_state(
+            has_inverter=False,
+            effective_owner_key="pi30",
+            effective_owner_name="PI30 / ASCII",
+            smartess_family_name="SmartESS 0925",
+            detection_confidence="none",
+            profile_source_scope="builtin",
+            schema_source_scope="builtin",
+        )
+
+        self.assertEqual(workflow["level"], "pending")
+        self.assertIn("PI30 / ASCII", workflow["summary"])
+        self.assertIn("SmartESS family context: SmartESS 0925.", workflow["advanced_hint"])
 
 
 if __name__ == "__main__":

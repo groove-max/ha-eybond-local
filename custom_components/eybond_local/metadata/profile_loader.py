@@ -98,7 +98,7 @@ def _load_raw_profile(profile_path: Path) -> dict[str, Any]:
 
     parent_ref_str = str(parent_ref)
     if parent_ref_str.startswith(("./", "../")):
-        parent_path = (profile_path.parent / parent_ref_str).resolve()
+        parent_path = _resolve_relative_parent_profile_path(profile_path, parent_ref_str)
     else:
         parent_path = _resolve_profile_path(parent_ref_str)
     parent_raw = _load_raw_profile(parent_path)
@@ -157,6 +157,27 @@ def builtin_profile_path(profile_name: str) -> Path:
     """Return the built-in profile path, bypassing external overrides."""
 
     return (PROFILES_DIR / profile_name).resolve()
+
+
+def _resolve_relative_parent_profile_path(profile_path: Path, parent_ref: str) -> Path:
+    candidate = (profile_path.parent / parent_ref).resolve()
+    if candidate.is_file():
+        return candidate
+
+    resolved_profile_path = profile_path.resolve()
+    for root in _EXTERNAL_PROFILE_ROOTS:
+        resolved_root = root.resolve()
+        if not _is_within_root(resolved_profile_path, resolved_root):
+            continue
+        relative_profile_path = resolved_profile_path.relative_to(resolved_root)
+        builtin_profile = (PROFILES_DIR / relative_profile_path).resolve()
+        if not _is_within_root(builtin_profile, PROFILES_DIR):
+            continue
+        builtin_candidate = (builtin_profile.parent / parent_ref).resolve()
+        if _is_within_root(builtin_candidate, PROFILES_DIR) and builtin_candidate.is_file():
+            return builtin_candidate
+
+    return candidate
 
 
 def _profile_source_scope(profile_path: Path) -> str:

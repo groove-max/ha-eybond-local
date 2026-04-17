@@ -11,6 +11,10 @@ from ..entity_descriptions import (
     BASE_SENSOR_DESCRIPTIONS,
     merge_descriptions,
 )
+from ..metadata.model_binding_catalog_loader import load_driver_model_binding_catalog
+from ..metadata.profile_loader import load_driver_profile
+from ..metadata.register_schema_loader import load_register_schema
+from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
 from ..models import (
     BinarySensorDescription,
     CapabilityGroup,
@@ -179,3 +183,25 @@ def prime_metadata_caches() -> None:
     all_write_capabilities()
     all_capability_groups()
     all_capability_presets()
+    _prime_catalog_driven_metadata()
+
+
+def _prime_catalog_driven_metadata() -> None:
+    """Warm JSON-backed metadata that is only reached through runtime catalogs."""
+
+    for binding in load_driver_model_binding_catalog().bindings.values():
+        if binding.profile_name:
+            load_driver_profile(binding.profile_name)
+        if binding.register_schema_name:
+            load_register_schema(binding.register_schema_name)
+
+    for protocol in load_smartess_protocol_catalog().protocols.values():
+        for profile_name in (protocol.raw_profile_name, protocol.profile_name):
+            if profile_name:
+                load_driver_profile(profile_name)
+        for schema_name in (
+            protocol.raw_register_schema_name,
+            protocol.register_schema_name,
+        ):
+            if schema_name:
+                load_register_schema(schema_name)

@@ -1,0 +1,7 @@
+{
+  "extends": "../base.json",
+  "profile_key": "smartess_0912",
+  "title": "SmartESS 0912 Profile",
+  "driver_key": "smartess_local",
+  "protocol_family": "smartess_local"
+}

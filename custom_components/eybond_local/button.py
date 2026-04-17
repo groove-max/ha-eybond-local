@@ -232,6 +232,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             "support_package_download_url": values.get("support_package_download_url"),
             "support_package_download_relative_url": values.get("support_package_download_relative_url"),
             "support_bundle_path": values.get("support_bundle_path"),
+            "cloud_evidence_path": values.get("cloud_evidence_path"),
             "local_profile_draft_path": values.get("local_profile_draft_path"),
             "local_schema_draft_path": values.get("local_schema_draft_path"),
             "local_metadata_status": values.get("local_metadata_status"),

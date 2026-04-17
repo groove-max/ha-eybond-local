@@ -35,7 +35,7 @@ body:
     id: hardware
     attributes:
       label: Inverter / collector model
-      placeholder: SMG 6200 + EyeBond Wi-Fi collector
+      placeholder: Sandisolar SD-HYM-4862HWP (SMG / Modbus) + EyeBond Wi-Fi collector
     validations:
       required: true
   - type: dropdown

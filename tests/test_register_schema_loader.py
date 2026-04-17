@@ -145,6 +145,25 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.enum_map_for("operating_mode_names")["L"], "Line")
         self.assertEqual(schema.bit_labels_for("alarm_status_names")[5], "Line fail warning")
 
+    def test_loads_pi30_smartess_0925_compat_model_overlay_schema(self) -> None:
+        schema = load_register_schema("pi30_ascii/models/smartess_0925_compat.json")
+
+        self.assertEqual(schema.key, "pi30_ascii_smartess_0925_compat")
+        self.assertEqual(schema.title, "SmartESS 0925 Compatibility Register Schema")
+        self.assertEqual(schema.driver_key, "pi30")
+        self.assertEqual(schema.protocol_family, "pi30")
+        self.assertEqual(schema.source_name, "pi30_ascii/models/smartess_0925_compat.json")
+        self.assertEqual(schema.source_scope, "builtin")
+        self.assertTrue(
+            schema.source_path.endswith(
+                "register_schemas/pi30_ascii/models/smartess_0925_compat.json"
+            )
+        )
+        self.assertEqual(schema.measurement_description("protocol_id").name, "Protocol ID")
+        self.assertEqual(schema.binary_sensor_description("lcd_backlight_enabled").name, "LCD Backlight Enabled")
+        self.assertEqual(schema.enum_map_for("operating_mode_names")["L"], "Line")
+        self.assertEqual(schema.bit_labels_for("alarm_status_names")[5], "Line fail warning")
+
     def test_loads_pi30_vmii_model_overlay_schema(self) -> None:
         schema = load_register_schema("pi30_ascii/models/vmii_nxpw5kw.json")
 
@@ -185,6 +204,86 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertTrue(schema.source_path.endswith("register_schemas/pi30_ascii/models/pi30_pip_gk.json"))
         self.assertEqual(schema.enum_map_for("operating_mode_names")["L"], "Line")
 
+    def test_loads_smartess_0925_model_overlay_schema(self) -> None:
+        schema = load_register_schema("smartess_local/models/0925.json")
+
+        self.assertEqual(schema.key, "smartess_0925")
+        self.assertEqual(schema.title, "SmartESS 0925 Register Schema")
+        self.assertEqual(schema.driver_key, "smartess_local")
+        self.assertEqual(schema.protocol_family, "smartess_local")
+        self.assertEqual(schema.source_name, "smartess_local/models/0925.json")
+        self.assertEqual(schema.source_scope, "builtin")
+        self.assertTrue(schema.source_path.endswith("register_schemas/smartess_local/models/0925.json"))
+        self.assertEqual(schema.block("live").start, 4501)
+        self.assertEqual(schema.block("live").count, 14)
+        self.assertEqual(schema.block("config").start, 5001)
+        self.assertEqual(schema.block("config").count, 33)
+        self.assertEqual(len(schema.spec_set("live")), 14)
+        self.assertEqual(len(schema.spec_set("config_state")), 18)
+        self.assertEqual(len(schema.spec_set("energy")), 4)
+        self.assertEqual(schema.measurement_description("output_active_power").name, "Output Active Power")
+        self.assertEqual(schema.measurement_description("all_energy").state_class, "total_increasing")
+        self.assertEqual(schema.measurement_description("today_energy").suggested_display_precision, 2)
+
+    def test_loads_smartess_0921_model_overlay_schema(self) -> None:
+        schema = load_register_schema("smartess_local/models/0921.json")
+
+        self.assertEqual(schema.key, "smartess_0921")
+        self.assertEqual(schema.title, "SmartESS 0921 Register Schema")
+        self.assertEqual(schema.driver_key, "smartess_local")
+        self.assertEqual(schema.protocol_family, "smartess_local")
+        self.assertEqual(schema.source_name, "smartess_local/models/0921.json")
+        self.assertEqual(schema.source_scope, "builtin")
+        self.assertTrue(schema.source_path.endswith("register_schemas/smartess_local/models/0921.json"))
+        self.assertEqual(schema.block("live").start, 32)
+        self.assertEqual(schema.block("live").count, 54)
+        self.assertEqual(schema.block("config").start, 256)
+        self.assertEqual(schema.block("config").count, 69)
+        self.assertEqual(len(schema.spec_set("live")), 29)
+        self.assertEqual(len(schema.spec_set("config")), 37)
+        self.assertEqual(schema.measurement_description("grid_power_limit").name, "Grid Power Limit")
+        self.assertEqual(schema.measurement_description("cumulative_output_energy").state_class, "total_increasing")
+        self.assertEqual(schema.measurement_description("grid_frequency").suggested_display_precision, 2)
+
+    def test_loads_smartess_0912_model_overlay_schema(self) -> None:
+        schema = load_register_schema("smartess_local/models/0912.json")
+
+        self.assertEqual(schema.key, "smartess_0912")
+        self.assertEqual(schema.title, "SmartESS 0912 Register Schema")
+        self.assertEqual(schema.driver_key, "smartess_local")
+        self.assertEqual(schema.protocol_family, "smartess_local")
+        self.assertEqual(schema.source_name, "smartess_local/models/0912.json")
+        self.assertEqual(schema.source_scope, "builtin")
+        self.assertTrue(schema.source_path.endswith("register_schemas/smartess_local/models/0912.json"))
+        self.assertEqual(schema.block("live").start, 0)
+        self.assertEqual(schema.block("live").count, 92)
+        self.assertEqual(schema.block("status").start, 95)
+        self.assertEqual(schema.block("status").count, 35)
+        self.assertEqual(schema.block("config").start, 1000)
+        self.assertEqual(schema.block("config").count, 116)
+        self.assertEqual(schema.block("update_flags").count, 3)
+        self.assertEqual(schema.block("dc_pv_live").count, 24)
+        self.assertEqual(len(schema.spec_set("live")), 68)
+        self.assertEqual(len(schema.spec_set("status")), 30)
+        self.assertEqual(len(schema.spec_set("config")), 93)
+        self.assertEqual(len(schema.spec_set("update_flags")), 3)
+        self.assertEqual(len(schema.spec_set("dc_pv_live")), 24)
+        self.assertEqual(len(schema.measurement_descriptions), 953)
+        self.assertEqual(schema.measurement_description("battery_power").name, "battery power")
+        self.assertEqual(
+            schema.measurement_description("highest_temperature_of_battery").unit,
+            "°C",
+        )
+        self.assertEqual(
+            schema.measurement_description("charger_to_start_the_update_logo").live,
+            False,
+        )
+        self.assertEqual(
+            schema.measurement_description("charger_to_start_the_update_logo").diagnostic,
+            True,
+        )
+        self.assertEqual(schema.measurement_description("battery_soc").suggested_display_precision, 2)
+
     def test_smg_driver_uses_loaded_register_schema(self) -> None:
         schema = load_register_schema("modbus_smg/models/smg_6200.json")
         driver = SmgModbusDriver()
@@ -213,7 +312,7 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         )
 
     def test_pi30_driver_uses_loaded_register_schema(self) -> None:
-        schema = load_register_schema("pi30_ascii/models/default.json")
+        schema = load_register_schema("pi30_ascii/models/smartess_0925_compat.json")
         driver = Pi30Driver()
 
         self.assertEqual(driver.register_schema_metadata.key, schema.key)
@@ -285,6 +384,39 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(
             schema.measurement_description("operational_state").name,
             "External System Status",
+        )
+        self.assertEqual(schema.block("live").count, 34)
+
+    def test_external_schema_relative_extends_can_fall_back_to_builtin_parent(self) -> None:
+        raw = {
+            "extends": "../base.json",
+            "schema_key": "external_smg_6200_relative",
+            "title": "External SMG 6200 Relative Register Schema",
+            "driver_key": "modbus_smg",
+            "protocol_family": "modbus_smg",
+            "measurement_descriptions": [
+                {
+                    "key": "operational_state",
+                    "name": "External Relative System Status",
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schema_path = Path(temp_dir) / "modbus_smg" / "models" / "smg_6200.json"
+            schema_path.parent.mkdir(parents=True, exist_ok=True)
+            schema_path.write_text(json.dumps(raw), encoding="utf-8")
+            set_external_register_schema_roots((Path(temp_dir),))
+
+            schema = load_register_schema("modbus_smg/models/smg_6200.json")
+
+        self.assertEqual(schema.title, "External SMG 6200 Relative Register Schema")
+        self.assertEqual(schema.key, "external_smg_6200_relative")
+        self.assertEqual(schema.source_scope, "external")
+        self.assertEqual(schema.source_path, str(schema_path.resolve()))
+        self.assertEqual(
+            schema.measurement_description("operational_state").name,
+            "External Relative System Status",
         )
         self.assertEqual(schema.block("live").count, 34)
 

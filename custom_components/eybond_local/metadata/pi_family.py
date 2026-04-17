@@ -8,6 +8,11 @@ from typing import Any
 from .pi_family_catalog_loader import load_pi_family_catalog
 
 
+_PI_MODEL_NUMBER_ALIASES: dict[str, str] = {
+    "VMII-NXPW5KW": "PowMr 4.2kW",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class PiProtocolIdentity:
     """Resolved PI-family identity for one detected device."""
@@ -39,8 +44,13 @@ def build_pi_model_name(protocol_id: str, values: dict[str, Any]) -> str:
     """Build a user-facing model name from probe values."""
 
     model_number = values.get("model_number")
-    if isinstance(model_number, str) and model_number:
-        return model_number
+    if isinstance(model_number, str):
+        normalized_model_number = model_number.strip()
+        if normalized_model_number:
+            return _PI_MODEL_NUMBER_ALIASES.get(
+                normalized_model_number.upper(),
+                normalized_model_number,
+            )
 
     rated_power = values.get("output_rating_active_power")
     if isinstance(rated_power, int) and rated_power > 0:

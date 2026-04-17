@@ -41,6 +41,23 @@ def default_control_summary(confidence: str) -> str:
     return "The integration will start in **monitoring-only** mode."
 
 
+def has_smartess_collector_hint(result: OnboardingResult) -> bool:
+    """Return true when onboarding captured SmartESS collector-side metadata."""
+
+    collector = result.collector
+    collector_info = collector.collector if collector is not None else None
+    if collector_info is None:
+        return False
+    return any(
+        str(value or "").strip()
+        for value in (
+            collector_info.smartess_collector_version,
+            collector_info.smartess_protocol_asset_id,
+            collector_info.smartess_protocol_profile_key,
+        )
+    )
+
+
 def scan_result_status_code(result: OnboardingResult, already_added: bool = False) -> str:
     """Return the UI status code for one onboarding result."""
 
@@ -51,6 +68,8 @@ def scan_result_status_code(result: OnboardingResult, already_added: bool = Fals
         return "ready"
     if result.match is not None:
         return "review"
+    if collector is not None and collector.connected and has_smartess_collector_hint(result):
+        return "smartess_hint"
     if collector is not None and collector.connected:
         return "collector_only"
     if collector is not None and collector.udp_reply:
@@ -66,6 +85,7 @@ def scan_result_status_label(result: OnboardingResult, already_added: bool = Fal
         "ready": "Ready",
         "review": "Review",
         "already_added": "Already added",
+        "smartess_hint": "SmartESS hint",
         "collector_only": "Collector only",
         "collector_replied": "Collector replied",
         "unknown": "Unknown",
@@ -84,9 +104,10 @@ def scan_result_sort_key(
         "ready": 0,
         "review": 1,
         "already_added": 2,
-        "collector_only": 3,
-        "collector_replied": 4,
-        "unknown": 5,
+        "smartess_hint": 3,
+        "collector_only": 4,
+        "collector_replied": 5,
+        "unknown": 6,
     }.get(status_code, 99)
     collector_ip = result.collector.ip if result.collector is not None else ""
     model_name = result.match.model_name if result.match is not None else ""
@@ -109,7 +130,9 @@ def result_label(result: OnboardingResult, *, display: ConnectionDisplayMetadata
     status_label = scan_result_status_label(result)
     if match is None:
         suffix = (
-            f"{display.peer_label} connected"
+            "SmartESS metadata"
+            if has_smartess_collector_hint(result)
+            else f"{display.peer_label} connected"
             if collector is not None and collector.connected
             else f"{display.peer_label} only"
         )
@@ -172,6 +195,15 @@ def build_scan_results_placeholders(
             f"Found **{detected_count}** device candidate(s), but none are ready to add yet."
         )
         next_hint = "Use **Refresh scan** to try again, or **Manual setup** to override the connection settings."
+    elif not ready_model_names:
+        scan_summary = (
+            f"Found **{detected_count}** device candidate(s). **{available_count}** collector candidate(s) "
+            f"can be added now, but local inverter matching is still pending."
+        )
+        next_hint = (
+            "Choose **Add detected device** to save a pending entry, or use **Refresh scan** "
+            "or **Manual setup** to retry the local match."
+        )
     else:
         ready_summary = ", ".join(dict.fromkeys(ready_model_names[:5])) or "detected inverters"
         scan_summary = (
@@ -227,6 +259,8 @@ def build_scan_result_line(
         ]
         if collector_pn:
             parts.append(f"PN {collector_pn}")
+        if has_smartess_collector_hint(result):
+            parts.append("SmartESS metadata")
         if collector is not None and collector.connected:
             parts.append(f"{display.peer_label} connected")
         elif collector is not None and collector.udp_reply:

@@ -21,6 +21,7 @@ from ..payload.pi18 import (
     parse_qpiri,
     parse_serial_number,
 )
+from ..metadata.model_binding_catalog_loader import resolve_driver_model_binding
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
 
@@ -56,12 +57,19 @@ class Pi18Driver(InverterDriver):
 
     key = "pi18"
     name = "PI18 / Experimental"
-    register_schema_name = "pi18_ascii/base.json"
     probe_targets = (
         ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
         ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
         ProbeTarget(devcode=0x0102, collector_addr=0xFF, device_addr=0),
     )
+
+    @property
+    def profile_name(self) -> str:
+        return _pi18_default_binding().profile_name
+
+    @property
+    def register_schema_name(self) -> str:
+        return _pi18_default_binding().register_schema_name
 
     @property
     def measurements(self):
@@ -208,6 +216,13 @@ def _build_model_name(values: dict[str, Any]) -> str:
     if isinstance(rated_power, int) and rated_power > 0:
         return f"PI18 {rated_power}"
     return "PI18"
+
+
+def _pi18_default_binding():
+    binding = resolve_driver_model_binding("pi18")
+    if binding is None:
+        raise RuntimeError("missing_model_binding:pi18")
+    return binding
 
 
 def _translate_config_enums(values: dict[str, Any], schema) -> dict[str, Any]:

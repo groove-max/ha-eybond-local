@@ -63,8 +63,8 @@ class _FakeTransport:
 class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_detects_pi30_inverter(self) -> None:
         driver = Pi30Driver()
-        self.assertEqual(driver.profile_name, "pi30_ascii/models/default.json")
-        self.assertEqual(driver.register_schema_name, "pi30_ascii/models/default.json")
+        self.assertEqual(driver.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
+        self.assertEqual(driver.register_schema_name, "pi30_ascii/models/smartess_0925_compat.json")
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
         transport = _FakeTransport(
             {
@@ -84,15 +84,15 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.serial_number, "553555355535552")
         self.assertEqual(inverter.model_name, "PI30 4200")
         self.assertEqual(inverter.variant_key, "default")
-        self.assertEqual(inverter.profile_name, "pi30_ascii/models/default.json")
-        self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/default.json")
+        self.assertEqual(inverter.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
+        self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(inverter.details["battery_type"], "User")
         self.assertEqual(inverter.details["output_source_priority"], "SBU first")
         self.assertEqual(inverter.details["machine_type"], "Hybrid")
         self.assertTrue(inverter.details["buzzer_enabled"])
         self.assertEqual(inverter.details["main_cpu_firmware_version"], "00012.09")
-        self.assertEqual(driver.profile_metadata.source_name, "pi30_ascii/models/default.json")
-        self.assertEqual(driver.register_schema_metadata.source_name, "pi30_ascii/models/default.json")
+        self.assertEqual(driver.profile_metadata.source_name, "pi30_ascii/models/smartess_0925_compat.json")
+        self.assertEqual(driver.register_schema_metadata.source_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(driver.measurements, driver.register_schema_metadata.measurement_descriptions)
         self.assertEqual(driver.binary_sensors, driver.register_schema_metadata.binary_sensor_descriptions)
         self.assertTrue(any(cap.key == "output_source_priority" for cap in inverter.capabilities))
@@ -119,7 +119,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(capabilities["battery_under_voltage"].native_minimum, 20.0)
         self.assertEqual(capabilities["battery_under_voltage"].native_maximum, 24.0)
 
-    async def test_probe_prefers_model_number_when_available(self) -> None:
+    async def test_probe_maps_vmii_model_number_to_display_name(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
         transport = _FakeTransport(
@@ -127,17 +127,17 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
                 (0x0994, 0x01, "QPI"): "PI30",
                 (0x0994, 0x01, "QID"): "553555355535552",
                 (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 28.2 27.0 2 30 80 0 2 2 1 10 0 0 27.0 0 1",
-                (0x0994, 0x01, "QMN"): "MKS2-4200",
+                (0x0994, 0x01, "QMN"): "VMII-NXPW5KW",
             }
         )
 
         inverter = await driver.async_probe(transport, target)
 
         assert inverter is not None
-        self.assertEqual(inverter.model_name, "MKS2-4200")
-        self.assertEqual(inverter.details["model_number"], "MKS2-4200")
-        self.assertEqual(inverter.profile_name, "pi30_ascii/models/default.json")
-        self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/default.json")
+        self.assertEqual(inverter.model_name, "PowMr 4.2kW")
+        self.assertEqual(inverter.details["model_number"], "VMII-NXPW5KW")
+        self.assertEqual(inverter.profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
+        self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/vmii_nxpw5kw.json")
 
     async def test_probe_selects_vmii_model_overlay_when_model_number_matches(self) -> None:
         driver = Pi30Driver()
@@ -154,7 +154,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
 
         assert inverter is not None
-        self.assertEqual(inverter.model_name, "VMII-NXPW5KW")
+        self.assertEqual(inverter.model_name, "PowMr 4.2kW")
         self.assertEqual(inverter.variant_key, "vmii_nxpw5kw")
         self.assertEqual(inverter.profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
         self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/vmii_nxpw5kw.json")

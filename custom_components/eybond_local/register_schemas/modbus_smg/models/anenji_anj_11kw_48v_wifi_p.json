@@ -1,0 +1,534 @@
+{
+  "extends": "../base.json",
+  "schema_key": "modbus_smg_anenji_anj_11kw_48v_wifi_p",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P Register Schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "blocks": [
+    {
+      "key": "status",
+      "start": 100,
+      "count": 10
+    },
+    {
+      "key": "live",
+      "start": 198,
+      "count": 34
+    },
+    {
+      "key": "config",
+      "start": 600,
+      "count": 57
+    }
+  ],
+  "scalar_registers": {
+    "rated_power_register": 0
+  },
+  "enum_tables": {
+    "output_mode": {
+      "0": "Single",
+      "1": "Parallel",
+      "2": "3 Phase-P1",
+      "3": "3 Phase-P2",
+      "4": "3 Phase-P3",
+      "5": "Split-Phase-P1",
+      "6": "Split-Phase-P2"
+    },
+    "output_source_priority": {
+      "1": "PV-Utility-Battery",
+      "2": "PV-Battery-Utility",
+      "3": "PV-Utility-Battery (Grid-Tied PV)"
+    },
+    "charge_source_priority": {
+      "1": "PV Priority",
+      "2": "PV and Utility",
+      "3": "PV Only",
+      "4": "PV Priority With Load Reserve"
+    },
+    "battery_type": {
+      "0": "AGM",
+      "1": "Flooded",
+      "2": "User",
+      "4": "Li2",
+      "6": "Li4",
+      "8": "LiB"
+    }
+  },
+  "bit_labels": {
+    "fault_code_names": {
+      "1": "Inverter Over Temperature",
+      "2": "PV Over Temperature",
+      "3": "DCDC Over Temperature",
+      "4": "Battery Overvoltage",
+      "5": "Reserved / Vendor-Specific Fault Bit 4",
+      "6": "Output Short Circuit",
+      "7": "Inverter Overvoltage",
+      "8": "Output Overload",
+      "9": "Busbar Overvoltage",
+      "10": "Bus Soft Start Timeout",
+      "11": "PV Overcurrent",
+      "12": "PV Overvoltage",
+      "13": "DCDC Overcurrent",
+      "14": "Inverter Overcurrent",
+      "15": "Busbar Low Voltage",
+      "16": "Reserved / Vendor-Specific Fault Bit 15",
+      "17": "The Inverter DC Component Is Too High",
+      "18": "PV2 Current Zero Deviation Is Too Large",
+      "19": "Output Current Zero Bias Is Too Large",
+      "20": "Inverter Current Zero Bias Is Too Large",
+      "21": "Battery Current Zero Bias Is Too Large",
+      "22": "PV1 Current Zero Deviation Is Too Large",
+      "23": "Inverter Low Voltage",
+      "24": "Inverter Negative Power Protection",
+      "25": "The Host Of The Parallel System Is Lost",
+      "26": "The Parallel System Synchronization Signal Is Abnormal",
+      "27": "Incompatible Battery Type",
+      "28": "Incompatible Parallel Versions",
+      "29": "External CT Setup Repeat",
+      "30": "Output 2 Current Zero Deviation Is Too Large"
+    },
+    "warning_code_names": {
+      "0": "Mains Zero-Crossing Loss",
+      "1": "Abnormal AC Power Waveform",
+      "2": "Mains Overvoltage",
+      "3": "Mains Undervoltage",
+      "4": "Mains Overfrequency",
+      "5": "Mains Underfrequency",
+      "6": "PV1 Undervoltage",
+      "7": "Overheating",
+      "8": "Low Battery Voltage",
+      "9": "Battery Not Connected",
+      "10": "Output Overload",
+      "11": "Battery Eq Charging",
+      "12": "Battery Discharged Below Recovery Point",
+      "13": "Output Power Derating",
+      "14": "Fan Stall",
+      "15": "PV Energy Is Too Low To Be Used",
+      "16": "Parallel Communication Interrupted",
+      "17": "Single And Parallel Output Modes Are Inconsistent",
+      "18": "Parallel Battery Voltage Difference Too Large",
+      "19": "Lithium Battery Communication Abnormality",
+      "20": "Battery Discharge Current Exceeds Set Value",
+      "21": "Island Detection",
+      "22": "PV2 Undervoltage",
+      "23": "Main Output Overload",
+      "24": "Secondary Output Load Exceeds Set Value",
+      "25": "Secondary Output Overload"
+    }
+  },
+  "spec_sets": {
+    "status": [
+      {
+        "key": "fault_code",
+        "register": 100,
+        "word_count": 2,
+        "combine": "u32_high_first"
+      },
+      {
+        "key": "warning_code",
+        "register": 104,
+        "word_count": 2,
+        "combine": "u32_high_first"
+      }
+    ],
+    "live": [
+      {
+        "key": "power_flow_status",
+        "register": 198
+      },
+      {
+        "key": "operating_mode",
+        "register": 201,
+        "enum_table": "mode_names"
+      },
+      {
+        "key": "grid_current",
+        "register": 202,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_frequency",
+        "register": 203,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_power",
+        "register": 204,
+        "signed": true
+      },
+      {
+        "key": "grid_va",
+        "register": 205,
+        "signed": true
+      },
+      {
+        "key": "inverter_charging_power",
+        "register": 206,
+        "signed": true
+      },
+      {
+        "key": "power_flow_status_extension",
+        "register": 207
+      },
+      {
+        "key": "inverter_current",
+        "register": 226,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_frequency",
+        "register": 227,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "inverter_power",
+        "register": 228,
+        "signed": true
+      },
+      {
+        "key": "inverter_va",
+        "register": 229,
+        "signed": true
+      },
+      {
+        "key": "charge_average_current",
+        "register": 230,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_temperature",
+        "register": 231,
+        "signed": true
+      }
+    ],
+    "config": [
+      {
+        "key": "output_mode",
+        "register": 600,
+        "enum_table": "output_mode"
+      },
+      {
+        "key": "output_source_priority",
+        "register": 601,
+        "enum_table": "output_source_priority"
+      },
+      {
+        "key": "output_rating_voltage",
+        "register": 606,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_rating_frequency",
+        "register": 607,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "battery_type",
+        "register": 630,
+        "enum_table": "battery_type"
+      },
+      {
+        "key": "battery_overvoltage_protection_voltage",
+        "register": 631,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "charge_source_priority",
+        "register": 632,
+        "enum_table": "charge_source_priority"
+      },
+      {
+        "key": "battery_bulk_voltage",
+        "register": 637,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_float_voltage",
+        "register": 638,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "max_charge_current",
+        "register": 640,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "max_ac_charge_current",
+        "register": 641,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_redischarge_voltage",
+        "register": 643,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_under_voltage",
+        "register": 644,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_under_voltage_off_grid",
+        "register": 646,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "low_dc_protection_soc_grid_mode",
+        "register": 647
+      },
+      {
+        "key": "solar_battery_utility_return_soc_threshold",
+        "register": 648
+      },
+      {
+        "key": "low_dc_cutoff_soc",
+        "register": 650
+      },
+      {
+        "key": "battery_equalization_mode",
+        "register": 651,
+        "enum_table": "battery_equalization_mode"
+      },
+      {
+        "key": "battery_equalization_voltage",
+        "register": 652,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_equalization_time",
+        "register": 653
+      },
+      {
+        "key": "battery_equalization_timeout",
+        "register": 654
+      },
+      {
+        "key": "battery_equalization_interval",
+        "register": 655
+      }
+    ],
+    "aux_config": [
+      {
+        "key": "device_type",
+        "register": 171
+      },
+      {
+        "key": "protocol_number",
+        "register": 184
+      },
+      {
+        "key": "output_current",
+        "register": 252,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_frequency",
+        "register": 253,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "output_power",
+        "register": 254,
+        "signed": true
+      },
+      {
+        "key": "output_va",
+        "register": 255,
+        "signed": true
+      },
+      {
+        "key": "load_percent",
+        "register": 256,
+        "signed": true
+      },
+      {
+        "key": "battery_voltage",
+        "register": 277,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_average_current",
+        "register": 278,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_average_power",
+        "register": 279,
+        "signed": true
+      },
+      {
+        "key": "battery_percent",
+        "register": 280
+      },
+      {
+        "key": "dcdc_temperature",
+        "register": 281,
+        "signed": true
+      },
+      {
+        "key": "pv_power",
+        "register": 302,
+        "signed": true
+      },
+      {
+        "key": "pv_charging_power",
+        "register": 303,
+        "signed": true
+      },
+      {
+        "key": "pv_charging_current",
+        "register": 304,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_temperature",
+        "register": 305,
+        "signed": true
+      },
+      {
+        "key": "grid_voltage",
+        "register": 338,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_voltage",
+        "register": 342,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_voltage",
+        "register": 346,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_voltage",
+        "register": 351,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_current",
+        "register": 352,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "turn_on_mode",
+        "register": 693,
+        "enum_table": "turn_on_mode"
+      },
+      {
+        "key": "remote_switch",
+        "register": 694,
+        "enum_table": "remote_switch"
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "protocol_number",
+      "name": "Protocol Number",
+      "icon": "mdi:numeric",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "device_type",
+      "name": "Device Type",
+      "icon": "mdi:identifier",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "power_flow_status",
+      "name": "Power Flow Status",
+      "icon": "mdi:swap-horizontal",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "grid_current",
+      "name": "Grid Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "grid_va",
+      "name": "Grid Apparent Power",
+      "unit": "VA",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "inverter_va",
+      "name": "Inverter Apparent Power",
+      "unit": "VA",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "pv_temperature",
+      "name": "PV Temperature",
+      "unit": "C",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
+    },
+    {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "icon": "mdi:battery-cog-outline",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    }
+  ]
+}

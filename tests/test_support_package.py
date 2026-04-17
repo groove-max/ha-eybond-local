@@ -36,6 +36,14 @@ class SupportPackageTests(unittest.TestCase):
                 options={"poll_interval": 10},
                 profile_name="smg_modbus.json",
                 register_schema_name="modbus_smg/models/smg_6200.json",
+                cloud_evidence={
+                    "evidence_version": 1,
+                    "source": "smartess_cloud_probe",
+                    "match": {"entry_id": "entry123", "collector_pn": "E5000025388419"},
+                    "device_identity": {"pn": "E50000253884199645", "sn": "E500...094801"},
+                    "summary": {"actions": ["device_list", "device_detail"]},
+                    "payload": {"request": {"command": "device-bundle"}},
+                },
             )
 
             result = export_support_package(
@@ -84,23 +92,39 @@ class SupportPackageTests(unittest.TestCase):
                 self.assertIn("manifest.json", names)
                 self.assertIn("support_bundle.json", names)
                 self.assertIn("raw_capture.json", names)
+                self.assertIn("evidence/cloud_evidence.json", names)
                 self.assertIn("fixture/raw_fixture.json", names)
                 self.assertIn("fixture/anonymized_fixture.json", names)
                 self.assertIn("README.txt", names)
 
                 manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
                 bundled = json.loads(archive.read("support_bundle.json").decode("utf-8"))
+                cloud_evidence = json.loads(
+                    archive.read("evidence/cloud_evidence.json").decode("utf-8")
+                )
                 raw_capture = json.loads(archive.read("raw_capture.json").decode("utf-8"))
                 anonymized_fixture = json.loads(
                     archive.read("fixture/anonymized_fixture.json").decode("utf-8")
                 )
 
             self.assertEqual(manifest["entry"]["entry_id"], "entry123")
+            self.assertEqual(manifest["archive_version"], 2)
+            self.assertEqual(
+                manifest["archive_members"]["cloud_evidence"],
+                "evidence/cloud_evidence.json",
+            )
             self.assertEqual(
                 manifest["effective_metadata"]["profile_source"]["scope"],
                 "builtin",
             )
             self.assertEqual(bundled["entry"]["entry_id"], "entry123")
+            self.assertEqual(
+                bundled["evidence"]["cloud"],
+                {"archive_member": "evidence/cloud_evidence.json"},
+            )
+            self.assertEqual(cloud_evidence["source"], "smartess_cloud_probe")
+            self.assertIn("payload", cloud_evidence)
+            self.assertNotIn("payload", bundled["evidence"]["cloud"])
             self.assertEqual(raw_capture["capture_kind"], "modbus_register_dump")
             self.assertTrue(anonymized_fixture["anonymized"])
 
@@ -109,12 +133,12 @@ class SupportPackageTests(unittest.TestCase):
             config_dir = Path(temp_dir)
             support_bundle = build_support_bundle_payload(
                 entry_id="entry456",
-                entry_title="VMII-NXPW5KW",
+                entry_title="PowMr 4.2kW",
                 connected=True,
                 collector={"collector_pn": "Q0033482254531"},
                 inverter={
                     "driver_key": "pi30",
-                    "model_name": "VMII-NXPW5KW",
+                    "model_name": "PowMr 4.2kW",
                     "serial_number": "55355535553555",
                 },
                 values={"operating_mode": "Line"},
@@ -128,7 +152,7 @@ class SupportPackageTests(unittest.TestCase):
             result = export_support_package(
                 config_dir=config_dir,
                 entry_id="entry456",
-                entry_title="VMII-NXPW5KW",
+                entry_title="PowMr 4.2kW",
                 support_bundle=support_bundle,
                 raw_capture={
                     "capture_kind": "pi30_ascii_dump",
@@ -151,10 +175,12 @@ class SupportPackageTests(unittest.TestCase):
             )
 
             with zipfile.ZipFile(result.path) as archive:
+                names = set(archive.namelist())
                 raw_fixture = json.loads(archive.read("fixture/raw_fixture.json").decode("utf-8"))
                 anonymized_fixture = json.loads(
                     archive.read("fixture/anonymized_fixture.json").decode("utf-8")
                 )
+                bundled = json.loads(archive.read("support_bundle.json").decode("utf-8"))
 
             self.assertEqual(raw_fixture["command_responses"]["QPI"], "PI30")
             self.assertEqual(raw_fixture["command_responses"]["QET"], "NAK")
@@ -163,6 +189,8 @@ class SupportPackageTests(unittest.TestCase):
                 raw_fixture["command_responses"]["QID"],
             )
             self.assertTrue(anonymized_fixture["anonymized"])
+            self.assertNotIn("evidence/cloud_evidence.json", names)
+            self.assertIsNone(bundled["evidence"]["cloud"])
 
 
 if __name__ == "__main__":
