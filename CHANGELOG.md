@@ -23,6 +23,12 @@ the GitHub release body should be rendered from the matching version section her
 
 - Nothing yet.
 
+## [0.1.51] - 2026-04-18
+
+### Fixed
+
+- Anenji inverter date/time sensors no longer stay unavailable on hardware that returns valid clock registers only when the optional inverter clock range is read as one contiguous block.
+
 ## [0.1.50] - 2026-04-18
 
 ### Added

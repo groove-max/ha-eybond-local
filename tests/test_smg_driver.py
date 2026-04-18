@@ -22,6 +22,7 @@ from custom_components.eybond_local.metadata.register_schema_loader import (  # 
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
+from custom_components.eybond_local.payload.modbus import crc16_modbus  # noqa: E402
 
 
 def _register_map_for_ranges(ranges: tuple[tuple[int, int], ...]) -> dict[int, int]:
@@ -431,6 +432,44 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["pv_generation_sum"], 123.45)
         self.assertEqual(values["ground_relay_enabled"], "Disabled")
         self.assertEqual(values["lithium_battery_activation_time"], 6)
+
+    async def test_read_values_batch_optional_clock_registers_when_single_reads_are_zero(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="Anenji ANJ-11KW-48V-WIFI-P",
+            serial_number="ANJ11KW240001",
+            probe_target=target,
+            variant_key="anenji_anj_11kw_48v_wifi_p",
+            profile_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            register_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            capabilities=(),
+        )
+
+        class ClockBlockOnlyTransport(FixtureTransport):
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                if 696 <= address <= 701 and count == 1:
+                    response = bytearray([self._probe_target.device_addr, 0x03, 0x02])
+                    response.extend((0).to_bytes(2, "big"))
+                    response_crc = crc16_modbus(response)
+                    response.extend(response_crc.to_bytes(2, "little"))
+                    return bytes(response)
+                return super()._handle_read_holding(payload)
+
+        transport = ClockBlockOnlyTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["inverter_date"], "2026-04-17")
+        self.assertEqual(values["inverter_time"], "07:22:01")
 
     async def test_write_capability_uses_inverter_capabilities(self) -> None:
         driver = SmgModbusDriver()

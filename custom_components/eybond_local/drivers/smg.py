@@ -414,19 +414,59 @@ def _decode_raw_value(registers: dict[int, int], spec: RegisterValueSpec) -> int
     return value
 
 
+def _group_optional_specs(
+    specs: tuple[RegisterValueSpec, ...],
+) -> tuple[tuple[int, int, tuple[RegisterValueSpec, ...]], ...]:
+    grouped: list[tuple[int, int, tuple[RegisterValueSpec, ...]]] = []
+    current_specs: list[RegisterValueSpec] = []
+    current_start = 0
+    current_end = -1
+
+    for spec in sorted(specs, key=lambda item: (item.register, item.word_count, item.key)):
+        spec_end = spec.register + spec.word_count - 1
+        if not current_specs or spec.register > current_end + 1:
+            if current_specs:
+                grouped.append(
+                    (current_start, current_end - current_start + 1, tuple(current_specs))
+                )
+            current_specs = [spec]
+            current_start = spec.register
+            current_end = spec_end
+            continue
+
+        current_specs.append(spec)
+        current_end = max(current_end, spec_end)
+
+    if current_specs:
+        grouped.append((current_start, current_end - current_start + 1, tuple(current_specs)))
+
+    return tuple(grouped)
+
+
 async def _read_optional_specs(
     session: ModbusSession,
     specs: tuple[RegisterValueSpec, ...],
 ) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
-    for spec in specs:
+
+    for start_register, register_count, grouped_specs in _group_optional_specs(specs):
         try:
-            raw_values = await session.read_holding(spec.register, spec.word_count)
+            raw_values = await session.read_holding(start_register, register_count)
         except Exception as exc:
             if not _is_optional_spec_error(exc):
                 raise
+            for spec in grouped_specs:
+                try:
+                    raw_values = await session.read_holding(spec.register, spec.word_count)
+                except Exception as fallback_exc:
+                    if not _is_optional_spec_error(fallback_exc):
+                        raise
+                    continue
+                decoded.update(_decode_block(spec.register, raw_values, (spec,)))
             continue
-        decoded.update(_decode_block(spec.register, raw_values, (spec,)))
+
+        decoded.update(_decode_block(start_register, raw_values, grouped_specs))
+
     return decoded
 
 
