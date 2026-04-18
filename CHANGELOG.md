@@ -23,6 +23,29 @@ the GitHub release body should be rendered from the matching version section her
 
 - Nothing yet.
 
+## [0.1.50] - 2026-04-18
+
+### Added
+
+- Added a separate deep-scan onboarding path that can probe the full selected IPv4 network from both the first setup step and the scan-results screen.
+- Added BusyBox-compatible IPv4 interface parsing for Home Assistant OS, so deep-scan network size and broadcast metadata still resolve correctly when `ip -j` is unavailable.
+- Added runtime-schema-aware entity selection for model-specific SMG variants, which restores Anenji PV1/PV2 and other variant-only entities when the detected runtime metadata differs from the generic driver defaults.
+
+### Changed
+
+- The Anenji ANJ-11KW-48V-WIFI-P model-specific write surface is now marked as tested on real hardware, so its validated controls can participate in normal high-confidence `auto` exposure.
+- The setup wizard now distinguishes quick scan from deep scan explicitly, with scan-mode-aware hints, timing estimates, and follow-up actions.
+
+### Fixed
+
+- Quick scan now stays effectively broadcast-first by removing duplicate broadcast targets and shortening reverse-connection waits when no UDP reply was received.
+- Deep scan no longer reports zero-address networks on BusyBox-based Home Assistant OS hosts and remains available from the results screen even when candidates were already found.
+- The scan progress bar now publishes its first determinate update immediately instead of briefly jumping from an indeterminate-looking state.
+
+### Docs
+
+- Updated the English and Ukrainian READMEs, SMG support docs, and generated support overview to describe deep scan, the validated Anenji control surface, and the current onboarding fallback flow more accurately.
+
 ## [0.1.49] - 2026-04-17
 
 ### Added

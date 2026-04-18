@@ -318,13 +318,12 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("inverter_date_write").word_count, 3)
         self.assertEqual(profile.get_capability("inverter_time_write").register, 699)
         self.assertEqual(profile.get_capability("inverter_time_write").word_count, 3)
+        self.assertTrue(all(capability.tested for capability in profile.capabilities))
         self.assertEqual(profile.get_capability("clear_generation_data").register, 705)
         self.assertEqual(profile.get_capability("reset_user_parameters").register, 706)
         self.assertEqual(profile.get_capability("ground_relay_enabled").register, 707)
         self.assertEqual(profile.get_capability("lithium_battery_activation_time").maximum, 300)
         self.assertEqual(profile.get_capability("battery_equalization_mode").register, 651)
-        self.assertFalse(profile.get_capability("output_source_priority").tested)
-        self.assertFalse(profile.get_capability("remote_turn_on").tested)
         with self.assertRaises(KeyError):
             profile.get_capability("remote_switch")
 
@@ -506,6 +505,53 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertTrue(capability.requires_confirm)
         self.assertEqual(capability.enum_value_map[0], "Local and Remote")
         self.assertEqual(capability.note, "Variant-specific register placement.")
+
+    def test_capability_defaults_apply_to_template_and_non_template_capabilities(self) -> None:
+        raw = {
+            "profile_key": "defaulted_profile",
+            "title": "Defaulted Profile",
+            "driver_key": "modbus_smg",
+            "protocol_family": "modbus_smg",
+            "groups": [{"key": "system", "title": "System"}],
+            "capability_defaults": {"tested": True},
+            "capability_templates": {
+                "templated_switch": {
+                    "value_kind": "bool",
+                    "title": "Templated Switch",
+                    "group": "system",
+                    "choices": [
+                        {"value": 0, "label": "Off"},
+                        {"value": 1, "label": "On"},
+                    ],
+                }
+            },
+            "capabilities": [
+                {
+                    "key": "templated_switch",
+                    "template": "templated_switch",
+                    "register": 10,
+                },
+                {
+                    "key": "direct_action",
+                    "register": 11,
+                    "value_kind": "action",
+                    "action_value": 1,
+                    "title": "Direct Action",
+                    "group": "system",
+                },
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "defaulted_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                profile = profile_loader.load_driver_profile("defaulted_profile.json")
+
+        self.assertTrue(profile.get_capability("templated_switch").tested)
+        self.assertTrue(profile.get_capability("direct_action").tested)
 
 
 if __name__ == "__main__":

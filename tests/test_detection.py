@@ -58,7 +58,56 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[-1], DiscoveryTarget(ip="192.168.1.254", source="subnet_unicast"))
         self.assertNotIn(DiscoveryTarget(ip="192.168.1.50", source="subnet_unicast"), targets)
 
-    async def test_auto_detect_appends_unicast_fallback_results_after_broadcast_match(self) -> None:
+    def test_build_unicast_fallback_targets_respects_selected_network(self) -> None:
+        targets = build_unicast_fallback_targets(
+            server_ip="192.168.1.50",
+            network_cidr="192.168.0.0/16",
+        )
+
+        self.assertEqual(len(targets), 65533)
+        self.assertEqual(targets[0], DiscoveryTarget(ip="192.168.0.1", source="subnet_unicast"))
+        self.assertEqual(targets[-1], DiscoveryTarget(ip="192.168.255.254", source="subnet_unicast"))
+        self.assertNotIn(DiscoveryTarget(ip="192.168.1.50", source="subnet_unicast"), targets)
+
+    async def test_auto_detect_keeps_broadcast_results_without_unicast_fallback(self) -> None:
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        broadcast_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.55",
+                connected=True,
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
+            ),
+            connection_mode="broadcast",
+        )
+
+        with (
+            patch.object(
+                detector,
+                "async_detect_targets",
+                new=AsyncMock(return_value=(broadcast_result,)),
+            ) as detect_targets,
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
+                new=AsyncMock(),
+            ),
+        ):
+            results = await detector.async_auto_detect(discovery_target="192.168.1.255", attempts=1)
+
+        self.assertEqual(detect_targets.await_count, 1)
+        self.assertEqual(
+            {result.collector.ip for result in results if result.collector is not None},
+            {"192.168.1.55"},
+        )
+
+    async def test_deep_detect_appends_unicast_fallback_results_after_broadcast_match(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         broadcast_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -93,21 +142,74 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(side_effect=[(broadcast_result,), (fallback_result,)]),
             ) as detect_targets,
             patch(
-                "custom_components.eybond_local.onboarding.eybond.build_unicast_fallback_targets",
-                return_value=(DiscoveryTarget(ip="192.168.1.14", source="subnet_unicast"),),
-            ),
-            patch(
                 "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
                 new=AsyncMock(return_value=(DiscoveryTarget(ip="192.168.1.14", source="subnet_unicast"),)),
             ),
         ):
-            results = await detector.async_auto_detect(discovery_target="192.168.1.255", attempts=1)
+            results = await detector.async_deep_detect(
+                discovery_target="192.168.1.255",
+                unicast_network_cidr="192.168.0.0/16",
+                attempts=1,
+            )
 
         self.assertEqual(detect_targets.await_count, 2)
         self.assertEqual(
             {result.collector.ip for result in results if result.collector is not None},
             {"192.168.1.55", "192.168.1.14"},
         )
+
+    async def test_detect_target_shortens_connect_wait_when_udp_reply_is_missing(self) -> None:
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")
+
+        class FakeTransport:
+            instances: list["FakeTransport"] = []
+
+            def __init__(self, *, host: str, port: int, request_timeout: float, heartbeat_interval: float, collector_ip: str) -> None:
+                self.collector_info = CollectorInfo(remote_ip="")
+                self.connected_timeout: float | None = None
+                FakeTransport.instances.append(self)
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            def set_collector_ip(self, collector_ip: str) -> None:
+                return None
+
+            async def wait_until_connected(self, timeout: float) -> bool:
+                self.connected_timeout = timeout
+                return False
+
+            async def wait_until_heartbeat(self, timeout: float) -> bool:
+                return False
+
+        with (
+            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                new=AsyncMock(
+                    return_value=DiscoveryProbeResult(
+                        target_ip="192.168.1.255",
+                        message="set>server=192.168.1.50:8899;",
+                        local_port=40000,
+                        reply="",
+                        reply_from="",
+                    )
+                ),
+            ),
+        ):
+            result = await detector._async_detect_target(
+                target,
+                discovery_timeout=1.5,
+                connect_timeout=5.0,
+                heartbeat_timeout=2.0,
+            )
+
+        self.assertEqual(FakeTransport.instances[0].connected_timeout, 0.75)
+        self.assertEqual(result.last_error, "collector_not_connected")
 
     async def test_detect_target_uses_shared_transport_and_routes_to_reply_ip(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")

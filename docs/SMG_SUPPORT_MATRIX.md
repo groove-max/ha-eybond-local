@@ -57,7 +57,7 @@ The SMG family now has three distinct built-in runtime paths.
 | Runtime path | When it is used | What users should expect |
 |---|---|---|
 | Verified default (`SMG 6200`) | Rated-power `6200` devices that match the known default SMG layout | Full monitoring and the tested default SMG write surface. This is the path covered by the generated matrix export below. |
-| Model-specific Anenji (`anenji_anj_11kw_48v_wifi_p`) | Devices that match the validated Anenji protocol-4 anchors | Built-in monitoring is broader than the default SMG path, including PV1/PV2, inverter date/time, and native PV counters. The writable surface is implemented but still untested, so normal `auto` mode keeps it hidden. |
+| Model-specific Anenji (`anenji_anj_11kw_48v_wifi_p`) | Devices that match the validated Anenji protocol-4 anchors | Built-in monitoring is broader than the default SMG path, including PV1/PV2, inverter date/time, and native PV counters. The full writable surface is now verified on real hardware, so tested controls can participate in normal `auto` mode when detection confidence is high. |
 | Read-only family fallback (`family_fallback`) | Devices that clearly look SMG-family, but do not match a verified model-specific binding | Monitoring remains available, but built-in writes stay disabled. Support workflow and exported archives explicitly label this state as `Read-only unverified SMG family`. |
 
 ## Verified Default SMG Diagnostics
@@ -78,8 +78,8 @@ The rest of this document focuses on the verified default SMG 6200 write surface
 - read-side system/config telemetry from the `677+` window, including `input_mode`, `remote_switch`, `ground_relay_enabled`, and `lithium_battery_activation_time`
 - read-side inverter clock decoding from `696..701` as `inverter_date` and `inverter_time`
 - native PV counters from `702` and `703..704` as `pv_generation_day` and `pv_generation_sum`
-- an untested 47-capability control surface, exposed only in manual `full` control mode
-- a dedicated `Sync Inverter Clock` tooling button that writes the current Home Assistant local date/time through the same untested clock registers when the model-specific write path is enabled
+- a tested 47-capability control surface, eligible for normal `auto` exposure on high-confidence matches
+- a dedicated `Sync Inverter Clock` tooling button that writes the current Home Assistant local date/time through the verified clock registers when the model-specific write path is enabled
 
 ## Auto-Exposed Tested Controls
 

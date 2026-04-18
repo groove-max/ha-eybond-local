@@ -62,6 +62,7 @@ def load_driver_profile(profile_name: str) -> DriverProfileMetadata:
     profile_key = str(raw.get("profile_key", profile_path.stem))
     driver_key = str(raw.get("driver_key", profile_key))
     protocol_family = str(raw.get("protocol_family", driver_key))
+    capability_defaults = _parse_capability_defaults(raw.get("capability_defaults", {}))
     capability_templates = _parse_capability_template_map(raw.get("capability_templates", {}))
 
     named_conditions = {
@@ -79,7 +80,7 @@ def load_driver_profile(profile_name: str) -> DriverProfileMetadata:
         source_scope=_profile_source_scope(profile_path),
         groups=tuple(_parse_group(item) for item in raw.get("groups", [])),
         capabilities=tuple(
-            _parse_capability(item, named_conditions, capability_templates)
+            _parse_capability(item, named_conditions, capability_defaults, capability_templates)
             for item in raw.get("capabilities", [])
         ),
         presets=tuple(
@@ -213,9 +214,10 @@ def _parse_group(raw: Mapping[str, Any]) -> CapabilityGroup:
 def _parse_capability(
     raw: Mapping[str, Any],
     named_conditions: Mapping[str, CapabilityCondition],
+    capability_defaults: Mapping[str, Any],
     capability_templates: Mapping[str, Mapping[str, Any]],
 ) -> WriteCapability:
-    resolved_raw = _resolve_capability_raw(raw, capability_templates)
+    resolved_raw = _resolve_capability_raw(raw, capability_defaults, capability_templates)
     choices = tuple(_parse_choice(item) for item in raw.get("choices", []))
     if not choices:
         choices = tuple(_parse_choice(item) for item in resolved_raw.get("choices", []))
@@ -267,19 +269,28 @@ def _parse_capability(
 
 def _resolve_capability_raw(
     raw: Mapping[str, Any],
+    capability_defaults: Mapping[str, Any],
     capability_templates: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     template_name = _optional_str(raw.get("template"))
     if not template_name:
-        return dict(raw)
+        return {**capability_defaults, **raw}
 
     template_raw = capability_templates.get(template_name)
     if template_raw is None:
         raise ValueError(f"unknown_capability_template:{template_name}")
 
-    resolved = {**template_raw, **raw}
+    resolved = {**capability_defaults, **template_raw, **raw}
     resolved.setdefault("key", template_name)
     return resolved
+
+
+def _parse_capability_defaults(raw_defaults: Any) -> dict[str, Any]:
+    if not raw_defaults:
+        return {}
+    if not isinstance(raw_defaults, Mapping):
+        raise ValueError("invalid_capability_defaults")
+    return {str(key): value for key, value in raw_defaults.items()}
 
 
 def _parse_capability_template_map(raw_templates: Any) -> dict[str, dict[str, Any]]:
@@ -412,6 +423,10 @@ def _merge_raw_profile(
     overlay: Mapping[str, Any],
 ) -> dict[str, Any]:
     merged = dict(base)
+    merged["capability_defaults"] = {
+        **base.get("capability_defaults", {}),
+        **overlay.get("capability_defaults", {}),
+    }
     merged["capability_templates"] = _merge_named_mapping(
         base.get("capability_templates", {}),
         overlay.get("capability_templates", {}),
@@ -437,7 +452,14 @@ def _merge_raw_profile(
     }
 
     for key, value in overlay.items():
-        if key in {"groups", "capabilities", "presets", "conditions"}:
+        if key in {
+            "capability_defaults",
+            "capability_templates",
+            "groups",
+            "capabilities",
+            "presets",
+            "conditions",
+        }:
             continue
         merged[key] = value
     return merged

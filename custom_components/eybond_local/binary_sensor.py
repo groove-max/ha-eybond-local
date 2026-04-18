@@ -14,7 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .runtime.coordinator import EybondLocalCoordinator
-from .drivers.registry import binary_sensors_for_driver
+from .drivers.registry import binary_sensors_for_runtime
 from .models import BinarySensorDescription
 
 _DEVICE_CLASS_MAP: dict[str, BinarySensorDeviceClass] = {
@@ -35,9 +35,14 @@ async def async_setup_entry(
     coordinator: EybondLocalCoordinator = entry.runtime_data
     driver = coordinator.current_driver
     driver_key = driver.key if driver is not None else None
+    inverter = coordinator.data.inverter
+    register_schema_name = getattr(inverter, "register_schema_name", "") if inverter is not None else ""
     async_add_entities(
         EybondBinaryValueSensor(coordinator, description)
-        for description in binary_sensors_for_driver(driver_key)
+        for description in binary_sensors_for_runtime(
+            driver_key=driver_key,
+            register_schema_name=register_schema_name,
+        )
     )
 
 

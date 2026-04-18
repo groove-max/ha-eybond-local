@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import types
@@ -182,8 +183,10 @@ from custom_components.eybond_local.config_flow import (
     CONF_RESULT_KEY,
     EybondLocalConfigFlow,
     EybondLocalOptionsFlow,
+    SETUP_MODE_DEEP_SCAN,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED,
+    _get_ipv4_interfaces,
     _flatten_sections,
 )
 from custom_components.eybond_local.const import (
@@ -206,6 +209,7 @@ from custom_components.eybond_local.models import (
     OnboardingResult,
     ProbeTarget,
 )
+from custom_components.eybond_local.onboarding.detection import DiscoveryTarget
 from custom_components.eybond_local.support.workflow import build_support_workflow_state
 from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceRecord, build_cloud_evidence_payload
 
@@ -293,7 +297,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._local_ip = "192.168.1.50"
         flow._auto_config = {"server_ip": "192.168.1.50"}
         flow._interface_options = [
-            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
+            {
+                "name": "eth0",
+                "ip": "192.168.1.50",
+                "label": "eth0 - 192.168.1.50",
+                "network": "192.168.0.0/16",
+                "broadcast": "192.168.255.255",
+            },
         ]
         return flow
 
@@ -347,10 +357,28 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "progress")
         placeholders = result["description_placeholders"]
-        self.assertEqual(placeholders["scan_progress_phase"], "Scanning the local subnet")
+        self.assertEqual(placeholders["scan_progress_phase"], "Sending discovery probes")
         self.assertIn("[", placeholders["scan_progress_bar"])
         self.assertIn("%", placeholders["scan_progress_bar"])
         self.assertIn("12s elapsed", placeholders["scan_progress_detail"])
+
+    def test_get_ipv4_interfaces_parses_busybox_oneline_output(self) -> None:
+        output = (
+            "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
+            "3: wlan0    inet 192.168.1.50/24 brd 192.168.1.255 scope global dynamic noprefixroute wlan0\\       valid_lft 42620sec preferred_lft 42620sec\n"
+            "4: hassio    inet 172.30.32.1/23 brd 172.30.33.255 scope global hassio\\       valid_lft forever preferred_lft forever\n"
+        )
+
+        with patch(
+            "custom_components.eybond_local.config_flow.subprocess.check_output",
+            side_effect=[subprocess.CalledProcessError(1, ["ip"]), output],
+        ):
+            interfaces = _get_ipv4_interfaces()
+
+        wlan0 = next(interface for interface in interfaces if interface["name"] == "wlan0")
+        self.assertEqual(wlan0["ip"], "192.168.1.50")
+        self.assertEqual(wlan0["network"], "192.168.1.0/24")
+        self.assertEqual(wlan0["broadcast"], "192.168.1.255")
 
     async def test_scanning_shows_progress_once_even_if_task_finishes_immediately(self) -> None:
         flow = self._make_flow()
@@ -461,6 +489,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         selector = result["data_schema"].schema["setup_mode"]
         labels = [option["label"] for option in selector.config.kwargs["options"]]
         self.assertIn("Запустить автопоиск", labels)
+        self.assertIn("Запустить глубокое сканирование", labels)
         self.assertIn("Пропустить и перейти к ручной настройке", labels)
         self.assertNotIn("Auto scan first", labels)
         self.assertNotIn("Manual setup now", labels)
@@ -490,6 +519,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "progress")
         self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
 
+    async def test_auto_step_routes_to_deep_scan_when_setup_mode_is_deep(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+
+        result = await flow.async_step_auto(
+            {"server_ip": "192.168.1.50", CONF_SETUP_MODE: SETUP_MODE_DEEP_SCAN}
+        )
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "deep_scan")
+        self.assertIn("start_deep_scan", result["menu_options"])
+        self.assertEqual(result["description_placeholders"]["deep_scan_network"], "192.168.0.0/16")
+        self.assertEqual(result["description_placeholders"]["deep_scan_target_count"], "65533")
+
     async def test_change_scan_interface_preserves_connection_type(self) -> None:
         flow = self._make_flow()
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
@@ -514,6 +557,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "scan_results")
+        self.assertEqual(result["menu_options"][:2], ["refresh_scan", "deep_scan"])
+        self.assertIn("deep_scan", result["menu_options"])
         self.assertIn("refresh_scan", result["menu_options"])
         self.assertIn("manual", result["menu_options"])
         self.assertNotIn("choose", result["menu_options"])
@@ -529,6 +574,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_scan_results()
 
         self.assertIn("change_scan_interface", result["menu_options"])
+
+    async def test_scan_results_after_deep_scan_hides_deep_scan_action(self) -> None:
+        flow = self._make_flow()
+        flow._scan_mode = SETUP_MODE_DEEP_SCAN
+
+        result = await flow.async_step_scan_results()
+
+        self.assertNotIn("deep_scan", result["menu_options"])
 
     async def test_scan_results_with_available_results_shows_menu(self) -> None:
         flow = self._make_flow()
@@ -550,8 +603,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "scan_results")
+        self.assertEqual(result["menu_options"][:2], ["refresh_scan", "deep_scan"])
         self.assertIn("scan_summary", result["description_placeholders"])
         self.assertIn("choose", result["menu_options"])
+        self.assertIn("deep_scan", result["menu_options"])
+
+    def test_scan_discovery_targets_use_selected_broadcast_only(self) -> None:
+        flow = self._make_flow()
+
+        targets = flow._scan_discovery_targets()
+
+        self.assertEqual(
+            targets,
+            (DiscoveryTarget(ip="192.168.255.255", source="broadcast"),),
+        )
 
     async def test_choose_step_shows_selector_form(self) -> None:
         flow = self._make_flow()

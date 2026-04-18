@@ -171,12 +171,11 @@ def _default_enabled_unique_ids_for_current_runtime(
     """Return default-enabled unique_ids for the currently detected runtime metadata."""
 
     from .derived_energy import default_enabled_derived_energy_keys
-    from .drivers.registry import binary_sensors_for_driver, measurements_for_driver
+    from .drivers.registry import binary_sensors_for_runtime, measurements_for_runtime
     from .schema import entity_kind_for_capability
 
     driver_key = driver.key if driver is not None else None
-    measurement_descriptions = measurements_for_driver(driver_key)
-    binary_sensor_descriptions = binary_sensors_for_driver(driver_key)
+    register_schema_name = getattr(inverter, "register_schema_name", "") if inverter is not None else ""
     capabilities = (
         inverter.capabilities
         if inverter is not None
@@ -186,6 +185,15 @@ def _default_enabled_unique_ids_for_current_runtime(
         inverter.capability_presets
         if inverter is not None
         else (driver.capability_presets if driver is not None else ())
+    )
+    measurement_descriptions = measurements_for_runtime(
+        driver_key=driver_key,
+        register_schema_name=register_schema_name,
+        write_capabilities=capabilities,
+    )
+    binary_sensor_descriptions = binary_sensors_for_runtime(
+        driver_key=driver_key,
+        register_schema_name=register_schema_name,
     )
 
     expected: set[str] = set()
@@ -266,16 +274,36 @@ async def _async_cleanup_obsolete_entities(
         derived_energy_descriptions_for_keys,
         derived_energy_entity_descriptions_for_keys,
     )
-    from .drivers.registry import binary_sensors_for_driver, measurements_for_driver
+    from .drivers.registry import binary_sensors_for_runtime, measurements_for_runtime
     from .schema import entity_kind_for_capability
 
     registry = er.async_get(hass)
     driver = coordinator.current_driver
+    inverter = coordinator.data.inverter
     driver_key = driver.key if driver is not None else None
-    measurement_descriptions = measurements_for_driver(driver_key)
+    register_schema_name = getattr(inverter, "register_schema_name", "") if inverter is not None else ""
+    capabilities = (
+        inverter.capabilities
+        if inverter is not None
+        else (driver.write_capabilities if driver is not None else ())
+    )
+    presets = (
+        inverter.capability_presets
+        if inverter is not None
+        else (driver.capability_presets if driver is not None else ())
+    )
+    measurement_descriptions = measurements_for_runtime(
+        driver_key=driver_key,
+        register_schema_name=register_schema_name,
+        write_capabilities=capabilities,
+    )
+    binary_sensor_descriptions = binary_sensors_for_runtime(
+        driver_key=driver_key,
+        register_schema_name=register_schema_name,
+    )
     measurement_keys = {description.key for description in measurement_descriptions}
     runtime_keys = measurement_keys | {
-        description.key for description in binary_sensors_for_driver(driver_key)
+        description.key for description in binary_sensor_descriptions
     }
     derived_energy_source_descriptions = derived_energy_descriptions_for_keys(
         measurement_keys
@@ -303,16 +331,12 @@ async def _async_cleanup_obsolete_entities(
     )
     expected_unique_ids.update(
         _entity_unique_id(entry.entry_id, "binary_sensor", description.key)
-        for description in binary_sensors_for_driver(driver_key)
+        for description in binary_sensor_descriptions
     )
     expected_unique_ids.update(
         _tool_unique_id(entry.entry_id, spec.key)
         for spec in _tooling_button_specs()
     )
-
-    inverter = coordinator.data.inverter
-    capabilities = inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
-    presets = inverter.capability_presets if inverter is not None else (driver.capability_presets if driver is not None else ())
     for capability in capabilities:
         entity_kind = entity_kind_for_capability(capability)
         if entity_kind in {"select", "number", "switch", "button"}:

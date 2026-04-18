@@ -16,14 +16,23 @@
       },
       "auto": {
         "title": "Choose Scan Interface",
-        "description": "{interface_hint}\n\nChoose whether to start auto-scan now or switch straight to manual setup.",
+        "description": "{interface_hint}\n\nChoose whether to start a quick auto-scan now, switch to a deeper full-network scan, or open manual setup immediately.",
         "data": {
           "server_ip": "Home Assistant interface",
           "setup_mode": "Next step"
         },
         "data_description": {
           "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter.",
-          "setup_mode": "Start auto-scan now, or skip it and open manual setup immediately."
+          "setup_mode": "Start a quick auto-scan, switch to a deeper full-network scan, or skip straight to manual setup."
+        }
+      },
+      "deep_scan": {
+        "title": "Deep Scan",
+        "description": "Deep scan keeps the initial broadcast probe, then checks the rest of the selected IPv4 network directly using **{selected_scan_interface}**.\n\n**Network:** {deep_scan_network}\n**Direct targets:** {deep_scan_target_count}\n**Estimated duration:** {deep_scan_duration}\n\n{deep_scan_warning}",
+        "menu_options": {
+          "start_deep_scan": "Start deep scan",
+          "change_scan_interface": "Change scan interface",
+          "manual": "Manual setup"
         }
       },
       "scanning": {
@@ -35,6 +44,7 @@
         "description": "**Scan interface:** {selected_scan_interface}\n\n{scan_summary}\n\n{candidate_list}\n\n{scan_next_hint}",
         "menu_options": {
           "choose": "Add detected device",
+          "deep_scan": "Run deep scan",
           "change_scan_interface": "Change scan interface",
           "refresh_scan": "Refresh scan results",
           "manual": "Manual setup"

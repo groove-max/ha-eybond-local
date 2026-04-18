@@ -14,7 +14,9 @@ from custom_components.eybond_local.drivers.registry import (
     binary_sensors_for_driver,
     get_driver,
     measurements_for_driver,
+    measurements_for_runtime,
 )
+from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 
 
 class RegistryTests(unittest.TestCase):
@@ -60,6 +62,27 @@ class RegistryTests(unittest.TestCase):
         self.assertFalse(descriptions["inverter_date"].enabled_default)
         self.assertTrue(descriptions["inverter_time"].diagnostic)
         self.assertFalse(descriptions["inverter_time"].enabled_default)
+
+    def test_measurements_for_anenji_runtime_include_variant_specific_keys(self) -> None:
+        profile = load_driver_profile("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+        descriptions = {
+            description.key: description
+            for description in measurements_for_runtime(
+                driver_key="modbus_smg",
+                register_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+                write_capabilities=profile.capabilities,
+            )
+        }
+
+        self.assertIn("pv1_voltage", descriptions)
+        self.assertIn("pv1_current", descriptions)
+        self.assertIn("pv1_power", descriptions)
+        self.assertIn("pv2_voltage", descriptions)
+        self.assertIn("pv2_current", descriptions)
+        self.assertIn("pv2_power", descriptions)
+        self.assertIn("pv_generation_sum", descriptions)
+        self.assertTrue(descriptions["input_mode"].enabled_default)
+        self.assertTrue(descriptions["battery_type"].enabled_default)
 
     def test_measurements_for_pi30_do_not_include_smg_only_keys(self) -> None:
         descriptions = {

@@ -28,8 +28,7 @@ from .derived_energy import (
     derived_energy_descriptions_for_keys,
     derived_energy_entity_descriptions_for_keys,
 )
-from .drivers.registry import measurements_for_driver
-from .drivers.registry import binary_sensors_for_driver
+from .drivers.registry import binary_sensors_for_runtime, measurements_for_runtime
 from .energy import CyclingEnergyAccumulator, EnergyAccumulator
 from .models import MeasurementDescription
 
@@ -151,10 +150,25 @@ async def async_setup_entry(
     coordinator: EybondLocalCoordinator = entry.runtime_data
     driver = coordinator.current_driver
     driver_key = driver.key if driver is not None else None
-    measurement_descriptions = measurements_for_driver(driver_key)
+    inverter = coordinator.data.inverter
+    register_schema_name = getattr(inverter, "register_schema_name", "") if inverter is not None else ""
+    write_capabilities = (
+        inverter.capabilities
+        if inverter is not None
+        else (driver.write_capabilities if driver is not None else ())
+    )
+    measurement_descriptions = measurements_for_runtime(
+        driver_key=driver_key,
+        register_schema_name=register_schema_name,
+        write_capabilities=write_capabilities,
+    )
+    binary_sensor_descriptions = binary_sensors_for_runtime(
+        driver_key=driver_key,
+        register_schema_name=register_schema_name,
+    )
     measurement_keys = {description.key for description in measurement_descriptions}
     runtime_keys = measurement_keys | {
-        description.key for description in binary_sensors_for_driver(driver_key)
+        description.key for description in binary_sensor_descriptions
     }
     derived_energy_source_descriptions = derived_energy_descriptions_for_keys(
         measurement_keys

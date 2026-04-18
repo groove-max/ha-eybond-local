@@ -78,22 +78,45 @@ def get_replay_driver(driver_key: str) -> InverterDriver:
     raise KeyError(driver_key)
 
 
+def measurements_for_runtime(
+    *,
+    driver_key: str | None = None,
+    register_schema_name: str = "",
+    write_capabilities: tuple[WriteCapability, ...] | None = None,
+) -> tuple[MeasurementDescription, ...]:
+    """Return measurements for one concrete runtime schema selection."""
+
+    driver_measurements = [BASE_SENSOR_DESCRIPTIONS]
+    if register_schema_name:
+        driver_measurements.append(load_register_schema(register_schema_name).measurement_descriptions)
+    elif driver_key is None:
+        driver_measurements.extend(driver.measurements for driver in _DRIVERS)
+    else:
+        driver_measurements.append(get_driver(driver_key).measurements)
+
+    if driver_key is None:
+        driver_measurements.append(all_canonical_measurements())
+        resolved_write_capabilities = (
+            all_write_capabilities() if write_capabilities is None else write_capabilities
+        )
+    else:
+        driver_measurements.append(canonical_measurements_for_driver(driver_key))
+        resolved_write_capabilities = (
+            get_driver(driver_key).write_capabilities
+            if write_capabilities is None
+            else write_capabilities
+        )
+
+    return _promote_readback_defaults(
+        merge_descriptions(*driver_measurements),
+        resolved_write_capabilities,
+    )
+
+
 def measurements_for_driver(driver_key: str | None = None) -> tuple[MeasurementDescription, ...]:
     """Return shared measurements plus those for one driver when specified."""
 
-    driver_measurements = [BASE_SENSOR_DESCRIPTIONS]
-    if driver_key is None:
-        driver_measurements.extend(driver.measurements for driver in _DRIVERS)
-        driver_measurements.append(all_canonical_measurements())
-        write_capabilities = all_write_capabilities()
-    else:
-        driver_measurements.append(get_driver(driver_key).measurements)
-        driver_measurements.append(canonical_measurements_for_driver(driver_key))
-        write_capabilities = get_driver(driver_key).write_capabilities
-    return _promote_readback_defaults(
-        merge_descriptions(*driver_measurements),
-        write_capabilities,
-    )
+    return measurements_for_runtime(driver_key=driver_key)
 
 
 def _promote_readback_defaults(
@@ -117,15 +140,27 @@ def _promote_readback_defaults(
     )
 
 
-def binary_sensors_for_driver(driver_key: str | None = None) -> tuple[BinarySensorDescription, ...]:
-    """Return shared binary sensors plus those for one driver when specified."""
+def binary_sensors_for_runtime(
+    *,
+    driver_key: str | None = None,
+    register_schema_name: str = "",
+) -> tuple[BinarySensorDescription, ...]:
+    """Return binary sensors for one concrete runtime schema selection."""
 
     driver_binary_sensors = [BASE_BINARY_SENSOR_DESCRIPTIONS]
-    if driver_key is None:
+    if register_schema_name:
+        driver_binary_sensors.append(load_register_schema(register_schema_name).binary_sensor_descriptions)
+    elif driver_key is None:
         driver_binary_sensors.extend(driver.binary_sensors for driver in _DRIVERS)
     else:
         driver_binary_sensors.append(get_driver(driver_key).binary_sensors)
     return merge_descriptions(*driver_binary_sensors)
+
+
+def binary_sensors_for_driver(driver_key: str | None = None) -> tuple[BinarySensorDescription, ...]:
+    """Return shared binary sensors plus those for one driver when specified."""
+
+    return binary_sensors_for_runtime(driver_key=driver_key)
 
 
 def all_measurements() -> tuple[MeasurementDescription, ...]:

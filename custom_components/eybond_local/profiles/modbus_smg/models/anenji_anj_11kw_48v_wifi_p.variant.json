@@ -4,6 +4,9 @@
   "title": "Anenji ANJ-11KW-48V-WIFI-P Variant Profile",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
+  "capability_defaults": {
+    "tested": true
+  },
   "conditions": {
     "not_off_grid_mode": {
       "key": "operating_mode",

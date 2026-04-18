@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
+from itertools import islice
 import ipaddress
 import logging
 from dataclasses import dataclass
@@ -36,6 +38,7 @@ _CONFIDENCE_SCORE = {
 
 _UNICAST_FALLBACK_PROBE_TIMEOUT = 0.35
 _UNICAST_FALLBACK_CONCURRENCY = 32
+_CONNECT_TIMEOUT_WITHOUT_UDP_REPLY = 0.75
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,23 +83,41 @@ def build_unicast_fallback_targets(
     *,
     server_ip: str,
     collector_ip: str = "",
+    network_cidr: str = "",
 ) -> tuple[DiscoveryTarget, ...]:
-    """Build one /24 unicast sweep target list for broadcast-unfriendly networks."""
+    """Build one unicast sweep target list for broadcast-unfriendly networks."""
+
+    return tuple(
+        iter_unicast_fallback_targets(
+            server_ip=server_ip,
+            collector_ip=collector_ip,
+            network_cidr=network_cidr,
+        )
+    )
+
+
+def iter_unicast_fallback_targets(
+    *,
+    server_ip: str,
+    collector_ip: str = "",
+    network_cidr: str = "",
+):
+    """Yield one unicast sweep target list for the selected IPv4 network."""
 
     if collector_ip:
-        return ()
+        return
 
     try:
-        network = ipaddress.ip_network(f"{server_ip}/24", strict=False)
+        network = ipaddress.ip_network(network_cidr or f"{server_ip}/24", strict=False)
     except ValueError:
-        return ()
+        return
 
     excluded = {server_ip, collector_ip, str(network.network_address), str(network.broadcast_address), ""}
-    return tuple(
-        DiscoveryTarget(ip=str(host), source="subnet_unicast")
-        for host in network.hosts()
-        if str(host) not in excluded
-    )
+    for host in network.hosts():
+        host_ip = str(host)
+        if host_ip in excluded:
+            continue
+        yield DiscoveryTarget(ip=host_ip, source="subnet_unicast")
 
 
 async def async_probe_fallback_targets(
@@ -105,44 +126,44 @@ async def async_probe_fallback_targets(
     advertised_server_ip: str,
     advertised_server_port: int,
     udp_port: int,
-    targets: Sequence[DiscoveryTarget],
+    targets: Iterable[DiscoveryTarget],
     timeout: float = _UNICAST_FALLBACK_PROBE_TIMEOUT,
     concurrency: int = _UNICAST_FALLBACK_CONCURRENCY,
 ) -> tuple[DiscoveryTarget, ...]:
     """Probe one list of direct unicast targets concurrently and keep responders only."""
 
-    if not targets:
-        return ()
-
-    semaphore = asyncio.Semaphore(max(1, concurrency))
-
     async def _probe(target: DiscoveryTarget) -> DiscoveryTarget | None:
-        async with semaphore:
-            try:
-                probe = await async_probe_target(
-                    bind_ip=bind_ip,
-                    advertised_server_ip=advertised_server_ip,
-                    advertised_server_port=advertised_server_port,
-                    target_ip=target.ip,
-                    udp_port=udp_port,
-                    timeout=timeout,
-                )
-            except Exception as exc:
-                logger.debug("Fallback unicast probe failed target=%s error=%s", target.ip, exc)
-                return None
+        try:
+            probe = await async_probe_target(
+                bind_ip=bind_ip,
+                advertised_server_ip=advertised_server_ip,
+                advertised_server_port=advertised_server_port,
+                target_ip=target.ip,
+                udp_port=udp_port,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            logger.debug("Fallback unicast probe failed target=%s error=%s", target.ip, exc)
+            return None
 
-            if not probe.reply:
-                return None
+        if not probe.reply:
+            return None
 
-            responder_ip = probe.reply_from.split(":", 1)[0] if probe.reply_from else target.ip
-            return DiscoveryTarget(ip=responder_ip, source=target.source)
+        responder_ip = probe.reply_from.split(":", 1)[0] if probe.reply_from else target.ip
+        return DiscoveryTarget(ip=responder_ip, source=target.source)
 
-    discovered = await asyncio.gather(*(_probe(target) for target in targets))
+    iterator = iter(targets)
     deduped: dict[str, DiscoveryTarget] = {}
-    for target in discovered:
-        if target is None:
-            continue
-        deduped[target.ip] = target
+    batch_size = max(1, concurrency)
+    while True:
+        batch = tuple(islice(iterator, batch_size))
+        if not batch:
+            break
+        discovered = await asyncio.gather(*(_probe(target) for target in batch))
+        for target in discovered:
+            if target is None:
+                continue
+            deduped[target.ip] = target
     return tuple(deduped.values())
 
 
@@ -207,6 +228,7 @@ class OnboardingDetector:
         *,
         collector_ip: str = "",
         discovery_target: str = DEFAULT_DISCOVERY_TARGET,
+        discovery_targets: Sequence[DiscoveryTarget] | None = None,
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
@@ -215,9 +237,12 @@ class OnboardingDetector:
     ) -> tuple[OnboardingResult, ...]:
         """Run the default EyeBond onboarding discovery order."""
 
-        targets = build_default_discovery_targets(
-            collector_ip=collector_ip,
-            discovery_target=discovery_target,
+        targets = tuple(
+            discovery_targets
+            or build_default_discovery_targets(
+                collector_ip=collector_ip,
+                discovery_target=discovery_target,
+            )
         )
         aggregated: list[OnboardingResult] = []
         for attempt_index in range(max(1, attempts)):
@@ -236,35 +261,75 @@ class OnboardingDetector:
             if attempt_index < max(1, attempts) - 1:
                 await asyncio.sleep(attempt_delay)
 
-        fallback_targets = build_unicast_fallback_targets(
-            server_ip=self._connection.server_ip,
-            collector_ip=collector_ip,
-        )
-        if fallback_targets:
-            replied_targets = await async_probe_fallback_targets(
-                bind_ip=self._connection.server_ip,
-                advertised_server_ip=self._connection.effective_advertised_server_ip,
-                advertised_server_port=self._connection.effective_advertised_tcp_port,
-                udp_port=self._connection.udp_port,
-                targets=fallback_targets,
-                timeout=min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT),
-            )
-            known_ips = {
-                result.collector.ip
-                for result in aggregated
-                if result.collector is not None and result.collector.ip
-            }
-            known_ips.update(target.ip for target in targets)
-            replied_targets = tuple(target for target in replied_targets if target.ip not in known_ips)
-            if replied_targets:
-                fallback_results = await self.async_detect_targets(
-                    replied_targets,
-                    discovery_timeout=discovery_timeout,
-                    connect_timeout=connect_timeout,
-                    heartbeat_timeout=heartbeat_timeout,
-                )
-                aggregated.extend(fallback_results)
+        return tuple(self._dedupe_results(aggregated))
 
+    async def async_deep_detect(
+        self,
+        *,
+        collector_ip: str = "",
+        discovery_target: str = DEFAULT_DISCOVERY_TARGET,
+        discovery_targets: Sequence[DiscoveryTarget] | None = None,
+        unicast_network_cidr: str = "",
+        discovery_timeout: float = 1.5,
+        connect_timeout: float = 5.0,
+        heartbeat_timeout: float = 2.0,
+        attempts: int = 3,
+        attempt_delay: float = 0.75,
+    ) -> tuple[OnboardingResult, ...]:
+        """Run broadcast discovery first, then sweep the full selected IPv4 network."""
+
+        resolved_targets = tuple(
+            discovery_targets
+            or build_default_discovery_targets(
+                collector_ip=collector_ip,
+                discovery_target=discovery_target,
+            )
+        )
+        aggregated = list(
+            await self.async_auto_detect(
+                collector_ip=collector_ip,
+                discovery_target=discovery_target,
+                discovery_targets=resolved_targets,
+                discovery_timeout=discovery_timeout,
+                connect_timeout=connect_timeout,
+                heartbeat_timeout=heartbeat_timeout,
+                attempts=attempts,
+                attempt_delay=attempt_delay,
+            )
+        )
+
+        replied_targets = await async_probe_fallback_targets(
+            bind_ip=self._connection.server_ip,
+            advertised_server_ip=self._connection.effective_advertised_server_ip,
+            advertised_server_port=self._connection.effective_advertised_tcp_port,
+            udp_port=self._connection.udp_port,
+            targets=iter_unicast_fallback_targets(
+                server_ip=self._connection.server_ip,
+                collector_ip=collector_ip,
+                network_cidr=unicast_network_cidr,
+            ),
+            timeout=min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT),
+        )
+        if not replied_targets:
+            return tuple(self._dedupe_results(aggregated))
+
+        known_ips = {
+            result.collector.ip
+            for result in aggregated
+            if result.collector is not None and result.collector.ip
+        }
+        known_ips.update(target.ip for target in resolved_targets)
+        replied_targets = tuple(target for target in replied_targets if target.ip not in known_ips)
+        if not replied_targets:
+            return tuple(self._dedupe_results(aggregated))
+
+        fallback_results = await self.async_detect_targets(
+            replied_targets,
+            discovery_timeout=discovery_timeout,
+            connect_timeout=connect_timeout,
+            heartbeat_timeout=heartbeat_timeout,
+        )
+        aggregated.extend(fallback_results)
         return tuple(self._dedupe_results(aggregated))
 
     async def _async_detect_target(
@@ -304,7 +369,10 @@ class OnboardingDetector:
                 candidate.ip = probe.reply_from.split(":", 1)[0]
                 transport.set_collector_ip(candidate.ip)
 
-            connected = await transport.wait_until_connected(timeout=connect_timeout)
+            effective_connect_timeout = connect_timeout
+            if not probe.reply:
+                effective_connect_timeout = min(connect_timeout, _CONNECT_TIMEOUT_WITHOUT_UDP_REPLY)
+            connected = await transport.wait_until_connected(timeout=effective_connect_timeout)
             if not connected:
                 warnings: list[str] = []
                 if probe.reply:

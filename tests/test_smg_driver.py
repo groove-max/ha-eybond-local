@@ -304,7 +304,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         )
         return registers
 
-    async def test_probe_selects_anenji_variant_and_untested_capability_profile(self) -> None:
+    async def test_probe_selects_anenji_variant_and_tested_capability_profile(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
         transport = FixtureTransport(
@@ -340,10 +340,10 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.get_capability("inverter_time_write").register, 699)
         with self.assertRaises(KeyError):
             inverter.get_capability("remote_switch")
-        self.assertTrue(all(not capability.tested for capability in inverter.capabilities))
+        self.assertTrue(all(capability.tested for capability in inverter.capabilities))
         self.assertTrue(
             all(
-                not can_expose_capability(
+                can_expose_capability(
                     capability,
                     control_mode="auto",
                     detection_confidence="high",
