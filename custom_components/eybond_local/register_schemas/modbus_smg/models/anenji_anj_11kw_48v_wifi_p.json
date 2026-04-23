@@ -639,6 +639,30 @@
       "live": false
     },
     {
+      "key": "low_dc_protection_soc_grid_mode",
+      "name": "Low DC Protection SOC in Grid Mode",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "name": "Return To Solar-Battery-Utility Threshold",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_dc_cutoff_soc",
+      "name": "Low DC Cut-Off SOC",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
       "key": "power_flow_status",
       "name": "Power Flow Status",
       "icon": "mdi:swap-horizontal",

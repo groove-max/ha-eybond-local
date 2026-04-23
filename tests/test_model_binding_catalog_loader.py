@@ -36,6 +36,7 @@ class DriverModelBindingCatalogLoaderTests(unittest.TestCase):
             {
                 ("pi30", "default"),
                 ("pi18", "default"),
+                ("modbus_smg", "anenji_4200_protocol_1"),
                 ("modbus_smg", "anenji_anj_11kw_48v_wifi_p"),
                 ("modbus_smg", "default"),
                 ("modbus_smg", "family_fallback"),
@@ -72,6 +73,22 @@ class DriverModelBindingCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(
             binding.register_schema_name,
             "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+
+    def test_resolves_smg_anenji_4200_protocol_1_binding(self) -> None:
+        binding = resolve_driver_model_binding(
+            "modbus_smg",
+            variant_key="anenji_4200_protocol_1",
+        )
+
+        assert binding is not None
+        self.assertEqual(
+            binding.profile_name,
+            "modbus_smg/models/anenji_4200_protocol_1.json",
+        )
+        self.assertEqual(
+            binding.register_schema_name,
+            "modbus_smg/models/anenji_4200_protocol_1.json",
         )
 
     def test_resolves_smg_family_fallback_binding(self) -> None:

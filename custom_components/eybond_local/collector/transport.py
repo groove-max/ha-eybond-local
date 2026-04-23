@@ -46,6 +46,16 @@ def _is_hairpin_alias_candidate(expected_ip: str, remote_ip: str) -> bool:
     return bool(expected.is_global and not remote.is_global)
 
 
+def _is_default_broadcast_alias_candidate(expected_ip: str, remote_ip: str) -> bool:
+    expected = _parse_ip_address(expected_ip)
+    remote = _parse_ip_address(remote_ip)
+    if not isinstance(expected, ipaddress.IPv4Address) or not isinstance(remote, ipaddress.IPv4Address):
+        return False
+    if expected == ipaddress.IPv4Address("255.255.255.255"):
+        return True
+    return expected == ipaddress.IPv4Address(int(remote) | 0xFF)
+
+
 def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
     return apply_collector_profile(
         CollectorInfo(
@@ -492,7 +502,10 @@ class _SharedEybondListener:
         for expected_ip, connection in self._connections.items():
             if connection.connected:
                 continue
-            if not _is_hairpin_alias_candidate(expected_ip, remote_ip):
+            if not (
+                _is_hairpin_alias_candidate(expected_ip, remote_ip)
+                or _is_default_broadcast_alias_candidate(expected_ip, remote_ip)
+            ):
                 continue
             candidates.append((expected_ip, connection))
 

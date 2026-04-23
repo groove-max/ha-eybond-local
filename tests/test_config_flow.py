@@ -603,7 +603,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "scan_results")
-        self.assertEqual(result["menu_options"][:2], ["refresh_scan", "deep_scan"])
+        self.assertEqual(result["menu_options"][:2], ["choose", "refresh_scan"])
         self.assertIn("scan_summary", result["description_placeholders"])
         self.assertIn("choose", result["menu_options"])
         self.assertIn("deep_scan", result["menu_options"])
@@ -1023,6 +1023,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._manual_defaults["collector_ip"], "192.168.1.55")
         self.assertIsNone(flow._manual_result)
 
+    async def test_manual_step_localizes_driver_selector_labels(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+
+        result = await flow.async_step_manual()
+
+        selector = result["data_schema"].schema["driver_hint"]
+        labels = [option["label"] for option in selector.config.kwargs["options"]]
+        self.assertEqual(labels, ["Авто", "SMG / Modbus", "PI30"])
+
     async def test_manual_probe_again_retries_with_stored_settings(self) -> None:
         flow = self._make_flow()
         flow._manual_config = {
@@ -1065,6 +1075,27 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["title"], "EyeBond Setup Pending")
+        self.assertEqual(result["data"]["collector_ip"], "192.168.1.55")
+
+    async def test_manual_create_pending_drops_default_broadcast_collector_ip(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.255",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(connection_mode="broadcast", next_action="create_pending_entry")
+
+        result = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["collector_ip"], "")
+        self.assertEqual(flow._test_unique_id, "listener:192.168.1.50:8899")
 
     async def test_smartess_cloud_assist_persists_inferred_metadata_on_pending_entry(self) -> None:
         flow = self._make_flow()
@@ -1272,7 +1303,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result_label = flow._result_label(flow._autodetect_results["0"])
 
         self.assertIn("локальное сопоставление инвертора пока не подтверждено", placeholders["scan_summary"])
-        self.assertIn("сохранить ожидающую запись", placeholders["scan_next_hint"])
+        self.assertIn("сохранить ожидающее устройство", placeholders["scan_next_hint"])
         self.assertIn("Есть признаки SmartESS", result_label)
 
     async def test_options_runtime_step_renders_branch_aware_connection_section(self) -> None:
@@ -1292,6 +1323,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "_load_translation_bundle",
             [getattr(func, "__name__", "") for func, _args in options.hass.executor_job_calls],
         )
+
+    async def test_options_runtime_step_localizes_control_mode_labels(self) -> None:
+        options = self._make_options_flow()
+        options.hass.config.language = "ru"
+
+        result = await options.async_step_runtime()
+
+        selector = result["data_schema"].schema["control_mode"]
+        labels = [option["label"] for option in selector.config.kwargs["options"]]
+        self.assertEqual(labels, ["Авто", "Только чтение", "Полный контроль"])
 
     async def test_options_runtime_step_serializes_branch_aware_option_payload(self) -> None:
         options = self._make_options_flow()

@@ -50,6 +50,44 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(match.confidence, "medium")
         self.assertIn("family_fallback_variant", match.reasons)
 
+    def test_build_driver_match_keeps_non_fallback_read_only_smg_profile_at_medium_confidence(self) -> None:
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG Protocol 1 Candidate",
+            serial_number="SMG11K240123",
+            probe_target=ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01),
+            variant_key="doc_backed_variant",
+            profile_name="modbus_smg/family_fallback.json",
+            capabilities=(),
+            details={"rated_power": 4200},
+        )
+
+        match = _build_driver_match(SmgModbusDriver(), inverter)
+
+        self.assertEqual(match.variant_key, "doc_backed_variant")
+        self.assertEqual(match.confidence, "medium")
+        self.assertIn("read_only_profile", match.reasons)
+
+    def test_build_driver_match_keeps_anenji_4200_protocol_1_at_medium_confidence(self) -> None:
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="Anenji 4200 (Protocol 1)",
+            serial_number="99432409105281",
+            probe_target=ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01),
+            variant_key="anenji_4200_protocol_1",
+            profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            capabilities=(),
+            details={"rated_power": 4200},
+        )
+
+        match = _build_driver_match(SmgModbusDriver(), inverter)
+
+        self.assertEqual(match.variant_key, "anenji_4200_protocol_1")
+        self.assertEqual(match.confidence, "medium")
+        self.assertIn("unverified_variant", match.reasons)
+
     def test_build_unicast_fallback_targets_scans_local_24_without_server_ip(self) -> None:
         targets = build_unicast_fallback_targets(server_ip="192.168.1.50")
 

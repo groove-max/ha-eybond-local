@@ -163,7 +163,7 @@
           "manual_probe_again": "Проверить ещё раз",
           "manual_edit_settings": "Изменить параметры",
           "manual_smartess_cloud_assist": "Уточнить через SmartESS cloud",
-          "manual_create_pending": "Создать ожидающую запись"
+          "manual_create_pending": "Сохранить ожидающее устройство"
         }
       }
     },
@@ -353,6 +353,13 @@
     }
   },
   "selector": {
+    "driver_hint": {
+      "options": {
+        "auto": "Авто",
+        "modbus_smg": "SMG / Modbus",
+        "pi30": "PI30"
+      }
+    },
     "control_mode": {
       "options": {
         "auto": "Авто",

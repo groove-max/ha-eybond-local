@@ -34,8 +34,17 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.source_scope, "builtin")
         self.assertTrue(profile.source_path.endswith("profiles/modbus_smg/base.json"))
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 0)
-        self.assertEqual(len(profile.presets), 0)
+        self.assertEqual(len(profile.capabilities), 30)
+        self.assertEqual(len(profile.presets), 2)
+        self.assertEqual(sum(capability.tested for capability in profile.capabilities), 0)
+        self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
+        self.assertEqual(
+            profile.get_capability("power_saving_mode").resolved_support_tier,
+            "standard",
+        )
+        self.assertEqual(profile.get_capability("power_saving_mode").support_notes, "")
+        with self.assertRaises(KeyError):
+            profile.get_capability("low_dc_cutoff_soc")
 
     def test_loads_smg_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -68,6 +77,36 @@ class ProfileLoaderTests(unittest.TestCase):
             "exception_code:7",
             profile.get_capability("power_saving_mode").support_notes,
         )
+
+    def test_loads_anenji_4200_protocol_1_profile_overlay(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/anenji_4200_protocol_1.json")
+
+        self.assertEqual(profile.key, "modbus_smg_anenji_4200_protocol_1")
+        self.assertEqual(profile.title, "Anenji 4200 Protocol 1")
+        self.assertEqual(profile.driver_key, "modbus_smg")
+        self.assertEqual(profile.protocol_family, "modbus_smg")
+        self.assertEqual(profile.source_name, "modbus_smg/models/anenji_4200_protocol_1.json")
+        self.assertEqual(profile.source_scope, "builtin")
+        self.assertTrue(
+            profile.source_path.endswith(
+                "profiles/modbus_smg/models/anenji_4200_protocol_1.json"
+            )
+        )
+        self.assertEqual(len(profile.groups), 4)
+        self.assertEqual(len(profile.capabilities), 30)
+        self.assertEqual(len(profile.presets), 2)
+        self.assertEqual(sum(capability.tested for capability in profile.capabilities), 0)
+        self.assertFalse(profile.get_capability("charge_source_priority").tested)
+        self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
+        self.assertEqual(
+            profile.get_capability("power_saving_mode").resolved_support_tier,
+            "standard",
+        )
+        self.assertEqual(profile.get_capability("power_saving_mode").support_notes, "")
+        with self.assertRaises(KeyError):
+            profile.get_capability("low_dc_cutoff_soc")
 
     def test_loads_pi30_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -133,6 +172,40 @@ class ProfileLoaderTests(unittest.TestCase):
         voltage_state = equalization_voltage.runtime_state(runtime_values)
         self.assertTrue(voltage_state.visible)
         self.assertTrue(voltage_state.editable)
+
+    def test_verified_default_smg_equalization_controls_are_enabled_by_default(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+
+        self.assertTrue(profile.get_capability("battery_equalization_mode").enabled_default)
+        self.assertTrue(profile.get_capability("battery_equalization_voltage").enabled_default)
+        self.assertTrue(profile.get_capability("battery_equalization_time").enabled_default)
+        self.assertTrue(profile.get_capability("battery_equalization_timeout").enabled_default)
+        self.assertTrue(profile.get_capability("battery_equalization_interval").enabled_default)
+
+    def test_verified_default_smg_tested_controls_are_enabled_by_default(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+
+        self.assertTrue(profile.get_capability("turn_on_mode").enabled_default)
+        self.assertTrue(profile.get_capability("battery_bulk_voltage").enabled_default)
+        self.assertTrue(profile.get_capability("battery_overvoltage_protection_voltage").enabled_default)
+        self.assertTrue(profile.get_capability("battery_float_voltage").enabled_default)
+        self.assertTrue(profile.get_capability("battery_redischarge_voltage").enabled_default)
+        self.assertTrue(profile.get_capability("battery_under_voltage").enabled_default)
+        self.assertTrue(profile.get_capability("battery_under_voltage_off_grid").enabled_default)
+
+    def test_verified_default_smg_does_not_expose_anenji_clock_write_capabilities(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+
+        with self.assertRaises(KeyError):
+            profile.get_capability("inverter_date_write")
+        with self.assertRaises(KeyError):
+            profile.get_capability("inverter_time_write")
 
     def test_loads_pi30_default_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()

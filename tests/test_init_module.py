@@ -16,6 +16,7 @@ from custom_components.eybond_local import (
     _default_enabled_unique_ids_for_current_runtime,
     _prime_metadata_caches,
 )
+from custom_components.eybond_local.tooling import tooling_button_keys_for_runtime
 from custom_components.eybond_local.models import (
     BinarySensorDescription,
     MeasurementDescription,
@@ -124,6 +125,92 @@ class InitModuleTests(unittest.TestCase):
         self.assertIn("entry123_binary_sensor_fault_active", unique_ids)
         self.assertIn("entry123_select_turn_on_mode", unique_ids)
         self.assertNotIn("entry123_select_output_mode", unique_ids)
+
+    def test_tooling_button_keys_only_include_clock_sync_for_allowed_profile(self) -> None:
+        self.assertEqual(
+            tooling_button_keys_for_runtime(
+                {"turn_on_mode", "battery_float_voltage"},
+                "smg_modbus.json",
+            ),
+            (
+                "create_support_package",
+                "export_support_bundle",
+                "reload_local_metadata",
+                "create_local_profile_draft",
+                "create_local_schema_draft",
+            ),
+        )
+        self.assertEqual(
+            tooling_button_keys_for_runtime(
+                {"inverter_date_write", "inverter_time_write"},
+                "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            ),
+            (
+                "create_support_package",
+                "export_support_bundle",
+                "reload_local_metadata",
+                "create_local_profile_draft",
+                "create_local_schema_draft",
+                "sync_inverter_clock",
+            ),
+        )
+        self.assertEqual(
+            tooling_button_keys_for_runtime(
+                {"inverter_date_write", "inverter_time_write"},
+                "smg_modbus.json",
+            ),
+            (
+                "create_support_package",
+                "export_support_bundle",
+                "reload_local_metadata",
+                "create_local_profile_draft",
+                "create_local_schema_draft",
+            ),
+        )
+
+    def test_current_runtime_default_enabled_unique_ids_include_clock_sync_tool_only_when_supported(self) -> None:
+        date_write = WriteCapability(
+            key="inverter_date_write",
+            register=696,
+            value_kind="date_words",
+            note="",
+            tested=True,
+            enabled_default=False,
+        )
+        time_write = WriteCapability(
+            key="inverter_time_write",
+            register=699,
+            value_kind="time_words",
+            note="",
+            tested=True,
+            enabled_default=False,
+        )
+        inverter = type(
+            "FakeInverter",
+            (),
+            {"capabilities": (date_write, time_write), "capability_presets": ()},
+        )()
+
+        with (
+            patch(
+                "custom_components.eybond_local.drivers.registry.measurements_for_runtime",
+                return_value=(),
+            ),
+            patch(
+                "custom_components.eybond_local.drivers.registry.binary_sensors_for_runtime",
+                return_value=(),
+            ),
+        ):
+            unique_ids = _default_enabled_unique_ids_for_current_runtime(
+                "entry123",
+                None,
+                inverter,
+                lambda capability: capability.key in {"inverter_date_write", "inverter_time_write"},
+                lambda _preset: True,
+            )
+
+        self.assertIn("entry123_tool_create_support_package", unique_ids)
+        self.assertIn("entry123_tool_sync_inverter_clock", unique_ids)
 
 
 if __name__ == "__main__":

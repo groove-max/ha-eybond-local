@@ -170,7 +170,9 @@
       "15": "PV Energy Too Low To Use",
       "16": "Parallel Communication Interrupted",
       "17": "Single/Parallel Output Mode Mismatch",
-      "18": "Parallel Battery Voltage Difference Too Large"
+        "18": "Parallel Battery Voltage Difference Too Large",
+        "19": "Lithium Battery Communication Abnormal",
+        "20": "Battery Discharge Current Exceeds Set Value"
     }
   },
   "spec_sets": {
@@ -322,6 +324,10 @@
       {
         "key": "battery_percent",
         "register": 229
+      },
+      {
+        "key": "power_flow_status",
+        "register": 231
       },
       {
         "key": "battery_current",
@@ -503,18 +509,6 @@
         "key": "automatic_mains_output_enabled",
         "register": 338,
         "enum_table": "enabled_disabled"
-      },
-      {
-        "key": "low_dc_protection_soc_grid_mode",
-        "register": 341
-      },
-      {
-        "key": "solar_battery_utility_return_soc_threshold",
-        "register": 342
-      },
-      {
-        "key": "low_dc_cutoff_soc",
-        "register": 343
       }
     ],
     "aux_config": [
@@ -846,39 +840,6 @@
       "live": false
     },
     {
-      "key": "max_discharge_current_protection",
-      "name": "Max Discharge Current Protection",
-      "unit": "A",
-      "device_class": "current",
-      "diagnostic": true,
-      "enabled_default": false,
-      "live": false
-    },
-    {
-      "key": "low_dc_protection_soc_grid_mode",
-      "name": "Low DC Protection SOC in Grid Mode",
-      "unit": "%",
-      "diagnostic": true,
-      "enabled_default": false,
-      "live": false
-    },
-    {
-      "key": "solar_battery_utility_return_soc_threshold",
-      "name": "Return To Solar-Battery-Utility Threshold",
-      "unit": "%",
-      "diagnostic": true,
-      "enabled_default": false,
-      "live": false
-    },
-    {
-      "key": "low_dc_cutoff_soc",
-      "name": "Low DC Cut-Off SOC",
-      "unit": "%",
-      "diagnostic": true,
-      "enabled_default": false,
-      "live": false
-    },
-    {
       "key": "operating_mode",
       "name": "Operating Mode",
       "icon": "mdi:state-machine",
@@ -901,6 +862,14 @@
       "name": "Power Flow",
       "icon": "mdi:source-branch",
       "enabled_default": true
+    },
+    {
+      "key": "power_flow_status",
+      "name": "Power Flow Status",
+      "icon": "mdi:swap-horizontal",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": true
     },
     {
       "key": "protection_state",
@@ -1187,6 +1156,41 @@
       "diagnostic": true,
       "enabled_default": false
     },
+      {
+        "key": "power_flow_pv_connection_state",
+        "name": "Power Flow PV Connection",
+        "icon": "mdi:solar-power-variant",
+        "diagnostic": true,
+        "enabled_default": false
+      },
+      {
+        "key": "power_flow_utility_connection_state",
+        "name": "Power Flow Utility Connection",
+        "icon": "mdi:transmission-tower",
+        "diagnostic": true,
+        "enabled_default": false
+      },
+      {
+        "key": "power_flow_battery_state",
+        "name": "Power Flow Battery State",
+        "icon": "mdi:battery-sync",
+        "diagnostic": true,
+        "enabled_default": false
+      },
+      {
+        "key": "power_flow_load_state",
+        "name": "Power Flow Load State",
+        "icon": "mdi:home-lightning-bolt-outline",
+        "diagnostic": true,
+        "enabled_default": false
+      },
+      {
+        "key": "power_flow_charge_source_state",
+        "name": "Power Flow Charge Source",
+        "icon": "mdi:battery-charging-medium",
+        "diagnostic": true,
+        "enabled_default": false
+      },
     {
       "key": "charge_source_policy_state",
       "name": "Charging Policy",

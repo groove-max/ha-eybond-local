@@ -10,11 +10,36 @@ from typing import Any
 from ..const import LOCAL_METADATA_DIR, LOCAL_SUPPORT_BUNDLES_DIR
 
 
-def build_support_marker(*, variant_key: str = "") -> dict[str, Any] | None:
-    """Return one machine-readable support marker for special runtime states."""
+_SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
+_SMG_READ_ONLY_PROFILE_NAME = "modbus_smg/family_fallback.json"
+
+
+def is_read_only_unverified_smg_family(
+    *,
+    variant_key: str = "",
+    profile_name: str = "",
+) -> bool:
+    """Return whether one runtime path is the read-only unverified SMG family state."""
 
     normalized_variant_key = str(variant_key or "").strip()
-    if normalized_variant_key != "family_fallback":
+    normalized_profile_name = str(profile_name or "").strip()
+    return (
+        normalized_variant_key == _SMG_FAMILY_FALLBACK_VARIANT
+        or normalized_profile_name == _SMG_READ_ONLY_PROFILE_NAME
+    )
+
+
+def build_support_marker(
+    *,
+    variant_key: str = "",
+    profile_name: str = "",
+) -> dict[str, Any] | None:
+    """Return one machine-readable support marker for special runtime states."""
+
+    if not is_read_only_unverified_smg_family(
+        variant_key=variant_key,
+        profile_name=profile_name,
+    ):
         return None
     return {
         "key": "read_only_unverified_smg_family",
@@ -22,7 +47,7 @@ def build_support_marker(*, variant_key: str = "") -> dict[str, Any] | None:
         "read_only": True,
         "verification": "unverified",
         "summary": (
-            "Generic SMG family fallback metadata is active. "
+            "Read-only SMG-family metadata is active. "
             "Built-in writes are intentionally disabled until a verified model-specific mapping exists."
         ),
     }
@@ -58,7 +83,10 @@ def build_support_bundle_payload(
 ) -> dict[str, Any]:
     """Build one machine-readable support bundle payload."""
 
-    support_marker = build_support_marker(variant_key=variant_key)
+    support_marker = build_support_marker(
+        variant_key=variant_key,
+        profile_name=profile_name,
+    )
 
     return {
         "bundle_version": 1,

@@ -134,6 +134,58 @@ class SupportBundleTests(unittest.TestCase):
         self.assertTrue(marker["read_only"])
         self.assertEqual(marker["verification"], "unverified")
 
+    def test_builds_support_bundle_payload_with_non_fallback_read_only_smg_profile_marker(self) -> None:
+        raw = build_support_bundle_payload(
+            entry_id="entry-doc-backed",
+            entry_title="SMG Candidate",
+            connected=True,
+            collector={"collector_pn": "E5000025388419"},
+            inverter={
+                "driver_key": "modbus_smg",
+                "model_name": "SMG Candidate",
+                "variant_key": "doc_backed_variant",
+                "serial_number": "SMG11K240123",
+                "profile_name": "modbus_smg/family_fallback.json",
+                "register_schema_name": "modbus_smg/base.json",
+            },
+            values={"operating_mode": "Off-Grid"},
+            data={"server_ip": "192.168.1.50"},
+            options={"poll_interval": 10},
+            profile_name="modbus_smg/family_fallback.json",
+            register_schema_name="modbus_smg/base.json",
+            variant_key="doc_backed_variant",
+        )
+
+        marker = raw["source_metadata"]["support_marker"]
+        self.assertEqual(marker["key"], "read_only_unverified_smg_family")
+        self.assertEqual(marker["label"], "Read-only unverified SMG family")
+        self.assertTrue(marker["read_only"])
+        self.assertEqual(marker["verification"], "unverified")
+
+    def test_builds_support_bundle_payload_without_read_only_marker_for_untested_anenji_4200_profile(self) -> None:
+        raw = build_support_bundle_payload(
+            entry_id="entry-anenji-4200",
+            entry_title="Anenji 4200",
+            connected=True,
+            collector={"collector_pn": "E5000025388419"},
+            inverter={
+                "driver_key": "modbus_smg",
+                "model_name": "Anenji 4200 (Protocol 1)",
+                "variant_key": "anenji_4200_protocol_1",
+                "serial_number": "99432409105281",
+                "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+            },
+            values={"operating_mode": "Off-Grid"},
+            data={"server_ip": "192.168.1.50"},
+            options={"poll_interval": 10},
+            profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            variant_key="anenji_4200_protocol_1",
+        )
+
+        self.assertIsNone(raw["source_metadata"]["support_marker"])
+
     def test_exports_support_bundle_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_dir = Path(temp_dir)

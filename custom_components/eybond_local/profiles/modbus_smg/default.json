@@ -1,366 +1,109 @@
 {
-  "extends": "modbus_smg/family_base.json",
+  "extends": "modbus_smg/base.json",
   "profile_key": "modbus_smg_default",
   "title": "SMG / Modbus Default Profile",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
-  "conditions": {
-    "battery_equalization_enabled": {
-      "key": "battery_equalization_enabled",
-      "operator": "truthy",
-      "reason": "Battery equalization is currently disabled."
-    },
-    "ac_charging_allowed": {
-      "key": "ac_charging_allowed",
-      "operator": "truthy",
-      "reason": "AC charging is currently disabled by Charge Source Priority."
-    },
-    "utility_charging_allowed": {
-      "key": "utility_charging_allowed",
-      "operator": "truthy",
-      "reason": "Utility charging is currently disabled by Charge Source Priority."
-    },
-    "pv_only_charging": {
-      "key": "pv_only_charging",
-      "operator": "truthy",
-      "reason": "Charge Source Priority is not currently set to PV Only."
-    },
-    "off_grid_mode": {
-      "key": "operating_mode",
-      "operator": "eq",
-      "value": "Off-Grid",
-      "reason": "This recommendation is intended for Off-Grid operation."
-    },
-    "pv_available": {
-      "key": "pv_voltage",
-      "operator": "truthy",
-      "reason": "PV input is not currently available."
-    }
-  },
   "capabilities": [
     {
-      "key": "output_mode",
-      "template": "output_mode",
-      "register": 300,
-      "change_summary": "Changes the inverter output topology mode reported by the SMG configuration block.",
-      "note": "Output mode according to SMG config block.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Single",
-          "order": 0,
-          "description": "Single inverter output mode."
-        },
-        {
-          "value": 1,
-          "label": "Parallel",
-          "order": 1,
-          "description": "Parallel-capable output mode."
-        },
-        {
-          "value": 2,
-          "label": "3 Phase-P1",
-          "order": 2,
-          "description": "Three-phase mode, phase 1."
-        },
-        {
-          "value": 3,
-          "label": "3 Phase-P2",
-          "order": 3,
-          "description": "Three-phase mode, phase 2."
-        },
-        {
-          "value": 4,
-          "label": "3 Phase-P3",
-          "order": 4,
-          "description": "Three-phase mode, phase 3."
-        }
-      ]
-    },
-    {
       "key": "output_source_priority",
-      "template": "output_source_priority",
-      "register": 301,
-      "tested": true,
-      "change_summary": "Changes how the inverter prioritizes utility, PV, and battery when powering the load.",
-      "note": "Output source priority according to SMG config block.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Utility-PV-Battery",
-          "order": 0,
-          "description": "Prefer utility first, then PV, then battery."
-        },
-        {
-          "value": 1,
-          "label": "PV-Utility-Battery",
-          "order": 1,
-          "description": "Prefer PV first, then utility, then battery."
-        },
-        {
-          "value": 2,
-          "label": "PV-Battery-Utility",
-          "order": 2,
-          "description": "Prefer PV first, then battery, then utility."
-        }
-      ],
-      "recommendations": [
-        {
-          "value": 2,
-          "reason": "Typical self-consumption preference for off-grid operation.",
-          "conditions": [
-            "off_grid_mode"
-          ],
-          "priority": 100
-        }
-      ]
+      "tested": true
     },
     {
       "key": "input_voltage_range",
-      "register": 302,
-      "value_kind": "enum",
-      "tested": true,
-      "title": "Input Voltage Range",
-      "group": "system",
-      "order": 110,
-      "enabled_default": true,
-      "advanced": true,
-      "requires_confirm": true,
-      "change_summary": "Changes the acceptable AC input voltage range used by the inverter.",
-      "note": "Input voltage range according to SMG config block.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Wide Range",
-          "order": 0,
-          "description": "Allow a wider AC input voltage tolerance."
-        },
-        {
-          "value": 1,
-          "label": "Narrow Range",
-          "order": 1,
-          "description": "Restrict AC input to a narrower utility range."
-        }
-      ]
+      "tested": true
     },
     {
       "key": "buzzer_mode",
-      "template": "buzzer_mode",
-      "register": 303,
-      "tested": true,
-      "note": "Buzzer mode according to SMG config block."
+      "tested": true
     },
     {
       "key": "lcd_backlight_mode",
-      "template": "lcd_backlight_mode",
-      "register": 305,
-      "tested": true,
-      "note": "LCD backlight behavior according to SMG config block."
+      "tested": true
     },
     {
       "key": "lcd_auto_return_mode",
-      "template": "lcd_auto_return_mode",
-      "register": 306,
-      "tested": true,
-      "note": "LCD auto-return behavior according to SMG config block."
-    },
-    {
-      "key": "power_saving_mode",
-      "template": "power_saving_mode",
-      "register": 307,
-      "support_tier": "blocked",
-      "support_notes": "Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts.",
-      "note": "Power saving flag according to SMG config block."
+      "tested": true
     },
     {
       "key": "overload_restart_mode",
-      "template": "overload_restart_mode",
-      "register": 308,
-      "tested": true,
-      "note": "Overload restart flag according to SMG config block."
+      "tested": true
     },
     {
       "key": "over_temperature_restart_mode",
-      "template": "over_temperature_restart_mode",
-      "register": 309,
-      "tested": true,
-      "note": "Over-temperature restart flag according to SMG config block."
-    },
-    {
-      "key": "overload_bypass_mode",
-      "template": "overload_bypass_mode",
-      "register": 310,
-      "support_tier": "blocked",
-      "support_notes": "Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts.",
-      "note": "Overload bypass flag according to SMG config block."
+      "tested": true
     },
     {
       "key": "battery_equalization_mode",
-      "template": "battery_equalization_mode",
-      "register": 313,
       "tested": true,
-      "note": "Battery equalization enable flag according to SMG config block.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Off",
-          "order": 0,
-          "description": "Disable battery equalization."
-        },
-        {
-          "value": 1,
-          "label": "On",
-          "order": 1,
-          "description": "Enable battery equalization."
-        }
-      ]
+      "enabled_default": true
     },
     {
       "key": "turn_on_mode",
-      "template": "turn_on_mode",
-      "register": 406,
       "tested": true,
-      "note": "Turn-on mode according to the extended SMG config register set."
-    },
-    {
-      "key": "remote_turn_on",
-      "template": "remote_turn_on",
-      "register": 420,
-      "change_summary": "Requests remote turn-on through the extended SMG remote control register.",
-      "note": "Write register 420 with value 1 to request remote turn-on."
-    },
-    {
-      "key": "remote_shutdown",
-      "template": "remote_shutdown",
-      "register": 420,
-      "change_summary": "Requests remote shutdown through the extended SMG remote control register.",
-      "note": "Write register 420 with value 0 to request remote shutdown."
-    },
-    {
-      "key": "output_rating_voltage",
-      "template": "output_rating_voltage",
-      "register": 320
-    },
-    {
-      "key": "output_rating_frequency",
-      "template": "output_rating_frequency",
-      "register": 321
+      "enabled_default": true
     },
     {
       "key": "battery_bulk_voltage",
-      "template": "battery_bulk_voltage",
-      "register": 324,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_overvoltage_protection_voltage",
-      "template": "battery_overvoltage_protection_voltage",
-      "register": 323,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_float_voltage",
-      "template": "battery_float_voltage",
-      "register": 325,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_redischarge_voltage",
-      "template": "battery_redischarge_voltage",
-      "register": 326,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_under_voltage",
-      "template": "battery_under_voltage",
-      "register": 327,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_under_voltage_off_grid",
-      "template": "battery_under_voltage_off_grid",
-      "register": 329,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "charge_source_priority",
-      "template": "charge_source_priority",
-      "register": 331,
-      "tested": true,
-      "note": "Charge source priority according to SMG config block.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Utility Priority",
-          "order": 0,
-          "description": "Prefer utility charging over PV charging."
-        },
-        {
-          "value": 1,
-          "label": "PV Priority",
-          "order": 1,
-          "description": "Prefer PV charging when solar power is available."
-        },
-        {
-          "value": 2,
-          "label": "PV and Utility",
-          "order": 2,
-          "description": "Allow both PV and utility charging."
-        },
-        {
-          "value": 3,
-          "label": "PV Only",
-          "order": 3,
-          "description": "Restrict charging to PV only."
-        }
-      ],
-      "recommendations": [
-        {
-          "value": 3,
-          "reason": "Recommended when solar is available and AC charging should stay disabled.",
-          "conditions": [
-            "off_grid_mode",
-            "pv_available"
-          ],
-          "priority": 100
-        }
-      ]
+      "tested": true
     },
     {
       "key": "max_charge_current",
-      "template": "max_charge_current",
-      "register": 332,
       "tested": true
     },
     {
       "key": "max_ac_charge_current",
-      "template": "max_ac_charge_current",
-      "register": 333,
       "tested": true
     },
     {
       "key": "battery_equalization_voltage",
-      "template": "battery_equalization_voltage",
-      "register": 334,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_equalization_time",
-      "template": "battery_equalization_time",
-      "register": 335,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_equalization_timeout",
-      "template": "battery_equalization_timeout",
-      "register": 336,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "battery_equalization_interval",
-      "template": "battery_equalization_interval",
-      "register": 337,
-      "tested": true
+      "tested": true,
+      "enabled_default": true
     },
     {
       "key": "low_dc_protection_soc_grid_mode",
@@ -384,62 +127,14 @@
       "note": "Reverse-engineered from live SMG app changes. Raw unsigned percent threshold."
     },
     {
-      "key": "exit_fault_mode",
-      "template": "exit_fault_mode",
-      "register": 426,
-      "change_summary": "Sends the inverter command that exits the fault state when supported by the current fault condition.",
-      "note": "Write register 426 with value 1 to request exit from fault mode."
-    }
-  ],
-  "presets": [
-    {
-      "key": "off_grid_self_consumption",
-      "title": "Off-Grid Self Consumption",
-      "description": "Prefer PV for the load, keep battery ahead of utility, and disable AC charging when solar power is available.",
-      "group": "recommended",
-      "order": 100,
-      "icon": "mdi:home-lightning-bolt-outline",
-      "requires_confirm": true,
-      "conditions": [
-        "off_grid_mode"
-      ],
-      "items": [
-        {
-          "capability_key": "output_source_priority",
-          "value": 2,
-          "order": 100,
-          "reason": "Prefer PV first and battery second when powering the load."
-        },
-        {
-          "capability_key": "charge_source_priority",
-          "value": 3,
-          "order": 110,
-          "reason": "Keep AC charging disabled and use PV only for charging."
-        }
-      ]
+      "key": "power_saving_mode",
+      "support_tier": "blocked",
+      "support_notes": "Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts."
     },
     {
-      "key": "hybrid_pv_with_grid_backup",
-      "title": "Hybrid PV With Grid Backup",
-      "description": "Prefer PV for both output and charging, while keeping utility ahead of battery as the backup source for the load.",
-      "group": "recommended",
-      "order": 110,
-      "icon": "mdi:transmission-tower",
-      "requires_confirm": true,
-      "items": [
-        {
-          "capability_key": "output_source_priority",
-          "value": 1,
-          "order": 100,
-          "reason": "Use PV first, then utility, and keep battery as the last backup source."
-        },
-        {
-          "capability_key": "charge_source_priority",
-          "value": 1,
-          "order": 110,
-          "reason": "Prefer PV charging while still allowing the system to use utility as needed."
-        }
-      ]
+      "key": "overload_bypass_mode",
+      "support_tier": "blocked",
+      "support_notes": "Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts."
     }
   ]
 }

@@ -24,17 +24,29 @@ from .base import InverterDriver
 
 
 _SMG_VARIANT_MODEL_NAMES = {
+    "anenji_4200_protocol_1": "Anenji 4200 (Protocol 1)",
     "anenji_anj_11kw_48v_wifi_p": "Anenji ANJ-11KW-48V-WIFI-P",
     "family_fallback": "SMG Family (Unverified Variant)",
 }
 
 _SMG_DEFAULT_RATED_POWERS = frozenset({6200})
+_SMG_ANENJI_4200_PROTOCOL_1_VARIANT = "anenji_4200_protocol_1"
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
-_SMG_DEFAULT_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
+_SMG_PROTOCOL_1_BASE_VARIANTS = frozenset(
+    {
+        _SMG_ANENJI_4200_PROTOCOL_1_VARIANT,
+        "default",
+        _SMG_FAMILY_FALLBACK_VARIANT,
+    }
+)
+_SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
     RegisterValueSpec(key="device_type", register=171),
     RegisterValueSpec(key="protocol_number", register=184),
-    RegisterValueSpec(key="max_discharge_current_protection", register=351),
     RegisterValueSpec(key="rated_cell_count", register=644),
+)
+_SMG_DEFAULT_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
+    *_SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS,
+    RegisterValueSpec(key="max_discharge_current_protection", register=351),
 )
 _SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES: tuple[tuple[str, int, int], ...] = (
     ("device_name", 172, 12),
@@ -331,7 +343,7 @@ class SmgModbusDriver(InverterDriver):
             "driver_key": self.key,
             "model_name": inverter.model_name,
             "serial_number": inverter.serial_number,
-            "capture_notes": list(_support_capture_notes()),
+            "capture_notes": list(_support_capture_notes(schema_name)),
             "planned_ranges": [
                 {"start": start, "count": count}
                 for start, count in ranges
@@ -548,6 +560,60 @@ def _decode_named_bits(
     return tuple(active)
 
 
+def _decode_power_flow_status(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, int) or raw_value < 0:
+        return {}
+
+    mains_charging = bool((raw_value >> 8) & 0x1)
+    pv_charging = bool((raw_value >> 9) & 0x1)
+    return {
+        "power_flow_pv_connection_state": _power_flow_connection_state(raw_value & 0x3),
+        "power_flow_utility_connection_state": _power_flow_connection_state((raw_value >> 2) & 0x3),
+        "power_flow_battery_state": _power_flow_battery_state((raw_value >> 4) & 0x3),
+        "power_flow_load_state": _power_flow_load_state((raw_value >> 6) & 0x3),
+        "power_flow_charge_source_state": _power_flow_charge_source_state(
+            mains_charging=mains_charging,
+            pv_charging=pv_charging,
+        ),
+    }
+
+
+def _power_flow_connection_state(value: int) -> str:
+    if value == 0:
+        return "Disconnected"
+    if value == 1:
+        return "Connected"
+    return f"Unknown ({value})"
+
+
+def _power_flow_battery_state(value: int) -> str:
+    if value == 0:
+        return "Idle"
+    if value == 1:
+        return "Charging"
+    if value == 2:
+        return "Discharging"
+    return f"Unknown ({value})"
+
+
+def _power_flow_load_state(value: int) -> str:
+    if value == 0:
+        return "Inactive"
+    if value == 1:
+        return "Active"
+    return f"Unknown ({value})"
+
+
+def _power_flow_charge_source_state(*, mains_charging: bool, pv_charging: bool) -> str:
+    if mains_charging and pv_charging:
+        return "PV + Utility"
+    if mains_charging:
+        return "Utility"
+    if pv_charging:
+        return "PV"
+    return "Idle"
+
+
 def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
     """Derive human-readable runtime states from already decoded SMG values."""
 
@@ -634,11 +700,23 @@ def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
         pv_charging_power=values.get("pv_charging_power"),
         inverter_charging_power=values.get("inverter_charging_power"),
     )
+    documented_power_flow = _decode_power_flow_status(values.get("power_flow_status"))
+    if documented_power_flow:
+        derived.update(documented_power_flow)
     derived["charging_active"] = bool(
         _is_active_power(values.get("pv_charging_power"))
         or _is_active_power(values.get("inverter_charging_power"))
     )
     derived["charging_inactive"] = not derived["charging_active"]
+    documented_charge_source_state = derived.get("power_flow_charge_source_state")
+    if (
+        isinstance(documented_charge_source_state, str)
+        and documented_charge_source_state not in {"Idle", "Unknown"}
+        and derived["charging_source_state"] in {"Idle", "Unknown"}
+    ):
+        derived["charging_source_state"] = documented_charge_source_state
+        derived["charging_active"] = True
+        derived["charging_inactive"] = False
     derived["charge_source_policy_state"] = charge_source_priority or "Unknown"
     derived["charging_settings_state"] = _charging_settings_state(
         charging_active=derived["charging_active"],
@@ -1491,7 +1569,7 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
 
 
 _SMG_FAMILY_DISCOVERY_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
-    (171, 13),
+    (171, 14),
     (277, 5),
     (338, 16),
     (389, 3),
@@ -1499,6 +1577,10 @@ _SMG_FAMILY_DISCOVERY_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
     (626, 8),
     (644, 1),
     (696, 9),
+)
+
+_SMG_PROTOCOL_1_DOCUMENTED_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
+    (700, 45),
 )
 
 _SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
@@ -1515,10 +1597,25 @@ _SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
 }
 
 
-def _support_capture_notes() -> tuple[str, ...]:
+def _is_protocol_1_common_schema(schema) -> bool:
     return (
-        "Includes supplemental SMG identity and family discovery ranges: 171-183, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+        schema.block("serial").start == 186
+        and schema.block("live").start == 201
+        and schema.block("config").start == 300
+        and schema.scalar_registers.get("rated_power_register", 0) == 643
     )
+
+
+def _support_capture_notes(schema_name: str | None = None) -> tuple[str, ...]:
+    default_binding = _smg_default_binding()
+    schema = load_register_schema(schema_name or default_binding.register_schema_name)
+
+    notes = [
+        "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+    ]
+    if _is_protocol_1_common_schema(schema):
+        notes.append("Protocol-1 SMG layouts also include documented fault/log windows: 700-744.")
+    return tuple(notes)
 
 
 def _support_capture_ranges(schema_name: str | None = None) -> tuple[tuple[int, int], ...]:
@@ -1539,6 +1636,8 @@ def _support_capture_ranges(schema_name: str | None = None) -> tuple[tuple[int, 
         for register in sorted({value for value in schema.scalar_registers.values() if value > 0})
     )
     planned.extend(_SMG_FAMILY_DISCOVERY_CAPTURE_RANGES)
+    if _is_protocol_1_common_schema(schema):
+        planned.extend(_SMG_PROTOCOL_1_DOCUMENTED_CAPTURE_RANGES)
     planned.extend(_SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES.get(schema.key, ()))
     return _merge_capture_ranges(planned)
 
@@ -1570,15 +1669,17 @@ def _smg_binding_sort_key(binding) -> tuple[int, str]:
 
 
 def _optional_probe_specs_for_variant(variant_key: str) -> tuple[RegisterValueSpec, ...]:
-    if variant_key in {"default", _SMG_FAMILY_FALLBACK_VARIANT}:
+    if variant_key == "default":
         return _SMG_DEFAULT_OPTIONAL_PROBE_SPECS
+    if variant_key in _SMG_PROTOCOL_1_BASE_VARIANTS:
+        return _SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS
     return ()
 
 
 def _optional_ascii_probe_ranges_for_variant(
     variant_key: str,
 ) -> tuple[tuple[str, int, int], ...]:
-    if variant_key in {"default", _SMG_FAMILY_FALLBACK_VARIANT}:
+    if variant_key in _SMG_PROTOCOL_1_BASE_VARIANTS:
         return _SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES
     return ()
 
@@ -1605,6 +1706,18 @@ def _is_valid_smg_probe(
     output_source_priority = config_values.get("output_source_priority")
     if isinstance(output_source_priority, str) and output_source_priority.startswith("Unknown"):
         return False
+
+    if variant_key == _SMG_ANENJI_4200_PROTOCOL_1_VARIANT:
+        if config_values.get("protocol_number") != 1:
+            return False
+        if config_values.get("device_type") != 0x3501:
+            return False
+        if rated_power != 4200:
+            return False
+        if not _is_known_enum_value(config_values.get("turn_on_mode")):
+            return False
+        if not _is_known_enum_value(config_values.get("remote_switch")):
+            return False
 
     if variant_key == "anenji_anj_11kw_48v_wifi_p":
         if config_values.get("protocol_number") not in {3, 4, 5, 6}:

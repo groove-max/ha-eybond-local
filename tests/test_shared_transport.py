@@ -186,6 +186,20 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(aliased)
         self.assertNotIn("192.168.1.1", listener._connections)
 
+    async def test_listener_aliases_single_default_broadcast_placeholder_for_callback(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        placeholder = listener.ensure_connection(
+            "192.168.1.255",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+
+        aliased = listener._resolve_public_placeholder_alias("192.168.1.55")
+
+        self.assertIs(aliased, placeholder)
+        self.assertIs(listener._connections["192.168.1.255"], placeholder)
+        self.assertIs(listener._connections["192.168.1.55"], placeholder)
+
     async def test_listener_uses_hairpin_alias_during_connection_handling(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         placeholder = listener.ensure_connection(
@@ -212,6 +226,33 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         run_mock.assert_awaited_once()
         self.assertEqual(listener._last_connection_ip, "192.168.1.1")
         self.assertIs(listener._connections["192.168.1.1"], placeholder)
+
+    async def test_listener_uses_default_broadcast_alias_during_connection_handling(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        placeholder = listener.ensure_connection(
+            "192.168.1.255",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+
+        class _FakeWriter:
+            def get_extra_info(self, name: str):
+                if name == "peername":
+                    return ("192.168.1.55", 12345)
+                return None
+
+            def close(self) -> None:
+                return None
+
+            async def wait_closed(self) -> None:
+                return None
+
+        with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
+            await listener._handle_connection(asyncio.StreamReader(), _FakeWriter())
+
+        run_mock.assert_awaited_once()
+        self.assertEqual(listener._last_connection_ip, "192.168.1.55")
+        self.assertIs(listener._connections["192.168.1.55"], placeholder)
 
 
 if __name__ == "__main__":

@@ -39,12 +39,29 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.scalar_register("rated_power_register"), 643)
         self.assertEqual(schema.enum_map_for("mode_names")[3], "Off-Grid")
         self.assertEqual(schema.bit_labels_for("warning_code_names")[9], "Battery Not Connected")
-        self.assertEqual(len(schema.spec_set("config")), 33)
-        self.assertEqual(len(schema.measurement_descriptions), 98)
+        self.assertEqual(
+            schema.bit_labels_for("warning_code_names")[19],
+            "Lithium Battery Communication Abnormal",
+        )
+        self.assertEqual(
+            schema.bit_labels_for("warning_code_names")[20],
+            "Battery Discharge Current Exceeds Set Value",
+        )
+        self.assertEqual(len(schema.spec_set("config")), 30)
+        self.assertEqual(len(schema.measurement_descriptions), 100)
         self.assertEqual(schema.measurement_description("inverter_date").name, "Inverter Date")
         self.assertEqual(schema.measurement_description("inverter_time").name, "Inverter Time")
         self.assertEqual(schema.measurement_description("device_name").name, "Device Name")
+        self.assertEqual(schema.measurement_description("power_flow_status").name, "Power Flow Status")
+        self.assertEqual(
+            schema.measurement_description("power_flow_charge_source_state").name,
+            "Power Flow Charge Source",
+        )
         self.assertEqual(schema.measurement_description("program_version").name, "Program Version")
+        with self.assertRaises(KeyError):
+            schema.measurement_description("low_dc_cutoff_soc")
+        with self.assertRaises(KeyError):
+            schema.measurement_description("max_discharge_current_protection")
         self.assertEqual(len(schema.binary_sensor_descriptions), 18)
 
     def test_infers_measurement_display_precision_from_register_specs(self) -> None:
@@ -79,10 +96,16 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.block("live").count, 34)
         self.assertEqual(schema.scalar_register("rated_power_register"), 643)
         self.assertEqual(schema.enum_map_for("mode_names")[3], "Off-Grid")
+        self.assertEqual(len(schema.spec_set("config")), 33)
         self.assertEqual(
-            schema.measurement_description("operational_state").name,
-            "System Status",
+            schema.measurement_description("max_discharge_current_protection").name,
+            "Max Discharge Current Protection",
         )
+        self.assertEqual(
+            schema.measurement_description("low_dc_cutoff_soc").name,
+            "Low DC Cut-Off SOC",
+        )
+        self.assertEqual(schema.measurement_description("operational_state").name, "System Status")
         self.assertEqual(
             schema.binary_sensor_description("battery_connected").name,
             "Battery Connected",

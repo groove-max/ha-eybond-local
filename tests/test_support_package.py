@@ -253,6 +253,60 @@ class SupportPackageTests(unittest.TestCase):
                 "read_only_unverified_smg_family",
             )
 
+    def test_exports_read_only_profile_archive_with_explicit_support_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-anenji-4200",
+                entry_title="Anenji 4200",
+                connected=True,
+                collector={"collector_pn": "E5000025388419"},
+                inverter={
+                    "driver_key": "modbus_smg",
+                    "model_name": "Anenji 4200 (Protocol 1)",
+                    "serial_number": "99432409105281",
+                    "variant_key": "anenji_4200_protocol_1",
+                },
+                values={"operating_mode": "Off-Grid"},
+                data={"server_ip": "192.168.1.50"},
+                options={"poll_interval": 10},
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                variant_key="anenji_4200_protocol_1",
+            )
+            support_bundle["source_metadata"].pop("support_marker", None)
+
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-anenji-4200",
+                entry_title="Anenji 4200",
+                support_bundle=support_bundle,
+                raw_capture={
+                    "capture_kind": "modbus_register_dump",
+                    "captured_ranges": [{"start": 201, "count": 2, "words": [1, 2]}],
+                    "range_failures": [],
+                },
+                fixture={
+                    "fixture_version": 1,
+                    "name": "anenji_4200_protocol_1_capture",
+                    "ranges": [{"start": 201, "count": 2, "values": [1, 2]}],
+                },
+                anonymized_fixture={
+                    "fixture_version": 1,
+                    "name": "anenji_4200_protocol_1_capture_anon",
+                    "ranges": [{"start": 201, "count": 2, "values": [1, 2]}],
+                    "anonymized": True,
+                },
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+                readme = archive.read("README.txt").decode("utf-8")
+
+            self.assertIsNone(manifest["support_marker"])
+            self.assertNotIn("Read-only unverified SMG family", readme)
+            self.assertNotIn("Built-in writes are intentionally disabled", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

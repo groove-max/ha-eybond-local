@@ -173,6 +173,7 @@ def _default_enabled_unique_ids_for_current_runtime(
     from .derived_energy import default_enabled_derived_energy_keys
     from .drivers.registry import binary_sensors_for_runtime, measurements_for_runtime
     from .schema import entity_kind_for_capability
+    from .tooling import default_enabled_tooling_button_keys_for_runtime
 
     driver_key = driver.key if driver is not None else None
     register_schema_name = getattr(inverter, "register_schema_name", "") if inverter is not None else ""
@@ -181,6 +182,8 @@ def _default_enabled_unique_ids_for_current_runtime(
         if inverter is not None
         else (driver.write_capabilities if driver is not None else ())
     )
+    capability_keys = {capability.key for capability in capabilities}
+    profile_name = getattr(inverter, "profile_name", "") if inverter is not None else ""
     presets = (
         inverter.capability_presets
         if inverter is not None
@@ -207,6 +210,9 @@ def _default_enabled_unique_ids_for_current_runtime(
     for description in binary_sensor_descriptions:
         if description.enabled_default:
             expected.add(_entity_unique_id(entry_id, "binary_sensor", description.key))
+
+    for key in default_enabled_tooling_button_keys_for_runtime(capability_keys, profile_name):
+        expected.add(_tool_unique_id(entry_id, key))
 
     for capability in capabilities:
         if not capability.enabled_default:
@@ -276,6 +282,7 @@ async def _async_cleanup_obsolete_entities(
     )
     from .drivers.registry import binary_sensors_for_runtime, measurements_for_runtime
     from .schema import entity_kind_for_capability
+    from .tooling import tooling_button_keys_for_runtime
 
     registry = er.async_get(hass)
     driver = coordinator.current_driver
@@ -287,6 +294,8 @@ async def _async_cleanup_obsolete_entities(
         if inverter is not None
         else (driver.write_capabilities if driver is not None else ())
     )
+    capability_keys = {capability.key for capability in capabilities}
+    profile_name = getattr(inverter, "profile_name", "") if inverter is not None else ""
     presets = (
         inverter.capability_presets
         if inverter is not None
@@ -334,8 +343,8 @@ async def _async_cleanup_obsolete_entities(
         for description in binary_sensor_descriptions
     )
     expected_unique_ids.update(
-        _tool_unique_id(entry.entry_id, spec.key)
-        for spec in _tooling_button_specs()
+        _tool_unique_id(entry.entry_id, key)
+        for key in tooling_button_keys_for_runtime(capability_keys, profile_name)
     )
     for capability in capabilities:
         entity_kind = entity_kind_for_capability(capability)

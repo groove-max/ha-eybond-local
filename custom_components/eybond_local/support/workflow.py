@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..control_policy import normalize_confidence
+from .bundle import is_read_only_unverified_smg_family
 
 
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
@@ -60,6 +61,7 @@ def build_support_workflow_state(
     *,
     has_inverter: bool,
     variant_key: str = "",
+    profile_name: str = "",
     effective_owner_key: str = "",
     effective_owner_name: str = "",
     smartess_family_name: str = "",
@@ -158,12 +160,15 @@ def build_support_workflow_state(
             ),
         )
 
-    if normalized_variant_key == _SMG_FAMILY_FALLBACK_VARIANT:
+    if is_read_only_unverified_smg_family(
+        variant_key=normalized_variant_key,
+        profile_name=profile_name,
+    ):
         return _workflow_state(
             level="family_fallback",
             level_label="Read-only unverified SMG family",
             summary=(
-                "This inverter is using the generic SMG family fallback. "
+                "This inverter is using read-only unverified SMG-family metadata. "
                 "Built-in writes are intentionally disabled until the exact model is verified."
             ),
             next_action=(

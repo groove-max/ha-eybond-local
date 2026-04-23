@@ -13,6 +13,7 @@ from .matrix import build_profile_support_matrix
 _DEFAULT_SUPPORT_OVERVIEW_PROFILES = (
     "pi30_ascii.json",
     "smg_modbus.json",
+    "modbus_smg/models/anenji_4200_protocol_1.json",
     "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
     "modbus_smg/family_fallback.json",
 )

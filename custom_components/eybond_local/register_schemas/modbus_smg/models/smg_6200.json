@@ -3,5 +3,56 @@
   "schema_key": "modbus_smg_6200",
   "title": "SMG 6200 Register Schema",
   "driver_key": "modbus_smg",
-  "protocol_family": "modbus_smg"
+  "protocol_family": "modbus_smg",
+  "spec_sets": {
+    "config": [
+      {
+        "key": "low_dc_protection_soc_grid_mode",
+        "register": 341
+      },
+      {
+        "key": "solar_battery_utility_return_soc_threshold",
+        "register": 342
+      },
+      {
+        "key": "low_dc_cutoff_soc",
+        "register": 343
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "max_discharge_current_protection",
+      "name": "Max Discharge Current Protection",
+      "unit": "A",
+      "device_class": "current",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_dc_protection_soc_grid_mode",
+      "name": "Low DC Protection SOC in Grid Mode",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "name": "Return To Solar-Battery-Utility Threshold",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "low_dc_cutoff_soc",
+      "name": "Low DC Cut-Off SOC",
+      "unit": "%",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    }
+  ]
 }

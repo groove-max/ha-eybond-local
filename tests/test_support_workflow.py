@@ -52,6 +52,7 @@ class SupportWorkflowTests(unittest.TestCase):
         workflow = build_support_workflow_state(
             has_inverter=True,
             variant_key="family_fallback",
+            profile_name="modbus_smg/family_fallback.json",
             effective_owner_key="modbus_smg",
             effective_owner_name="SMG-family runtime",
             detection_confidence="medium",
@@ -67,6 +68,39 @@ class SupportWorkflowTests(unittest.TestCase):
         self.assertIn("read-only", workflow["step_3"])
         self.assertIn("support archive", workflow["next_action"])
         self.assertIn("unverified", workflow["advanced_hint"])
+
+    def test_non_fallback_read_only_smg_profile_variant_has_same_explicit_marker(self) -> None:
+        workflow = build_support_workflow_state(
+            has_inverter=True,
+            variant_key="doc_backed_variant",
+            profile_name="modbus_smg/family_fallback.json",
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG-family runtime",
+            detection_confidence="medium",
+            profile_source_scope="builtin",
+            schema_source_scope="builtin",
+        )
+
+        self.assertEqual(workflow["level"], "family_fallback")
+        self.assertEqual(workflow["level_label"], "Read-only unverified SMG family")
+        self.assertIn("read-only", workflow["summary"])
+        self.assertIn("support archive", workflow["next_action"])
+
+    def test_untested_anenji_4200_profile_counts_as_partial_support(self) -> None:
+        workflow = build_support_workflow_state(
+            has_inverter=True,
+            variant_key="anenji_4200_protocol_1",
+            profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG-family runtime",
+            detection_confidence="medium",
+            profile_source_scope="builtin",
+            schema_source_scope="builtin",
+        )
+
+        self.assertEqual(workflow["level"], "partial")
+        self.assertEqual(workflow["level_label"], "Partial support")
+        self.assertIn("support archive", workflow["next_action"])
 
     def test_experimental_support_recommends_reload(self) -> None:
         workflow = build_support_workflow_state(

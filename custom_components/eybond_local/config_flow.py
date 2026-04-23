@@ -273,6 +273,20 @@ def _translation_lookup(bundle: dict[str, Any], key: str) -> Any:
     return current
 
 
+def _selector_option_label(
+    bundle: dict[str, Any] | None,
+    selector_key: str,
+    option_key: str,
+    default: str,
+) -> str:
+    """Resolve one localized selector option label with an English fallback."""
+
+    if not isinstance(bundle, dict):
+        return default
+    value = _translation_lookup(bundle, f"selector.{selector_key}.options.{option_key}")
+    return value if isinstance(value, str) and value else default
+
+
 def _with_translation_bundle(step):
     """Preload one flow translation bundle before rendering localized UI."""
 
@@ -574,9 +588,22 @@ _PASSWORD_TEXT_SELECTOR = TextSelector(TextSelectorConfig(type="password"))
 _BOOLEAN_SELECTOR = BooleanSelector()
 
 
-def _driver_selector() -> SelectSelector:
+def _driver_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
+    labels = {
+        DRIVER_HINT_AUTO: "Auto",
+        "modbus_smg": "SMG / Modbus",
+        "pi30": "PI30",
+    }
     options = [
-        SelectOptionDict(value=opt, label=opt.replace("_", " ").title())
+        SelectOptionDict(
+            value=opt,
+            label=_selector_option_label(
+                bundle,
+                "driver_hint",
+                opt,
+                labels.get(opt, opt.replace("_", " ").title()),
+            ),
+        )
         for opt in driver_options()
     ]
     return SelectSelector(
@@ -587,10 +614,13 @@ def _driver_selector() -> SelectSelector:
     )
 
 
-def _control_mode_selector() -> SelectSelector:
+def _control_mode_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
     labels = {"auto": "Auto", "read_only": "Read only", "full": "Full control"}
     options = [
-        SelectOptionDict(value=opt, label=labels.get(opt, opt))
+        SelectOptionDict(
+            value=opt,
+            label=_selector_option_label(bundle, "control_mode", opt, labels.get(opt, opt)),
+        )
         for opt in control_mode_options()
     ]
     return SelectSelector(
@@ -817,6 +847,23 @@ def _compute_broadcast_24(ip: str) -> str:
     if len(parts) != 4:
         return DEFAULT_DISCOVERY_TARGET
     return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+
+
+def _sanitize_pending_collector_ip(
+    collector_ip: str,
+    *,
+    server_ip: str = "",
+    discovery_target: str = "",
+) -> str:
+    candidate = str(collector_ip).strip()
+    if not candidate:
+        return ""
+    if candidate == DEFAULT_DISCOVERY_TARGET:
+        return ""
+    default_broadcast = _compute_broadcast_24(server_ip) if server_ip else ""
+    if discovery_target and candidate == discovery_target and default_broadcast and candidate == default_broadcast:
+        return ""
+    return candidate
 
 
 def _network_target_count(network_cidr: str, *, exclude: set[str] | None = None) -> int:
@@ -1159,11 +1206,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         available_results = self._available_autodetect_results()
-        menu_options: list[str] = ["refresh_scan"]
-        if self._scan_mode != SETUP_MODE_DEEP_SCAN:
-            menu_options.append("deep_scan")
+        menu_options: list[str] = []
         if available_results:
             menu_options.append("choose")
+        menu_options.append("refresh_scan")
+        if self._scan_mode != SETUP_MODE_DEEP_SCAN:
+            menu_options.append("deep_scan")
         if len(self._interface_options) > 1:
             menu_options.append("change_scan_interface")
         menu_options.append("manual")
@@ -1615,6 +1663,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         assist_state = self._smartess_cloud_assist_state_for_result(result)
         if result is not None and result.match is None and driver_hint == DRIVER_HINT_AUTO and assist_state is not None and assist_state.inferred_driver_key:
             driver_hint = assist_state.inferred_driver_key
+
+        collector_ip = _sanitize_pending_collector_ip(
+            collector_ip,
+            server_ip=str(user_input.get(CONF_SERVER_IP, "")),
+            discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
+        )
 
         unique_id = (
             f"collector:{collector_pn}"
@@ -2373,7 +2427,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if field.selector_kind == "heartbeat_interval":
             return _HEARTBEAT_INTERVAL_SELECTOR
         if field.selector_kind == "driver_hint":
-            return _driver_selector()
+            return _driver_selector(self._translation_bundle)
         raise ValueError(f"unsupported_connection_selector:{field.selector_kind}")
 
     def _build_connection_fields_schema(
@@ -2558,15 +2612,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     else "common.dynamic.manual_control_summary"
                 ),
                 (
-                    "If you continue, a **read-only** pending entry will be created. Sensors may stay unavailable until a local driver match is confirmed. This local probe does not rule out SmartESS app support; the app may still use a separate cloud identity."
+                    "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until a local driver match is confirmed. This local probe does not rule out SmartESS app support; the app may still use a separate cloud identity."
                     if smartess_hint_available
-                    else "If you continue, a **read-only** pending entry will be created. Sensors may stay unavailable until the {peer_label} connects and detection completes."
+                    else "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until the {peer_label} connects and detection completes."
                 ),
                 {"peer_label": self._peer_label()},
             ),
             "next_actions_hint": self._tr(
                 "common.dynamic.manual_probe_next_actions",
-                "Choose **{probe_again_action_label}** to test again, **{edit_settings_action_label}** to change the values, or **{create_pending_action_label}** to save a read-only pending entry now.",
+                "Choose **{probe_again_action_label}** to test again, **{edit_settings_action_label}** to change the values, or **{create_pending_action_label}** to save the read-only Pending Device now.",
                 {
                     "probe_again_action_label": self._manual_confirm_action_label(
                         MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
@@ -2578,7 +2632,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     ),
                     "create_pending_action_label": self._manual_confirm_action_label(
                         MANUAL_CONFIRM_ACTION_CREATE_PENDING,
-                        "Create pending entry",
+                        "Save Pending Device",
                     ),
                 },
             ),
@@ -2940,7 +2994,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             next_hint = self._tr(
                 "common.dynamic.scan_pending_next",
-                "Choose **{choose_action_label}** to save a pending entry, or use **{refresh_action_label}** or **{manual_action_label}** to retry the local match.",
+                "Choose **{choose_action_label}** to save the Pending Device now, or use **{refresh_action_label}** or **{manual_action_label}** to retry the local match.",
                 {
                     "choose_action_label": choose_action_label,
                     "refresh_action_label": refresh_action_label,
@@ -3150,7 +3204,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         data_schema = vol.Schema(
             {
                 vol.Required(CONF_POLL_INTERVAL, default=poll_interval): _POLL_INTERVAL_SELECTOR,
-                vol.Required(CONF_CONTROL_MODE, default=control_mode): _control_mode_selector(),
+                vol.Required(CONF_CONTROL_MODE, default=control_mode): _control_mode_selector(
+                    self._translation_bundle,
+                ),
                 vol.Required("connection"): section(
                     vol.Schema(
                         self._build_connection_fields_schema(

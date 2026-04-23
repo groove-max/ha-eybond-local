@@ -732,6 +732,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         workflow = build_support_workflow_state(
             has_inverter=snapshot.inverter is not None,
             variant_key=getattr(snapshot.inverter, "variant_key", ""),
+            profile_name=metadata.profile_name,
             effective_owner_key=metadata.effective_owner_key,
             effective_owner_name=metadata.effective_owner_name,
             smartess_family_name=metadata.smartess_family_name,

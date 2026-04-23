@@ -13,6 +13,10 @@ from ..models import DetectedInverter, DriverMatch
 logger = logging.getLogger(__name__)
 
 
+_SMG_READ_ONLY_PROFILE_NAME = "modbus_smg/family_fallback.json"
+_SMG_UNVERIFIED_VARIANT_KEYS = {"anenji_4200_protocol_1"}
+
+
 @dataclass(slots=True)
 class DetectedDriverContext:
     """The concrete matched driver plus a serializable match summary."""
@@ -65,6 +69,10 @@ def _build_driver_match(driver: InverterDriver, inverter: DetectedInverter) -> D
         reasons.append("rated_power_present")
     if inverter.variant_key == "family_fallback":
         reasons.append("family_fallback_variant")
+    elif inverter.variant_key in _SMG_UNVERIFIED_VARIANT_KEYS:
+        reasons.append("unverified_variant")
+    elif inverter.profile_name == _SMG_READ_ONLY_PROFILE_NAME:
+        reasons.append("read_only_profile")
     elif inverter.protocol_family and inverter.model_name and inverter.serial_number:
         confidence = "high"
 

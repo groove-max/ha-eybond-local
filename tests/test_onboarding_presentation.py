@@ -146,7 +146,7 @@ class OnboardingPresentationTests(unittest.TestCase):
         )
 
         self.assertIn("local inverter matching is still pending", pending["scan_summary"])
-        self.assertIn("save a pending entry", pending["scan_next_hint"])
+        self.assertIn("save the Pending Device now", pending["scan_next_hint"])
 
     def test_scan_result_line_includes_existing_entry_hint(self) -> None:
         line = build_scan_result_line(

@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 from .runtime.coordinator import EybondLocalCoordinator
 from .models import CapabilityPreset, WriteCapability
 from .schema import serialize_capability, serialize_preset
+from .tooling import supports_clock_sync, tooling_button_keys_for_runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,8 @@ async def async_setup_entry(
     capabilities = (
         inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
     )
+    capability_keys = {capability.key for capability in capabilities}
+    profile_name = getattr(inverter, "profile_name", "") or coordinator.effective_profile_name
     presets = (
         inverter.capability_presets if inverter is not None else (driver.capability_presets if driver is not None else ())
     )
@@ -46,7 +49,7 @@ async def async_setup_entry(
         [
             *[
                 EybondToolingButton(coordinator, spec)
-                for spec in _tooling_button_specs()
+                for spec in _tooling_button_specs_for_runtime(capability_keys, profile_name)
             ],
             *[
                 EybondPresetButton(coordinator, preset)
@@ -96,8 +99,17 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
             name="Sync Inverter Clock",
             icon="mdi:clock-sync",
             entity_category=EntityCategory.CONFIG,
+            enabled_default=True,
         ),
     )
+
+
+def _tooling_button_specs_for_runtime(
+    capability_keys: set[str] | frozenset[str],
+    profile_name: str,
+) -> tuple[_ToolingButtonSpec, ...]:
+    allowed_keys = set(tooling_button_keys_for_runtime(capability_keys, profile_name))
+    return tuple(spec for spec in _tooling_button_specs() if spec.key in allowed_keys)
 
 
 def _clock_sync_capabilities(coordinator: EybondLocalCoordinator) -> tuple[WriteCapability, WriteCapability] | None:
@@ -219,10 +231,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
         self._attr_name = spec.name
         self._attr_icon = spec.icon
         self._attr_entity_category = spec.entity_category
-        if spec.key == "sync_inverter_clock":
-            self._attr_entity_registry_enabled_default = _clock_sync_capabilities(coordinator) is not None
-        else:
-            self._attr_entity_registry_enabled_default = spec.enabled_default
+        self._attr_entity_registry_enabled_default = spec.enabled_default
 
     @property
     def device_info(self):
@@ -244,7 +253,12 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             snapshot = self.coordinator.data
             if not snapshot.connected:
                 return False
+            inverter = snapshot.inverter
+            profile_name = getattr(inverter, "profile_name", "") or self.coordinator.effective_profile_name
             capabilities = _clock_sync_capabilities(self.coordinator)
+            capability_keys = {capability.key for capability in capabilities} if capabilities is not None else set()
+            if not supports_clock_sync(capability_keys, profile_name):
+                return False
             if capabilities is None:
                 return False
             for capability in capabilities:

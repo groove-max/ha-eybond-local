@@ -39,7 +39,7 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
             _support_capture_ranges(),
             (
                 (100, 10),
-                (171, 13),
+                (171, 14),
                 (186, 12),
                 (201, 34),
                 (277, 5),
@@ -50,7 +50,27 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
                 (607, 1),
                 (626, 8),
                 (643, 2),
-                (696, 9),
+                (696, 49),
+            ),
+        )
+
+    def test_support_capture_ranges_include_protocol_1_fault_log_window_for_anenji_4200(self) -> None:
+        self.assertEqual(
+            _support_capture_ranges("modbus_smg/models/anenji_4200_protocol_1.json"),
+            (
+                (100, 10),
+                (171, 14),
+                (186, 12),
+                (201, 34),
+                (277, 5),
+                (300, 54),
+                (389, 3),
+                (406, 1),
+                (420, 1),
+                (607, 1),
+                (626, 8),
+                (643, 2),
+                (696, 49),
             ),
         )
 
@@ -131,7 +151,8 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             evidence["capture_notes"],
             [
-                "Includes supplemental SMG identity and family discovery ranges: 171-183, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+                "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+                "Protocol-1 SMG layouts also include documented fault/log windows: 700-744.",
             ],
         )
         self.assertEqual(
@@ -141,12 +162,12 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["range_failures"], [])
 
         captured_by_start = {item["start"]: item for item in evidence["captured_ranges"]}
-        self.assertEqual(captured_by_start[171]["count"], 13)
+        self.assertEqual(captured_by_start[171]["count"], 14)
         self.assertEqual(captured_by_start[300]["count"], 54)
         self.assertEqual(captured_by_start[607]["words"], [607])
         self.assertEqual(captured_by_start[626]["count"], 8)
         self.assertEqual(captured_by_start[643]["count"], 2)
-        self.assertEqual(captured_by_start[696]["count"], 9)
+        self.assertEqual(captured_by_start[696]["count"], 49)
         self.assertEqual(len(evidence["fixture_ranges"]), len(expected_ranges))
 
     async def test_capture_support_evidence_includes_anenji_protocol_3_10_windows(self) -> None:
@@ -569,7 +590,15 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
-    def _smg_family_registers(self, *, rated_power: int) -> dict[int, int]:
+    def _smg_family_registers(
+        self,
+        *,
+        rated_power: int,
+        device_type: int = 0x1E00,
+        device_name_text: str | None = "SMG II 6200",
+        program_version_text: str | None = "U1.00",
+        rated_cell_count: int = 16,
+    ) -> dict[int, int]:
         registers: dict[int, int] = {
             register: 0
             for start, stop in (
@@ -585,16 +614,18 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             )
             for register in range(start, stop)
         }
-        for offset, value in _ascii_words("SMG II 6200", word_count=12).items():
-            registers[172 + offset] = value
+        if device_name_text is not None:
+            for offset, value in _ascii_words(device_name_text, word_count=12).items():
+                registers[172 + offset] = value
         for offset, value in _ascii_words("SMG11K240001", word_count=12).items():
             registers[186 + offset] = value
-        for offset, value in _ascii_words("U1.00", word_count=8).items():
-            registers[626 + offset] = value
+        if program_version_text is not None:
+            for offset, value in _ascii_words(program_version_text, word_count=8).items():
+                registers[626 + offset] = value
 
         registers.update(
             {
-                171: 0x1E00,
+                171: device_type,
                 184: 1,
                 201: 3,
                 202: 2300,
@@ -609,6 +640,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
                 220: 10,
                 223: 800,
                 225: 40,
+                231: 97,
                 300: 0,
                 301: 1,
                 302: 0,
@@ -647,7 +679,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
                 406: 0,
                 420: 1,
                 643: rated_power,
-                644: 16,
+                644: rated_cell_count,
             }
         )
         return registers
@@ -699,6 +731,45 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("device_name", inverter.details)
         self.assertEqual(inverter.details["program_version"], "U1.00")
 
+    async def test_probe_selects_explicit_anenji_4200_protocol_1_variant(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._smg_family_registers(
+                rated_power=4200,
+                device_type=0x3501,
+                device_name_text=None,
+                program_version_text=None,
+                rated_cell_count=2,
+            ),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "anenji_4200_protocol_1")
+        self.assertEqual(inverter.model_name, "Anenji 4200 (Protocol 1)")
+        self.assertEqual(inverter.profile_name, "modbus_smg/models/anenji_4200_protocol_1.json")
+        self.assertEqual(inverter.register_schema_name, "modbus_smg/models/anenji_4200_protocol_1.json")
+        self.assertEqual(inverter.details["protocol_number"], 1)
+        self.assertEqual(inverter.details["device_type"], 0x3501)
+        self.assertEqual(inverter.details["rated_power"], 4200)
+        self.assertNotIn("max_discharge_current_protection", inverter.details)
+        self.assertEqual(len(inverter.capabilities), 30)
+        self.assertEqual(len(inverter.capability_presets), 2)
+        charge_source_priority = next(
+            capability
+            for capability in inverter.capabilities
+            if capability.key == "charge_source_priority"
+        )
+        self.assertFalse(charge_source_priority.tested)
+        self.assertNotIn(
+            "low_dc_cutoff_soc",
+            {capability.key for capability in inverter.capabilities},
+        )
+
     async def test_read_values_exposes_documented_base_layout_config_diagnostics(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
@@ -731,6 +802,12 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         values = await driver.async_read_values(transport, inverter)
 
         self.assertEqual(values["battery_type"], "User")
+        self.assertEqual(values["power_flow_status"], 97)
+        self.assertEqual(values["power_flow_pv_connection_state"], "Connected")
+        self.assertEqual(values["power_flow_utility_connection_state"], "Disconnected")
+        self.assertEqual(values["power_flow_battery_state"], "Discharging")
+        self.assertEqual(values["power_flow_load_state"], "Active")
+        self.assertEqual(values["power_flow_charge_source_state"], "Idle")
         self.assertEqual(values["warning_mask_i"], 0x12345678)
         self.assertEqual(values["dry_contact_mode"], "Grounding Box Mode")
         self.assertEqual(values["automatic_mains_output_enabled"], "Enabled")
@@ -772,6 +849,49 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["program_version"], "U1.00")
         self.assertEqual(inverter.details["rated_cell_count"], 16)
         self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
+
+    async def test_read_values_use_common_protocol_1_layout_for_anenji_4200_variant(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="Anenji 4200 (Protocol 1)",
+            serial_number="99432409105281",
+            probe_target=target,
+            variant_key="anenji_4200_protocol_1",
+            profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            details={
+                "device_type": 0x3501,
+                "protocol_number": 1,
+                "rated_power": 4200,
+            },
+            capabilities=(),
+        )
+        transport = FixtureTransport(
+            registers=self._smg_family_registers(
+                rated_power=4200,
+                device_type=0x3501,
+                device_name_text=None,
+                program_version_text=None,
+                rated_cell_count=2,
+            ),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["protocol_number"], 1)
+        self.assertEqual(values["device_type"], 0x3501)
+        self.assertEqual(values["power_flow_status"], 97)
+        self.assertEqual(values["power_flow_battery_state"], "Discharging")
+        self.assertEqual(values["power_flow_load_state"], "Active")
+        self.assertEqual(values["turn_on_mode"], "Local and Remote")
+        self.assertEqual(values["remote_switch"], "Remote Turn-On")
+        self.assertNotIn("max_discharge_current_protection", values)
+        self.assertNotIn("max_discharge_current_protection", inverter.details)
 
     async def test_probe_falls_back_to_read_only_family_variant_for_unknown_smg_power_class(self) -> None:
         driver = SmgModbusDriver()

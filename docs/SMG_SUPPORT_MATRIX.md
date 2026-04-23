@@ -8,8 +8,10 @@ This document summarizes the current support level for the SMG-family default ru
 - shared family profile base: `custom_components/eybond_local/profiles/modbus_smg/family_base.json`
 - verified default capability profile: `custom_components/eybond_local/profiles/smg_modbus.json` (shim -> `profiles/modbus_smg/default.json`)
 - read-only family fallback profile: `custom_components/eybond_local/profiles/modbus_smg/family_fallback.json`
+- document-backed Anenji 4200 profile: `custom_components/eybond_local/profiles/modbus_smg/models/anenji_4200_protocol_1.json`
 - model-specific Anenji profile: `custom_components/eybond_local/profiles/modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json`
 - default register schema: `custom_components/eybond_local/register_schemas/modbus_smg/models/smg_6200.json`
+- document-backed Anenji 4200 schema: `custom_components/eybond_local/register_schemas/modbus_smg/models/anenji_4200_protocol_1.json`
 - model-specific Anenji schema: `custom_components/eybond_local/register_schemas/modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json`
 - generated export: [generated/SMG_SUPPORT_MATRIX.generated.md](generated/SMG_SUPPORT_MATRIX.generated.md)
 
@@ -27,6 +29,14 @@ Inspect the model-specific Anenji capability matrix with:
 ```bash
 python3 tools/export_support_matrix.py \
   --profile modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json \
+  --format markdown
+```
+
+Inspect the document-backed Anenji 4200 protocol-1 capability matrix with:
+
+```bash
+python3 tools/export_support_matrix.py \
+  --profile modbus_smg/models/anenji_4200_protocol_1.json \
   --format markdown
 ```
 
@@ -52,11 +62,12 @@ These human categories map approximately to machine-readable profile metadata li
 
 ## Runtime Paths
 
-The SMG family now has three distinct built-in runtime paths.
+The SMG family now has four distinct built-in runtime paths.
 
 | Runtime path | When it is used | What users should expect |
 |---|---|---|
 | Verified default (`SMG 6200`) | Rated-power `6200` devices that match the known default SMG layout | Full monitoring and the tested default SMG write surface. This is the path covered by the generated matrix export below. |
+| Document-backed Anenji 4200 Protocol 1 (`anenji_4200_protocol_1`) | Devices matching the classic protocol-1 anchors `device_type=0x3501`, `protocol_number=1`, and `rated_power=4200` | Built-in monitoring follows the common protocol-1 SMG layout, including `power_flow_status`, documented identity/config diagnostics, and the shared protocol-1 control surface. Detection stays medium-confidence and built-in writes remain untested until real-hardware validation exists. |
 | Model-specific Anenji (`anenji_anj_11kw_48v_wifi_p`) | Devices that match the validated Anenji protocol-4 anchors | Built-in monitoring is broader than the default SMG path, including PV1/PV2, inverter date/time, and native PV counters. The full writable surface is now verified on real hardware, so tested controls can participate in normal `auto` mode when detection confidence is high. |
 | Read-only family fallback (`family_fallback`) | Devices that clearly look SMG-family, but do not match a verified model-specific binding | Monitoring remains available, but built-in writes stay disabled. Support workflow and exported archives explicitly label this state as `Read-only unverified SMG family`. |
 
@@ -69,6 +80,8 @@ Live verification on the currently checked Sandisolar-backed SMG 6200 path suppo
 - suppress when it is only placeholder data: `device_name`
 
 The current driver also backfills missing probe-only SMG details during normal refresh, so these surviving diagnostics remain available after a Home Assistant restart instead of dropping to `unavailable` permanently.
+
+Classic protocol-1 SMG layouts now also decode the documented `power_flow_status` register and include the documented fault/log capture window `700..744` in support archives. That shared protocol-1 read path is used both by the verified default SMG 6200 path and by the document-backed Anenji 4200 protocol-1 variant, while model-only extras like `341..343` and `351` stay scoped to the verified SMG 6200 overlay.
 
 ## Anenji Model-Specific Additions
 
@@ -169,13 +182,13 @@ The following runtime conditions affect whether a control is visible or editable
 Current SMG read coverage in the driver:
 
 - status block: `100`, `108`
-- live block: `201..217`, `219`, `220`, `223..227`, `229`, `232..234`
+- live block: `201..217`, `219`, `220`, `223..227`, `229`, `231..234`
 - config block: `300..310`, `313..316`, `320..338`, `341..343`, `351`
 - auxiliary or model registers: `171..184`, `406`, `420`, `626..644`
 
 Known uncovered candidates inside otherwise known SMG ranges:
 
-- live block: `218`, `221`, `222`, `228`, `230`, `231`
+- live block: `218`, `221`, `222`, `228`, `230`
 - config block: `304`, `311`, `312`, `317..319`, `328`, `330`, `339`, `340`
 
 These are not blockers for current Home Assistant functionality, but they remain candidates for future reverse engineering.

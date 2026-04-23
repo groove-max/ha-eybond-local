@@ -23,6 +23,34 @@ the GitHub release body should be rendered from the matching version section her
 
 - Nothing yet.
 
+## [0.1.52] - 2026-04-23
+
+### Added
+
+- Added an explicit built-in `anenji_4200_protocol_1` SMG runtime path for classic protocol-1 hardware that matches the documented `device_type=0x3501`, `protocol_number=1`, and `rated_power=4200` anchors.
+- Added documented `power_flow_status` decoding for classic SMG protocol-1 layouts, exposing diagnostic connection, battery, load, and charge-source states instead of leaving the raw register uninterpreted.
+- Added documented classic protocol-1 fault/log support-capture coverage for `700..744`, so support archives retain a broader evidence window for SMG 6200 and the document-backed Anenji 4200 path.
+
+### Changed
+
+- SMG protocol-1 writable metadata is now layered through a real shared base plus model overlays, so the common path carries only the shared protocol-1 controls and presets while 6200-only extras stay model-scoped.
+- The support workflow and support-bundle markers now treat explicit but still-unverified model-specific profiles separately from the read-only SMG family fallback, keeping the new Anenji 4200 path at partial support instead of labeling it as a generic fallback.
+
+### Fixed
+
+- SMG common protocol-1 schemas and probe metadata no longer leak 6200-only diagnostics like `341..343` and `max_discharge_current_protection` into other protocol-1 variants.
+- The Anenji ANJ-11KW-48V-WIFI-P schema no longer depends on accidentally inherited low-DC measurement metadata after the SMG common/base cleanup.
+- The project-wide support overview export now includes the new built-in Anenji 4200 protocol-1 runtime profile instead of silently omitting it from release documentation.
+- Runtime control-mode labels in the options flow are now localized instead of falling back to hard-coded English labels.
+- Re-adding the verified default SMG 6200 integration now restores the tested write controls that should be enabled by default, including the equalization settings and the previously verified battery threshold controls.
+- `Sync Inverter Clock` no longer leaks into the verified default SMG 6200 runtime path; it now stays scoped to the Anenji ANJ-11KW-48V-WIFI-P model-specific tooling path.
+- Pending onboarding no longer stalls when a saved manual or pending device keeps the default broadcast discovery target as `collector_ip`; the shared listener now aliases that placeholder to the real collector callback IP.
+
+### Docs
+
+- Updated the English and Ukrainian READMEs, the SMG support matrix, and the generated support overview to describe the new Anenji 4200 protocol-1 path, the stricter SMG common-vs-model layering, the verified default SMG runtime path wording, and the current protocol-1 read coverage more accurately.
+- Expanded the English and Ukrainian READMEs and onboarding copy to explain what the Pending Device / `EyeBond Setup Pending` state means, what to expect from it, and which retry steps to use before opening a support issue.
+
 ## [0.1.51] - 2026-04-18
 
 ### Fixed

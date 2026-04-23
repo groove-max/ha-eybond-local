@@ -39,8 +39,9 @@ The stock SmartESS monitoring usually keeps working in parallel: EyeBond Local d
 
 | Commercial model / hardware class | Internal runtime path | Status | What it means |
 |---|---|---|---|
-| **Sandisolar SD-HYM-4862HWP** | `modbus_smg` default binding | Supported | Full monitoring plus tested controls on the verified default SMG layout. In the current runtime UI this device still appears generically as `SMG 6200`, because the local Modbus surface exposes rated power but not a stronger raw commercial identifier. |
-| **Anenji ANJ-11KW-48V-WIFI-P** | `modbus_smg` model-specific variant | Supported | Built-in model-specific monitoring is active, including PV1/PV2 telemetry, inverter date/time, and native PV day/total counters. The full write surface has now been verified on real hardware, so tested controls can participate in normal `auto` exposure when detection confidence is high. |
+| **Sandisolar SD-HYM-4862HWP** | verified default `modbus_smg` runtime path | Supported | Full monitoring plus tested controls on the verified default SMG layout. In the current runtime UI this device still appears generically as `SMG 6200`, because the local Modbus surface exposes rated power but not a stronger raw commercial identifier. |
+| **Anenji ANJ-11KW-48V-WIFI-P** | model-specific `modbus_smg` variant | Supported | Built-in model-specific monitoring is active, including PV1/PV2 telemetry, inverter date/time, and native PV day/total counters. The full write surface has now been verified on real hardware, so tested controls can participate in normal `auto` exposure when detection confidence is high. |
+| **Anenji 4200 (Protocol 1)** | model-specific `modbus_smg` variant `anenji_4200_protocol_1` | Partial support | Built-in monitoring follows the document-backed classic SMG protocol-1 layout, including `power_flow_status`, documented identity/config diagnostics, and the shared protocol-1 control surface. Detection remains medium-confidence and built-in writes stay untested, so controls are exposed only in `full` mode until real-hardware validation exists. |
 | **PowMr 4.2kW** (raw model `VMII-NXPW5KW`) | `pi30` runtime driver with SmartESS `0925` compatibility metadata | Supported | Full monitoring plus tested controls on the verified PI30-family path for this hardware. |
 | **Unknown but clearly SMG-family inverter** | `modbus_smg` `family_fallback` | Read-only fallback | Used when the inverter clearly looks SMG-family but the exact model is not yet verified. Monitoring stays available, support/archive output is explicitly marked as read-only/unverified, and built-in writes remain disabled. |
 | **PI18-family hardware** | `pi18` experimental replay path | Experimental | Replay-tested only. Useful for research and fixture work, but there is not yet a verified public hardware model that should be presented as production-ready support. |
@@ -51,7 +52,7 @@ Three different naming layers exist in the project, and they should not be read 
 - **Internal runtime path**: the local protocol engine and binding used by the integration, such as `modbus_smg`, `pi30`, or `pi18`.
 - **Metadata owner / compatibility profile**: the declarative profile or SmartESS asset used to describe controls and readback, such as SmartESS `0925` compatibility metadata.
 
-The runtime engine may stay generic even when the commercial model is known. For example, the verified Sandisolar unit still runs through the generic SMG default path because the local protocol evidence supports that path, but does not expose a trustworthy commercial-name identifier on its own.
+The runtime engine may stay generic even when the commercial model is known. For example, the verified Sandisolar unit still runs through the verified default `modbus_smg` runtime path because the local protocol evidence supports that path, but does not expose a trustworthy commercial-name identifier on its own.
 
 Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support.
 
@@ -93,7 +94,7 @@ The setup wizard takes care of most of the work for you.
 
 - **Ready** — confidently detected, safe to add.
 - **Review** — found but with low confidence.
-- **Collector only** — collector responded but the inverter is not yet identified.
+- **Collector only** — collector responded but the inverter is not yet identified. You can still save it as a read-only Pending Device and continue from diagnostics later.
 
 <p align="center"><img src="docs/images/setup-03-detected-devices.png" alt="Detected devices" width="320"></p>
 
@@ -106,6 +107,26 @@ If quick auto-detection doesn't find anything, try **Run deep scan** from the re
 <p align="center"><img src="docs/images/setup-manual.png" alt="Manual setup" width="360"></p>
 
 > **Tip:** Keep Home Assistant and the collector on the **same subnet** if you want auto-discovery, because broadcast discovery usually doesn't cross routers.
+
+### Pending Device / EyeBond Setup Pending
+
+If the wizard can save a usable network path to the collector but cannot fully confirm the inverter yet, it can still create a **read-only Pending Device**. In Home Assistant this appears as **EyeBond Setup Pending**.
+
+This is a saved intermediate state, not automatically a failure.
+
+What it means:
+
+- The integration has saved the listener, discovery, and collector settings you chose.
+- The collector may already be known, but the reverse TCP callback, the local inverter match, or both are still incomplete.
+- Diagnostics and support actions are available immediately, even if the normal sensors are still unavailable.
+- The entry can resolve later on its own after the collector reconnects or after you retry the scan or manual probe.
+
+What to do next:
+
+1. Wait a short moment, then refresh the device page. If the collector was just reconfigured, rebooting it can help.
+2. On a normal LAN, keep Home Assistant and the collector on the same subnet, then retry quick scan, deep scan, or manual probe.
+3. For manual or remote/NAT setups, re-check the collector IP, advertised callback IP and port, and that TCP `8899` / UDP `58899` are not blocked.
+4. If the device stays pending, open **Configure → Diagnostics and experimental metadata** and create a **Support Archive** before editing local drafts.
 
 ### Remote / NAT Manual Setup
 
@@ -180,6 +201,7 @@ The Support Archive contains an anonymized snapshot of your inverter's state, re
 | Problem | Try this |
 |---|---|
 | Auto-scan finds nothing | Use **Change scan interface** to pick a different network interface first. If the quick scan still comes back empty, try **Run deep scan** from the results screen. If you eventually switch to **Manual setup**, find the Wi-Fi module or collector's local IP address first, usually from your router. |
+| Device stays on **EyeBond Setup Pending** | A Pending Device is a saved intermediate state, not a hard failure. Wait briefly, retry scan or manual probe, and then create a Support Archive if the collector callback or local match still does not complete. |
 | Stuck on "Collector only" | The collector responded, but the integration still can't confidently identify the protocol, profile, or exact inverter model. Submit a Support Archive. |
 | Sensors stay unavailable | Check that the collector is on the same subnet as Home Assistant, and that nothing is blocking TCP `8899` / UDP `58899`. |
 | Remote collector replies but never connects back | Check **Advertised callback IP** and **Advertised callback TCP port** first. They must match the address and forwarded TCP port that the collector can really reach. |

@@ -26,16 +26,21 @@ class SupportOverviewTests(unittest.TestCase):
         summary = overview["summary"]
 
         self.assertEqual(summary["profiles"], len(overview["profiles"]))
-        self.assertGreaterEqual(summary["profiles"], 4)
-        self.assertGreaterEqual(summary["capabilities"], 98)
+        self.assertGreaterEqual(summary["profiles"], 5)
+        self.assertGreaterEqual(summary["capabilities"], 128)
         self.assertGreaterEqual(summary["validation_state_counts"]["tested"], 25)
         self.assertEqual(summary["support_tier_counts"]["blocked"], 2)
 
         profile_by_key = {item["profile_key"]: item for item in overview["profiles"]}
         self.assertIn("smg_modbus", profile_by_key)
+        self.assertIn("modbus_smg_anenji_4200_protocol_1", profile_by_key)
         self.assertIn("modbus_smg_anenji_anj_11kw_48v_wifi_p", profile_by_key)
         self.assertIn("modbus_smg_family_fallback", profile_by_key)
         self.assertEqual(profile_by_key["smg_modbus"]["capabilities"], 33)
+        self.assertEqual(
+            profile_by_key["modbus_smg_anenji_4200_protocol_1"]["capabilities"],
+            30,
+        )
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_anj_11kw_48v_wifi_p"]["capabilities"],
             47,
@@ -56,6 +61,10 @@ class SupportOverviewTests(unittest.TestCase):
         )
         self.assertIn(
             "| `SMG-family default runtime profile` | `smg_modbus` | `modbus_smg` | `modbus_smg` | `33` |",
+            markdown,
+        )
+        self.assertIn(
+            "| `Anenji 4200 Protocol 1 model-specific runtime profile` | `modbus_smg_anenji_4200_protocol_1` | `modbus_smg` | `modbus_smg` | `30` |",
             markdown,
         )
         self.assertIn(

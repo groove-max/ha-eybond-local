@@ -201,7 +201,7 @@ def build_scan_results_placeholders(
             f"can be added now, but local inverter matching is still pending."
         )
         next_hint = (
-            "Choose **Add detected device** to save a pending entry, or use **Refresh scan** "
+            "Choose **Add detected device** to save the Pending Device now, or use **Refresh scan** "
             "or **Manual setup** to retry the local match."
         )
     else:
