@@ -145,6 +145,8 @@ class EybondRuntimeLinkManager:
         self._discovery_interval = int(discovery_interval)
         self._heartbeat_interval = int(heartbeat_interval)
         self._effective_server_ip = resolve_server_ip(server_ip)
+        self._discovery_restart_count = 0
+        self._last_discovery_reason = ""
         if server_ip and self._effective_server_ip and self._effective_server_ip != server_ip:
             logger.warning(
                 "Configured EyeBond server_ip %s is not active on this host; falling back to %s",
@@ -174,6 +176,8 @@ class EybondRuntimeLinkManager:
         collector = self._transport.collector_info
         collector.last_udp_reply = self._announcer.last_reply
         collector.last_udp_reply_from = self._announcer.last_reply_from
+        collector.discovery_restart_count = self._discovery_restart_count
+        collector.last_discovery_reason = self._last_discovery_reason
         return collector
 
     @property
@@ -197,7 +201,7 @@ class EybondRuntimeLinkManager:
             self._rebuild_link(resolved_server_ip)
 
         await self._transport.start()
-        await self._announcer.start()
+        await self._ensure_discovery(reason="runtime_start")
 
     async def async_stop(self) -> None:
         """Stop discovery and the active link transport."""
@@ -214,7 +218,7 @@ class EybondRuntimeLinkManager:
         """Try to ensure a live collector connection without raising on timeout."""
 
         if not self._transport.connected:
-            await self._announcer.start()
+            await self._ensure_discovery(reason="waiting_for_callback")
             ok = await self._transport.wait_until_connected(timeout=timeout)
             if not ok:
                 return False
@@ -222,7 +226,7 @@ class EybondRuntimeLinkManager:
         if require_heartbeat:
             heartbeat_ok = await self._transport.wait_until_heartbeat(timeout=min(timeout, 1.5))
             if not heartbeat_ok:
-                await self._announcer.start()
+                await self._ensure_discovery(reason="heartbeat_timeout")
                 return False
 
         await self._announcer.stop()
@@ -257,7 +261,17 @@ class EybondRuntimeLinkManager:
             f"0x{collector.last_devcode:04X}" if collector.last_devcode is not None else "unknown",
         )
         await self._transport.disconnect()
+        await self._ensure_discovery(reason=reason or "runtime_reset")
+
+    async def _ensure_discovery(self, *, reason: str) -> None:
+        """Start discovery if needed and track why it restarted."""
+
+        was_running = bool(getattr(self._announcer, "running", False))
         await self._announcer.start()
+        is_running = bool(getattr(self._announcer, "running", True))
+        if not was_running and is_running:
+            self._discovery_restart_count += 1
+            self._last_discovery_reason = reason
 
     def _rebuild_link(self, server_ip: str) -> None:
         """Create the transport/discovery pair for one effective EyeBond bind IP."""

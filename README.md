@@ -25,6 +25,7 @@ If your inverter's stock monitoring already works through the SmartESS app, that
 - **Guided setup wizard** with auto-discovery and a manual fallback.
 - **Safe by default** — controls stay read-only until detection is confident.
 - **Optional SmartESS cloud assist** — collects reusable cloud evidence for diagnostics and metadata hints without bypassing local safety gates.
+- **Explicit write confirmation** — non-action writes must confirm by immediate readback instead of reporting silent success when the value did not stick.
 - **Configurable polling interval** — from `2` to `3600` seconds, so updates can be much more frequent than the stock SmartESS refresh.
 - **Energy dashboard ready** — derived totals for PV, load, battery, and, on supported models, grid import/export.
 - **Open architecture** — JSON-first profiles and register schemas.
@@ -155,8 +156,8 @@ After setup, the integration adds a single device with:
 - **Polling control** — the sensor refresh interval is configurable from `2` to `3600` seconds in the integration options.
 - **Energy totals** — derived `kWh` totals for PV production, load consumption, and battery charge/discharge, plus grid import/export on models that expose grid power. Drop them straight into the **Energy dashboard**.
 - **Binary sensors** — operating mode, faults, alarms, charging state.
-- **Controls** — `number`, `select`, `switch`, and `button` entities for supported settings (charge limits, output mode, beep, etc.). On variants that ship model-specific tooling, this can also include dedicated actions such as **Sync Inverter Clock**. Control exposure is still gated by detection confidence and validation state.
-- **Diagnostics** — connection state, driver match, support level, optional SmartESS cloud evidence export, explicit read-only fallback markers where applicable, and a one-click **Support Archive** export.
+- **Controls** — `number`, `select`, `switch`, and `button` entities for supported settings (charge limits, output mode, beep, etc.). On variants that ship model-specific tooling, this can also include dedicated actions such as **Sync Inverter Clock**. Control exposure is still gated by detection confidence and validation state, but runtime-only SMG conditions now surface as warnings instead of hiding or locally hard-blocking the control.
+- **Diagnostics** — connection state, driver match, support level, collector connection-churn and discovery-restart markers, optional SmartESS cloud evidence export, explicit read-only fallback markers where applicable, and a one-click **Support Archive** export.
 
 <p align="center"><img src="docs/images/sensors.png" alt="Live sensors after setup" width="320"></p>
 
@@ -204,6 +205,7 @@ The Support Archive contains an anonymized snapshot of your inverter's state, re
 | Device stays on **EyeBond Setup Pending** | A Pending Device is a saved intermediate state, not a hard failure. Wait briefly, retry scan or manual probe, and then create a Support Archive if the collector callback or local match still does not complete. |
 | Stuck on "Collector only" | The collector responded, but the integration still can't confidently identify the protocol, profile, or exact inverter model. Submit a Support Archive. |
 | Sensors stay unavailable | Check that the collector is on the same subnet as Home Assistant, and that nothing is blocking TCP `8899` / UDP `58899`. |
+| A write was accepted but the value immediately reverted | EyeBond Local now treats that as an explicit readback failure instead of silent success. Check the device diagnostics for collector disconnect/restart counters, pause competing SmartESS or vendor-app writes, and retry after the collector is stable. |
 | Remote collector replies but never connects back | Check **Advertised callback IP** and **Advertised callback TCP port** first. They must match the address and forwarded TCP port that the collector can really reach. |
 | Remote setup is flaky over the public internet | Prefer VPN over raw NAT if either side is behind CGNAT or if UDP/TCP forwarding is unreliable. |
 | Controls are missing | In **Auto** mode, controls only appear when detection confidence is high and the relevant capabilities are marked as tested. Some runtime paths are intentionally read-only, such as the SMG family fallback. If monitoring works for a PI30-family inverter but the exact model was not matched, you can open **Runtime settings** and switch to **Full control**. This is a manual safety override that exposes every write command, so use it only at your own risk and preferably after exporting a Support Archive. |

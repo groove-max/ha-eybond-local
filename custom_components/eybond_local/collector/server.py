@@ -70,6 +70,13 @@ class EybondServer:
         return apply_collector_profile(CollectorInfo(
             remote_ip=self._collector.remote_ip,
             remote_port=self._collector.remote_port,
+            connection_count=self._collector.connection_count,
+            connection_replace_count=self._collector.connection_replace_count,
+            disconnect_count=self._collector.disconnect_count,
+            pending_request_drop_count=self._collector.pending_request_drop_count,
+            last_disconnect_reason=self._collector.last_disconnect_reason,
+            discovery_restart_count=self._collector.discovery_restart_count,
+            last_discovery_reason=self._collector.last_discovery_reason,
             collector_pn=self._collector.collector_pn,
             last_devcode=self._collector.last_devcode,
             heartbeat_devcode=self._collector.heartbeat_devcode,

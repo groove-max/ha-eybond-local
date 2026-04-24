@@ -118,10 +118,11 @@ class CapabilityPreset:
     ) -> "CapabilityPresetRuntimeState":
         """Evaluate whether the preset is currently visible and applicable."""
 
-        visible, reasons = _evaluate_conditions(self.conditions, values)
-        applicable = visible
+        _, condition_warnings = _evaluate_conditions(self.conditions, values)
+        visible = True
+        applicable = True
         matches_current = True
-        warnings: list[str] = []
+        warnings: list[str] = list(condition_warnings)
 
         for item in sorted(self.items, key=lambda item: (item.order, item.capability_key)):
             try:
@@ -160,7 +161,7 @@ class CapabilityPreset:
         return CapabilityPresetRuntimeState(
             visible=visible,
             applicable=applicable,
-            reasons=_dedupe_texts(reasons),
+            reasons=(),
             warnings=_dedupe_texts(warnings),
             matches_current=matches_current,
         )
@@ -293,9 +294,11 @@ class WriteCapability:
     def runtime_state(self, values: Mapping[str, Any]) -> "CapabilityRuntimeState":
         """Evaluate visibility/editability rules against runtime values."""
 
-        visible, visible_reasons = _evaluate_conditions(self.visible_if, values)
-        editable, editable_reasons = _evaluate_conditions(self.editable_if, values)
-        runtime_reasons = [*visible_reasons, *editable_reasons]
+        _, visible_warnings = _evaluate_conditions(self.visible_if, values)
+        _, editable_warnings = _evaluate_conditions(self.editable_if, values)
+        visible = True
+        editable = True
+        runtime_reasons: list[str] = []
 
         blocked_reason = values.get(f"capability_block_reason_{self.key}")
         blocked_action = values.get(f"capability_block_action_{self.key}")
@@ -305,10 +308,12 @@ class WriteCapability:
             if blocked_action:
                 runtime_reasons.append(f"Suggested action: {blocked_action}")
 
-        warnings = _build_runtime_warnings(self, values)
+        warnings = [
+            *visible_warnings,
+            *editable_warnings,
+            *_build_runtime_warnings(self, values),
+        ]
         recommendations = _evaluate_recommendations(self, values)
-        if not visible:
-            editable = False
         return CapabilityRuntimeState(
             visible=visible,
             editable=editable,
@@ -390,6 +395,13 @@ class CollectorInfo:
 
     remote_ip: str = ""
     remote_port: int | None = None
+    connection_count: int = 0
+    connection_replace_count: int = 0
+    disconnect_count: int = 0
+    pending_request_drop_count: int = 0
+    last_disconnect_reason: str = ""
+    discovery_restart_count: int = 0
+    last_discovery_reason: str = ""
     collector_pn: str = ""
     last_devcode: int | None = None
     heartbeat_devcode: int | None = None

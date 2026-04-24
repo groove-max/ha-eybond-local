@@ -144,6 +144,115 @@ class _IllegalDataValueDriver:
         raise ModbusError("exception_code:3")
 
 
+class _WriteConfirmedDriver:
+    def __init__(self) -> None:
+        self.read_calls = 0
+        self.write_calls = 0
+        self._current_value = 20
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.read_calls += 1
+        return {
+            "battery_connected": True,
+            "utility_charging_allowed": True,
+            "charging_active": False,
+            "charging_inactive": True,
+            "operating_mode": "Off-Grid",
+            "max_ac_charge_current": self._current_value,
+        }
+
+    async def async_write_capability(
+        self,
+        transport,
+        inverter,
+        capability_key,
+        value,
+    ):
+        self.write_calls += 1
+        self._current_value = value
+        return value
+
+
+class _WriteUnconfirmedDriver:
+    def __init__(self) -> None:
+        self.read_calls = 0
+        self.write_calls = 0
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.read_calls += 1
+        return {
+            "battery_connected": True,
+            "utility_charging_allowed": True,
+            "charging_active": False,
+            "charging_inactive": True,
+            "operating_mode": "Off-Grid",
+            "max_ac_charge_current": 20,
+        }
+
+    async def async_write_capability(
+        self,
+        transport,
+        inverter,
+        capability_key,
+        value,
+    ):
+        self.write_calls += 1
+        return value
+
+
+class _WriteConfirmedWhileChargingDriver:
+    def __init__(self) -> None:
+        self.read_calls = 0
+        self.write_calls = 0
+        self._current_value = 20
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.read_calls += 1
+        return {
+            "battery_connected": True,
+            "utility_charging_allowed": True,
+            "charging_active": True,
+            "charging_inactive": False,
+            "operating_mode": "Off-Grid",
+            "max_ac_charge_current": self._current_value,
+        }
+
+    async def async_write_capability(
+        self,
+        transport,
+        inverter,
+        capability_key,
+        value,
+    ):
+        self.write_calls += 1
+        self._current_value = value
+        return value
+
+
 class HubSnapshotTests(unittest.TestCase):
     def test_build_snapshot_includes_effective_profile_and_schema_names(self) -> None:
         hub = EybondHub(
@@ -224,6 +333,44 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.values["pv_current"], 8.5)
         self.assertEqual(snapshot.values["pv_power"], 1003)
         self.assertEqual(snapshot.values["battery_power"], 614.4)
+
+    def test_build_snapshot_includes_collector_churn_markers(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        hub._link_manager.collector_info.connection_count = 3
+        hub._link_manager.collector_info.connection_replace_count = 1
+        hub._link_manager.collector_info.disconnect_count = 2
+        hub._link_manager.collector_info.pending_request_drop_count = 4
+        hub._link_manager.collector_info.last_disconnect_reason = "collector_connection_reset"
+        hub._link_manager.collector_info.discovery_restart_count = 5
+        hub._link_manager.collector_info.last_discovery_reason = "heartbeat_timeout"
+
+        snapshot = hub._build_snapshot()
+
+        self.assertEqual(snapshot.values["collector_connection_count"], 3)
+        self.assertEqual(snapshot.values["collector_connection_replace_count"], 1)
+        self.assertEqual(snapshot.values["collector_disconnect_count"], 2)
+        self.assertEqual(snapshot.values["collector_pending_request_drop_count"], 4)
+        self.assertEqual(
+            snapshot.values["collector_last_disconnect_reason"],
+            "collector_connection_reset",
+        )
+        self.assertEqual(snapshot.values["collector_discovery_restart_count"], 5)
+        self.assertEqual(
+            snapshot.values["collector_last_discovery_reason"],
+            "heartbeat_timeout",
+        )
 
     def test_build_snapshot_recomputes_smg_canonical_battery_power(self) -> None:
         hub = EybondHub(
@@ -342,6 +489,117 @@ class HubWriteBlockerTests(unittest.TestCase):
 
             self.assertEqual(hub._write_blockers, {})
             self.assertEqual(hub._driver.write_calls, 1)
+
+        asyncio.run(_run())
+
+    def test_async_write_capability_returns_when_readback_confirms_value(self) -> None:
+        async def _run() -> None:
+            profile = load_driver_profile("smg_modbus.json")
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._driver = _WriteConfirmedDriver()
+            hub._inverter = DetectedInverter(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
+                capabilities=profile.capabilities,
+                capability_groups=profile.groups,
+                capability_presets=profile.presets,
+            )
+
+            written = await hub.async_write_capability("max_ac_charge_current", 30)
+
+            self.assertEqual(written, 30)
+            self.assertEqual(hub._driver.write_calls, 1)
+            self.assertEqual(hub._driver.read_calls, 2)
+
+        asyncio.run(_run())
+
+    def test_async_write_capability_raises_when_readback_stays_old(self) -> None:
+        async def _run() -> None:
+            profile = load_driver_profile("smg_modbus.json")
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._driver = _WriteUnconfirmedDriver()
+            hub._inverter = DetectedInverter(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
+                capabilities=profile.capabilities,
+                capability_groups=profile.groups,
+                capability_presets=profile.presets,
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"write_not_confirmed:max_ac_charge_current:Command accepted, but 'Max AC Charge Current' did not confirm by readback.",
+            ):
+                await hub.async_write_capability("max_ac_charge_current", 30)
+
+            self.assertEqual(hub._driver.write_calls, 1)
+            self.assertEqual(hub._driver.read_calls, 2)
+
+        asyncio.run(_run())
+
+    def test_async_write_capability_allows_write_attempt_while_soft_gate_is_active(self) -> None:
+        async def _run() -> None:
+            profile = load_driver_profile("smg_modbus.json")
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._driver = _WriteConfirmedWhileChargingDriver()
+            hub._inverter = DetectedInverter(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
+                capabilities=profile.capabilities,
+                capability_groups=profile.groups,
+                capability_presets=profile.presets,
+            )
+
+            written = await hub.async_write_capability("max_ac_charge_current", 30)
+
+            self.assertEqual(written, 30)
+            self.assertEqual(hub._driver.write_calls, 1)
+            self.assertEqual(hub._driver.read_calls, 2)
 
         asyncio.run(_run())
 

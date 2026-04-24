@@ -814,6 +814,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return {
             "remote_ip": self.data.collector.remote_ip,
             "remote_port": self.data.collector.remote_port,
+            "connection_count": self.data.collector.connection_count,
+            "connection_replace_count": self.data.collector.connection_replace_count,
+            "disconnect_count": self.data.collector.disconnect_count,
+            "pending_request_drop_count": self.data.collector.pending_request_drop_count,
+            "last_disconnect_reason": self.data.collector.last_disconnect_reason,
+            "discovery_restart_count": self.data.collector.discovery_restart_count,
+            "last_discovery_reason": self.data.collector.last_discovery_reason,
             "collector_pn": self.data.collector.collector_pn,
             "profile_key": self.data.collector.profile_key,
             "profile_name": self.data.collector.profile_name,

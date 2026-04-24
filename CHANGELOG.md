@@ -23,6 +23,25 @@ the GitHub release body should be rendered from the matching version section her
 
 - Nothing yet.
 
+## [0.1.53] - 2026-04-25
+
+### Added
+
+- Collector diagnostics now track connection churn, dropped pending requests, disconnect reasons, and discovery restarts to make local write-path contention easier to diagnose.
+
+### Changed
+
+- Declarative SMG runtime gates now surface advisory warnings instead of locally hiding or hard-blocking controls; the inverter response and immediate readback confirmation are now the final authority for non-action writes.
+
+### Fixed
+
+- Non-action writes no longer report silent success when the refreshed value stays unchanged; EyeBond Local now raises an explicit `write_not_confirmed` error after readback.
+- Temperature sensors backed by the affected PI18 and Anenji schemas now report `°C` instead of plain `C`.
+
+### Docs
+
+- Updated the English and Ukrainian READMEs plus the SMG support matrix to describe advisory runtime warnings, explicit readback confirmation, and the new collector contention diagnostics.
+
 ## [0.1.52] - 2026-04-23
 
 ### Added

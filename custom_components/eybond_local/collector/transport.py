@@ -56,11 +56,28 @@ def _is_default_broadcast_alias_candidate(expected_ip: str, remote_ip: str) -> b
     return expected == ipaddress.IPv4Address(int(remote) | 0xFF)
 
 
+def _disconnect_reason_from_exception(exc: BaseException) -> str:
+    if isinstance(exc, ConnectionResetError):
+        return "collector_connection_reset"
+    if isinstance(exc, BrokenPipeError):
+        return "collector_broken_pipe"
+    if isinstance(exc, OSError):
+        return "collector_os_error"
+    return "collector_disconnected"
+
+
 def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
     return apply_collector_profile(
         CollectorInfo(
             remote_ip=collector.remote_ip,
             remote_port=collector.remote_port,
+            connection_count=collector.connection_count,
+            connection_replace_count=collector.connection_replace_count,
+            disconnect_count=collector.disconnect_count,
+            pending_request_drop_count=collector.pending_request_drop_count,
+            last_disconnect_reason=collector.last_disconnect_reason,
+            discovery_restart_count=collector.discovery_restart_count,
+            last_discovery_reason=collector.last_discovery_reason,
             collector_pn=collector.collector_pn,
             last_devcode=collector.last_devcode,
             heartbeat_devcode=collector.heartbeat_devcode,
@@ -275,12 +292,15 @@ class _CollectorConnection:
         writer: asyncio.StreamWriter,
     ) -> None:
         if self.connected:
+            self._collector.connection_replace_count += 1
             logger.warning("Replacing active collector connection for %s", self._collector.remote_ip)
-            await self._disconnect()
+            await self._disconnect(reason="replaced_active_connection")
 
         peer = writer.get_extra_info("peername") or ("", None)
         self._collector.remote_ip = peer[0] or self._collector.remote_ip
         self._collector.remote_port = peer[1]
+        self._collector.connection_count += 1
+        self._collector.last_disconnect_reason = ""
         self._last_heartbeat_monotonic = None
         self._reader = reader
         self._writer = writer
@@ -363,16 +383,40 @@ class _CollectorConnection:
                     payload.hex(),
                 )
         except asyncio.IncompleteReadError:
+            self._collector.last_disconnect_reason = "collector_eof"
             logger.info("Collector disconnected: %s", self._collector.remote_ip)
         except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+            self._collector.last_disconnect_reason = _disconnect_reason_from_exception(exc)
             logger.info("Collector disconnected %s: %s", self._collector.remote_ip, exc)
         except asyncio.CancelledError:
             raise
 
     async def disconnect(self) -> None:
-        await self._disconnect()
+        await self._disconnect(reason="manual_disconnect")
 
-    async def _disconnect(self, skip_task: asyncio.Task[Any] | None = None) -> None:
+    async def _disconnect(
+        self,
+        skip_task: asyncio.Task[Any] | None = None,
+        *,
+        reason: str = "",
+    ) -> None:
+        pending_drop_count = sum(1 for future in self._pending.values() if not future.done())
+        had_session = (
+            self._reader is not None
+            or self._writer is not None
+            or self._connected.is_set()
+            or pending_drop_count > 0
+        )
+        if pending_drop_count:
+            self._collector.pending_request_drop_count += pending_drop_count
+        if had_session:
+            self._collector.disconnect_count += 1
+            self._collector.last_disconnect_reason = (
+                reason
+                or self._collector.last_disconnect_reason
+                or "collector_disconnected"
+            )
+
         heartbeat_task = self._heartbeat_task
         self._heartbeat_task = None
 

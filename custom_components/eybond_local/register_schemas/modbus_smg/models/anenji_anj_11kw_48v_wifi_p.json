@@ -699,7 +699,7 @@
     {
       "key": "pv_temperature",
       "name": "PV Temperature",
-      "unit": "C",
+      "unit": "°C",
       "diagnostic": true,
       "enabled_default": false,
       "live": true

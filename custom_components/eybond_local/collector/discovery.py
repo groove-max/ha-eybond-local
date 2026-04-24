@@ -118,10 +118,16 @@ class DiscoveryAnnouncer:
         self.last_reply: str = ""
         self.last_reply_from: str = ""
 
+    @property
+    def running(self) -> bool:
+        """Return whether the background discovery loop is active."""
+
+        return self._task is not None and not self._task.done()
+
     async def start(self) -> None:
         """Start the background broadcast loop if it is not running yet."""
 
-        if self._task and not self._task.done():
+        if self.running:
             return
         self._task = asyncio.create_task(self._run(), name="eybond_discovery")
 

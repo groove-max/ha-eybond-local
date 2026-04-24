@@ -48,8 +48,8 @@ python3 tools/export_support_matrix.py \
 - `untested`
   - implemented in schema and driver, but not yet confirmed on real hardware
   - exposed only in `full` control mode
-- `runtime-restricted`
-  - implemented, but visibility or editability depends on live inverter state
+- `advisory-gated`
+  - implemented, but live inverter state can still produce warnings or likely-write guidance before the inverter itself confirms or rejects the change
 - `observed blocked`
   - attempted on real hardware, but the inverter rejected the write path
 
@@ -57,7 +57,7 @@ These human categories map approximately to machine-readable profile metadata li
 
 - `tested` -> `validation_state=tested`
 - `untested` -> `validation_state=untested`
-- `runtime-restricted` -> `support_tier=conditional`
+- `advisory-gated` -> `support_tier=conditional`
 - `observed blocked` -> `support_tier=blocked`
 
 ## Runtime Paths
@@ -110,7 +110,7 @@ These are the safest parts of the verified default SMG 6200 write surface. In `a
 |---|---:|---|
 | `charge_source_priority` | `331` | Tested. |
 | `max_charge_current` | `332` | Tested. |
-| `max_ac_charge_current` | `333` | Tested. Editable only when utility charging is allowed by current policy. |
+| `max_ac_charge_current` | `333` | Tested. When live charge-state conditions look unfavorable, the UI now warns and relies on inverter-side confirmation instead of locally blocking the write. |
 
 ### Battery
 
@@ -123,10 +123,10 @@ These are the safest parts of the verified default SMG 6200 write surface. In `a
 | `battery_redischarge_voltage` | `326` | Tested. |
 | `battery_under_voltage` | `327` | Tested. |
 | `battery_under_voltage_off_grid` | `329` | Tested. |
-| `battery_equalization_voltage` | `334` | Tested. Visible only when equalization is enabled. |
-| `battery_equalization_time` | `335` | Tested. Visible only when equalization is enabled. |
-| `battery_equalization_timeout` | `336` | Tested. Visible only when equalization is enabled. |
-| `battery_equalization_interval` | `337` | Tested. Visible only when equalization is enabled. |
+| `battery_equalization_voltage` | `334` | Tested. The UI warns when equalization is disabled instead of hiding the control. |
+| `battery_equalization_time` | `335` | Tested. The UI warns when equalization is disabled instead of hiding the control. |
+| `battery_equalization_timeout` | `336` | Tested. The UI warns when equalization is disabled instead of hiding the control. |
+| `battery_equalization_interval` | `337` | Tested. The UI warns when equalization is disabled instead of hiding the control. |
 | `low_dc_protection_soc_grid_mode` | `341` | Tested. Reverse-engineered from live app changes. |
 | `solar_battery_utility_return_soc_threshold` | `342` | Tested. Reverse-engineered from live app changes. |
 | `low_dc_cutoff_soc` | `343` | Tested. Reverse-engineered from live app changes. |
@@ -149,12 +149,12 @@ These controls exist in the profile and driver, but are still untested or intent
 
 | Capability | Register | Why Not Auto-Exposed Yet |
 |---|---:|---|
-| `output_mode` | `300` | Untested and high-impact. Requires safe configuration mode. |
-| `output_rating_voltage` | `320` | Untested and high-impact. Requires safe configuration mode. |
-| `output_rating_frequency` | `321` | Untested and high-impact. Requires safe configuration mode. |
-| `remote_turn_on` | `420` | Action-style control, not yet live-validated. |
-| `remote_shutdown` | `420` | Action-style control, not yet live-validated. |
-| `exit_fault_mode` | `426` | Action-style control, only relevant in fault mode, not yet live-validated. |
+| `output_mode` | `300` | Untested and high-impact. The UI warns outside safe configuration mode, but the inverter remains the final authority. |
+| `output_rating_voltage` | `320` | Untested and high-impact. The UI warns outside safe configuration mode, but the inverter remains the final authority. |
+| `output_rating_frequency` | `321` | Untested and high-impact. The UI warns outside safe configuration mode, but the inverter remains the final authority. |
+| `remote_turn_on` | `420` | Action-style control, not yet live-validated. The UI warns when remote control is disabled by the current mode. |
+| `remote_shutdown` | `420` | Action-style control, not yet live-validated. The UI warns when remote control is disabled by the current mode. |
+| `exit_fault_mode` | `426` | Action-style control, only relevant in fault mode, not yet live-validated. The UI warns when fault-mode preconditions are missing. |
 
 ## Observed Blocked On Real Hardware
 
@@ -167,15 +167,16 @@ At the moment these should be treated as firmware-locked or mode-restricted for 
 
 ## Runtime Gates That Matter
 
-The following runtime conditions affect whether a control is visible or editable:
+The following runtime conditions now act as advisory warnings and likely-write hints. They no longer hard-hide or locally hard-block the SMG control on their own; the final authority is the inverter response plus immediate readback confirmation for non-action writes:
 
 - `configuration_safe_mode`
 - `battery_connected`
 - `charging_inactive`
-- `utility_charging_allowed`
 - `battery_equalization_enabled`
 - `remote_control_enabled`
 - `fault_mode`
+
+When a write is accepted transport-side but the refreshed value still does not match, EyeBond Local now raises an explicit `write_not_confirmed` error instead of reporting silent success.
 
 ## Read Coverage Summary
 

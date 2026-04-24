@@ -173,6 +173,107 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertTrue(voltage_state.visible)
         self.assertTrue(voltage_state.editable)
 
+    def test_smg_charge_current_gate_becomes_warning_while_charging(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+        capability = profile.get_capability("max_ac_charge_current")
+        runtime_state = capability.runtime_state(
+            {
+                "battery_connected": True,
+                "charging_active": True,
+                "charging_inactive": False,
+            }
+        )
+
+        self.assertTrue(runtime_state.visible)
+        self.assertTrue(runtime_state.editable)
+        self.assertEqual(runtime_state.reasons, ())
+        self.assertIn(
+            "Stop active battery charging before changing this setting.",
+            runtime_state.warnings,
+        )
+
+    def test_smg_safe_configuration_gate_becomes_warning_for_output_mode(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+        runtime_state = profile.get_capability("output_mode").runtime_state(
+            {
+                "configuration_safe_mode": False,
+            }
+        )
+
+        self.assertTrue(runtime_state.visible)
+        self.assertTrue(runtime_state.editable)
+        self.assertEqual(runtime_state.reasons, ())
+        self.assertIn(
+            "This setting can only be changed while the inverter is in Power On, Standby, or Fault mode.",
+            runtime_state.warnings,
+        )
+
+    def test_smg_remote_control_gate_becomes_warning_for_remote_actions(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+        runtime_state = profile.get_capability("remote_turn_on").runtime_state(
+            {
+                "remote_control_enabled": False,
+            }
+        )
+
+        self.assertTrue(runtime_state.visible)
+        self.assertTrue(runtime_state.editable)
+        self.assertEqual(runtime_state.reasons, ())
+        self.assertIn(
+            "Remote control is disabled by the current Turn On Mode setting.",
+            runtime_state.warnings,
+        )
+
+    def test_anenji_reset_user_parameters_gate_becomes_warning_in_off_grid_mode(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+        runtime_state = profile.get_capability("reset_user_parameters").runtime_state(
+            {
+                "operating_mode": "Off-Grid",
+            }
+        )
+
+        self.assertTrue(runtime_state.visible)
+        self.assertTrue(runtime_state.editable)
+        self.assertEqual(runtime_state.reasons, ())
+        self.assertEqual(
+            runtime_state.warnings,
+            ("This action is only valid outside Off-Grid mode.",),
+        )
+
+    def test_smg_off_grid_preset_condition_becomes_warning_not_block(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("smg_modbus.json")
+        preset = next(
+            preset
+            for preset in profile.presets
+            if preset.key == "off_grid_self_consumption"
+        )
+        runtime_state = preset.runtime_state(
+            profile,
+            {
+                "operating_mode": "Line",
+                "battery_connected": True,
+                "charging_inactive": True,
+            },
+        )
+
+        self.assertTrue(runtime_state.visible)
+        self.assertTrue(runtime_state.applicable)
+        self.assertEqual(runtime_state.reasons, ())
+        self.assertIn(
+            "This recommendation is intended for Off-Grid operation.",
+            runtime_state.warnings,
+        )
+
     def test_verified_default_smg_equalization_controls_are_enabled_by_default(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 

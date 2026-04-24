@@ -183,6 +183,51 @@ def _friendly_write_error(
     )
 
 
+def _should_confirm_write(capability: WriteCapability) -> bool:
+    """Return whether a write should be verified by immediate readback."""
+
+    return capability.value_kind != "action"
+
+
+def _write_readback_matches(
+    capability: WriteCapability,
+    *,
+    requested_value: object,
+    written_value: object,
+    readback_value: object,
+) -> bool:
+    """Return whether one refreshed value confirms the requested write."""
+
+    if readback_value == written_value or readback_value == requested_value:
+        return True
+
+    if capability.enum_value_map and isinstance(requested_value, int):
+        expected_label = capability.enum_value_map.get(requested_value)
+        if expected_label is not None and readback_value == expected_label:
+            return True
+
+    return False
+
+
+def _write_not_confirmed_error(
+    capability: WriteCapability,
+    *,
+    written_value: object,
+    readback_value: object,
+    refresh_error: str,
+) -> RuntimeError:
+    """Return one explicit error for a write that did not confirm by readback."""
+
+    readback_text = "unavailable" if readback_value is None else repr(readback_value)
+    message = (
+        f"Command accepted, but {capability.display_name!r} did not confirm by readback. "
+        f"Expected {written_value!r}, got {readback_text}."
+    )
+    if refresh_error:
+        message = f"{message} Refresh reported {refresh_error}."
+    return RuntimeError(f"write_not_confirmed:{capability.key}:{message}")
+
+
 class EybondHub:
     """Coordinates runtime link connectivity, driver probing and polling."""
 
@@ -420,6 +465,28 @@ class EybondHub:
             snapshot = await self.async_refresh()
         if snapshot.last_error:
             logger.warning("Refresh after write reported: %s", snapshot.last_error)
+
+        if _should_confirm_write(capability):
+            readback_value = snapshot.values.get(capability.value_key)
+            if not _write_readback_matches(
+                capability,
+                requested_value=value,
+                written_value=written_value,
+                readback_value=readback_value,
+            ):
+                logger.warning(
+                    "Write %s was accepted but did not confirm by readback; expected=%r readback=%r refresh_error=%s",
+                    capability_key,
+                    written_value,
+                    readback_value,
+                    snapshot.last_error or "",
+                )
+                raise _write_not_confirmed_error(
+                    capability,
+                    written_value=written_value,
+                    readback_value=readback_value,
+                    refresh_error=snapshot.last_error,
+                )
         return written_value
 
     async def async_apply_preset(self, preset_key: str) -> dict[str, object]:
@@ -673,12 +740,25 @@ class EybondHub:
 
         if collector.remote_ip:
             values["collector_remote_ip"] = collector.remote_ip
+        values["collector_connection_count"] = collector.connection_count
+        values["collector_connection_replace_count"] = collector.connection_replace_count
+        values["collector_disconnect_count"] = collector.disconnect_count
+        values["collector_pending_request_drop_count"] = collector.pending_request_drop_count
+        values["collector_discovery_restart_count"] = collector.discovery_restart_count
         if collector.collector_pn:
             values["collector_pn"] = collector.collector_pn
         if collector.profile_name:
             values["collector_profile"] = collector.profile_name
         if collector.profile_key:
             values["collector_profile_key"] = collector.profile_key
+        if collector.last_disconnect_reason:
+            values["collector_last_disconnect_reason"] = collector.last_disconnect_reason
+        else:
+            values.pop("collector_last_disconnect_reason", None)
+        if collector.last_discovery_reason:
+            values["collector_last_discovery_reason"] = collector.last_discovery_reason
+        else:
+            values.pop("collector_last_discovery_reason", None)
         if collector.heartbeat_devcode is not None:
             values["collector_heartbeat_devcode"] = f"0x{collector.heartbeat_devcode:04X}"
         if collector.heartbeat_payload_hex:
