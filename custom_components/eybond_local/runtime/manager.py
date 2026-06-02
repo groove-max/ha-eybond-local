@@ -28,6 +28,9 @@ class RuntimeManager(Protocol):
     async def async_stop(self) -> None:
         ...
 
+    async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
+        ...
+
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
         ...
 

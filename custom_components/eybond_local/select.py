@@ -13,9 +13,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
-    CONTROL_MODE_AUTO,
-    CONTROL_MODE_FULL,
-    CONTROL_MODE_READ_ONLY,
 )
 from .runtime.coordinator import EybondLocalCoordinator
 from .models import WriteCapability
@@ -53,7 +50,8 @@ def default_enabled_runtime_select_keys_for_runtime(
 
 
 def _runtime_select_specs(*, has_inverter_identity: bool = True) -> tuple[_RuntimeSelectSpec, ...]:
-    specs = [
+    del has_inverter_identity
+    return (
         _RuntimeSelectSpec(
             key="collector_operation_mode",
             translation_key="collector_operation_mode",
@@ -64,22 +62,7 @@ def _runtime_select_specs(*, has_inverter_identity: bool = True) -> tuple[_Runti
             ),
             device_scope="collector",
         ),
-    ]
-    if has_inverter_identity:
-        specs.append(
-            _RuntimeSelectSpec(
-                key="control_mode",
-                translation_key="control_mode",
-                name="Control Mode",
-                options=(
-                    CONTROL_MODE_AUTO,
-                    CONTROL_MODE_READ_ONLY,
-                    CONTROL_MODE_FULL,
-                ),
-                device_scope="inverter",
-            )
-        )
-    return tuple(specs)
+    )
 
 
 async def async_setup_entry(

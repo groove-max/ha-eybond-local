@@ -18,6 +18,7 @@ from ..collector.cloud_family import (
 from ..collector.discovery import DiscoveryAnnouncer, async_probe_target
 from ..collector.transport import (
     CollectorAtTransport,
+    CollectorListenerBindError,
     CollectorTransport,
     SharedCollectorAtTransport,
     SharedEybondTransport,
@@ -29,6 +30,8 @@ from ..models import CollectorInfo
 from ..support.proxy_session import InProcessProxyCaptureHandler
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_LISTENER_BIND_HOST = "0.0.0.0"
 
 
 def _prefer_more_complete_collector_pn(current: str, candidate: str) -> str:
@@ -242,6 +245,11 @@ class EybondRuntimeLinkManager:
         self._discovery_interval = int(discovery_interval)
         self._heartbeat_interval = int(heartbeat_interval)
         self._effective_server_ip = resolve_server_ip(server_ip, collector_ip=collector_ip)
+        self._listener_bind_host = _DEFAULT_LISTENER_BIND_HOST
+        self._listener_status = "stopped"
+        self._listener_last_error = ""
+        self._listener_rebind_count = 0
+        self._started = False
         self._discovery_restart_count = 0
         self._last_discovery_reason = ""
         self._reverse_discovery_enabled = True
@@ -332,7 +340,7 @@ class EybondRuntimeLinkManager:
 
     @property
     def effective_server_ip(self) -> str:
-        """Return the current bind IP used by the EyeBond listener."""
+        """Return the current collector-facing IP used for discovery and advertising."""
 
         return self._effective_server_ip
 
@@ -342,28 +350,91 @@ class EybondRuntimeLinkManager:
 
         return self._configured_advertised_server_ip or self._effective_server_ip
 
+    @property
+    def effective_advertised_tcp_port(self) -> int:
+        """Return the advertised callback TCP port used by UDP bootstrap probes."""
+
+        return self._configured_advertised_tcp_port or self._tcp_port
+
+    @property
+    def listener_bind_host(self) -> str:
+        """Return the local TCP bind host used by collector callback listeners."""
+
+        return self._listener_bind_host
+
+    @property
+    def listener_status(self) -> str:
+        """Return the listener lifecycle status for diagnostics."""
+
+        return self._listener_status
+
+    @property
+    def listener_last_error(self) -> str:
+        """Return the latest listener start error for diagnostics."""
+
+        return self._listener_last_error
+
+    def listener_diagnostics(self) -> dict[str, object]:
+        """Return listener bind and advertised endpoint diagnostics."""
+
+        return {
+            "collector_listener_status": self._listener_status,
+            "collector_listener_bind_host": self._listener_bind_host,
+            "collector_listener_bind_endpoint": f"{self._listener_bind_host}:{self._tcp_port}",
+            "collector_listener_effective_host": self._effective_server_ip,
+            "collector_listener_advertised_endpoint": (
+                f"{self.effective_advertised_server_ip}:{self.effective_advertised_tcp_port}"
+            ),
+            "collector_listener_rebind_count": self._listener_rebind_count,
+            "collector_listener_last_error": self._listener_last_error,
+        }
+
     async def async_start(self) -> None:
         """Start the active link transport and its discovery loop."""
 
-        resolved_server_ip = resolve_server_ip(
-            self._configured_server_ip,
-            collector_ip=self._collector_ip,
-        )
-        if resolved_server_ip != self._effective_server_ip:
-            logger.warning(
-                "EyeBond listener IP changed from %s to %s; rebuilding transport",
-                self._effective_server_ip,
-                resolved_server_ip,
-            )
-            await self._announcer.stop()
+        await self._rebuild_if_server_ip_changed(reason="runtime_start")
+        self._listener_status = "starting"
+        try:
+            await self._start_all_transports()
+        except Exception as exc:
+            self._started = False
+            self._record_listener_error(exc)
             await self._stop_all_transports()
-            self._rebuild_link(resolved_server_ip)
+            raise
 
-        await self._start_all_transports()
+        self._started = True
+        self._listener_status = "listening"
+        self._listener_last_error = ""
         if self._reverse_discovery_enabled:
             await self._ensure_discovery(reason="runtime_start")
         else:
             await self._announcer.stop()
+
+    async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
+        """Re-resolve the collector-facing host and rebuild listeners if it changed."""
+
+        was_started = self._started
+        changed = await self._rebuild_if_server_ip_changed(reason=reason)
+        if not changed or not was_started:
+            return changed
+
+        self._listener_status = "starting"
+        try:
+            await self._start_all_transports()
+        except Exception as exc:
+            self._started = False
+            self._record_listener_error(exc)
+            await self._stop_all_transports()
+            raise
+
+        self._listener_status = "listening"
+        self._listener_last_error = ""
+        self._started = True
+        if self._reverse_discovery_enabled:
+            await self._ensure_discovery(reason=reason or "network_change")
+        else:
+            await self._announcer.stop()
+        return True
 
     async def async_stop(self) -> None:
         """Stop discovery and the active link transport."""
@@ -371,6 +442,8 @@ class EybondRuntimeLinkManager:
         await self.async_stop_proxy_capture_route()
         await self._announcer.stop()
         await self._stop_all_transports()
+        self._started = False
+        self._listener_status = "stopped"
 
     async def async_ensure_callback_listener(self, port: int) -> None:
         """Ensure one auxiliary callback listener is available for collector redirects."""
@@ -382,14 +455,18 @@ class EybondRuntimeLinkManager:
         if requested_port not in self._auxiliary_listener_ports:
             self._auxiliary_listener_ports.add(requested_port)
             payload_transport, at_transport = self._build_transport_pair(
-                self._effective_server_ip,
+                self._listener_bind_host,
                 requested_port,
             )
             self._auxiliary_transports[requested_port] = payload_transport
             self._auxiliary_at_transports[requested_port] = at_transport
 
-        await self._auxiliary_transports[requested_port].start()
-        await self._auxiliary_at_transports[requested_port].start()
+        try:
+            await self._auxiliary_transports[requested_port].start()
+            await self._auxiliary_at_transports[requested_port].start()
+        except Exception as exc:
+            self._record_listener_error(exc)
+            raise
 
     async def async_trigger_reverse_discovery(
         self,
@@ -454,14 +531,15 @@ class EybondRuntimeLinkManager:
         )
         await handler.start()
         route = SharedProxyCaptureRoute(
-            host=self._effective_server_ip,
+            host=self._listener_bind_host,
             port=int(listen_port),
             collector_ip=collector_ip,
             handler=handler.handle_client,
         )
         try:
             await route.start()
-        except Exception:
+        except Exception as exc:
+            self._record_listener_error(exc)
             await handler.stop()
             raise
         self._proxy_capture_handler = handler
@@ -715,17 +793,24 @@ class EybondRuntimeLinkManager:
             self._last_discovery_reason = reason
 
     def _rebuild_link(self, server_ip: str) -> None:
-        """Create the transport/discovery pair for one effective EyeBond bind IP."""
+        """Create the transport/discovery pair for one collector-facing IP."""
 
         effective_target = self._collector_ip or self._discovery_target
         effective_advertised_server_ip = self._configured_advertised_server_ip or server_ip
         effective_advertised_tcp_port = self._configured_advertised_tcp_port or self._tcp_port
         self._effective_server_ip = server_ip
-        self._transport, self._at_transport = self._build_transport_pair(server_ip, self._tcp_port)
+        self._listener_bind_host = _DEFAULT_LISTENER_BIND_HOST
+        self._transport, self._at_transport = self._build_transport_pair(
+            self._listener_bind_host,
+            self._tcp_port,
+        )
         self._auxiliary_transports = {}
         self._auxiliary_at_transports = {}
         for port in sorted(self._auxiliary_listener_ports):
-            payload_transport, at_transport = self._build_transport_pair(server_ip, port)
+            payload_transport, at_transport = self._build_transport_pair(
+                self._listener_bind_host,
+                port,
+            )
             self._auxiliary_transports[port] = payload_transport
             self._auxiliary_at_transports[port] = at_transport
         self._announcer = DiscoveryAnnouncer(
@@ -739,20 +824,47 @@ class EybondRuntimeLinkManager:
 
     def _build_transport_pair(
         self,
-        server_ip: str,
+        bind_host: str,
         port: int,
     ) -> tuple[SharedEybondTransport, SharedCollectorAtTransport]:
         payload_transport = SharedEybondTransport(
-            host=server_ip,
+            host=bind_host,
             port=port,
             request_timeout=DEFAULT_REQUEST_TIMEOUT,
             heartbeat_interval=float(self._heartbeat_interval),
             collector_ip=self._collector_ip,
         )
         at_transport = SharedCollectorAtTransport(
-            host=server_ip,
+            host=bind_host,
             port=port,
             request_timeout=DEFAULT_REQUEST_TIMEOUT,
             collector_ip=self._collector_ip,
         )
         return payload_transport, at_transport
+
+    async def _rebuild_if_server_ip_changed(self, *, reason: str) -> bool:
+        resolved_server_ip = resolve_server_ip(
+            self._configured_server_ip,
+            collector_ip=self._collector_ip,
+        )
+        if resolved_server_ip == self._effective_server_ip:
+            return False
+
+        logger.warning(
+            "EyeBond advertised listener IP changed from %s to %s after %s; rebuilding transport",
+            self._effective_server_ip or "unknown",
+            resolved_server_ip or "unknown",
+            reason or "network_change",
+        )
+        await self._announcer.stop()
+        await self._stop_all_transports()
+        self._rebuild_link(resolved_server_ip)
+        self._listener_rebind_count += 1
+        return True
+
+    def _record_listener_error(self, exc: Exception) -> None:
+        self._listener_status = "error"
+        if isinstance(exc, CollectorListenerBindError):
+            self._listener_last_error = str(exc.error)
+            return
+        self._listener_last_error = str(exc)

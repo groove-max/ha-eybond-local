@@ -363,6 +363,18 @@ class EybondHub:
             return self._collector_last_server_endpoint_before_change
         return ""
 
+    @property
+    def effective_server_ip(self) -> str:
+        """Return the collector-facing local host selected by the link manager."""
+
+        return self._link_manager.effective_server_ip
+
+    @property
+    def effective_advertised_server_ip(self) -> str:
+        """Return the callback host advertised to the collector."""
+
+        return self._link_manager.effective_advertised_server_ip
+
     def __init__(
         self,
         *,
@@ -410,6 +422,11 @@ class EybondHub:
         """Stop discovery and the active runtime link."""
 
         await self._link_manager.async_stop()
+
+    async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
+        """Re-resolve listener network state after HA/network readiness changes."""
+
+        return await self._link_manager.async_reconcile_network(reason=reason)
 
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:
         """Pass reverse-discovery policy changes through to the runtime link layer."""
@@ -1294,6 +1311,11 @@ class EybondHub:
             values["connection_mode"] = self._connection_mode
         if self._connection.collector_ip:
             values["configured_collector_ip"] = self._connection.collector_ip
+        listener_diagnostics = getattr(self._link_manager, "listener_diagnostics", None)
+        if listener_diagnostics is not None:
+            values.update(listener_diagnostics())
+            if not values.get("collector_listener_last_error"):
+                values.pop("collector_listener_last_error", None)
         if collector.last_devcode is not None:
             values["collector_devcode"] = f"0x{collector.last_devcode:04X}"
         if collector.last_udp_reply:

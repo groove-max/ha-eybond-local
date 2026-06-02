@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 from functools import partial
 import logging
 from math import isfinite
@@ -15,12 +16,20 @@ except ModuleNotFoundError:  # Local tooling imports the package without Home As
     cv = None
 
 try:
-    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
 except ModuleNotFoundError:  # Local tooling imports the package without Home Assistant installed.
+    EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"
     EVENT_HOMEASSISTANT_STOP = "homeassistant_stop"
+
+try:
+    from homeassistant.exceptions import ConfigEntryNotReady
+except ModuleNotFoundError:  # Local tooling imports the package without Home Assistant installed.
+    class ConfigEntryNotReady(Exception):
+        """Fallback used by local tooling when Home Assistant is unavailable."""
 
 from .naming import installation_title, legacy_installation_titles
 from .collector.signal import is_legacy_disabled_signal_entity_key
+from .collector.transport import CollectorListenerBindError
 from .const import (
     COLLECTOR_OPERATION_MODES,
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -54,8 +63,13 @@ _FLOAT_PRECISION_DEVICE_CLASSES = {
 }
 _DEFAULT_ENABLED_RUNTIME_SELECT_KEYS = (
     CONF_COLLECTOR_OPERATION_MODE,
-    CONF_CONTROL_MODE,
 )
+_TRANSIENT_LISTENER_BIND_ERRNOS = {
+    errno.EADDRNOTAVAIL,
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.ENODEV,
+}
 
 CONFIG_SCHEMA: Any = (
     cv.config_entry_only_config_schema("eybond_local")
@@ -82,6 +96,46 @@ def _register_entry_stop_shutdown(hass: HomeAssistant, entry: ConfigEntry, coord
     entry.async_on_unload(
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_shutdown_on_stop)
     )
+
+
+def _register_entry_network_reconcile(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Ask the runtime to re-check listener network state after HA/network events."""
+
+    async def _async_reconcile_on_event(event) -> None:
+        reconcile = getattr(coordinator, "async_reconcile_network", None)
+        if reconcile is None:
+            return
+        reason = str(getattr(event, "event_type", "") or "homeassistant_started")
+        try:
+            await reconcile(reason=reason)
+        except Exception:
+            logger.exception(
+                "Failed to reconcile EyeBond listener network state for entry %s after %s",
+                entry.entry_id,
+                reason,
+            )
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _async_reconcile_on_event)
+    )
+    async_listen = getattr(hass.bus, "async_listen", None)
+    if async_listen is not None:
+        entry.async_on_unload(
+            async_listen("core_config_updated", _async_reconcile_on_event)
+        )
+
+
+def _is_transient_listener_bind_error(exc: CollectorListenerBindError) -> bool:
+    """Return whether one listener bind failure should be retried by HA."""
+
+    if exc.errno in _TRANSIENT_LISTENER_BIND_ERRNOS:
+        return True
+    if exc.errno == errno.EADDRINUSE:
+        return False
+    message = str(exc.error).lower()
+    if "address already in use" in message:
+        return False
+    return "could not bind" in message or "cannot assign requested address" in message
 
 
 def _configure_local_metadata_roots(hass: HomeAssistant) -> None:
@@ -644,6 +698,30 @@ async def _async_self_heal_expert_defaults(
         )
 
 
+async def _async_remove_legacy_runtime_select_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Remove runtime select entities that were migrated into config flow options."""
+
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    legacy_unique_ids = {
+        _entity_unique_id(entry.entry_id, "select", CONF_CONTROL_MODE),
+    }
+
+    for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity_entry.unique_id not in legacy_unique_ids:
+            continue
+        logger.warning(
+            "Removing legacy runtime select %s for entry %s after config-flow migration",
+            entity_entry.entity_id,
+            entry.entry_id,
+        )
+        registry.async_remove(entity_entry.entity_id)
+
+
 def _infer_sensor_display_precision(value: float) -> int | None:
     """Infer a stable display precision for one float-like sensor value."""
 
@@ -746,6 +824,8 @@ async def _async_finalize_expert_entity_migration(
                 entry.entry_id,
             )
     await _async_self_heal_expert_defaults(hass, entry)
+    if getattr(entry, "runtime_data", None) is not None:
+        await _async_remove_legacy_runtime_select_entities(hass, entry)
     await _async_self_heal_sensor_display_precision(hass, entry)
 
 
@@ -884,6 +964,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .runtime.coordinator import EybondLocalCoordinator
     from .services import async_setup_services
 
+    coordinator = None
     try:
         _configure_local_metadata_roots(hass)
         await async_setup_services(hass)
@@ -895,6 +976,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_setup()
         entry.runtime_data = coordinator
         _register_entry_stop_shutdown(hass, entry, coordinator)
+        _register_entry_network_reconcile(hass, entry, coordinator)
         await _async_initial_refresh_for_setup(hass, entry, coordinator)
         await _async_self_heal_enabled_defaults(hass, entry, coordinator)
         await _async_cleanup_obsolete_entities(hass, entry, coordinator)
@@ -910,7 +992,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(partial(_cancel_task_callback, expert_migration_task))
         coordinator.async_sync_device_registry()
         entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    except CollectorListenerBindError as exc:
+        if coordinator is not None:
+            try:
+                await coordinator.async_shutdown()
+            except Exception:
+                logger.exception(
+                    "Failed to clean up EyeBond Local entry %s after listener bind failure",
+                    entry.entry_id,
+                )
+        if _is_transient_listener_bind_error(exc):
+            logger.warning(
+                "EyeBond listener is temporarily unavailable for entry %s on %s:%d: %s",
+                entry.entry_id,
+                exc.host,
+                exc.port,
+                exc.error,
+            )
+            raise ConfigEntryNotReady(
+                f"EyeBond listener is not ready on {exc.host}:{exc.port}: {exc.error}"
+            ) from exc
+        logger.exception("Failed to set up EyeBond Local entry %s", entry.entry_id)
+        raise
     except Exception:
+        if coordinator is not None and getattr(entry, "runtime_data", None) is None:
+            try:
+                await coordinator.async_shutdown()
+            except Exception:
+                logger.exception(
+                    "Failed to clean up EyeBond Local entry %s after setup failure",
+                    entry.entry_id,
+                )
         logger.exception("Failed to set up EyeBond Local entry %s", entry.entry_id)
         raise
     return True

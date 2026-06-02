@@ -38,6 +38,8 @@ from ..models import CollectorCandidate, OnboardingResult
 
 logger = logging.getLogger(__name__)
 
+_LISTENER_BIND_HOST = "0.0.0.0"
+
 _CONFIDENCE_SCORE = {
     "none": 0,
     "low": 1,
@@ -370,13 +372,13 @@ class OnboardingDetector:
         if any(target.source == "broadcast" for target in targets):
             try:
                 listener = await _acquire_shared_listener(
-                    self._connection.server_ip,
+                    _LISTENER_BIND_HOST,
                     self._connection.tcp_port,
                 )
-            except OSError as exc:
+            except Exception as exc:
                 logger.debug(
                     "Quick-scan fan-out listener unavailable host=%s port=%s error=%s",
-                    self._connection.server_ip,
+                    _LISTENER_BIND_HOST,
                     self._connection.tcp_port,
                     exc,
                 )
@@ -564,13 +566,13 @@ class OnboardingDetector:
         listener = None
         try:
             listener = await _acquire_shared_listener(
-                self._connection.server_ip,
+                _LISTENER_BIND_HOST,
                 self._connection.tcp_port,
             )
-        except OSError as exc:
+        except Exception as exc:
             logger.debug(
                 "Deep-scan fallback listener unavailable host=%s port=%s error=%s",
-                self._connection.server_ip,
+                _LISTENER_BIND_HOST,
                 self._connection.tcp_port,
                 exc,
             )
@@ -632,7 +634,7 @@ class OnboardingDetector:
         detection_state: _TargetDetectionState | None = None,
     ) -> OnboardingResult:
         transport = SharedEybondTransport(
-            host=self._connection.server_ip,
+            host=_LISTENER_BIND_HOST,
             port=self._connection.tcp_port,
             request_timeout=self._connection.request_timeout,
             heartbeat_interval=float(self._connection.heartbeat_interval),
@@ -800,7 +802,7 @@ class OnboardingDetector:
         try:
             if at_timeout is not None and at_timeout > 0:
                 at_transport = SharedCollectorAtTransport(
-                    host=self._connection.server_ip,
+                    host=_LISTENER_BIND_HOST,
                     port=self._connection.tcp_port,
                     request_timeout=min(self._connection.request_timeout, at_timeout),
                     collector_ip=collector_ip,

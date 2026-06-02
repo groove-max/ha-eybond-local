@@ -29,6 +29,19 @@ from .protocol import (
 logger = logging.getLogger(__name__)
 
 
+class CollectorListenerBindError(RuntimeError):
+    """Raised when the shared collector listener cannot bind its socket."""
+
+    def __init__(self, host: str, port: int, error: OSError) -> None:
+        self.host = str(host)
+        self.port = int(port)
+        self.error = error
+        self.errno = getattr(error, "errno", None)
+        super().__init__(
+            f"collector_listener_bind_failed:{self.host}:{self.port}:{error}"
+        )
+
+
 async def _finish_cleanup_on_cancel(awaitable: Awaitable[Any]) -> Any:
     """Finish critical cleanup even if the caller is already being cancelled."""
 
@@ -816,7 +829,15 @@ class _SharedEybondListener:
     async def acquire(self) -> None:
         self._ref_count += 1
         if self._server is None:
-            self._server = await asyncio.start_server(self._handle_connection, self._host, self._port)
+            try:
+                self._server = await asyncio.start_server(
+                    self._handle_connection,
+                    self._host,
+                    self._port,
+                )
+            except OSError as exc:
+                self._ref_count = max(0, self._ref_count - 1)
+                raise CollectorListenerBindError(self._host, self._port, exc) from exc
             logger.info("Shared EyeBond listener listening on %s:%d", self._host, self._port)
 
     async def release(self) -> bool:
@@ -1391,7 +1412,12 @@ async def _acquire_shared_listener(host: str, port: int) -> _SharedEybondListene
         if listener is None:
             listener = _SharedEybondListener(host=host, port=port)
             _LISTENERS[key] = listener
-        await listener.acquire()
+        try:
+            await listener.acquire()
+        except Exception:
+            if listener._server is None and listener._ref_count == 0:
+                _LISTENERS.pop(key, None)
+            raise
         return listener
 
 
@@ -1402,7 +1428,12 @@ async def _acquire_shared_payload_listener(host: str, port: int, collector_ip: s
         if listener is None:
             listener = _SharedEybondListener(host=host, port=port)
             _LISTENERS[key] = listener
-        await listener.acquire()
+        try:
+            await listener.acquire()
+        except Exception:
+            if listener._server is None and listener._ref_count == 0:
+                _LISTENERS.pop(key, None)
+            raise
         listener.register_payload_owner(collector_ip)
         return listener
 
@@ -1414,7 +1445,12 @@ async def _acquire_shared_at_listener(host: str, port: int, collector_ip: str) -
         if listener is None:
             listener = _SharedEybondListener(host=host, port=port)
             _LISTENERS[key] = listener
-        await listener.acquire()
+        try:
+            await listener.acquire()
+        except Exception:
+            if listener._server is None and listener._ref_count == 0:
+                _LISTENERS.pop(key, None)
+            raise
         listener.register_at_owner(collector_ip)
         return listener
 

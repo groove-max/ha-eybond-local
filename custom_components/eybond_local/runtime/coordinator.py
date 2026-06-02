@@ -608,6 +608,32 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self._runtime.async_stop()
             self._shutdown_complete = True
 
+    async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
+        """Reconcile listener bind/discovery state after HA or network readiness changes."""
+
+        changed = await self._async_reconcile_network(reason=reason)
+        if changed:
+            if self.collector_home_assistant_primary:
+                await self._async_prepare_home_assistant_callback_listener(
+                    self.collector_callback_target_endpoint
+                )
+            await self.async_request_refresh()
+        return changed
+
+    async def _async_reconcile_network(self, *, reason: str) -> bool:
+        reconcile = getattr(self._runtime, "async_reconcile_network", None)
+        if reconcile is None:
+            return False
+        changed = bool(await reconcile(reason=reason))
+        if changed:
+            self._ha_primary_reconcile_last_signature = ("", "")
+            logger.warning(
+                "Reconciled EyeBond listener network state for entry %s after %s",
+                self.config_entry.entry_id,
+                reason or "network_change",
+            )
+        return changed
+
     def mark_entity_platforms_initialized(
         self,
         *,
@@ -1097,6 +1123,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             snapshot.values.pop(key, None)
 
     async def _async_update_data(self) -> RuntimeSnapshot:
+        await self._async_reconcile_network(reason="refresh")
         snapshot = await self._runtime.async_refresh(
             poll_interval=float(
                 self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)

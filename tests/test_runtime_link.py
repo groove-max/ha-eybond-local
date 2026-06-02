@@ -156,6 +156,25 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                 heartbeat_interval=60,
             )
 
+    def test_runtime_manager_binds_tcp_wildcard_and_advertises_resolved_ip(self) -> None:
+        manager = self._build_manager()
+
+        self.assertEqual(manager.listener_bind_host, "0.0.0.0")
+        self.assertEqual(manager._transport._host, "0.0.0.0")
+        self.assertEqual(manager._at_transport._host, "0.0.0.0")
+        self.assertEqual(manager.effective_server_ip, "192.168.1.10")
+        self.assertEqual(manager.effective_advertised_server_ip, "192.168.1.10")
+        self.assertEqual(manager._announcer._bind_ip, "192.168.1.10")
+        self.assertEqual(manager._announcer._advertised_server_ip, "192.168.1.10")
+
+        diagnostics = manager.listener_diagnostics()
+        self.assertEqual(diagnostics["collector_listener_status"], "stopped")
+        self.assertEqual(diagnostics["collector_listener_bind_endpoint"], "0.0.0.0:8899")
+        self.assertEqual(
+            diagnostics["collector_listener_advertised_endpoint"],
+            "192.168.1.10:8899",
+        )
+
     def test_collector_info_merges_transport_and_discovery_state(self) -> None:
         manager = self._build_manager()
         manager._transport = _FakeTransport(connected=True)  # type: ignore[assignment]
@@ -309,13 +328,61 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         manager = self._build_manager()
         payload_transport = _FakeTransport()
         at_transport = _FakeTransport()
-        manager._build_transport_pair = lambda server_ip, port: (payload_transport, at_transport)  # type: ignore[method-assign]
+        build_calls: list[tuple[str, int]] = []
+
+        def _build_pair(bind_host: str, port: int):
+            build_calls.append((bind_host, port))
+            return payload_transport, at_transport
+
+        manager._build_transport_pair = _build_pair  # type: ignore[method-assign]
 
         asyncio.run(manager.async_ensure_callback_listener(502))
 
         self.assertEqual(manager._auxiliary_listener_ports, {502})
+        self.assertEqual(build_calls, [("0.0.0.0", 502)])
         self.assertEqual(payload_transport.start_calls, 1)
         self.assertEqual(at_transport.start_calls, 1)
+
+    def test_async_reconcile_network_rebuilds_advertised_host_without_specific_tcp_bind(self) -> None:
+        with patch(
+            "custom_components.eybond_local.runtime.link.resolve_server_ip",
+            side_effect=["192.168.1.10", "192.168.1.20"],
+        ):
+            manager = EybondRuntimeLinkManager(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+            )
+            manager._transport = _FakeTransport()  # type: ignore[assignment]
+            manager._at_transport = _FakeTransport()  # type: ignore[assignment]
+            manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
+            manager._started = True
+            manager.set_reverse_discovery_enabled(False)
+            builds: list[tuple[str, int, _FakeTransport, _FakeTransport]] = []
+
+            def _build_pair(bind_host: str, port: int):
+                payload_transport = _FakeTransport()
+                at_transport = _FakeTransport()
+                builds.append((bind_host, port, payload_transport, at_transport))
+                return payload_transport, at_transport
+
+            manager._build_transport_pair = _build_pair  # type: ignore[method-assign]
+
+            changed = asyncio.run(manager.async_reconcile_network(reason="network_test"))
+
+        self.assertTrue(changed)
+        self.assertEqual(builds[-1][0], "0.0.0.0")
+        self.assertEqual(builds[-1][1], 8899)
+        self.assertEqual(manager.effective_server_ip, "192.168.1.20")
+        self.assertEqual(manager._announcer._bind_ip, "192.168.1.20")
+        self.assertEqual(manager._announcer._advertised_server_ip, "192.168.1.20")
+        self.assertEqual(manager.listener_diagnostics()["collector_listener_rebind_count"], 1)
+        self.assertEqual(builds[-1][2].start_calls, 1)
+        self.assertEqual(builds[-1][3].start_calls, 1)
 
     def test_async_trigger_reverse_discovery_uses_bootstrap_listener_defaults(self) -> None:
         manager = self._build_manager()
@@ -407,7 +474,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             "handler_stop",
         ])
         route_kwargs = dict(events[2][1])
-        self.assertEqual(route_kwargs["host"], "192.168.1.10")
+        self.assertEqual(route_kwargs["host"], "0.0.0.0")
         self.assertEqual(route_kwargs["port"], 502)
         self.assertEqual(route_kwargs["collector_ip"], "192.168.1.14")
 
@@ -456,6 +523,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
     def test_runtime_manager_uses_bind_ip_for_advertised_endpoint_when_override_is_empty(self) -> None:
         manager = self._build_manager()
 
+        self.assertEqual(manager._transport._host, "0.0.0.0")
         self.assertEqual(manager._announcer._advertised_server_ip, "192.168.1.10")
         self.assertEqual(manager._announcer._advertised_server_port, 8899)
 

@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.transport import (
+    CollectorListenerBindError,
     SharedCollectorAtTransport,
     SharedEybondTransport,
     SharedProxyCaptureRoute,
@@ -152,6 +153,27 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 await writer.wait_closed()
             await first.stop()
             await second.stop()
+
+    async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
+        port = 19099
+        transport = SharedEybondTransport(
+            host="127.0.0.1",
+            port=port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="",
+        )
+        key = ("127.0.0.1", port)
+
+        with patch(
+            "custom_components.eybond_local.collector.transport.asyncio.start_server",
+            new=AsyncMock(side_effect=OSError("could not bind on any address")),
+        ):
+            with self.assertRaises(CollectorListenerBindError):
+                await transport.start()
+
+        self.assertIsNone(transport._listener)
+        self.assertNotIn(key, _LISTENERS)
 
     async def test_transport_stop_releases_listener_even_when_cancelled(self) -> None:
         port = _free_tcp_port()

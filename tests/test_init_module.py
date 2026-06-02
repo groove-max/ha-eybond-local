@@ -14,9 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local import (
+    ConfigEntryNotReady,
     _async_cleanup_obsolete_entities,
     _async_finalize_expert_entity_migration,
     _async_initial_refresh_for_setup,
+    _async_remove_legacy_runtime_select_entities,
     _async_self_heal_entry_title,
     _async_self_heal_expert_defaults,
     _async_self_heal_enabled_defaults,
@@ -26,6 +28,7 @@ from custom_components.eybond_local import (
     _prime_metadata_caches,
     async_setup_entry,
 )
+from custom_components.eybond_local.collector.transport import CollectorListenerBindError
 from custom_components.eybond_local.tooling import (
     default_enabled_tooling_button_keys_for_runtime,
     tooling_button_keys_for_runtime,
@@ -40,11 +43,7 @@ from custom_components.eybond_local.models import (
 def _runtime_entity_key_module_stubs() -> dict[str, types.ModuleType]:
     select_module = types.ModuleType("custom_components.eybond_local.select")
     select_module.default_enabled_runtime_select_keys_for_runtime = (
-        lambda *, has_inverter_identity=True: (
-            ("collector_operation_mode", "control_mode")
-            if has_inverter_identity
-            else ("collector_operation_mode",)
-        )
+        lambda *, has_inverter_identity=True: ("collector_operation_mode",)
     )
     text_module = types.ModuleType("custom_components.eybond_local.text")
     text_module.default_enabled_collector_text_keys_for_runtime = lambda: ()
@@ -120,9 +119,11 @@ class InitModuleTests(unittest.TestCase):
         self.assertIn("entry123_collector_signal_strength", unique_ids)
         self.assertIn("entry123_collector_signal_quality", unique_ids)
         self.assertIn("entry123_collector_operation_mode", unique_ids)
+        self.assertIn("entry123_select_collector_operation_mode", unique_ids)
         self.assertIn("entry123_collector_onboarding_status", unique_ids)
         self.assertIn("entry123_collector_serial_baudrate", unique_ids)
         self.assertIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
+        self.assertNotIn("entry123_select_control_mode", unique_ids)
         self.assertNotIn("entry123_text_collector_callback_endpoint", unique_ids)
 
     def test_current_runtime_default_enabled_unique_ids_follow_capability_policy(self) -> None:
@@ -735,6 +736,41 @@ class InitModuleTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_remove_legacy_runtime_select_entities_removes_control_mode_select(self) -> None:
+        async def _run() -> None:
+            legacy_control_mode_entry = types.SimpleNamespace(
+                unique_id="entry123_select_control_mode",
+                entity_id="select.smg_6200_control_mode",
+            )
+            runtime_select_entry = types.SimpleNamespace(
+                unique_id="entry123_select_collector_operation_mode",
+                entity_id="select.collector_pn_e50000253884199645_collector_operation_mode",
+            )
+
+            class _Registry:
+                def __init__(self) -> None:
+                    self.removed: list[str] = []
+
+                def async_remove(self, entity_id: str) -> None:
+                    self.removed.append(entity_id)
+
+            registry = _Registry()
+            hass = types.SimpleNamespace()
+            entry = types.SimpleNamespace(entry_id="entry123")
+
+            with (
+                patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=[legacy_control_mode_entry, runtime_select_entry],
+                ),
+            ):
+                await _async_remove_legacy_runtime_select_entities(hass, entry)
+
+            self.assertEqual(registry.removed, ["select.smg_6200_control_mode"])
+
+        asyncio.run(_run())
+
     def test_self_heal_updates_legacy_inverter_first_entry_title(self) -> None:
         async def _run() -> None:
             updated: list[tuple[object, str]] = []
@@ -806,7 +842,7 @@ class InitModuleTests(unittest.TestCase):
                 await asyncio.Event().wait()
 
             hass = types.SimpleNamespace(async_block_till_done=async_block_till_done)
-            entry = types.SimpleNamespace(entry_id="entry123")
+            entry = types.SimpleNamespace(entry_id="entry123", runtime_data=object())
 
             with (
                 patch("custom_components.eybond_local._EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT", 0.01),
@@ -814,10 +850,20 @@ class InitModuleTests(unittest.TestCase):
                     "custom_components.eybond_local._async_self_heal_expert_defaults",
                     new=AsyncMock(),
                 ) as self_heal,
+                patch(
+                    "custom_components.eybond_local._async_remove_legacy_runtime_select_entities",
+                    new=AsyncMock(),
+                ) as legacy_cleanup,
+                patch(
+                    "custom_components.eybond_local._async_self_heal_sensor_display_precision",
+                    new=AsyncMock(),
+                ) as sensor_precision,
             ):
                 await _async_finalize_expert_entity_migration(hass, entry)
 
             self_heal.assert_awaited_once_with(hass, entry)
+            legacy_cleanup.assert_awaited_once_with(hass, entry)
+            sensor_precision.assert_awaited_once_with(hass, entry)
 
         asyncio.run(_run())
 
@@ -935,8 +981,9 @@ class InitModuleTests(unittest.TestCase):
             setup_services.assert_awaited_once_with(hass)
             self.assertEqual(len(forwarded), 1)
             self.assertGreaterEqual(len(unload_callbacks), 2)
-            self.assertEqual(len(stop_listeners), 1)
+            self.assertEqual(len(stop_listeners), 2)
             self.assertEqual(stop_listeners[0][0], "homeassistant_stop")
+            self.assertEqual(stop_listeners[1][0], "homeassistant_started")
             await stop_listeners[0][1](types.SimpleNamespace())
             self.assertEqual(entry.runtime_data.shutdown_calls, 1)
             await refresh_started.wait()
@@ -951,6 +998,85 @@ class InitModuleTests(unittest.TestCase):
             refresh_cancel_callback()
             with self.assertRaises(asyncio.CancelledError):
                 await refresh_task
+
+        asyncio.run(_run())
+
+    def test_async_setup_entry_retries_transient_listener_bind_failure(self) -> None:
+        async def _run() -> None:
+            coordinators: list[object] = []
+
+            async def async_add_executor_job(func, *args):
+                return func(*args)
+
+            class _ConfigEntries:
+                async def async_forward_entry_setups(self, entry, platforms) -> None:
+                    raise AssertionError("platforms should not be forwarded after bind failure")
+
+            hass = types.SimpleNamespace(
+                async_add_executor_job=async_add_executor_job,
+                config_entries=_ConfigEntries(),
+            )
+
+            class _Entry:
+                def __init__(self) -> None:
+                    self.entry_id = "entry123"
+                    self.data = {"driver_hint": "pi30"}
+                    self.options = {}
+                    self.title = "Collector 192.168.1.55"
+                    self.runtime_data = None
+
+                def async_on_unload(self, callback) -> None:
+                    return None
+
+                def add_update_listener(self, listener):
+                    return listener
+
+            entry = _Entry()
+
+            class _FakeCoordinator:
+                def __init__(self, _hass, _entry) -> None:
+                    self.shutdown_calls = 0
+                    coordinators.append(self)
+
+                async def async_setup(self) -> None:
+                    raise CollectorListenerBindError(
+                        "192.168.1.50",
+                        8899,
+                        OSError(
+                            "could not bind on any address out of [('192.168.1.50', 8899)]"
+                        ),
+                    )
+
+                async def async_shutdown(self) -> None:
+                    self.shutdown_calls += 1
+
+            runtime_coordinator_module = types.ModuleType(
+                "custom_components.eybond_local.runtime.coordinator"
+            )
+            runtime_coordinator_module.EybondLocalCoordinator = _FakeCoordinator
+
+            with (
+                patch("custom_components.eybond_local._configure_local_metadata_roots"),
+                patch("custom_components.eybond_local._prime_metadata_caches"),
+                patch(
+                    "custom_components.eybond_local.services.async_setup_services",
+                    new=AsyncMock(),
+                ),
+                patch("custom_components.eybond_local._async_self_heal_server_ip", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_entry_title", new=AsyncMock()),
+                patch.dict(
+                    sys.modules,
+                    {
+                        "custom_components.eybond_local.runtime.coordinator": runtime_coordinator_module,
+                    },
+                ),
+            ):
+                with self.assertRaises(ConfigEntryNotReady):
+                    await async_setup_entry(hass, entry)
+
+            self.assertIsNone(entry.runtime_data)
+            self.assertEqual(len(coordinators), 1)
+            self.assertEqual(coordinators[0].shutdown_calls, 1)
 
         asyncio.run(_run())
 
