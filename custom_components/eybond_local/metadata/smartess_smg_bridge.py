@@ -18,278 +18,12 @@ from .local_metadata import (
 )
 from .profile_loader import builtin_profile_path, load_driver_profile, load_driver_profile_raw
 from .register_schema_loader import builtin_register_schema_path, load_register_schema
+from .smartess_semantic_catalog_loader import resolve_smartess_semantic_entry
 
 
 _SMARTESS_SMG_OWNER_KEYS = frozenset({"modbus_smg"})
 _BRIDGE_PROFILE_TITLE_SUFFIX = " (Local SmartESS SMG Bridge)"
 _BRIDGE_SCHEMA_TITLE_SUFFIX = " (Local SmartESS SMG Bridge)"
-
-_SMARTESS_SMG_BRIDGE_MAPPINGS: dict[str, dict[str, str]] = {
-    "output mode": {
-        "profile_key": "output_mode",
-        "measurement_key": "output_mode",
-    },
-    "output priority": {
-        "profile_key": "output_source_priority",
-        "measurement_key": "output_source_priority",
-    },
-    "main output priority": {
-        "profile_key": "output_source_priority",
-        "measurement_key": "output_source_priority",
-    },
-    "input voltage range": {
-        "profile_key": "input_voltage_range",
-        "measurement_key": "input_voltage_range",
-    },
-    "input mode": {
-        "profile_key": "input_mode",
-        "measurement_key": "input_mode",
-    },
-    "battery type": {
-        "profile_key": "battery_type",
-        "measurement_key": "battery_type",
-    },
-    "buzzer mode": {
-        "profile_key": "buzzer_mode",
-        "measurement_key": "buzzer_mode",
-    },
-    "backlight control": {
-        "profile_key": "lcd_backlight_mode",
-        "measurement_key": "lcd_backlight_mode",
-    },
-    "lcd backlight": {
-        "profile_key": "lcd_backlight_mode",
-        "measurement_key": "lcd_backlight_mode",
-    },
-    "auto return to default display screen": {
-        "profile_key": "lcd_auto_return_mode",
-        "measurement_key": "lcd_auto_return_mode",
-    },
-    "lcd automatically returns to the home page": {
-        "profile_key": "lcd_auto_return_mode",
-        "measurement_key": "lcd_auto_return_mode",
-    },
-    "lcd automatically returns to the homepage": {
-        "profile_key": "lcd_auto_return_mode",
-        "measurement_key": "lcd_auto_return_mode",
-    },
-    "power saving mode": {
-        "profile_key": "power_saving_mode",
-        "measurement_key": "power_saving_mode",
-    },
-    "energy-saving mode switch": {
-        "profile_key": "power_saving_mode",
-        "measurement_key": "power_saving_mode",
-    },
-    "auto restart when overload occurs": {
-        "profile_key": "overload_restart_mode",
-        "measurement_key": "overload_restart_mode",
-    },
-    "overload automatic restart": {
-        "profile_key": "overload_restart_mode",
-        "measurement_key": "overload_restart_mode",
-    },
-    "auto restart when over temperature occurs": {
-        "profile_key": "over_temperature_restart_mode",
-        "measurement_key": "over_temperature_restart_mode",
-    },
-    "automatic restart when over temperature": {
-        "profile_key": "over_temperature_restart_mode",
-        "measurement_key": "over_temperature_restart_mode",
-    },
-    "overload bypass": {
-        "profile_key": "overload_bypass_mode",
-        "measurement_key": "overload_bypass_mode",
-    },
-    "overload transfer to bypass enable": {
-        "profile_key": "overload_bypass_mode",
-        "measurement_key": "overload_bypass_mode",
-    },
-    "battery eq mode": {
-        "profile_key": "battery_equalization_mode",
-        "measurement_key": "battery_equalization_mode",
-    },
-    "output voltage": {
-        "profile_key": "output_rating_voltage",
-        "measurement_key": "output_rating_voltage",
-    },
-    "output voltage setting": {
-        "profile_key": "output_rating_voltage",
-        "measurement_key": "output_rating_voltage",
-    },
-    "output frequency": {
-        "profile_key": "output_rating_frequency",
-        "measurement_key": "output_rating_frequency",
-    },
-    "output frequency setting": {
-        "profile_key": "output_rating_frequency",
-        "measurement_key": "output_rating_frequency",
-    },
-    "high dc protection voltage": {
-        "profile_key": "battery_overvoltage_protection_voltage",
-        "measurement_key": "battery_overvoltage_protection_voltage",
-    },
-    "battery overvoltage protection point": {
-        "profile_key": "battery_overvoltage_protection_voltage",
-        "measurement_key": "battery_overvoltage_protection_voltage",
-    },
-    "bulk charging voltage (c.v voltage)": {
-        "profile_key": "battery_bulk_voltage",
-        "measurement_key": "battery_bulk_voltage",
-    },
-    "maximum charging voltage": {
-        "profile_key": "battery_bulk_voltage",
-        "measurement_key": "battery_bulk_voltage",
-    },
-    "floating charging voltage": {
-        "profile_key": "battery_float_voltage",
-        "measurement_key": "battery_float_voltage",
-    },
-    "floating charge voltage": {
-        "profile_key": "battery_float_voltage",
-        "measurement_key": "battery_float_voltage",
-    },
-    "low dc protection voltage in mains mode": {
-        "profile_key": "battery_under_voltage",
-        "measurement_key": "battery_under_voltage",
-    },
-    "mains mode battery low voltage protection point": {
-        "profile_key": "battery_under_voltage",
-        "measurement_key": "battery_under_voltage",
-    },
-    "low dc protection voltage in off-grid mode": {
-        "profile_key": "battery_under_voltage_off_grid",
-        "measurement_key": "battery_under_voltage_off_grid",
-    },
-    "off-grid mode battery low voltage protection point": {
-        "profile_key": "battery_under_voltage_off_grid",
-        "measurement_key": "battery_under_voltage_off_grid",
-    },
-    "mains mode battery discharge recovery point": {
-        "profile_key": "battery_redischarge_voltage",
-        "measurement_key": "battery_redischarge_voltage",
-    },
-    "charger source priority": {
-        "profile_key": "charge_source_priority",
-        "measurement_key": "charge_source_priority",
-    },
-    "max.charging current": {
-        "profile_key": "max_charge_current",
-        "measurement_key": "max_charge_current",
-    },
-    "maximum charging current": {
-        "profile_key": "max_charge_current",
-        "measurement_key": "max_charge_current",
-    },
-    "max.ac.charging current": {
-        "profile_key": "max_ac_charge_current",
-        "measurement_key": "max_ac_charge_current",
-    },
-    "maximum mains charging current": {
-        "profile_key": "max_ac_charge_current",
-        "measurement_key": "max_ac_charge_current",
-    },
-    "eq charing voltage": {
-        "profile_key": "battery_equalization_voltage",
-        "measurement_key": "battery_equalization_voltage",
-    },
-    "eq charging voltage": {
-        "profile_key": "battery_equalization_voltage",
-        "measurement_key": "battery_equalization_voltage",
-    },
-    "eq charing time": {
-        "profile_key": "battery_equalization_time",
-        "measurement_key": "battery_equalization_time",
-    },
-    "eq timeout exit time": {
-        "profile_key": "battery_equalization_timeout",
-        "measurement_key": "battery_equalization_timeout",
-    },
-    "eq timeout exit": {
-        "profile_key": "battery_equalization_timeout",
-        "measurement_key": "battery_equalization_timeout",
-    },
-    "eq interval time": {
-        "profile_key": "battery_equalization_interval",
-        "measurement_key": "battery_equalization_interval",
-    },
-    "eq charging interval": {
-        "profile_key": "battery_equalization_interval",
-        "measurement_key": "battery_equalization_interval",
-    },
-    "battery eq mode enable": {
-        "profile_key": "battery_equalization_mode",
-        "measurement_key": "battery_equalization_mode",
-    },
-    "low dc protection soc in grid mode": {
-        "profile_key": "low_dc_protection_soc_grid_mode",
-        "measurement_key": "low_dc_protection_soc_grid_mode",
-    },
-    "low dc protection soc in ac mode": {
-        "profile_key": "low_dc_protection_soc_grid_mode",
-        "measurement_key": "low_dc_protection_soc_grid_mode",
-    },
-    "low dc recovery soc in ac mode": {
-        "profile_key": "solar_battery_utility_return_soc_threshold",
-        "measurement_key": "solar_battery_utility_return_soc_threshold",
-    },
-    "battery low cut off soc": {
-        "profile_key": "low_dc_cutoff_soc",
-        "measurement_key": "low_dc_cutoff_soc",
-    },
-    "off grid mode battery discharge soc protection value": {
-        "profile_key": "low_dc_cutoff_soc",
-        "measurement_key": "low_dc_cutoff_soc",
-    },
-    "boot method": {
-        "profile_key": "turn_on_mode",
-        "measurement_key": "turn_on_mode",
-    },
-    "remote switch": {
-        "measurement_key": "remote_switch",
-    },
-    "equalization activated immediately": {
-        "profile_key": "force_eq_charge",
-    },
-    "clean generation power": {
-        "profile_key": "clear_generation_data",
-    },
-    "bat eq time": {
-        "profile_key": "battery_equalization_time",
-        "measurement_key": "battery_equalization_time",
-    },
-    "dry contact": {
-        "profile_key": "dry_contact_mode",
-        "measurement_key": "dry_contact_mode",
-    },
-    "automatic mains output enable": {
-        "profile_key": "automatic_mains_output_enabled",
-        "measurement_key": "automatic_mains_output_enabled",
-    },
-    "pv grid-connected maximum power": {
-        "profile_key": "pv_grid_connected_max_power",
-        "measurement_key": "pv_grid_connected_max_power",
-    },
-    "island detection enabled": {
-        "profile_key": "island_detection_enabled",
-        "measurement_key": "island_detection_enabled",
-    },
-    "inverter date": {
-        "measurement_key": "inverter_date",
-    },
-    "ground relay enable": {
-        "profile_key": "ground_relay_enabled",
-        "measurement_key": "ground_relay_enabled",
-    },
-    "lithium battery activation time": {
-        "profile_key": "lithium_battery_activation_time",
-        "measurement_key": "lithium_battery_activation_time",
-    },
-    "exit fault mode": {
-        "profile_key": "exit_fault_mode",
-        "measurement_key": "exit_fault_mode",
-    },
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,7 +117,7 @@ def resolve_smartess_smg_bridge_plan(
             continue
         seen_titles.add(normalized_title)
 
-        mapping = _SMARTESS_SMG_BRIDGE_MAPPINGS.get(normalized_title)
+        mapping = _resolve_smartess_smg_bridge_mapping(title)
         if mapping is None:
             skipped_field_titles.append(title)
             continue
@@ -532,6 +266,23 @@ def _normalized_setting_fields(cloud_evidence: dict[str, Any] | None) -> list[di
 
 def _normalize_setting_title(value: str) -> str:
     return " ".join(str(value).strip().lower().replace("_", " ").split())
+
+
+def _resolve_smartess_smg_bridge_mapping(title: str) -> dict[str, str] | None:
+    semantic_entry = resolve_smartess_semantic_entry(title)
+    if semantic_entry is None:
+        return None
+    bridge_binding = semantic_entry.smg_bridge
+    profile_key = str(next(iter(bridge_binding.profile_keys), "") or "").strip()
+    measurement_key = str(next(iter(bridge_binding.measurement_keys), "") or "").strip()
+    if not profile_key and not measurement_key:
+        return None
+    mapping: dict[str, str] = {}
+    if profile_key:
+        mapping["profile_key"] = profile_key
+    if measurement_key:
+        mapping["measurement_key"] = measurement_key
+    return mapping
 
 
 def _apply_enabled_default_flags(

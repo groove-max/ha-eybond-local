@@ -1,0 +1,167 @@
+{
+  "protocol_family": "modbus_smg",
+  "layout_groups": [
+    {
+      "key": "protocol_1_common",
+      "register_schema_name": "modbus_smg/models/smg_6200.json",
+      "description": "Protocol-1/common SMG identity layout"
+    },
+    {
+      "key": "anenji_protocol_3_10",
+      "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+      "description": "Anenji protocol 3-10 identity layout"
+    }
+  ],
+  "base_layout_groups": [
+    "protocol_1_common"
+  ],
+  "variant_layout_groups": {
+    "anenji_anj_11kw_48v_wifi_p": [
+      "anenji_protocol_3_10"
+    ]
+  },
+  "read_groups": [
+    {
+      "key": "serial_identity",
+      "description": "Serial block for identity seeding"
+    },
+    {
+      "key": "live_identity",
+      "description": "Live block probes used as identity anchors"
+    },
+    {
+      "key": "config_identity",
+      "description": "Config block probes used as identity anchors"
+    },
+    {
+      "key": "aux_identity",
+      "description": "Auxiliary config anchors"
+    },
+    {
+      "key": "scalar_identity",
+      "description": "Scalar register anchors"
+    }
+  ],
+  "anchors": [
+    {
+      "key": "serial",
+      "read_group": "serial_identity",
+      "source_type": "block",
+      "block_key": "serial",
+      "layout_groups": [
+        "protocol_1_common",
+        "anenji_protocol_3_10"
+      ]
+    },
+    {
+      "key": "operating_mode",
+      "read_group": "live_identity",
+      "source_type": "spec",
+      "spec_set_key": "live",
+      "register_key": "operating_mode",
+      "layout_groups": [
+        "protocol_1_common"
+      ]
+    },
+    {
+      "key": "output_rating_voltage",
+      "read_group": "config_identity",
+      "source_type": "spec",
+      "spec_set_key": "config",
+      "register_key": "output_rating_voltage",
+      "layout_groups": [
+        "protocol_1_common"
+      ]
+    },
+    {
+      "key": "output_rating_frequency",
+      "read_group": "config_identity",
+      "source_type": "spec",
+      "spec_set_key": "config",
+      "register_key": "output_rating_frequency",
+      "layout_groups": [
+        "protocol_1_common"
+      ]
+    },
+    {
+      "key": "protocol_number",
+      "read_group": "aux_identity",
+      "source_type": "spec",
+      "spec_set_key": "aux_config",
+      "register_key": "protocol_number",
+      "layout_groups": [
+        "protocol_1_common",
+        "anenji_protocol_3_10"
+      ],
+      "variants": [
+        "anenji_4200_protocol_1",
+        "anenji_anj_11kw_48v_wifi_p"
+      ]
+    },
+    {
+      "key": "device_type",
+      "read_group": "aux_identity",
+      "source_type": "spec",
+      "spec_set_key": "aux_config",
+      "register_key": "device_type",
+      "layout_groups": [
+        "protocol_1_common",
+        "anenji_protocol_3_10"
+      ],
+      "variants": [
+        "anenji_4200_protocol_1",
+        "anenji_anj_11kw_48v_wifi_p"
+      ]
+    },
+    {
+      "key": "rated_power",
+      "read_group": "scalar_identity",
+      "source_type": "scalar",
+      "layout_groups": [
+        "protocol_1_common",
+        "anenji_protocol_3_10"
+      ],
+      "scalar_key": "rated_power_register",
+      "variants": [
+        "default",
+        "family_fallback",
+        "anenji_4200_protocol_1"
+      ]
+    },
+    {
+      "key": "turn_on_mode",
+      "read_group": "aux_identity",
+      "source_type": "spec",
+      "spec_set_key": "aux_config",
+      "register_key": "turn_on_mode",
+      "layout_groups": [
+        "protocol_1_common",
+        "anenji_protocol_3_10"
+      ]
+    },
+    {
+      "key": "remote_switch",
+      "read_group": "aux_identity",
+      "source_type": "spec",
+      "spec_set_key": "aux_config",
+      "register_key": "remote_switch",
+      "layout_groups": [
+        "protocol_1_common",
+        "anenji_protocol_3_10"
+      ]
+    },
+    {
+      "key": "pv_grid_connected_max_power",
+      "read_group": "aux_identity",
+      "source_type": "spec",
+      "spec_set_key": "aux_config",
+      "layout_groups": [
+        "anenji_protocol_3_10"
+      ],
+      "register_key": "pv_grid_connected_max_power",
+      "variants": [
+        "anenji_anj_11kw_48v_wifi_p"
+      ]
+    }
+  ]
+}

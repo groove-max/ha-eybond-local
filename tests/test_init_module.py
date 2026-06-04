@@ -83,7 +83,8 @@ class InitModuleTests(unittest.TestCase):
         prime.assert_called_once_with()
 
     def test_default_enabled_unique_ids_include_derived_energy_defaults(self) -> None:
-        unique_ids = _default_enabled_unique_ids("entry123")
+        with patch.dict(sys.modules, _runtime_entity_key_module_stubs()):
+            unique_ids = _default_enabled_unique_ids("entry123")
 
         self.assertIn("entry123_battery_power", unique_ids)
         self.assertIn("entry123_last_error", unique_ids)
@@ -667,11 +668,17 @@ class InitModuleTests(unittest.TestCase):
                     self.removed.append(entity_id)
 
             registry = _Registry()
+            inverter = types.SimpleNamespace(
+                capabilities=(),
+                capability_presets=(),
+                profile_name="",
+                register_schema_name="",
+            )
             coordinator = types.SimpleNamespace(
                 collector_cloud_family="legacy_binary",
                 current_driver=None,
-                identified_inverter=None,
-                data=types.SimpleNamespace(inverter=None),
+                identified_inverter=inverter,
+                data=types.SimpleNamespace(inverter=inverter),
                 can_expose_capability=lambda _capability: True,
                 can_expose_preset=lambda _preset: True,
             )
@@ -733,6 +740,220 @@ class InitModuleTests(unittest.TestCase):
                 await _async_cleanup_obsolete_entities(hass, entry, coordinator)
 
             self.assertEqual(registry.removed, ["sensor.collector_signal_strength"])
+
+        asyncio.run(_run())
+
+    def test_cleanup_skips_when_effective_metadata_snapshot_is_not_safe(self) -> None:
+        async def _run() -> None:
+            entity_entry = types.SimpleNamespace(
+                unique_id="entry123_pv2_power",
+                entity_id="sensor.anenji_pv2_power",
+            )
+
+            class _Registry:
+                def __init__(self) -> None:
+                    self.removed: list[str] = []
+
+                def async_remove(self, entity_id: str) -> None:
+                    self.removed.append(entity_id)
+
+            registry = _Registry()
+            coordinator = types.SimpleNamespace(
+                identified_inverter=None,
+                effective_metadata_snapshot=types.SimpleNamespace(is_valid=False),
+                effective_metadata=None,
+                current_driver=None,
+                data=types.SimpleNamespace(inverter=None),
+                can_expose_capability=lambda _capability: True,
+                can_expose_preset=lambda _preset: True,
+            )
+            hass = types.SimpleNamespace()
+            entry = types.SimpleNamespace(entry_id="entry123")
+
+            with (
+                patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=[entity_entry],
+                ),
+                self.assertLogs("custom_components.eybond_local", level="DEBUG") as logs,
+            ):
+                await _async_cleanup_obsolete_entities(hass, entry, coordinator)
+
+            self.assertEqual(registry.removed, [])
+            self.assertTrue(
+                any("Skipping obsolete entity cleanup" in message for message in logs.output)
+            )
+
+        asyncio.run(_run())
+
+    def test_cleanup_skips_when_snapshot_falls_back_to_different_profile(self) -> None:
+        async def _run() -> None:
+            entity_entry = types.SimpleNamespace(
+                unique_id="entry123_pv2_power",
+                entity_id="sensor.anenji_pv2_power",
+            )
+
+            class _Registry:
+                def __init__(self) -> None:
+                    self.removed: list[str] = []
+
+                def async_remove(self, entity_id: str) -> None:
+                    self.removed.append(entity_id)
+
+            registry = _Registry()
+            coordinator = types.SimpleNamespace(
+                identified_inverter=None,
+                effective_metadata_snapshot=types.SimpleNamespace(
+                    is_valid=True,
+                    effective_owner_key="modbus_smg",
+                    profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                    register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                ),
+                effective_metadata=types.SimpleNamespace(
+                    effective_owner_key="modbus_smg",
+                    profile_name="smg_modbus.json",
+                    register_schema_name="smg_modbus.json",
+                    profile_metadata=types.SimpleNamespace(source_name="smg_modbus.json"),
+                    register_schema_metadata=types.SimpleNamespace(source_name="smg_modbus.json"),
+                ),
+                current_driver=None,
+                data=types.SimpleNamespace(inverter=None),
+                can_expose_capability=lambda _capability: True,
+                can_expose_preset=lambda _preset: True,
+            )
+            hass = types.SimpleNamespace()
+            entry = types.SimpleNamespace(entry_id="entry123")
+
+            with (
+                patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=[entity_entry],
+                ),
+                self.assertLogs("custom_components.eybond_local", level="DEBUG") as logs,
+            ):
+                await _async_cleanup_obsolete_entities(hass, entry, coordinator)
+
+            self.assertEqual(registry.removed, [])
+            self.assertTrue(
+                any("effective_metadata_mismatch_from_snapshot" in message for message in logs.output)
+            )
+
+        asyncio.run(_run())
+
+    def test_cleanup_uses_safe_snapshot_and_preserves_anenji_pv2_entity(self) -> None:
+        async def _run() -> None:
+            pv2_entry = types.SimpleNamespace(
+                unique_id="entry123_pv2_power",
+                entity_id="sensor.anenji_pv2_power",
+            )
+            legacy_entry = types.SimpleNamespace(
+                unique_id="entry123_legacy_metric",
+                entity_id="sensor.legacy_metric",
+            )
+
+            class _Registry:
+                def __init__(self) -> None:
+                    self.removed: list[str] = []
+
+                def async_remove(self, entity_id: str) -> None:
+                    self.removed.append(entity_id)
+
+            registry = _Registry()
+            fake_driver = types.SimpleNamespace(
+                key="modbus_smg",
+                write_capabilities=(),
+                capability_presets=(),
+            )
+            coordinator = types.SimpleNamespace(
+                identified_inverter=None,
+                effective_metadata_snapshot=types.SimpleNamespace(
+                    is_valid=True,
+                    effective_owner_key="modbus_smg",
+                    profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                    register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                ),
+                effective_metadata=types.SimpleNamespace(
+                    effective_owner_key="modbus_smg",
+                    profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                    register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                    profile_metadata=types.SimpleNamespace(
+                        driver_key="modbus_smg",
+                        protocol_family="modbus_smg",
+                        source_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                        groups=(),
+                        capabilities=(),
+                        presets=(),
+                    ),
+                    register_schema_metadata=types.SimpleNamespace(
+                        driver_key="modbus_smg",
+                        protocol_family="modbus_smg",
+                        source_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                    ),
+                ),
+                current_driver=None,
+                data=types.SimpleNamespace(inverter=None),
+                can_expose_capability=lambda _capability: True,
+                can_expose_preset=lambda _preset: True,
+            )
+            hass = types.SimpleNamespace()
+            entry = types.SimpleNamespace(entry_id="entry123")
+            button_module = types.ModuleType("custom_components.eybond_local.button")
+            button_module._tooling_button_specs = lambda: ()
+            select_module = types.ModuleType("custom_components.eybond_local.select")
+            select_module.runtime_select_keys_for_runtime = (
+                lambda *, has_inverter_identity=True: ()
+            )
+            text_module = types.ModuleType("custom_components.eybond_local.text")
+            text_module.collector_text_keys_for_runtime = lambda: ()
+            tooling_module = types.ModuleType("custom_components.eybond_local.tooling")
+            tooling_module.tooling_button_keys_for_runtime = (
+                lambda capability_keys, profile_name, has_inverter_identity=True: ()
+            )
+            derived_energy_module = types.ModuleType("custom_components.eybond_local.derived_energy")
+            derived_energy_module.derived_energy_cycle_descriptions_for_keys = lambda _keys: ()
+            derived_energy_module.derived_energy_descriptions_for_keys = lambda _keys: ()
+            derived_energy_module.derived_energy_entity_descriptions_for_keys = lambda _keys: ()
+
+            with (
+                patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=[pv2_entry, legacy_entry],
+                ),
+                patch(
+                    "custom_components.eybond_local.platform_context.get_driver",
+                    side_effect=lambda key: fake_driver if key == fake_driver.key else None,
+                ),
+                patch(
+                    "custom_components.eybond_local.drivers.registry.measurements_for_runtime",
+                    return_value=(
+                        MeasurementDescription(
+                            key="pv2_power",
+                            name="PV2 Power",
+                            enabled_default=True,
+                        ),
+                    ),
+                ),
+                patch(
+                    "custom_components.eybond_local.drivers.registry.binary_sensors_for_runtime",
+                    return_value=(),
+                ),
+                patch.dict(
+                    sys.modules,
+                    {
+                        "custom_components.eybond_local.button": button_module,
+                        "custom_components.eybond_local.select": select_module,
+                        "custom_components.eybond_local.text": text_module,
+                        "custom_components.eybond_local.tooling": tooling_module,
+                        "custom_components.eybond_local.derived_energy": derived_energy_module,
+                    },
+                ),
+            ):
+                await _async_cleanup_obsolete_entities(hass, entry, coordinator)
+
+            self.assertEqual(registry.removed, ["sensor.legacy_metric"])
 
         asyncio.run(_run())
 
@@ -944,8 +1165,14 @@ class InitModuleTests(unittest.TestCase):
                 def has_inverter_identity(self) -> bool:
                     return bool(getattr(self.data, "inverter", None))
 
-                def mark_entity_platforms_initialized(self, *, has_inverter_identity=None) -> None:
+                def mark_entity_platforms_initialized(
+                    self,
+                    *,
+                    has_inverter_identity=None,
+                    has_driver_fallback=None,
+                ) -> None:
                     self.platforms_started_with_inverter_identity = has_inverter_identity
+                    self.platforms_started_with_driver_fallback = has_driver_fallback
                     self.platforms_initialized = True
 
             runtime_coordinator_module = types.ModuleType(

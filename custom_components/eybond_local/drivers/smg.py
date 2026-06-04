@@ -15,11 +15,12 @@ from ..models import (
 )
 from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
 from ..metadata.model_binding_catalog_loader import (
-    load_driver_model_binding_catalog,
     resolve_driver_model_binding,
 )
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
+from ..metadata.smg_identity_anchor_catalog_loader import load_smg_identity_anchor_catalog
+from ..metadata.smg_identity_rules import SmgIdentityEvidence, score_smg_identity_candidates
 from .base import InverterDriver
 
 
@@ -32,12 +33,19 @@ _SMG_VARIANT_MODEL_NAMES = {
 _SMG_DEFAULT_RATED_POWERS = frozenset({6200})
 _SMG_ANENJI_4200_PROTOCOL_1_VARIANT = "anenji_4200_protocol_1"
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
+_SMG_ANENJI_11KW_VARIANT = "anenji_anj_11kw_48v_wifi_p"
 _SMG_PROTOCOL_1_BASE_VARIANTS = frozenset(
     {
         _SMG_ANENJI_4200_PROTOCOL_1_VARIANT,
         "default",
         _SMG_FAMILY_FALLBACK_VARIANT,
     }
+)
+_SMG_COMPATIBILITY_FALLBACK_VARIANTS: tuple[str, ...] = (
+    "default",
+    _SMG_ANENJI_4200_PROTOCOL_1_VARIANT,
+    _SMG_ANENJI_11KW_VARIANT,
+    _SMG_FAMILY_FALLBACK_VARIANT,
 )
 _SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
     RegisterValueSpec(key="device_type", register=171),
@@ -107,99 +115,126 @@ class SmgModbusDriver(InverterDriver):
         target: ProbeTarget,
     ) -> DetectedInverter | None:
         session = self._session(transport, target)
-        for binding in _smg_bindings():
-            try:
-                schema = load_register_schema(binding.register_schema_name)
-            except Exception:
-                continue
+        attempted_variant_keys: set[str] = set()
 
-            try:
-                profile = load_driver_profile(binding.profile_name) if binding.profile_name else None
-            except Exception:
-                continue
+        try:
+            identity_binding = await _resolve_smg_identity_binding(session)
+        except Exception:
+            identity_binding = None
+        if identity_binding is not None:
+            attempted_variant_keys.add(identity_binding.variant_key)
+            detected = await self._async_probe_binding(session, target, identity_binding)
+            if detected is not None:
+                return detected
 
-            try:
-                serial_block = await session.read_holding(
-                    schema.block("serial").start,
-                    schema.block("serial").count,
-                )
-                serial_number = _decode_ascii_words(serial_block)
-                if len(serial_number) < 6:
-                    continue
+        fallback_bindings = _compatibility_fallback_bindings(attempted_variant_keys)
+        if not fallback_bindings:
+            return None
 
-                live_block = await session.read_holding(
-                    schema.block("live").start,
-                    schema.block("live").count,
-                )
-                live_values = _decode_block(
-                    schema.block("live").start,
-                    live_block,
-                    _specs_for_block(
-                        schema.spec_set("live"),
-                        schema.block("live").start,
-                        schema.block("live").count,
-                    ),
-                )
-
-                config_block = await session.read_holding(
-                    schema.block("config").start,
-                    schema.block("config").count,
-                )
-                config_values = _decode_block(
-                    schema.block("config").start,
-                    config_block,
-                    _specs_for_block(
-                        schema.spec_set("config"),
-                        schema.block("config").start,
-                        schema.block("config").count,
-                    ),
-                )
-                config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
-                rated_power = await _read_rated_power(session, schema)
-            except Exception:
-                continue
-
-            if not _is_valid_smg_probe(
-                schema,
-                live_values,
-                config_values,
-                binding.variant_key,
-                rated_power=rated_power,
-            ):
-                continue
-
-            details = dict(config_values)
-            details.update(
-                await _read_optional_specs(
-                    session,
-                    _optional_probe_specs_for_variant(binding.variant_key),
-                )
-            )
-            details.update(
-                await _read_optional_ascii_ranges(
-                    session,
-                    _optional_ascii_probe_ranges_for_variant(binding.variant_key),
-                )
-            )
-            if rated_power:
-                details["rated_power"] = rated_power
-
-            return DetectedInverter(
-                driver_key=self.key,
-                protocol_family="modbus_smg",
-                model_name=_smg_model_name(binding.variant_key, rated_power),
-                serial_number=serial_number,
-                probe_target=target,
-                variant_key=binding.variant_key,
-                details=details,
-                profile_name=binding.profile_name,
-                register_schema_name=binding.register_schema_name,
-                capability_groups=profile.groups if profile is not None else (),
-                capabilities=profile.capabilities if profile is not None else (),
-                capability_presets=profile.presets if profile is not None else (),
-            )
+        # Keep legacy full-schema probing as bounded emergency compatibility only.
+        for binding in fallback_bindings:
+            detected = await self._async_probe_binding(session, target, binding)
+            if detected is not None:
+                return detected
 
         return None
+
+    async def _async_probe_binding(
+        self,
+        session: ModbusSession,
+        target: ProbeTarget,
+        binding,
+    ) -> DetectedInverter | None:
+        try:
+            schema = load_register_schema(binding.register_schema_name)
+        except Exception:
+            return None
+
+        try:
+            profile = load_driver_profile(binding.profile_name) if binding.profile_name else None
+        except Exception:
+            return None
+
+        try:
+            serial_block = await session.read_holding(
+                schema.block("serial").start,
+                schema.block("serial").count,
+            )
+            serial_number = _decode_ascii_words(serial_block)
+            if len(serial_number) < 6:
+                return None
+
+            live_block = await session.read_holding(
+                schema.block("live").start,
+                schema.block("live").count,
+            )
+            live_values = _decode_block(
+                schema.block("live").start,
+                live_block,
+                _specs_for_block(
+                    schema.spec_set("live"),
+                    schema.block("live").start,
+                    schema.block("live").count,
+                ),
+            )
+
+            config_block = await session.read_holding(
+                schema.block("config").start,
+                schema.block("config").count,
+            )
+            config_values = _decode_block(
+                schema.block("config").start,
+                config_block,
+                _specs_for_block(
+                    schema.spec_set("config"),
+                    schema.block("config").start,
+                    schema.block("config").count,
+                ),
+            )
+            config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
+            rated_power = await _read_rated_power(session, schema)
+        except Exception:
+            return None
+
+        if not _is_valid_smg_probe(
+            schema,
+            live_values,
+            config_values,
+            binding.variant_key,
+            rated_power=rated_power,
+        ):
+            return None
+
+        details = dict(config_values)
+        details.update(
+            await _read_optional_specs(
+                session,
+                _optional_probe_specs_for_variant(binding.variant_key),
+            )
+        )
+        details.update(
+            await _read_optional_ascii_ranges(
+                session,
+                _optional_ascii_probe_ranges_for_variant(binding.variant_key),
+            )
+        )
+        if rated_power:
+            details["rated_power"] = rated_power
+
+        return DetectedInverter(
+            driver_key=self.key,
+            protocol_family="modbus_smg",
+            model_name=_smg_model_name(binding.variant_key, rated_power),
+            serial_number=serial_number,
+            probe_target=target,
+            variant_key=binding.variant_key,
+            details=details,
+            profile_name=binding.profile_name,
+            register_schema_name=binding.register_schema_name,
+            capability_groups=profile.groups if profile is not None else (),
+            capabilities=profile.capabilities if profile is not None else (),
+            capability_presets=profile.presets if profile is not None else (),
+        )
 
     async def async_read_values(
         self,
@@ -1655,18 +1690,19 @@ def _schema_for_inverter(
     return load_register_schema(schema_name)
 
 
-def _smg_bindings():
-    catalog = load_driver_model_binding_catalog()
-    bindings = [binding for binding in catalog.bindings.values() if binding.driver_key == "modbus_smg"]
-    return tuple(sorted(bindings, key=_smg_binding_sort_key))
-
-
-def _smg_binding_sort_key(binding) -> tuple[int, str]:
-    if binding.variant_key == _SMG_FAMILY_FALLBACK_VARIANT:
-        return (2, binding.variant_key)
-    if binding.variant_key == "default":
-        return (1, binding.variant_key)
-    return (0, binding.variant_key)
+def _compatibility_fallback_bindings(attempted_variant_keys: set[str]):
+    fallback_bindings = []
+    for variant_key in _SMG_COMPATIBILITY_FALLBACK_VARIANTS:
+        if variant_key in attempted_variant_keys:
+            continue
+        if variant_key == "default":
+            binding = _smg_default_binding()
+        else:
+            binding = resolve_driver_model_binding("modbus_smg", variant_key=variant_key)
+        if binding is None:
+            continue
+        fallback_bindings.append(binding)
+    return tuple(fallback_bindings)
 
 
 def _optional_probe_specs_for_variant(variant_key: str) -> tuple[RegisterValueSpec, ...]:
@@ -1751,6 +1787,197 @@ async def _read_rated_power(session: ModbusSession, schema) -> int:
         return (await session.read_holding(rated_power_register, 1))[0]
     except ModbusError:
         return 0
+
+
+async def _resolve_smg_identity_binding(session: ModbusSession):
+    catalog = load_smg_identity_anchor_catalog()
+    evidence = SmgIdentityEvidence(protocol_family="modbus_smg", anchors={})
+    selected_binding = None
+
+    evidence = await _read_smg_identity_evidence_for_layout_groups(
+        session,
+        catalog,
+        catalog.base_layout_groups,
+        existing_anchors=evidence.anchors,
+    )
+    selected_binding = _select_smg_identity_binding(evidence)
+    if selected_binding is not None and selected_binding.variant_key != _SMG_FAMILY_FALLBACK_VARIANT:
+        return selected_binding
+
+    attempted_layout_groups = set(catalog.base_layout_groups)
+    routed_layout_group_keys = {
+        layout_group_key
+        for configured_layout_groups in catalog.variant_layout_groups.values()
+        for layout_group_key in configured_layout_groups
+        if layout_group_key not in attempted_layout_groups
+    }
+    layout_groups = tuple(
+        layout_group_key
+        for layout_group_key in catalog.layout_groups
+        if layout_group_key in routed_layout_group_keys
+    )
+    if layout_groups:
+        evidence = await _read_smg_identity_evidence_for_layout_groups(
+            session,
+            catalog,
+            layout_groups,
+            existing_anchors=evidence.anchors,
+        )
+        selected_binding = _select_smg_identity_binding(evidence)
+        if selected_binding is not None and selected_binding.variant_key != _SMG_FAMILY_FALLBACK_VARIANT:
+            return selected_binding
+
+    return selected_binding
+
+
+async def _read_smg_identity_evidence_for_layout_groups(
+    session: ModbusSession,
+    catalog,
+    layout_group_keys: tuple[str, ...],
+    *,
+    existing_anchors: dict[str, object] | None = None,
+) -> SmgIdentityEvidence:
+    anchors = dict(existing_anchors or {})
+
+    for layout_group_key in layout_group_keys:
+        layout_group = catalog.layout_groups.get(layout_group_key)
+        if layout_group is None:
+            continue
+        evidence = await _read_smg_identity_evidence(
+            session,
+            layout_group.register_schema_name,
+            catalog=catalog,
+            layout_group_keys=(layout_group_key,),
+            existing_anchors=anchors,
+        )
+        anchors.update(evidence.anchors)
+
+    return SmgIdentityEvidence(protocol_family="modbus_smg", anchors=anchors)
+
+
+async def _read_smg_identity_evidence(
+    session: ModbusSession,
+    register_schema_name: str,
+    *,
+    catalog=None,
+    layout_group_keys: tuple[str, ...] = (),
+    existing_anchors: dict[str, object] | None = None,
+) -> SmgIdentityEvidence:
+    schema = load_register_schema(register_schema_name)
+    if catalog is None:
+        catalog = load_smg_identity_anchor_catalog()
+    selected_layout_group_keys = set(layout_group_keys or catalog.layout_groups)
+    anchors = dict(existing_anchors or {})
+
+    for group_key in catalog.read_groups:
+        group_anchors = tuple(
+            anchor
+            for anchor in catalog.anchors_for_group(group_key)
+            if any(layout_group_key in selected_layout_group_keys for layout_group_key in anchor.layout_groups)
+        )
+        if not group_anchors:
+            continue
+
+        block_values = await _read_identity_block_anchors(session, schema, group_anchors)
+        if block_values:
+            anchors.update(block_values)
+
+        spec_values = await _read_identity_spec_anchors(session, schema, group_anchors)
+        if spec_values:
+            anchors.update(spec_values)
+
+        scalar_values = await _read_identity_scalar_anchors(session, schema, group_anchors)
+        if scalar_values:
+            anchors.update(scalar_values)
+
+    return SmgIdentityEvidence(protocol_family="modbus_smg", anchors=anchors)
+
+
+async def _read_identity_block_anchors(
+    session: ModbusSession,
+    schema,
+    anchors,
+) -> dict[str, object]:
+    decoded: dict[str, object] = {}
+    for anchor in anchors:
+        if anchor.source_type != "block":
+            continue
+        try:
+            block = schema.block(anchor.block_key)
+            raw_values = await session.read_holding(block.start, block.count)
+        except Exception as exc:
+            if not _is_optional_spec_error(exc):
+                raise
+            continue
+        text = _decode_ascii_words(raw_values).strip()
+        if len(text) >= 6:
+            decoded[anchor.key] = text
+    return decoded
+
+
+async def _read_identity_spec_anchors(
+    session: ModbusSession,
+    schema,
+    anchors,
+) -> dict[str, object]:
+    specs: list[RegisterValueSpec] = []
+    for anchor in anchors:
+        if anchor.source_type != "spec":
+            continue
+        spec = _identity_anchor_spec(schema, anchor.spec_set_key, anchor.register_key)
+        if spec is not None:
+            specs.append(spec)
+    return await _read_optional_specs(session, tuple(specs))
+
+
+async def _read_identity_scalar_anchors(
+    session: ModbusSession,
+    schema,
+    anchors,
+) -> dict[str, object]:
+    specs: list[RegisterValueSpec] = []
+    for anchor in anchors:
+        if anchor.source_type != "scalar":
+            continue
+        register = schema.scalar_registers.get(anchor.scalar_key, 0)
+        if register <= 0:
+            continue
+        specs.append(RegisterValueSpec(key=anchor.key, register=register))
+    return await _read_optional_specs(session, tuple(specs))
+
+
+def _identity_anchor_spec(schema, spec_set_key: str, register_key: str) -> RegisterValueSpec | None:
+    for spec in schema.spec_set(spec_set_key):
+        if spec.key == register_key:
+            return spec
+    return None
+
+
+def _select_smg_identity_binding(evidence: SmgIdentityEvidence):
+    candidates = score_smg_identity_candidates(evidence)
+    if not candidates:
+        return None
+
+    candidate = candidates[0]
+    if candidate.variant_key == _SMG_FAMILY_FALLBACK_VARIANT and not _has_smg_family_identity_evidence(
+        evidence.anchors
+    ):
+        return None
+
+    return resolve_driver_model_binding("modbus_smg", variant_key=candidate.variant_key)
+
+
+def _has_smg_family_identity_evidence(anchors: dict[str, object] | Any) -> bool:
+    return any(
+        key in anchors
+        for key in (
+            "serial",
+            "operating_mode",
+            "protocol_number",
+            "device_type",
+            "rated_power",
+        )
+    )
 
 
 def _smg_model_name(variant_key: str, rated_power: int) -> str:

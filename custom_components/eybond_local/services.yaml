@@ -66,14 +66,14 @@ bind_collector_to_home_assistant:
         text:
     confirm_redirect:
       name: Confirm callback redirect to Home Assistant
-      description: Must be enabled to acknowledge that the collector callback target will move away from SmartESS and over to this Home Assistant listener.
+      description: Must be enabled to acknowledge that the collector callback target will move away from its current cloud endpoint and over to this Home Assistant listener.
       required: true
       selector:
         boolean:
 
 apply_collector_changes:
   name: Apply collector changes
-  description: Trigger SmartESS collector parameter 29 to apply staged collector-side settings. This may disconnect the current session while the collector restarts networking.
+  description: Trigger collector parameter 29 to apply staged collector-side settings. This may disconnect the current session while the collector restarts networking.
   fields:
     entry_id:
       name: Config entry ID
@@ -90,7 +90,7 @@ apply_collector_changes:
 
 reboot_collector:
   name: Reboot collector
-  description: Trigger the collector restart intent over SmartESS collector parameter 29. At the protocol level this currently uses the same local system-action path as apply.
+  description: Trigger the collector restart intent over collector parameter 29. At the protocol level this currently uses the same local system-action path as apply.
   fields:
     entry_id:
       name: Config entry ID
@@ -106,8 +106,8 @@ reboot_collector:
         boolean:
 
 rollback_collector_server_endpoint:
-  name: Restore SmartESS access
-  description: Restore collector parameter 21 to the last previous endpoint remembered by the current runtime session. Use this after binding the collector to Home Assistant when you want SmartESS cloud access back. This rollback is only available after a prior endpoint change in the same Home Assistant runtime.
+  name: Restore cloud access
+  description: Restore collector parameter 21 to the last previous endpoint remembered by the current runtime session. Use this after binding the collector to Home Assistant when you want cloud-app access back. This rollback is only available after a prior endpoint change in the same Home Assistant runtime.
   fields:
     entry_id:
       name: Config entry ID
@@ -123,8 +123,8 @@ rollback_collector_server_endpoint:
       selector:
         boolean:
     confirm_redirect:
-      name: Confirm SmartESS restore
-      description: Must be enabled to acknowledge that the collector callback target will move away from Home Assistant and back to the remembered SmartESS endpoint.
+      name: Confirm cloud restore
+      description: Must be enabled to acknowledge that the collector callback target will move away from Home Assistant and back to the remembered cloud endpoint.
       required: true
       selector:
         boolean:
@@ -148,7 +148,7 @@ start_proxy_capture:
         boolean:
     confirm_redirect:
       name: Confirm collector redirect
-      description: Must be enabled to acknowledge that starting capture may temporarily move collector parameter 21 away from SmartESS and restore it afterward.
+      description: Must be enabled to acknowledge that starting capture may temporarily move collector parameter 21 away from the current cloud endpoint and restore it afterward.
       required: false
       default: false
       selector:
@@ -179,7 +179,7 @@ stop_proxy_capture:
 
 set_collector_server_endpoint:
   name: Set collector server endpoint
-  description: Guarded SmartESS collector parameter 21 write for the active callback endpoint. Use only when you intentionally want the collector to call back to a different host or port.
+  description: Guarded collector parameter 21 write for the active callback endpoint. Use only when you intentionally want the collector to call back to a different host or port.
   fields:
     entry_id:
       name: Config entry ID

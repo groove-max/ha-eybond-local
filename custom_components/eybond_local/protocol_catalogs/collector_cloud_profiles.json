@@ -1,0 +1,22 @@
+{
+  "profiles": [
+    {
+      "family": "legacy_binary",
+      "default_host": "ess.eybond.com",
+      "known_hosts": ["ess.eybond.com"],
+      "known_ports": [502]
+    },
+    {
+      "family": "smartess_at",
+      "default_host": "dtu_ess.eybond.com",
+      "known_hosts": ["dtu_ess.eybond.com"],
+      "known_ports": [18899, 38899]
+    },
+    {
+      "family": "smartvalue_at",
+      "default_host": "m2m.eybond.com",
+      "known_hosts": ["m2m.eybond.com"],
+      "known_ports": []
+    }
+  ]
+}

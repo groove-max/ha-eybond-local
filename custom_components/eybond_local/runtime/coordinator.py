@@ -83,8 +83,6 @@ from ..const import (
 from ..connection.models import build_connection_spec
 from ..collector.entity_scope import is_collector_entity_key
 from ..control_policy import (
-    can_expose_capability,
-    can_expose_preset,
     controls_enabled,
     controls_reason,
     controls_summary,
@@ -93,6 +91,11 @@ from ..drivers.registry import get_driver
 from ..drivers.registry import all_write_capabilities
 from ..fixtures.utils import anonymize_fixture_json, build_command_fixture_responses
 from ..metadata.effective_metadata import resolve_effective_metadata_selection
+from ..metadata.effective_metadata_snapshot import (
+    EffectiveMetadataSnapshot,
+    build_effective_metadata_snapshot_from_runtime,
+    effective_metadata_snapshot_from_dict,
+)
 from ..metadata.local_metadata import (
     clear_local_metadata_loader_caches,
     create_local_profile_draft,
@@ -114,7 +117,11 @@ from ..models import CapabilityPreset, RuntimeSnapshot, WriteCapability
 from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
-from ..schema import build_runtime_ui_schema
+from ..schema import (
+    build_runtime_ui_schema,
+    capability_write_exposure_allowed,
+    preset_write_exposure_allowed,
+)
 from ..support.bundle import build_support_bundle_payload, export_support_bundle
 from ..support.cloud_evidence import (
     fetch_and_export_smartess_device_bundle_cloud_evidence,
@@ -160,6 +167,11 @@ _HIDDEN_HA_ONLY_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
 
 _DEFAULT_PROXY_CAPTURE_PORT = 18899
 _COLLECTOR_HA_PRIMARY_RECONCILE_COOLDOWN_SECONDS = 300.0
+_EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY = "effective_metadata_snapshot"
+_CONF_COLLECTOR_CLOUD_PROFILE_KEY = "collector_cloud_profile_key"
+_CONF_COLLECTOR_CLOUD_PROFILE_LABEL = "collector_cloud_profile_label"
+_CONF_COLLECTOR_CLOUD_PROFILE_SOURCE = "collector_cloud_profile_source"
+_CONF_COLLECTOR_CLOUD_PROFILE_CONFIDENCE = "collector_cloud_profile_confidence"
 
 _LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
     "proxy_capture_notification_title": {
@@ -294,6 +306,12 @@ def _known_collector_cloud_family(value: object) -> str:
     if family in {"", COLLECTOR_CLOUD_FAMILY_UNKNOWN}:
         return ""
     return family
+
+
+def _known_collector_cloud_profile_value(value: object) -> str:
+    """Return one normalized non-empty collector cloud profile metadata value."""
+
+    return str(value or "").strip()
 
 
 def _collector_cloud_family_from_endpoint_shape(endpoint: object) -> str:
@@ -476,6 +494,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._entity_platforms_initialized = False
         self._entity_platform_reload_requested = False
         self._entity_platforms_loaded_with_inverter_identity = False
+        self._entity_platforms_loaded_with_driver_fallback = False
+        self._platform_loaded_effective_metadata_signature: tuple[str, str, str] = (
+            "",
+            "",
+            "",
+        )
         self._shutdown_lock = asyncio.Lock()
         self._shutdown_complete = False
 
@@ -638,6 +662,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self,
         *,
         has_inverter_identity: bool | None = None,
+        has_driver_fallback: bool | None = None,
     ) -> None:
         """Record that Home Assistant entity platforms finished loading."""
 
@@ -647,9 +672,77 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if has_inverter_identity is None
             else bool(has_inverter_identity)
         )
+        loaded_with_driver_fallback = bool(has_driver_fallback)
         self._entity_platforms_loaded_with_inverter_identity = loaded_with_inverter_identity
+        self._entity_platforms_loaded_with_driver_fallback = loaded_with_driver_fallback
+        self._platform_loaded_effective_metadata_signature = (
+            self._effective_metadata_reload_signature_from_snapshot(
+                self.effective_metadata_snapshot
+            )
+        )
         if self.has_inverter_identity and not loaded_with_inverter_identity:
             self._request_entry_reload_for_late_identity()
+
+    def _effective_metadata_reload_signature_from_snapshot(
+        self,
+        snapshot: EffectiveMetadataSnapshot,
+    ) -> tuple[str, str, str]:
+        """Return one strict drift signature used for controlled reload checks."""
+
+        if not snapshot.is_valid:
+            return ("", "", "")
+        variant_key = str(getattr(snapshot, "variant_key", "") or "").strip()
+        profile_name = str(getattr(snapshot, "profile_name", "") or "").strip()
+        register_schema_name = str(
+            getattr(snapshot, "register_schema_name", "") or ""
+        ).strip()
+        if not (variant_key and profile_name and register_schema_name):
+            return ("", "", "")
+        return (variant_key, profile_name, register_schema_name)
+
+    def _request_entry_reload_for_metadata_drift(
+        self,
+        *,
+        setup_signature: tuple[str, str, str],
+        runtime_signature: tuple[str, str, str],
+    ) -> None:
+        """Reload once when effective metadata drifts after platforms are loaded."""
+
+        if not getattr(self, "_entity_platforms_initialized", False):
+            return
+        if getattr(self, "_entity_platform_reload_requested", False):
+            return
+        if not (
+            getattr(self, "_entity_platforms_loaded_with_inverter_identity", False)
+            or getattr(self, "_entity_platforms_loaded_with_driver_fallback", False)
+        ):
+            return
+        if not all(runtime_signature):
+            return
+
+        first_runtime_signature = not any(setup_signature)
+        if not first_runtime_signature and not all(setup_signature):
+            return
+        if not first_runtime_signature and setup_signature == runtime_signature:
+            return
+
+        self._entity_platform_reload_requested = True
+        if first_runtime_signature:
+            logger.info(
+                "Reloading EyeBond entry %s after first confirmed effective metadata snapshot (%s)",
+                self.config_entry.entry_id,
+                "/".join(runtime_signature),
+            )
+        else:
+            logger.info(
+                "Reloading EyeBond entry %s after effective metadata drift (%s -> %s)",
+                self.config_entry.entry_id,
+                "/".join(setup_signature),
+                "/".join(runtime_signature),
+            )
+        self.hass.async_create_task(
+            self.hass.config_entries.async_reload(self.config_entry.entry_id)
+        )
 
     def _request_entry_reload_for_late_identity(self) -> None:
         """Reload once when runtime confirms an inverter after platform setup."""
@@ -927,6 +1020,38 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 if getattr(collector, "smartess_device_address", None) is not None
                 else snapshot.values.get("smartess_device_address"),
             )
+            collector_cloud_profile_key = (
+                getattr(collector, "collector_cloud_profile_key", "")
+                or getattr(collector, "smartess_protocol_profile_key", "")
+                or snapshot.values.get("collector_cloud_profile_key")
+                or snapshot.values.get("smartess_protocol_profile_key")
+                or snapshot.values.get("smartess_profile_key")
+            )
+            _set_data_if_value(
+                _CONF_COLLECTOR_CLOUD_PROFILE_KEY,
+                collector_cloud_profile_key,
+            )
+            _set_data_if_value(
+                _CONF_COLLECTOR_CLOUD_PROFILE_LABEL,
+                getattr(collector, "collector_cloud_profile_label", "")
+                or getattr(collector, "smartess_protocol_name", "")
+                or getattr(collector, "smartess_protocol_asset_name", "")
+                or snapshot.values.get("collector_cloud_profile_label")
+                or snapshot.values.get("smartess_protocol_name")
+                or snapshot.values.get("smartess_protocol_asset_name"),
+            )
+            _set_data_if_value(
+                _CONF_COLLECTOR_CLOUD_PROFILE_SOURCE,
+                getattr(collector, "collector_cloud_profile_source", "")
+                or snapshot.values.get("collector_cloud_profile_source")
+                or ("runtime_observed" if collector_cloud_profile_key else ""),
+            )
+            _set_data_if_value(
+                _CONF_COLLECTOR_CLOUD_PROFILE_CONFIDENCE,
+                getattr(collector, "collector_cloud_profile_confidence", "")
+                or snapshot.values.get("collector_cloud_profile_confidence")
+                or ("high" if collector_cloud_profile_key else ""),
+            )
 
         inverter = snapshot.inverter
         if inverter is not None:
@@ -953,6 +1078,31 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     updated_data[CONF_DRIVER_HINT] = driver_key
                 if str(updated_options.get(CONF_DRIVER_HINT) or "").strip() in {"", DRIVER_HINT_AUTO}:
                     updated_options[CONF_DRIVER_HINT] = driver_key
+
+        current_effective_snapshot = effective_metadata_snapshot_from_dict(
+            current_options.get(_EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY)
+        )
+        updated_effective_snapshot = self._build_runtime_effective_metadata_snapshot(
+            snapshot,
+            entry_data=updated_data,
+            current_snapshot=current_effective_snapshot,
+        )
+        if updated_effective_snapshot is not None:
+            updated_snapshot_data = updated_effective_snapshot.as_dict()
+            if updated_snapshot_data != current_effective_snapshot.as_dict():
+                updated_options[_EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY] = (
+                    updated_snapshot_data
+                )
+            self._request_entry_reload_for_metadata_drift(
+                setup_signature=getattr(
+                    self,
+                    "_platform_loaded_effective_metadata_signature",
+                    ("", "", ""),
+                ),
+                runtime_signature=self._effective_metadata_reload_signature_from_snapshot(
+                    updated_effective_snapshot
+                ),
+            )
 
         if updated_data == current_data and updated_options == current_options:
             return
@@ -1000,6 +1150,73 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         if gained_inverter_identity and (not had_inverter_identity or platforms_need_identity_reload):
             self._request_entry_reload_for_late_identity()
+
+    def _build_runtime_effective_metadata_snapshot(
+        self,
+        snapshot: RuntimeSnapshot,
+        *,
+        entry_data: dict[str, Any],
+        current_snapshot,
+    ):
+        """Return one persisted snapshot only when live runtime identity is confirmed."""
+
+        inverter = snapshot.inverter
+        if inverter is None:
+            return None
+
+        model_name = str(getattr(inverter, "model_name", "") or "").strip()
+        serial_number = str(getattr(inverter, "serial_number", "") or "").strip()
+        if not (model_name or serial_number):
+            return None
+
+        # Persist only when runtime supplied concrete metadata, not driver defaults alone.
+        profile_name = str(getattr(inverter, "profile_name", "") or "").strip()
+        register_schema_name = str(
+            getattr(inverter, "register_schema_name", "") or ""
+        ).strip()
+        if not profile_name or not register_schema_name:
+            return None
+
+        effective_selection = resolve_effective_metadata_selection(
+            inverter=inverter,
+            driver=self.current_driver,
+            collector=snapshot.collector,
+            entry_data=entry_data,
+        )
+        confidence = str(
+            entry_data.get(CONF_DETECTION_CONFIDENCE)
+            or self.detection_confidence
+            or "none"
+        ).strip()
+        stable_snapshot = build_effective_metadata_snapshot_from_runtime(
+            inverter=inverter,
+            selection=effective_selection,
+            confidence=confidence,
+            generation=current_snapshot.generation,
+            generated_at=current_snapshot.generated_at,
+        )
+        if not stable_snapshot.is_valid:
+            return None
+        if (
+            stable_snapshot.effective_owner_key == current_snapshot.effective_owner_key
+            and stable_snapshot.effective_owner_name == current_snapshot.effective_owner_name
+            and stable_snapshot.variant_key == current_snapshot.variant_key
+            and stable_snapshot.profile_name == current_snapshot.profile_name
+            and stable_snapshot.register_schema_name == current_snapshot.register_schema_name
+            and stable_snapshot.confidence == current_snapshot.confidence
+        ):
+            return None
+
+        new_snapshot = build_effective_metadata_snapshot_from_runtime(
+            inverter=inverter,
+            selection=effective_selection,
+            confidence=confidence,
+            generation=max(int(current_snapshot.generation), 0) + 1,
+            generated_at=datetime.now(timezone.utc),
+        )
+        if not new_snapshot.is_valid:
+            return None
+        return new_snapshot
 
     def _endpoint_effective_parts(self, endpoint: str) -> tuple[str, int, str]:
         try:
@@ -1138,6 +1355,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         collector_cloud_family = self.collector_cloud_family
         if collector_cloud_family:
             snapshot.values["collector_cloud_family"] = collector_cloud_family
+        collector_cloud_profile_key = self.collector_cloud_profile_key
+        if collector_cloud_profile_key:
+            snapshot.values["collector_cloud_profile_key"] = collector_cloud_profile_key
+        collector_cloud_profile_label = self.collector_cloud_profile_label
+        if collector_cloud_profile_label:
+            snapshot.values["collector_cloud_profile_label"] = collector_cloud_profile_label
+        collector_cloud_profile_source = self.collector_cloud_profile_source
+        if collector_cloud_profile_source:
+            snapshot.values["collector_cloud_profile_source"] = collector_cloud_profile_source
+        collector_cloud_profile_confidence = self.collector_cloud_profile_confidence
+        if collector_cloud_profile_confidence:
+            snapshot.values["collector_cloud_profile_confidence"] = (
+                collector_cloud_profile_confidence
+            )
         await self._async_reconcile_collector_operation_mode_endpoint(snapshot)
         snapshot.values["connection_type"] = self.config_entry.data.get(CONF_CONNECTION_TYPE, "eybond")
         snapshot.values["collector_operation_mode"] = self.collector_operation_mode
@@ -1146,6 +1377,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot.values["controls_enabled"] = self.controls_enabled
         snapshot.values["control_policy_reason"] = self.controls_reason
         snapshot.values["control_policy_summary"] = self.controls_summary
+        write_exposure_context = self._write_exposure_context()
+        snapshot.values["effective_variant_key"] = write_exposure_context["variant_key"]
+        snapshot.values["effective_profile_name"] = write_exposure_context["profile_name"]
+        snapshot.values["effective_profile_source_scope"] = write_exposure_context[
+            "profile_source_scope"
+        ]
+        snapshot.values["effective_schema_source_scope"] = write_exposure_context[
+            "schema_source_scope"
+        ]
         snapshot.values.update(self._support_workflow_values(snapshot))
         snapshot.values.update(self._collector_onboarding_values(snapshot))
         snapshot.values.update(self._tooling_values)
@@ -1857,6 +2097,128 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return ""
 
     @property
+    def collector_cloud_profile_key(self) -> str:
+        """Return the best available observed collector cloud profile key."""
+
+        collector = getattr(self.data, "collector", None)
+        key = _known_collector_cloud_profile_value(
+            getattr(collector, "collector_cloud_profile_key", "")
+        )
+        if key:
+            return key
+        key = _known_collector_cloud_profile_value(
+            getattr(collector, "smartess_protocol_profile_key", "")
+        )
+        if key:
+            return key
+
+        values = getattr(self.data, "values", {})
+        key = _known_collector_cloud_profile_value(values.get("collector_cloud_profile_key"))
+        if key:
+            return key
+        key = _known_collector_cloud_profile_value(values.get("smartess_protocol_profile_key"))
+        if key:
+            return key
+        key = _known_collector_cloud_profile_value(values.get("smartess_profile_key"))
+        if key:
+            return key
+
+        config_entry = getattr(self, "config_entry", None)
+        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
+        key = _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY))
+        if key:
+            return key
+        return _known_collector_cloud_profile_value(config_data.get(CONF_SMARTESS_PROFILE_KEY))
+
+    @property
+    def collector_cloud_profile_label(self) -> str:
+        """Return the best available observed collector cloud profile label."""
+
+        collector = getattr(self.data, "collector", None)
+        for candidate in (
+            getattr(collector, "collector_cloud_profile_label", ""),
+            getattr(collector, "smartess_protocol_name", ""),
+            getattr(collector, "smartess_protocol_asset_name", ""),
+        ):
+            label = _known_collector_cloud_profile_value(candidate)
+            if label:
+                return label
+
+        values = getattr(self.data, "values", {})
+        for candidate in (
+            values.get("collector_cloud_profile_label"),
+            values.get("smartess_protocol_name"),
+            values.get("smartess_protocol_asset_name"),
+        ):
+            label = _known_collector_cloud_profile_value(candidate)
+            if label:
+                return label
+
+        config_entry = getattr(self, "config_entry", None)
+        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
+        return _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_LABEL))
+
+    @property
+    def collector_cloud_profile_source(self) -> str:
+        """Return the source of the observed collector cloud profile identity."""
+
+        collector = getattr(self.data, "collector", None)
+        source = _known_collector_cloud_profile_value(
+            getattr(collector, "collector_cloud_profile_source", "")
+        )
+        if source:
+            return source
+
+        values = getattr(self.data, "values", {})
+        source = _known_collector_cloud_profile_value(values.get("collector_cloud_profile_source"))
+        if source:
+            return source
+
+        config_entry = getattr(self, "config_entry", None)
+        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
+        source = _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_SOURCE))
+        if source:
+            return source
+
+        if self.collector_cloud_profile_key:
+            if getattr(self.data, "collector", None) is not None:
+                return "runtime_observed"
+            if _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY)):
+                return "entry_persisted"
+        return ""
+
+    @property
+    def collector_cloud_profile_confidence(self) -> str:
+        """Return confidence for the observed collector cloud profile identity."""
+
+        collector = getattr(self.data, "collector", None)
+        confidence = _known_collector_cloud_profile_value(
+            getattr(collector, "collector_cloud_profile_confidence", "")
+        )
+        if confidence:
+            return confidence
+
+        values = getattr(self.data, "values", {})
+        confidence = _known_collector_cloud_profile_value(values.get("collector_cloud_profile_confidence"))
+        if confidence:
+            return confidence
+
+        config_entry = getattr(self, "config_entry", None)
+        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
+        confidence = _known_collector_cloud_profile_value(
+            config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_CONFIDENCE)
+        )
+        if confidence:
+            return confidence
+
+        if self.collector_cloud_profile_key:
+            if getattr(self.data, "collector", None) is not None:
+                return "high"
+            if _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY)):
+                return "low"
+        return ""
+
+    @property
     def detection_confidence(self) -> str:
         """Return the saved detection confidence for this entry."""
 
@@ -2061,10 +2423,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def can_expose_capability(self, capability: WriteCapability) -> bool:
         """Whether one capability should exist as a writable HA entity."""
 
-        return can_expose_capability(
+        context = self._write_exposure_context()
+        return capability_write_exposure_allowed(
             capability,
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
+            variant_key=context["variant_key"],
+            profile_source_scope=context["profile_source_scope"],
+            schema_source_scope=context["schema_source_scope"],
+            profile_name=context["profile_name"],
         )
 
     def can_expose_preset(self, preset: CapabilityPreset) -> bool:
@@ -2078,12 +2445,38 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             }
         else:
             capabilities_by_key = {capability.key: capability for capability in inverter.capabilities}
-        return can_expose_preset(
+        context = self._write_exposure_context()
+        return preset_write_exposure_allowed(
             preset,
             capabilities_by_key=capabilities_by_key,
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
+            variant_key=context["variant_key"],
+            profile_source_scope=context["profile_source_scope"],
+            schema_source_scope=context["schema_source_scope"],
+            profile_name=context["profile_name"],
         )
+
+    def _write_exposure_context(self) -> dict[str, str]:
+        """Return normalized metadata context shared by write exposure checks."""
+
+        metadata = self.effective_metadata
+        inverter = self.identified_inverter
+        snapshot = self.effective_metadata_snapshot
+        variant_key = str(
+            getattr(inverter, "variant_key", "") or getattr(snapshot, "variant_key", "") or ""
+        ).strip()
+        return {
+            "variant_key": variant_key,
+            "profile_name": str(getattr(metadata, "profile_name", "") or "").strip(),
+            "profile_source_scope": str(
+                getattr(getattr(metadata, "profile_metadata", None), "source_scope", "") or ""
+            ).strip(),
+            "schema_source_scope": str(
+                getattr(getattr(metadata, "register_schema_metadata", None), "source_scope", "")
+                or ""
+            ).strip(),
+        }
 
     @property
     def current_driver(self):
@@ -2145,6 +2538,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             driver=self.current_driver,
             collector=self.data.collector,
             entry_data=self.config_entry.data,
+            persisted_snapshot=self.effective_metadata_snapshot,
+        )
+
+    @property
+    def effective_metadata_snapshot(self) -> EffectiveMetadataSnapshot:
+        """Return the persisted effective metadata snapshot when one is stored."""
+
+        options = getattr(self.config_entry, "options", {}) or {}
+        return effective_metadata_snapshot_from_dict(
+            options.get(_EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY)
         )
 
     @property
@@ -3385,6 +3788,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "smartess_protocol_profile_key": self.data.collector.smartess_protocol_profile_key,
             "smartess_protocol_name": self.data.collector.smartess_protocol_name,
             "smartess_device_address": self.data.collector.smartess_device_address,
+            "collector_cloud_profile_key": (
+                self.data.collector.collector_cloud_profile_key
+                or self.collector_cloud_profile_key
+            ),
+            "collector_cloud_profile_label": (
+                self.data.collector.collector_cloud_profile_label
+                or self.collector_cloud_profile_label
+            ),
+            "collector_cloud_profile_source": (
+                self.data.collector.collector_cloud_profile_source
+                or self.collector_cloud_profile_source
+            ),
+            "collector_cloud_profile_confidence": (
+                self.data.collector.collector_cloud_profile_confidence
+                or self.collector_cloud_profile_confidence
+            ),
         }
 
     @staticmethod

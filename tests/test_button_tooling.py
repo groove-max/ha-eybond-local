@@ -595,7 +595,7 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertFalse(entity.available)
         self.assertEqual(
             entity.extra_state_attributes["availability_reason"],
-            "No upstream callback endpoint is available yet. Restore SmartESS access first or wait for one external callback endpoint to be detected.",
+            "No upstream callback endpoint is available yet. Restore cloud access first or wait for one external callback endpoint to be detected.",
         )
 
     def test_start_proxy_capture_button_is_disabled_while_mode_change_applies(self) -> None:

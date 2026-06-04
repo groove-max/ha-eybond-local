@@ -222,6 +222,8 @@ def _install_coordinator_stubs() -> None:
 
     schema = _ensure_module("custom_components.eybond_local.schema")
     schema.build_runtime_ui_schema = lambda *args, **kwargs: None
+    schema.capability_write_exposure_allowed = lambda *args, **kwargs: True
+    schema.preset_write_exposure_allowed = lambda *args, **kwargs: True
 
     support_bundle = _ensure_module("custom_components.eybond_local.support.bundle")
     support_bundle.build_support_bundle_payload = lambda *args, **kwargs: None
@@ -333,6 +335,8 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components.eybond_local.runtime.coordinator",
     "homeassistant",
     "homeassistant.components",
+    "homeassistant.components.network",
+    "homeassistant.components.network.util",
     "homeassistant.components.persistent_notification",
     "homeassistant.config_entries",
     "homeassistant.helpers",
@@ -341,6 +345,7 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "homeassistant.helpers.update_coordinator",
     "homeassistant.util",
     "homeassistant.util.dt",
+    "homeassistant.util.logging",
 )
 
 
@@ -422,6 +427,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator_spec.loader.exec_module(coordinator_module)
 
         cls.coordinator_module = coordinator_module
+        cls.platform_context_module = importlib.import_module(
+            "custom_components.eybond_local.platform_context"
+        )
         cls.RuntimeSnapshot = sys.modules[
             "custom_components.eybond_local.models"
         ].RuntimeSnapshot
@@ -571,6 +579,138 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertIsNotNone(collector)
         self.assertIsNone(inverter)
         self.assertEqual(registry.removed_device_ids, [stale_inverter.id])
+
+    def test_snapshot_backed_setup_uses_persisted_anenji_metadata_without_live_inverter(self) -> None:
+        fake_driver = types.SimpleNamespace(key="modbus_smg", name="SMG / Modbus")
+        fake_selection = types.SimpleNamespace(
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG-family runtime",
+            profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            profile_metadata=types.SimpleNamespace(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                source_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                groups=(types.SimpleNamespace(key="config", title="Config", order=1),),
+                capabilities=(types.SimpleNamespace(key="boot_method"),),
+                presets=(types.SimpleNamespace(key="normal"),),
+            ),
+            register_schema_metadata=types.SimpleNamespace(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                source_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            ),
+        )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={"driver_hint": "auto"},
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "modbus_smg",
+                    "effective_owner_name": "SMG-family runtime",
+                    "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "confidence": "high",
+                    "generation": 4,
+                    "generated_at": "2026-06-03T19:00:00+00:00",
+                }
+            },
+            title="SMG 6200",
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
+
+        with patch.object(
+            self.coordinator_module,
+            "resolve_effective_metadata_selection",
+            return_value=fake_selection,
+        ), patch.object(
+            self.platform_context_module,
+            "get_driver",
+            side_effect=lambda key: fake_driver if key == fake_driver.key else None,
+        ):
+            driver, inverter, has_inverter_identity = self.platform_context_module.entity_setup_context(
+                coordinator.config_entry,
+                coordinator,
+            )
+
+        self.assertIsNotNone(driver)
+        self.assertEqual(getattr(driver, "key", ""), "modbus_smg")
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.profile_name, "modbus_smg/models/anenji_4200_protocol_1.json")
+        self.assertEqual(
+            inverter.register_schema_name,
+            "modbus_smg/models/anenji_4200_protocol_1.json",
+        )
+        self.assertGreater(len(inverter.capabilities), 0)
+        self.assertFalse(has_inverter_identity)
+
+    def test_snapshot_backed_setup_is_not_synthesized_without_persisted_snapshot(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={"driver_hint": "auto"},
+            options={},
+            title="SMG 6200",
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
+
+        with patch.object(
+            self.coordinator_module,
+            "resolve_effective_metadata_selection",
+            side_effect=AssertionError("resolver must not run without valid snapshot"),
+        ), patch.object(
+            self.platform_context_module,
+            "get_driver",
+            side_effect=AssertionError("driver lookup must not run without valid snapshot"),
+        ):
+            driver, inverter, has_inverter_identity = self.platform_context_module.entity_setup_context(
+                coordinator.config_entry,
+                coordinator,
+            )
+
+        self.assertIsNone(driver)
+        self.assertIsNone(inverter)
+        self.assertFalse(has_inverter_identity)
+
+    def test_snapshot_backed_setup_is_not_synthesized_for_invalid_snapshot_payload(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={"driver_hint": "auto"},
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "modbus_smg",
+                    "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "confidence": "none",
+                }
+            },
+            title="SMG 6200",
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
+
+        with patch.object(
+            self.coordinator_module,
+            "resolve_effective_metadata_selection",
+            side_effect=AssertionError("resolver must not run for invalid snapshot payload"),
+        ), patch.object(
+            self.platform_context_module,
+            "get_driver",
+            side_effect=AssertionError("driver lookup must not run for invalid snapshot payload"),
+        ):
+            driver, inverter, has_inverter_identity = self.platform_context_module.entity_setup_context(
+                coordinator.config_entry,
+                coordinator,
+            )
+
+        self.assertIsNone(driver)
+        self.assertIsNone(inverter)
+        self.assertFalse(has_inverter_identity)
 
     def test_remembered_external_endpoint_is_persisted_and_reused_for_rollback(self) -> None:
         updated_options: list[dict[str, object]] = []
@@ -1191,6 +1331,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
                 smartess_collector_version="8.50.12.3",
+                smartess_protocol_profile_key="smartess_at",
             ),
         )
 
@@ -1209,6 +1350,18 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(
             coordinator.config_entry.data["detected_serial"],
             "55355535553555",
+        )
+        self.assertEqual(
+            coordinator.config_entry.data["collector_cloud_profile_key"],
+            "smartess_at",
+        )
+        self.assertEqual(
+            coordinator.config_entry.data["collector_cloud_profile_source"],
+            "runtime_observed",
+        )
+        self.assertEqual(
+            coordinator.config_entry.data["collector_cloud_profile_confidence"],
+            "high",
         )
         self.assertEqual(
             coordinator.config_entry.title,
@@ -1287,6 +1440,236 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(len(updated_entries), 1)
         self.assertEqual(reload_requests, ["entry-3"])
         self.assertTrue(coordinator._entity_platform_reload_requested)
+
+    def test_remember_runtime_identity_persists_effective_snapshot_in_options(self) -> None:
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+                updated_entries.append(
+                    {
+                        "title": entry.title,
+                        "data": dict(entry.data),
+                        "options": dict(entry.options),
+                    }
+                )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-6",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "",
+                "detected_model": "",
+                "detected_serial": "",
+                "detection_confidence": "medium",
+                "server_ip": "192.168.1.104",
+                "driver_hint": "auto",
+            },
+            options={},
+            title="Collector 192.168.1.14",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = True
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 4.2kW",
+                serial_number="55355535553555",
+                driver_key="modbus_smg",
+                variant_key="powmr_4200_protocol_1",
+                profile_name="modbus_smg/models/powmr_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0033482254531",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+            ),
+        )
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertEqual(coordinator.config_entry.data["detected_model"], "PowMr 4.2kW")
+        self.assertEqual(coordinator.config_entry.data["detected_serial"], "55355535553555")
+        self.assertEqual(coordinator.config_entry.data["detection_confidence"], "high")
+
+        persisted_snapshot = coordinator.config_entry.options.get("effective_metadata_snapshot")
+        self.assertIsInstance(persisted_snapshot, dict)
+        assert isinstance(persisted_snapshot, dict)
+        self.assertEqual(persisted_snapshot.get("effective_owner_key"), "modbus_smg")
+        self.assertEqual(
+            persisted_snapshot.get("profile_name"),
+            "modbus_smg/models/powmr_4200_protocol_1.json",
+        )
+        self.assertEqual(
+            persisted_snapshot.get("register_schema_name"),
+            "modbus_smg/models/powmr_4200_protocol_1.json",
+        )
+        self.assertNotIn("collector_cloud_profile_key", persisted_snapshot)
+        self.assertNotIn("collector_cloud_profile_label", persisted_snapshot)
+        self.assertNotIn("collector_cloud_profile_source", persisted_snapshot)
+        self.assertNotIn("collector_cloud_profile_confidence", persisted_snapshot)
+        self.assertEqual(persisted_snapshot.get("confidence"), "high")
+        self.assertEqual(persisted_snapshot.get("generation"), 1)
+        self.assertTrue(str(persisted_snapshot.get("generated_at") or ""))
+        self.assertEqual(len(updated_entries), 1)
+
+    def test_remember_runtime_identity_skips_snapshot_rewrite_when_unchanged(self) -> None:
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+                updated_entries.append(
+                    {
+                        "title": entry.title,
+                        "data": dict(entry.data),
+                        "options": dict(entry.options),
+                    }
+                )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-6b",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "",
+                "detected_model": "",
+                "detected_serial": "",
+                "detection_confidence": "medium",
+                "server_ip": "192.168.1.104",
+                "driver_hint": "auto",
+            },
+            options={},
+            title="Collector 192.168.1.14",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = True
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 4.2kW",
+                serial_number="55355535553555",
+                driver_key="modbus_smg",
+                variant_key="powmr_4200_protocol_1",
+                profile_name="modbus_smg/models/powmr_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0033482254531",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+            ),
+        )
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+        first_snapshot = dict(
+            coordinator.config_entry.options.get("effective_metadata_snapshot") or {}
+        )
+        self.assertTrue(first_snapshot)
+        self.assertEqual(first_snapshot.get("generation"), 1)
+        self.assertEqual(len(updated_entries), 1)
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        second_snapshot = dict(
+            coordinator.config_entry.options.get("effective_metadata_snapshot") or {}
+        )
+        self.assertEqual(len(updated_entries), 1)
+        self.assertEqual(second_snapshot, first_snapshot)
+        self.assertEqual(second_snapshot.get("generation"), 1)
+
+    def test_remember_runtime_identity_does_not_persist_snapshot_without_live_identity(self) -> None:
+        update_calls: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+                update_calls.append(
+                    {
+                        "title": entry.title,
+                        "data": dict(entry.data),
+                        "options": dict(entry.options),
+                    }
+                )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-7",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0033482254531",
+                "detected_model": "",
+                "detected_serial": "",
+                "driver_hint": "modbus_smg",
+                "detection_confidence": "none",
+                "server_ip": "192.168.1.104",
+            },
+            options={"driver_hint": "modbus_smg"},
+            title="Collector PN Q0033482254531",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = True
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="",
+                serial_number="",
+                driver_key="modbus_smg",
+                variant_key="powmr_4200_protocol_1",
+                profile_name="modbus_smg/models/powmr_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0033482254531",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+            ),
+        )
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertEqual(len(update_calls), 1)
+        self.assertNotIn(
+            "effective_metadata_snapshot",
+            update_calls[0]["options"],
+        )
+        self.assertNotIn("effective_metadata_snapshot", coordinator.config_entry.options)
 
     def test_remember_runtime_identity_requests_reload_when_platforms_loaded_collector_only(self) -> None:
         reload_requests: list[str] = []
@@ -1379,6 +1762,290 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertFalse(coordinator._entity_platforms_loaded_with_inverter_identity)
         self.assertTrue(coordinator._entity_platform_reload_requested)
         self.assertEqual(reload_requests, ["entry-4"])
+
+    def test_remember_runtime_identity_requests_reload_on_effective_metadata_drift(self) -> None:
+        reload_requests: list[str] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+
+            async def async_reload(self, entry_id: str) -> None:
+                reload_requests.append(entry_id)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=_ConfigEntries(),
+            async_create_task=lambda coro: asyncio.create_task(coro),
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-drift",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0033482254531",
+                "detected_model": "SMG 6200",
+                "detected_serial": "SMG-123",
+                "detection_confidence": "high",
+                "server_ip": "192.168.1.104",
+                "driver_hint": "modbus_smg",
+            },
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "modbus_smg",
+                    "effective_owner_name": "modbus_smg",
+                    "variant_key": "smg_default",
+                    "profile_name": "modbus_smg/models/smg_default.json",
+                    "register_schema_name": "modbus_smg/models/smg_default.json",
+                    "confidence": "high",
+                    "generation": 1,
+                    "generated_at": "2026-06-01T00:00:00+00:00",
+                }
+            },
+            title="Collector PN Q0033482254531",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="SMG 6200",
+                serial_number="SMG-123",
+            )
+        )
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = False
+        coordinator._platform_loaded_effective_metadata_signature = ("", "", "")
+
+        coordinator.mark_entity_platforms_initialized(has_inverter_identity=True)
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="SMG 6200",
+                serial_number="SMG-123",
+                driver_key="modbus_smg",
+                variant_key="anenji_4200_protocol_1",
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0033482254531",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+            ),
+        )
+
+        async def _run() -> None:
+            await coordinator._async_remember_runtime_identity(snapshot)
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+
+        self.assertEqual(reload_requests, ["entry-drift"])
+        self.assertTrue(coordinator._entity_platform_reload_requested)
+
+    def test_remember_runtime_identity_requests_reload_for_first_runtime_signature_after_upgrade(self) -> None:
+        reload_requests: list[str] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+
+            async def async_reload(self, entry_id: str) -> None:
+                reload_requests.append(entry_id)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=_ConfigEntries(),
+            async_create_task=lambda coro: asyncio.create_task(coro),
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-upgrade-first-runtime-signature",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0033482254531",
+                "detected_model": "SMG 6200",
+                "detected_serial": "SMG-123",
+                "detection_confidence": "high",
+                "server_ip": "192.168.1.104",
+                "driver_hint": "modbus_smg",
+            },
+            options={},
+            title="Collector PN Q0033482254531",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="SMG 6200",
+                serial_number="SMG-123",
+            )
+        )
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = False
+        coordinator._entity_platforms_loaded_with_driver_fallback = False
+        coordinator._platform_loaded_effective_metadata_signature = ("", "", "")
+
+        coordinator.mark_entity_platforms_initialized(has_inverter_identity=True)
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="SMG 6200",
+                serial_number="SMG-123",
+                driver_key="modbus_smg",
+                variant_key="anenji_4200_protocol_1",
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0033482254531",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+            ),
+        )
+
+        async def _run() -> None:
+            await coordinator._async_remember_runtime_identity(snapshot)
+            await coordinator._async_remember_runtime_identity(snapshot)
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+
+        self.assertEqual(reload_requests, ["entry-upgrade-first-runtime-signature"])
+        self.assertTrue(coordinator._entity_platform_reload_requested)
+
+    def test_metadata_drift_reload_allows_first_runtime_signature_for_driver_fallback_setup(self) -> None:
+        reload_requests: list[str] = []
+
+        class _ConfigEntries:
+            async def async_reload(self, entry_id: str) -> None:
+                reload_requests.append(entry_id)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=_ConfigEntries(),
+            async_create_task=lambda coro: asyncio.create_task(coro),
+        )
+        coordinator.config_entry = types.SimpleNamespace(entry_id="entry-driver-fallback")
+        coordinator._entity_platforms_initialized = True
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = False
+        coordinator._entity_platforms_loaded_with_driver_fallback = True
+
+        async def _run() -> None:
+            coordinator._request_entry_reload_for_metadata_drift(
+                setup_signature=("", "", ""),
+                runtime_signature=(
+                    "anenji_4200_protocol_1",
+                    "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "modbus_smg/models/anenji_4200_protocol_1.json",
+                ),
+            )
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+
+        self.assertEqual(reload_requests, ["entry-driver-fallback"])
+        self.assertTrue(coordinator._entity_platform_reload_requested)
+
+    def test_remember_runtime_identity_does_not_reload_on_identical_effective_metadata(self) -> None:
+        reload_requests: list[str] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+
+            async def async_reload(self, entry_id: str) -> None:
+                reload_requests.append(entry_id)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=_ConfigEntries(),
+            async_create_task=lambda coro: asyncio.create_task(coro),
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-same",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0033482254531",
+                "detected_model": "SMG 6200",
+                "detected_serial": "SMG-123",
+                "detection_confidence": "high",
+                "server_ip": "192.168.1.104",
+                "driver_hint": "modbus_smg",
+            },
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "modbus_smg",
+                    "effective_owner_name": "modbus_smg",
+                    "variant_key": "anenji_4200_protocol_1",
+                    "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+                    "confidence": "high",
+                    "generation": 2,
+                    "generated_at": "2026-06-01T00:00:00+00:00",
+                }
+            },
+            title="Collector PN Q0033482254531",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="SMG 6200",
+                serial_number="SMG-123",
+            )
+        )
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platforms_loaded_with_inverter_identity = False
+        coordinator._platform_loaded_effective_metadata_signature = ("", "", "")
+
+        coordinator.mark_entity_platforms_initialized(has_inverter_identity=True)
+
+        snapshot = self.RuntimeSnapshot(
+            values={"smartess_profile_key": "hint-only-change"},
+            inverter=types.SimpleNamespace(
+                model_name="SMG 6200",
+                serial_number="SMG-123",
+                driver_key="modbus_smg",
+                variant_key="anenji_4200_protocol_1",
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0033482254531",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name="changed-hint-only",
+                smartess_protocol_asset_name="changed-hint-only",
+                smartess_collector_version="8.50.12.3",
+            ),
+        )
+
+        async def _run() -> None:
+            await coordinator._async_remember_runtime_identity(snapshot)
+            await coordinator._async_remember_runtime_identity(snapshot)
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+
+        self.assertEqual(reload_requests, [])
+        self.assertFalse(coordinator._entity_platform_reload_requested)
 
     def test_clear_proxy_capture_session_runtime_values_drops_stale_session_keys(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)

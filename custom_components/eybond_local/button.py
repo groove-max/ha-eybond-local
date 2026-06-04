@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .collector_endpoint import normalize_collector_server_endpoint
 from .collector.entity_scope import is_collector_tooling_key
+from .metadata.collector_cloud_profile_catalog_loader import load_collector_cloud_profile_catalog
 from .runtime.coordinator import EybondLocalCoordinator
 from .models import CapabilityPreset, WriteCapability
 from .platform_context import entity_setup_context
@@ -181,6 +182,23 @@ def _normalize_collector_endpoint(endpoint: object) -> str:
         return raw
 
 
+def _callback_owner_label_from_family(
+    cloud_family: object,
+    *,
+    fallback: str,
+    include_current_suffix: bool = False,
+) -> str:
+    normalized = str(cloud_family or "").strip().lower()
+    if not normalized:
+        return fallback
+    catalog = load_collector_cloud_profile_catalog()
+    if normalized not in catalog.profiles:
+        return fallback
+    if include_current_suffix:
+        return f"{normalized}_or_current"
+    return normalized
+
+
 class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity):
     """One preset button backed by the declarative preset schema."""
 
@@ -325,7 +343,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             if overview.blocking_reason == "collector_not_connected":
                 return "Collector is not connected."
             if overview.blocking_reason == "upstream_endpoint_unavailable":
-                return "No upstream callback endpoint is available yet. Restore SmartESS access first or wait for one external callback endpoint to be detected."
+                return "No upstream callback endpoint is available yet. Restore cloud access first or wait for one external callback endpoint to be detected."
             if overview.blocking_reason == "target_endpoint_unavailable":
                 return "Proxy target endpoint is not available."
             if overview.blocking_reason == "current_endpoint_unavailable":
@@ -524,10 +542,14 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 attributes["collector_restart_expected"] = True
             elif self._spec.key == "rollback_collector_server_endpoint":
                 attributes["action_summary"] = (
-                    "Restores SmartESS access by putting back the callback endpoint captured before the last redirect."
+                    "Restores cloud access by putting back the callback endpoint captured before the last redirect."
                 )
                 attributes["rollback_requires_cached_endpoint"] = True
                 attributes["target_callback_owner"] = "smartess"
+                attributes["target_callback_owner_label"] = _callback_owner_label_from_family(
+                    values.get("collector_cloud_family"),
+                    fallback="smartess",
+                )
             elif self._spec.key == "start_proxy_capture":
                 attributes["action_summary"] = (
                     "Starts live collector proxy capture and writes a standalone JSONL trace artifact."
@@ -539,6 +561,12 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                     "Stops live collector proxy capture, restores the callback endpoint if needed, and writes a manifest."
                 )
                 attributes["target_callback_owner"] = "smartess_or_current"
+                attributes["target_callback_owner_label"] = _callback_owner_label_from_family(
+                    values.get("proxy_capture_collector_cloud_family")
+                    or values.get("collector_cloud_family"),
+                    fallback="smartess_or_current",
+                    include_current_suffix=True,
+                )
                 attributes["confirmation_mode"] = "none"
         return attributes
 

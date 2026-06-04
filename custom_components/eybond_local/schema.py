@@ -11,6 +11,73 @@ from .models import CapabilityPreset, CapabilityPresetItem, DetectedInverter, Wr
 UI_SCHEMA_VERSION = 4
 
 
+def capability_write_exposure_allowed(
+    capability: WriteCapability,
+    *,
+    control_mode: str,
+    detection_confidence: str,
+    variant_key: str = "",
+    profile_source_scope: str = "",
+    schema_source_scope: str = "",
+    profile_name: str = "",
+) -> bool:
+    """Return whether runtime should expose one capability as writable."""
+
+    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name):
+        return False
+    if not capability.allows_runtime_write_without_local_proof:
+        return False
+    if capability.provenance == "verified" and not _has_confirmed_local_metadata_proof(
+        profile_source_scope=profile_source_scope,
+        schema_source_scope=schema_source_scope,
+    ):
+        return False
+    return can_expose_capability(
+        capability,
+        control_mode=control_mode,
+        detection_confidence=detection_confidence,
+    )
+
+
+def preset_write_exposure_allowed(
+    preset: CapabilityPreset,
+    *,
+    capabilities_by_key: dict[str, WriteCapability],
+    control_mode: str,
+    detection_confidence: str,
+    variant_key: str = "",
+    profile_source_scope: str = "",
+    schema_source_scope: str = "",
+    profile_name: str = "",
+) -> bool:
+    """Return whether runtime should expose one preset as writable."""
+
+    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name):
+        return False
+    if not can_expose_preset(
+        preset,
+        capabilities_by_key=capabilities_by_key,
+        control_mode=control_mode,
+        detection_confidence=detection_confidence,
+    ):
+        return False
+    for item in preset.items:
+        capability = capabilities_by_key.get(item.capability_key)
+        if capability is None:
+            return False
+        if not capability_write_exposure_allowed(
+            capability,
+            control_mode=control_mode,
+            detection_confidence=detection_confidence,
+            variant_key=variant_key,
+            profile_source_scope=profile_source_scope,
+            schema_source_scope=schema_source_scope,
+            profile_name=profile_name,
+        ):
+            return False
+    return True
+
+
 def build_runtime_ui_schema(
     inverter: DetectedInverter,
     values: Mapping[str, Any],
@@ -157,10 +224,14 @@ def serialize_capability(
     policy_active = _policy_is_active(values)
     policy_allowed = True
     if policy_active:
-        policy_allowed = can_expose_capability(
+        policy_allowed = capability_write_exposure_allowed(
             capability,
             control_mode=str(values.get("control_mode") or ""),
             detection_confidence=str(values.get("detection_confidence") or ""),
+            variant_key=str(values.get("effective_variant_key") or ""),
+            profile_source_scope=str(values.get("effective_profile_source_scope") or ""),
+            schema_source_scope=str(values.get("effective_schema_source_scope") or ""),
+            profile_name=str(values.get("effective_profile_name") or ""),
         )
     effective_editable = runtime_state.editable and policy_allowed
     entity_kind = entity_kind_for_capability(capability)
@@ -268,11 +339,15 @@ def serialize_preset(
     policy_active = _policy_is_active(values)
     policy_allowed = True
     if policy_active:
-        policy_allowed = can_expose_preset(
+        policy_allowed = preset_write_exposure_allowed(
             preset,
             capabilities_by_key=capabilities_by_key,
             control_mode=str(values.get("control_mode") or ""),
             detection_confidence=str(values.get("detection_confidence") or ""),
+            variant_key=str(values.get("effective_variant_key") or ""),
+            profile_source_scope=str(values.get("effective_profile_source_scope") or ""),
+            schema_source_scope=str(values.get("effective_schema_source_scope") or ""),
+            profile_name=str(values.get("effective_profile_name") or ""),
         )
     reasons = list(runtime_state.reasons)
     if policy_active and runtime_state.visible and not policy_allowed:
@@ -502,6 +577,21 @@ def _target_label(capability: WriteCapability, value: object) -> str:
     if enum_map and value in enum_map:
         return enum_map[value]
     return str(value)
+
+
+def _has_confirmed_local_metadata_proof(
+    *,
+    profile_source_scope: str,
+    schema_source_scope: str,
+) -> bool:
+    return profile_source_scope == "builtin" and schema_source_scope == "builtin"
+
+
+def _is_family_fallback_variant(*, variant_key: str, profile_name: str) -> bool:
+    normalized_variant_key = str(variant_key or "").strip()
+    if normalized_variant_key == "family_fallback":
+        return True
+    return str(profile_name or "").strip().endswith("/family_fallback.json")
 
 
 def _policy_is_active(values: Mapping[str, Any]) -> bool:

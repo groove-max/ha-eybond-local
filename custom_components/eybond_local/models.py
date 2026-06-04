@@ -178,6 +178,7 @@ class WriteCapability:
     word_count: int = 1
     combine: str = "u16"
     tested: bool = False
+    provenance: str = "inferred"
     support_tier: str = ""
     support_notes: str = ""
     action_value: int | None = None
@@ -246,6 +247,12 @@ class WriteCapability:
         """Return the capability validation state used for support reporting."""
 
         return "tested" if self.tested else "untested"
+
+    @property
+    def allows_runtime_write_without_local_proof(self) -> bool:
+        """Cloud hints are metadata only and never sufficient for runtime writes."""
+
+        return self.provenance != "cloud_hint"
 
     @property
     def resolved_support_tier(self) -> str:
@@ -425,6 +432,10 @@ class CollectorInfo:
     collector_cloud_family: str = ""
     collector_cloud_family_source: str = ""
     collector_cloud_family_confidence: str = ""
+    collector_cloud_profile_key: str = ""
+    collector_cloud_profile_label: str = ""
+    collector_cloud_profile_source: str = ""
+    collector_cloud_profile_confidence: str = ""
     smartess_collector_version: str = ""
     smartess_protocol_raw_id: str = ""
     smartess_protocol_asset_id: str = ""

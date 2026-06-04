@@ -11,6 +11,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .metadata.smartess_semantic_catalog_loader import (
+    resolve_smartess_cloud_classification,
+    resolve_smartess_cloud_entry,
+)
+
 
 DEFAULT_BASE_URL = "https://android.shinemonitor.com/public/"
 DEFAULT_LANGUAGE = "en"
@@ -25,397 +30,6 @@ _SMARTESS_0925_EXACT = "exact_0925"
 _SMARTESS_0925_PROBABLE = "probable_0925"
 _SMARTESS_CLOUD_ONLY = "cloud_only"
 
-
-_SMARTESS_SETTING_TITLE_ALIASES: dict[str, str] = {
-    "main output priority": "output priority",
-    "output voltage setting": "output voltage",
-    "output frequency setting": "output frequency",
-    "bat_eq_time": "eq charing time",
-    "bat eq time": "eq charing time",
-    "maximum charging voltage": "bulk charging voltage (c.v voltage)",
-    "floating charge voltage": "floating charging voltage",
-    "battery overvoltage protection point": "high dc protection voltage",
-    "maximum charging current": "max.charging current",
-    "maximum mains charging current": "max.ac.charging current",
-    "battery eq mode enable": "battery eq mode",
-    "eq charging voltage": "eq charing voltage",
-    "eq timeout exit": "eq timeout exit time",
-    "eq charging interval": "eq interval time",
-    "equalization activated immediately": "forced eq charging",
-    "clean generation power": "clear record",
-    "mains mode battery low voltage protection point": "low dc protection voltage in mains mode",
-    "off-grid mode battery low voltage protection point": "low dc protection voltage in off-grid mode",
-}
-
-
-_SMARTESS_0925_SETTING_BINDINGS: dict[str, dict[str, Any]] = {
-    "output priority": {
-        "profile_key": "output_source_priority",
-        "register_key": "output_source_priority",
-        "register": 4537,
-    },
-    "input voltage range": {
-        "profile_key": "input_voltage_range",
-        "register_key": "input_voltage_range",
-        "register": 4538,
-    },
-    "battery type": {
-        "profile_key": "battery_type",
-        "register_key": "battery_type",
-        "register": 4539,
-    },
-    "high dc protection voltage": {
-        "profile_key": "battery_overvoltage_protection_voltage",
-        "register_key": "battery_overvoltage_protection_voltage",
-    },
-    "output frequency": {
-        "profile_key": "configured_output_frequency",
-        "register_key": "configured_output_frequency",
-        "register": 4540,
-    },
-    "max.charging current": {
-        "profile_key": "max_total_charge_current",
-        "register_key": "max_total_charge_current",
-        "register": 4541,
-    },
-    "output voltage": {
-        "profile_key": "configured_output_voltage",
-        "register_key": "configured_output_voltage",
-        "register": 4542,
-    },
-    "max.ac.charging current": {
-        "profile_key": "max_utility_charge_current",
-        "register_key": "max_utility_charge_current",
-        "register": 4543,
-    },
-    "recovery voltage back to mains mode": {
-        "profile_key": "utility_return_voltage_sbu",
-        "register_key": "utility_return_voltage_sbu",
-        "register": 4544,
-    },
-    "soc recovery value of battery discharge in mains mode": {
-        "profile_key": "battery_return_voltage_sbu",
-        "register_key": "battery_return_voltage_sbu",
-        "register": 4545,
-    },
-    "bulk charging voltage (c.v voltage)": {
-        "profile_key": "bulk_charging_voltage",
-        "register_key": "bulk_charging_voltage",
-        "register": 4546,
-    },
-    "floating charging voltage": {
-        "profile_key": "floating_charging_voltage",
-        "register_key": "floating_charging_voltage",
-        "register": 4547,
-    },
-    "low dc protection voltage in mains mode": {
-        "profile_key": "low_battery_cutoff_voltage",
-        "register_key": "low_battery_cutoff_voltage",
-        "register": 4548,
-    },
-    "charger source priority": {
-        "profile_key": "charger_source_priority",
-        "register_key": "charger_source_priority",
-        "register": 4536,
-    },
-    "eq charing voltage": {
-        "profile_key": "battery_equalization_voltage",
-        "register_key": "battery_equalization_voltage",
-        "register": 4549,
-    },
-    "eq charing time": {
-        "profile_key": "battery_equalized_time",
-        "register_key": "battery_equalized_time",
-        "register": 4550,
-    },
-    "eq timeout exit time": {
-        "profile_key": "battery_equalized_timeout",
-        "register_key": "battery_equalized_timeout",
-        "register": 4551,
-    },
-    "eq interval time": {
-        "profile_key": "battery_equalization_interval",
-        "register_key": "battery_equalization_interval",
-        "register": 4552,
-    },
-    "beeps while primary source is interrupted": {
-        "profile_key": "primary_source_interrupt_alarm_enabled",
-        "register_key": "primary_source_interrupt_alarm_enabled",
-        "register": 5007,
-    },
-    "backlight control": {
-        "profile_key": "lcd_backlight_enabled",
-        "register_key": "lcd_backlight_enabled",
-        "register": 5004,
-    },
-    "auto return to default display screen": {
-        "profile_key": "lcd_reset_to_default_enabled",
-        "register_key": "lcd_reset_to_default_enabled",
-        "register": 5008,
-    },
-    "power saving mode": {
-        "profile_key": "power_saving_enabled",
-        "register_key": "power_saving_enabled",
-        "register": 5003,
-    },
-    "auto restart when overload occurs": {
-        "profile_key": "overload_restart_enabled",
-        "register_key": "overload_restart_enabled",
-        "register": 5005,
-    },
-    "auto restart when over temperature occurs": {
-        "profile_key": "over_temperature_restart_enabled",
-        "register_key": "over_temperature_restart_enabled",
-        "register": 5006,
-    },
-    "overload bypass": {
-        "profile_key": "overload_bypass_enabled",
-        "register_key": "overload_bypass_enabled",
-        "register": 5009,
-    },
-    "battery eq mode": {
-        "profile_key": "battery_equalization_mode",
-        "register_key": "battery_equalization_mode",
-        "register": 5011,
-    },
-    "forced eq charging": {
-        "profile_key": "force_battery_equalization",
-        "register_key": "force_battery_equalization",
-        "register": 5012,
-    },
-    "clear record": {
-        "profile_key": "clear_power_history",
-        "register_key": "clear_power_history",
-        "register": 5001,
-    },
-    "reset user settings": {
-        "profile_key": "restore_defaults",
-        "register_key": "restore_defaults",
-        "register": 5016,
-    },
-    "record fault code": {
-        "profile_key": "record_fault_code_enabled",
-        "register_key": "record_fault_code_enabled",
-        "register": 5010,
-    },
-}
-
-_SMARTESS_0925_SETTING_CLASSIFICATIONS: dict[str, dict[str, Any]] = {
-    "output mode": {
-        "bucket": _SMARTESS_0925_PROBABLE,
-        "source": "pi30_family_surface",
-        "reason": (
-            "Matches the PI30-family output-mode vocabulary, but no direct 0925 write "
-            "register has been proven yet."
-        ),
-    },
-    "output priority": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4537,
-        "reason": "Direct 0925 root-map match for output source priority.",
-    },
-    "input voltage range": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4538,
-        "reason": "Direct 0925 root-map match for AC input range.",
-    },
-    "buzzer mode": {
-        "bucket": _SMARTESS_0925_PROBABLE,
-        "source": "pi30_family_surface",
-        "reason": (
-            "A direct 0925 local buzzer toggle exists at register 5002, but the cloud "
-            "exposes a richer mode enum than the currently proven local surface."
-        ),
-    },
-    "beeps while primary source is interrupted": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5007,
-        "reason": "Direct 0925 root-map match for the primary-source interrupt beeper toggle.",
-    },
-    "backlight control": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5004,
-        "reason": "Direct 0925 root-map match for LCD backlight control.",
-    },
-    "auto return to default display screen": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5008,
-        "reason": "Direct 0925 root-map match for LCD auto-return behavior.",
-    },
-    "power saving mode": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5003,
-        "reason": "Direct 0925 root-map match for power-saving mode.",
-    },
-    "auto restart when overload occurs": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5005,
-        "reason": "Direct 0925 root-map match for overload auto-restart.",
-    },
-    "auto restart when over temperature occurs": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5006,
-        "reason": "Direct 0925 root-map match for over-temperature auto-restart.",
-    },
-    "overload bypass": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5009,
-        "reason": "Direct 0925 root-map match for overload bypass behavior.",
-    },
-    "battery eq mode": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5011,
-        "reason": "Direct 0925 root-map match for battery equalization enablement.",
-    },
-    "output voltage": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4542,
-        "reason": "Direct 0925 root-map match for configured output voltage.",
-    },
-    "output frequency": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4540,
-        "reason": "Direct 0925 root-map match for configured output frequency.",
-    },
-    "soc recovery value of battery discharge in mains mode": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4545,
-        "reason": "Direct 0925 root-map match for the SBU battery return threshold.",
-    },
-    "battery type": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4539,
-        "reason": "Direct 0925 root-map match for battery type.",
-    },
-    "high dc protection voltage": {
-        "bucket": _SMARTESS_0925_PROBABLE,
-        "source": "pi30_family_surface",
-        "reason": (
-            "Looks like the same PI30-family battery-threshold cluster, but no exact 0925 "
-            "root-map register has been confirmed."
-        ),
-    },
-    "bulk charging voltage (c.v voltage)": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4546,
-        "reason": "Direct 0925 root-map match for bulk charging voltage.",
-    },
-    "floating charging voltage": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4547,
-        "reason": "Direct 0925 root-map match for floating charging voltage.",
-    },
-    "recovery voltage back to mains mode": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4544,
-        "reason": "Direct 0925 root-map match for the SBU return-to-mains threshold.",
-    },
-    "low dc protection voltage in mains mode": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4548,
-        "reason": "Direct 0925 root-map match for low-DC protection in mains mode.",
-    },
-    "low dc protection voltage in off-grid mode": {
-        "bucket": _SMARTESS_0925_PROBABLE,
-        "source": "pi30_family_surface",
-        "reason": (
-            "Looks like the off-grid counterpart to the proven 0925 mains-mode cut-off, but "
-            "the local 0925 register has not been confirmed."
-        ),
-    },
-    "time from c.v to floating charge": {
-        "bucket": _SMARTESS_0925_PROBABLE,
-        "source": "pi30_family_surface",
-        "reason": (
-            "Fits the PI30-family battery-charge timing surface, but there is no direct 0925 "
-            "root-map proof yet."
-        ),
-    },
-    "charger source priority": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4536,
-        "reason": "Direct 0925 root-map match for charger source priority.",
-    },
-    "max.charging current": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4541,
-        "reason": "Direct 0925 root-map match for maximum total charge current.",
-    },
-    "max.ac.charging current": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4543,
-        "reason": "Direct 0925 root-map match for maximum AC charge current.",
-    },
-    "eq charing voltage": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4549,
-        "reason": "Direct 0925 root-map match for equalization voltage.",
-    },
-    "eq charing time": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4550,
-        "reason": "Direct 0925 root-map match for equalization time.",
-    },
-    "eq timeout exit time": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4551,
-        "reason": "Direct 0925 root-map match for equalization timeout.",
-    },
-    "eq interval time": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 4552,
-        "reason": "Direct 0925 root-map match for equalization interval.",
-    },
-    "forced eq charging": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5012,
-        "reason": "Direct 0925 root-map match for forced one-shot equalization.",
-    },
-    "clear record": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5001,
-        "reason": "Matches the 0925 clear-history action in the root map.",
-    },
-    "reset user settings": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5016,
-        "reason": "Matches the 0925 restore-defaults action in the root map.",
-    },
-    "record fault code": {
-        "bucket": _SMARTESS_0925_EXACT,
-        "source": "root_map_0925",
-        "asset_register": 5010,
-        "reason": "Direct 0925 root-map match for the fault-code recording toggle.",
-    },
-}
 
 _SMARTESS_SETTING_AREA_BY_PREFIX = {
     "bse": "output",
@@ -872,9 +486,9 @@ def normalize_device_settings(dat: Any) -> dict[str, Any] | None:
             has_current_value=has_current_value,
         )
         area = _infer_setting_area(field_id)
-        normalized_title = _normalize_setting_name(title)
-        binding = _SMARTESS_0925_SETTING_BINDINGS.get(normalized_title)
-        classification = _resolve_smartess_0925_setting_classification(normalized_title)
+        semantic_entry = resolve_smartess_cloud_entry(title)
+        binding = _resolve_smartess_0925_setting_binding(semantic_entry)
+        classification = _resolve_smartess_0925_setting_classification(title)
         if binding is not None:
             mapped_field_count += 1
 
@@ -929,14 +543,7 @@ def normalize_device_settings(dat: Any) -> dict[str, Any] | None:
 
 
 def _resolve_smartess_0925_setting_classification(normalized_title: str) -> dict[str, Any]:
-    classification = _SMARTESS_0925_SETTING_CLASSIFICATIONS.get(normalized_title)
-    if classification is not None:
-        return dict(classification)
-    return {
-        "bucket": _SMARTESS_CLOUD_ONLY,
-        "source": "cloud_payload_only",
-        "reason": "No current 0925 root-map or PI30-family local evidence is linked to this field.",
-    }
+    return resolve_smartess_cloud_classification(normalized_title)
 
 
 def _normalize_setting_choices(raw_choices: Any) -> list[dict[str, Any]]:
@@ -1012,8 +619,30 @@ def _optional_text(value: Any) -> str | None:
 
 
 def _normalize_setting_name(value: str) -> str:
-    normalized = " ".join(str(value or "").strip().lower().split())
-    return _SMARTESS_SETTING_TITLE_ALIASES.get(normalized, normalized)
+    return " ".join(str(value or "").strip().lower().replace("_", " ").split())
+
+
+def _resolve_smartess_0925_setting_binding(semantic_entry: Any) -> dict[str, Any] | None:
+    if semantic_entry is None:
+        return None
+    cloud_binding = getattr(semantic_entry, "smartess_cloud", None)
+    if cloud_binding is None:
+        return None
+
+    profile_key = str(next(iter(getattr(cloud_binding, "profile_keys", ())), "") or "").strip()
+    register_key = str(next(iter(getattr(cloud_binding, "register_keys", ())), "") or "").strip()
+    register = next(iter(getattr(cloud_binding, "asset_registers", ())), None)
+    if not profile_key and not register_key and not isinstance(register, int):
+        return None
+
+    binding: dict[str, Any] = {}
+    if profile_key:
+        binding["profile_key"] = profile_key
+    if register_key:
+        binding["register_key"] = register_key
+    if isinstance(register, int):
+        binding["register"] = register
+    return binding or None
 
 
 def _parse_scalar(value: Any) -> Any:

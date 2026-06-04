@@ -727,6 +727,127 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertTrue(profile.get_capability("templated_switch").tested)
         self.assertTrue(profile.get_capability("direct_action").tested)
 
+    def test_capability_provenance_defaults_follow_tested_flag(self) -> None:
+        raw = {
+            "profile_key": "provenance_defaults_profile",
+            "title": "Provenance Defaults Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "tested_capability",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "tested",
+                    "group": "system",
+                    "tested": True,
+                },
+                {
+                    "key": "untested_capability",
+                    "register": 101,
+                    "value_kind": "bool",
+                    "note": "untested",
+                    "group": "system",
+                },
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "provenance_defaults_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                profile = profile_loader.load_driver_profile("provenance_defaults_profile.json")
+
+        self.assertEqual(profile.get_capability("tested_capability").provenance, "verified")
+        self.assertEqual(profile.get_capability("untested_capability").provenance, "inferred")
+
+    def test_capability_provenance_parses_explicit_values(self) -> None:
+        raw = {
+            "profile_key": "provenance_values_profile",
+            "title": "Provenance Values Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "verified_capability",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "verified",
+                    "group": "system",
+                    "provenance": "verified",
+                },
+                {
+                    "key": "doc_backed_capability",
+                    "register": 101,
+                    "value_kind": "bool",
+                    "note": "doc",
+                    "group": "system",
+                    "provenance": "doc_backed",
+                },
+                {
+                    "key": "inferred_capability",
+                    "register": 102,
+                    "value_kind": "bool",
+                    "note": "inferred",
+                    "group": "system",
+                    "provenance": "inferred",
+                },
+                {
+                    "key": "cloud_hint_capability",
+                    "register": 103,
+                    "value_kind": "bool",
+                    "note": "hint",
+                    "group": "system",
+                    "provenance": "cloud_hint",
+                },
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "provenance_values_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                profile = profile_loader.load_driver_profile("provenance_values_profile.json")
+
+        self.assertEqual(profile.get_capability("verified_capability").provenance, "verified")
+        self.assertEqual(profile.get_capability("doc_backed_capability").provenance, "doc_backed")
+        self.assertEqual(profile.get_capability("inferred_capability").provenance, "inferred")
+        self.assertEqual(profile.get_capability("cloud_hint_capability").provenance, "cloud_hint")
+        self.assertFalse(
+            profile.get_capability("cloud_hint_capability").allows_runtime_write_without_local_proof
+        )
+
+    def test_rejects_invalid_capability_provenance(self) -> None:
+        raw = {
+            "profile_key": "bad_provenance_profile",
+            "title": "Bad Provenance Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "invalid_provenance",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "invalid",
+                    "group": "system",
+                    "provenance": "runtime_guess",
+                }
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "bad_provenance_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"invalid_capability_provenance:runtime_guess",
+                ):
+                    profile_loader.load_driver_profile("bad_provenance_profile.json")
+
 
 if __name__ == "__main__":
     unittest.main()

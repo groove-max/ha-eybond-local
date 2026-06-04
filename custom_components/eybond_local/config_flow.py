@@ -135,6 +135,10 @@ from .metadata.local_metadata import (
     local_register_schema_override_details,
     resolve_local_metadata_rollback_paths,
 )
+from .metadata.collector_cloud_profile_catalog_loader import (
+    resolve_collector_cloud_family_by_host,
+    resolve_collector_cloud_family_by_port,
+)
 from .naming import installation_title
 from .metadata.profile_loader import load_driver_profile
 from .metadata.smartess_draft import resolve_smartess_known_family_draft_plan
@@ -4212,15 +4216,32 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "common.dynamic.collector_endpoint_unknown_hint",
                 "The current collector callback endpoint could not be read yet.",
             )
+
         host = normalized.split(",", 1)[0]
-        if "eybond" in host or "smartess" in host:
+        family = ""
+        try:
+            parsed = inspect_collector_server_endpoint(
+                normalized,
+                require_explicit_port=False,
+                require_explicit_protocol=False,
+            )
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            host = str(parsed.host or "").strip().lower()
+            if parsed.has_explicit_port:
+                family = resolve_collector_cloud_family_by_port(parsed.port)
+            else:
+                family = resolve_collector_cloud_family_by_host(host)
+
+        if family or "eybond" in host or "smartess" in host:
             return self._tr(
                 "common.dynamic.collector_endpoint_original_hint",
-                "This looks like the original SmartESS endpoint. Write it down before continuing; the integration will remember it, but keeping your own copy is safer.",
+                "This looks like the original cloud endpoint. Write it down before continuing; the integration will remember it, but keeping your own copy is safer.",
             )
         return self._tr(
             "common.dynamic.collector_endpoint_custom_hint",
-            "This endpoint does not look like the stock SmartESS address. Make sure you know how to restore it before continuing.",
+            "This endpoint does not look like the stock cloud address. Make sure you know how to restore it before continuing.",
         )
 
     def _collector_endpoint_confirm_placeholders(self) -> dict[str, str]:

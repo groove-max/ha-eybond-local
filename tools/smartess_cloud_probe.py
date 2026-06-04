@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 import time
 from typing import Any
@@ -35,6 +36,9 @@ DEFAULT_APP_VERSION = "3.43.3.0"
 DEFAULT_COMPANY_KEY = "bnrl_frRFjEz8Mkn"
 DEFAULT_DEVICE_TYPE = 2304
 DEFAULT_TIMEOUT = 15.0
+DEFAULT_LEARN_DELAY_SECONDS = 1.0
+DEFAULT_LEARN_NUMERIC_VALUE = "1"
+_HINT_RANGE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:~|-|to)\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
 class SmartEssCloudError(RuntimeError):
@@ -323,6 +327,28 @@ def build_device_settings_action(*, pn: str, sn: str, devcode: int, devaddr: int
     return _build_action(
         "webQueryDeviceCtrlField",
         [("pn", pn), ("devcode", devcode), ("devaddr", devaddr), ("sn", sn)],
+    )
+
+
+def build_device_control_action(
+    *,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    field_id: str,
+    value: str,
+) -> str:
+    return _build_action(
+        "ctrlDevice",
+        [
+            ("pn", pn),
+            ("sn", sn),
+            ("devcode", devcode),
+            ("devaddr", devaddr),
+            ("id", field_id),
+            ("val", value),
+        ],
     )
 
 
@@ -689,6 +715,279 @@ def _run_energy_flow(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _run_control_field(args: argparse.Namespace) -> dict[str, Any]:
+    session_source, session = _resolve_session(args)
+    if session is None:
+        raise SmartEssCloudError("control_field_requires_session_or_login")
+
+    action = build_device_control_action(
+        pn=args.pn,
+        sn=args.sn,
+        devcode=args.devcode,
+        devaddr=args.devaddr,
+        field_id=args.field_id,
+        value=args.value,
+    )
+    if args.dry_run:
+        return _build_command_output(
+            command="control-field",
+            action="ctrlDevice",
+            params={
+                "pn": args.pn,
+                "sn": args.sn,
+                "devcode": args.devcode,
+                "devaddr": args.devaddr,
+                "field_id": args.field_id,
+                "value": args.value,
+                "dry_run": True,
+            },
+            session_source=session_source,
+            session=session,
+            envelope=None,
+            normalized={"signed_action": action},
+        )
+    if not args.confirm_cloud_write:
+        raise SmartEssCloudError("control_field_requires_confirm_cloud_write")
+
+    envelope = fetch_signed_action(
+        action=action,
+        session=session,
+        base_url=args.base_url,
+        language=args.language,
+        app_id=args.app_id,
+        app_version=args.app_version,
+        timeout=args.timeout,
+    )
+    return _build_command_output(
+        command="control-field",
+        action="ctrlDevice",
+        params={
+            "pn": args.pn,
+            "sn": args.sn,
+            "devcode": args.devcode,
+            "devaddr": args.devaddr,
+            "field_id": args.field_id,
+            "value": args.value,
+            "dry_run": False,
+        },
+        session_source=session_source,
+        session=session,
+        envelope=envelope,
+        normalized=None,
+    )
+
+
+def _run_learn_settings(args: argparse.Namespace) -> dict[str, Any]:
+    session_source, session = _resolve_session(args)
+    if session is None:
+        raise SmartEssCloudError("learn_settings_requires_session_or_login")
+    if not args.dry_run and not args.confirm_cloud_write:
+        raise SmartEssCloudError("learn_settings_requires_confirm_cloud_write")
+
+    settings_action = build_device_settings_action(
+        pn=args.pn,
+        sn=args.sn,
+        devcode=args.devcode,
+        devaddr=args.devaddr,
+    )
+    settings_envelope = fetch_signed_action(
+        action=settings_action,
+        session=session,
+        base_url=args.base_url,
+        language=args.language,
+        app_id=args.app_id,
+        app_version=args.app_version,
+        timeout=args.timeout,
+    )
+    plan = _build_learn_settings_plan(
+        settings_envelope.dat,
+        field_ids=args.field_id,
+        include_numeric=args.include_numeric,
+        numeric_value=args.numeric_value,
+        all_choice_values=args.all_choice_values,
+        max_fields=args.max_fields,
+    )
+
+    output_path = Path(args.output) if str(args.output or "").strip() else None
+    results: list[dict[str, Any]] = []
+    for item in plan:
+        control_action = build_device_control_action(
+            pn=args.pn,
+            sn=args.sn,
+            devcode=args.devcode,
+            devaddr=args.devaddr,
+            field_id=item["field_id"],
+            value=item["value"],
+        )
+        result: dict[str, Any] = {
+            "field_id": item["field_id"],
+            "title": item["title"],
+            "value": item["value"],
+            "value_label": item.get("value_label", ""),
+            "value_source": item["value_source"],
+            "dry_run": bool(args.dry_run),
+            "action": "ctrlDevice",
+        }
+        if args.dry_run:
+            result["status"] = "planned"
+        else:
+            try:
+                envelope = fetch_signed_action(
+                    action=control_action,
+                    session=session,
+                    base_url=args.base_url,
+                    language=args.language,
+                    app_id=args.app_id,
+                    app_version=args.app_version,
+                    timeout=args.timeout,
+                )
+                result["status"] = "sent"
+                result["response"] = {"err": envelope.err, "desc": envelope.desc}
+                result["dat"] = envelope.dat
+            except SmartEssCloudError as exc:
+                result["status"] = "error"
+                result["error"] = str(exc)
+                if not args.continue_on_error:
+                    _append_jsonl(output_path, result)
+                    results.append(result)
+                    break
+        _append_jsonl(output_path, result)
+        results.append(result)
+        if not args.dry_run and args.delay_seconds > 0:
+            time.sleep(args.delay_seconds)
+
+    return _build_command_output(
+        command="learn-settings",
+        action="ctrlDevice",
+        params={
+            "pn": args.pn,
+            "sn": args.sn,
+            "devcode": args.devcode,
+            "devaddr": args.devaddr,
+            "field_ids": args.field_id,
+            "include_numeric": args.include_numeric,
+            "all_choice_values": args.all_choice_values,
+            "max_fields": args.max_fields,
+            "dry_run": args.dry_run,
+            "output": str(output_path or ""),
+        },
+        session_source=session_source,
+        session=session,
+        envelope=ApiEnvelope(err=settings_envelope.err, desc=settings_envelope.desc, dat=None, raw={}),
+        normalized={
+            "planned_write_count": len(plan),
+            "executed_result_count": len(results),
+            "sent_count": sum(1 for result in results if result.get("status") == "sent"),
+            "error_count": sum(1 for result in results if result.get("status") == "error"),
+            "results": results,
+        },
+    )
+
+
+def _build_learn_settings_plan(
+    dat: Any,
+    *,
+    field_ids: list[str],
+    include_numeric: bool,
+    numeric_value: str,
+    all_choice_values: bool,
+    max_fields: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(dat, dict):
+        return []
+    requested_ids = {str(field_id).strip() for field_id in field_ids if str(field_id).strip()}
+    fields = dat.get("field")
+    if not isinstance(fields, list):
+        return []
+
+    plan: list[dict[str, Any]] = []
+    visited_fields = 0
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        field_id = str(field.get("id") or "").strip()
+        if not field_id:
+            continue
+        if requested_ids and field_id not in requested_ids:
+            continue
+        if max_fields > 0 and visited_fields >= max_fields:
+            break
+        candidates = _candidate_values_for_field(
+            field,
+            include_numeric=include_numeric,
+            numeric_value=numeric_value,
+            all_choice_values=all_choice_values,
+        )
+        if not candidates:
+            continue
+        visited_fields += 1
+        for candidate in candidates:
+            plan.append(
+                {
+                    "field_id": field_id,
+                    "title": str(field.get("name") or ""),
+                    "value": candidate["value"],
+                    "value_label": candidate.get("label", ""),
+                    "value_source": candidate["source"],
+                }
+            )
+    return plan
+
+
+def _candidate_values_for_field(
+    field: dict[str, Any],
+    *,
+    include_numeric: bool,
+    numeric_value: str,
+    all_choice_values: bool,
+) -> list[dict[str, str]]:
+    choices = field.get("item")
+    if isinstance(choices, list) and choices:
+        candidates = []
+        for raw_choice in choices:
+            if not isinstance(raw_choice, dict):
+                continue
+            raw_value = raw_choice.get("key")
+            if raw_value in (None, ""):
+                continue
+            candidates.append(
+                {
+                    "value": str(raw_value),
+                    "label": str(raw_choice.get("val") or ""),
+                    "source": "choice",
+                }
+            )
+            if not all_choice_values:
+                break
+        return candidates
+
+    if not include_numeric:
+        return []
+    hint_value = _first_numeric_hint_value(str(field.get("hint") or ""))
+    return [
+        {
+            "value": hint_value or str(numeric_value),
+            "label": "",
+            "source": "hint_min" if hint_value else "numeric_default",
+        }
+    ]
+
+
+def _first_numeric_hint_value(hint: str) -> str:
+    match = _HINT_RANGE_RE.search(hint)
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def _append_jsonl(path: Path | None, payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def _run_device_bundle(args: argparse.Namespace) -> dict[str, Any]:
     session_source, session = _resolve_session(args)
     if session is None:
@@ -864,6 +1163,39 @@ def _build_parser() -> argparse.ArgumentParser:
     flow_parser.add_argument("--devcode", required=True, type=_parse_int)
     flow_parser.add_argument("--devaddr", required=True, type=_parse_int)
     flow_parser.set_defaults(func=_run_energy_flow)
+
+    control_parser = subparsers.add_parser("control-field", help="Call ctrlDevice for one setting field.")
+    _add_session_args(control_parser)
+    control_parser.add_argument("--pn", required=True)
+    control_parser.add_argument("--sn", required=True)
+    control_parser.add_argument("--devcode", required=True, type=_parse_int)
+    control_parser.add_argument("--devaddr", required=True, type=_parse_int)
+    control_parser.add_argument("--field-id", required=True)
+    control_parser.add_argument("--value", required=True)
+    control_parser.add_argument("--dry-run", action="store_true")
+    control_parser.add_argument("--confirm-cloud-write", action="store_true")
+    control_parser.set_defaults(func=_run_control_field)
+
+    learn_parser = subparsers.add_parser(
+        "learn-settings",
+        help="Iterate SmartESS setting fields through ctrlDevice for shadow-learning.",
+    )
+    _add_session_args(learn_parser)
+    learn_parser.add_argument("--pn", required=True)
+    learn_parser.add_argument("--sn", required=True)
+    learn_parser.add_argument("--devcode", required=True, type=_parse_int)
+    learn_parser.add_argument("--devaddr", required=True, type=_parse_int)
+    learn_parser.add_argument("--field-id", action="append", default=[])
+    learn_parser.add_argument("--include-numeric", action="store_true")
+    learn_parser.add_argument("--numeric-value", default=DEFAULT_LEARN_NUMERIC_VALUE)
+    learn_parser.add_argument("--all-choice-values", action="store_true")
+    learn_parser.add_argument("--max-fields", default=0, type=int)
+    learn_parser.add_argument("--delay-seconds", default=DEFAULT_LEARN_DELAY_SECONDS, type=float)
+    learn_parser.add_argument("--output", default="")
+    learn_parser.add_argument("--dry-run", action="store_true")
+    learn_parser.add_argument("--confirm-cloud-write", action="store_true")
+    learn_parser.add_argument("--continue-on-error", action="store_true", default=True)
+    learn_parser.set_defaults(func=_run_learn_settings)
 
     bundle_parser = subparsers.add_parser(
         "device-bundle",

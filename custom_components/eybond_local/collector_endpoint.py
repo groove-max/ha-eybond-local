@@ -6,6 +6,10 @@ from dataclasses import dataclass
 import ipaddress
 import re
 
+from .metadata.collector_cloud_profile_catalog_loader import (
+    load_collector_cloud_profile_catalog,
+)
+
 _HOSTNAME_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?$")
 
 DEFAULT_COLLECTOR_SERVER_PORT = 18899
@@ -92,7 +96,14 @@ def validate_collector_server_protocol(
 def default_collector_server_port(*, cloud_family: str = "") -> int:
     """Return the semantic default callback port for one collector cloud family."""
 
-    if str(cloud_family or "").strip().lower() == "legacy_binary":
+    normalized_family = str(cloud_family or "").strip().lower()
+    if normalized_family:
+        catalog = load_collector_cloud_profile_catalog()
+        profile = catalog.profiles.get(normalized_family)
+        if profile is not None and profile.known_ports:
+            return int(profile.known_ports[0])
+
+    if normalized_family == "legacy_binary":
         return LEGACY_BINARY_COLLECTOR_SERVER_PORT
     return DEFAULT_COLLECTOR_SERVER_PORT
 

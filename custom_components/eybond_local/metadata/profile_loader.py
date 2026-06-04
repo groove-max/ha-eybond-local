@@ -22,6 +22,9 @@ from ..models import (
 
 PROFILES_DIR = Path(__file__).resolve().parents[1] / "profiles"
 _EXTERNAL_PROFILE_ROOTS: tuple[Path, ...] = ()
+_ALLOWED_CAPABILITY_PROVENANCE: frozenset[str] = frozenset(
+    {"verified", "doc_backed", "inferred", "cloud_hint"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +225,8 @@ def _parse_capability(
     if not choices:
         choices = tuple(_parse_choice(item) for item in resolved_raw.get("choices", []))
     enum_map = _parse_enum_map(resolved_raw.get("enum_map"))
+    tested = bool(resolved_raw.get("tested", False))
+    provenance = _parse_capability_provenance(resolved_raw.get("provenance"), tested=tested)
     return WriteCapability(
         key=str(resolved_raw["key"]),
         register=int(resolved_raw["register"]),
@@ -229,7 +234,8 @@ def _parse_capability(
         note=str(resolved_raw.get("note", "")),
         word_count=int(resolved_raw.get("word_count", 1)),
         combine=str(resolved_raw.get("combine", "u16")),
-        tested=bool(resolved_raw.get("tested", False)),
+        tested=tested,
+        provenance=provenance,
         support_tier=str(resolved_raw.get("support_tier", "")),
         support_notes=str(resolved_raw.get("support_notes", "")),
         action_value=_optional_int(resolved_raw.get("action_value")),
@@ -390,6 +396,16 @@ def _parse_enum_map(raw: Any) -> dict[int, str] | None:
     if not isinstance(raw, Mapping):
         return None
     return {int(key): str(value) for key, value in raw.items()}
+
+
+def _parse_capability_provenance(value: Any, *, tested: bool) -> str:
+    if value is None or value == "":
+        return "verified" if tested else "inferred"
+
+    parsed = str(value).strip().lower()
+    if parsed not in _ALLOWED_CAPABILITY_PROVENANCE:
+        raise ValueError(f"invalid_capability_provenance:{value}")
+    return parsed
 
 
 def _optional_int(value: Any) -> int | None:

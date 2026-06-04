@@ -107,7 +107,7 @@
           "collector_operation_mode": "Режим работы коллектора"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant."
+          "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant."
         }
       },
       "collector_endpoint_confirm": {
@@ -128,7 +128,7 @@
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
@@ -140,7 +140,7 @@
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
@@ -293,7 +293,7 @@
         },
         "data_description": {
           "poll_interval": "Как часто считывать значения датчиков с инвертора.",
-          "collector_operation_mode": "SmartESS + HA оставляет коллектор доступным в приложении SmartESS, а Home Assistant при этом тоже работает с ним локально. Только Home Assistant переводит коллектор в режим подключения только к Home Assistant.",
+          "collector_operation_mode": "Cloud app + HA оставляет коллектор доступным в исходном облачном приложении, а Home Assistant при этом тоже работает с ним локально. Только Home Assistant переводит коллектор в режим подключения только к Home Assistant.",
           "control_mode": "Авто включает проверенные элементы управления, когда уверенность обнаружения высока. Только чтение отключает все управление. Полный режим включает всё."
         },
         "sections": {
@@ -458,7 +458,7 @@
       "collector_operation_mode": {
         "name": "Режим работы коллектора",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + HA",
+          "smartess_cloud_home_assistant": "Cloud + HA",
           "home_assistant_only": "Только Home Assistant"
         }
       },
@@ -485,7 +485,7 @@
       "collector_operation_mode": {
         "name": "Режим работы коллектора",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + HA",
+          "smartess_cloud_home_assistant": "Cloud + HA",
           "home_assistant_only": "Только Home Assistant"
         }
       },
@@ -581,7 +581,7 @@
         }
       },
       "rollback_collector_server_endpoint": {
-        "name": "Восстановить доступ к SmartESS",
+        "name": "Восстановить облачный доступ",
         "state_attributes": {
           "action_summary": {
             "name": "Сводка действия"

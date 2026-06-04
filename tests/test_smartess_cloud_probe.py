@@ -53,6 +53,142 @@ class SmartEssCloudProbeTests(unittest.TestCase):
         self.assertEqual(args.pagesize, 50)
         self.assertIs(args.func, smartess_cloud_probe._run_device_bundle)
 
+    def test_parser_accepts_learn_settings_command(self) -> None:
+        parser = smartess_cloud_probe._build_parser()
+
+        args = parser.parse_args(
+            [
+                "learn-settings",
+                "--token",
+                "token123456789",
+                "--secret",
+                "secret123456789",
+                "--pn",
+                "E50000253884199645",
+                "--sn",
+                "E50000253884199645094801",
+                "--devcode",
+                "2376",
+                "--devaddr",
+                "1",
+                "--field-id",
+                "sys_eybond_ctrl_53",
+                "--dry-run",
+            ]
+        )
+
+        self.assertEqual(args.command, "learn-settings")
+        self.assertEqual(args.field_id, ["sys_eybond_ctrl_53"])
+        self.assertIs(args.func, smartess_cloud_probe._run_learn_settings)
+
+    def test_build_device_control_action_uses_ctrl_device_fields(self) -> None:
+        action = smartess_cloud_probe.build_device_control_action(
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            field_id="sys_eybond_ctrl_53",
+            value="1",
+        )
+
+        self.assertEqual(
+            action,
+            (
+                "&action=ctrlDevice"
+                "&pn=E50000253884199645"
+                "&sn=E50000253884199645094801"
+                "&devcode=2376"
+                "&devaddr=1"
+                "&id=sys_eybond_ctrl_53"
+                "&val=1"
+            ),
+        )
+
+    def test_learn_settings_dry_run_plans_choice_fields(self) -> None:
+        args = argparse.Namespace(
+            username="",
+            password="",
+            token="token123456789",
+            secret="secret123456789",
+            base_url=smartess_cloud_probe.DEFAULT_BASE_URL,
+            language=smartess_cloud_probe.DEFAULT_LANGUAGE,
+            app_id=smartess_cloud_probe.DEFAULT_APP_ID,
+            app_version=smartess_cloud_probe.DEFAULT_APP_VERSION,
+            company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
+            timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            field_id=[],
+            include_numeric=False,
+            numeric_value=smartess_cloud_probe.DEFAULT_LEARN_NUMERIC_VALUE,
+            all_choice_values=False,
+            max_fields=0,
+            delay_seconds=0,
+            output="",
+            dry_run=True,
+            confirm_cloud_write=False,
+            continue_on_error=True,
+        )
+        settings_envelope = smartess_cloud_probe.ApiEnvelope(
+            err=0,
+            desc="ok",
+            dat={
+                "field": [
+                    {
+                        "id": "sys_eybond_ctrl_53",
+                        "name": "Backlight Control",
+                        "item": [
+                            {"key": "0", "val": "Backlight Timing Off"},
+                            {"key": "1", "val": "Backlight On"},
+                        ],
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_76",
+                        "name": "Max.Charging Current",
+                        "unit": "A",
+                    },
+                ],
+                "two_tier": {},
+            },
+            raw={},
+        )
+
+        with patch.object(
+            smartess_cloud_probe,
+            "fetch_signed_action",
+            return_value=settings_envelope,
+        ) as fetch:
+            payload = smartess_cloud_probe._run_learn_settings(args)
+
+        self.assertEqual(fetch.call_count, 1)
+        normalized = payload["normalized"]
+        self.assertEqual(normalized["planned_write_count"], 1)
+        self.assertEqual(normalized["results"][0]["field_id"], "sys_eybond_ctrl_53")
+        self.assertEqual(normalized["results"][0]["value"], "0")
+        self.assertEqual(normalized["results"][0]["status"], "planned")
+
+    def test_learn_settings_requires_confirm_for_live_writes(self) -> None:
+        args = argparse.Namespace(
+            username="",
+            password="",
+            token="token123456789",
+            secret="secret123456789",
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=False,
+        )
+
+        with self.assertRaisesRegex(
+            smartess_cloud_probe.SmartEssCloudError,
+            "requires_confirm_cloud_write",
+        ):
+            smartess_cloud_probe._run_learn_settings(args)
+
     def test_device_bundle_collects_all_cloud_payloads(self) -> None:
         args = argparse.Namespace(
             username="",
@@ -375,6 +511,72 @@ class SmartEssCloudProbeTests(unittest.TestCase):
         self.assertEqual(fields[9]["binding"]["register"], 5001)
         self.assertEqual(fields[10]["bucket"], "exact_0925")
         self.assertEqual(fields[10]["binding"]["register"], 5012)
+
+    def test_normalize_device_settings_keeps_bridge_only_aliases_cloud_only(self) -> None:
+        normalized = smartess_cloud_probe.normalize_device_settings(
+            {
+                "field": [
+                    {
+                        "id": "bse_eybond_ctrl_main_output_priority",
+                        "name": "Main Output Priority",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_battery_type",
+                        "name": "Battery Type",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_soc_recovery",
+                        "name": "SOC recovery value of battery discharge in mains mode",
+                    },
+                    {
+                        "id": "sys_eybond_read_lcd_backlight",
+                        "name": "LCD backlight",
+                    },
+                    {
+                        "id": "sys_eybond_read_lcd_homepage",
+                        "name": "LCD automatically returns to the homepage",
+                    },
+                    {
+                        "id": "sys_eybond_read_overload_restart",
+                        "name": "Overload automatic restart",
+                    },
+                    {
+                        "id": "sys_eybond_read_overtemp_restart",
+                        "name": "Automatic restart when over temperature",
+                    },
+                    {
+                        "id": "sys_eybond_read_overload_bypass",
+                        "name": "Overload transfer to bypass enable",
+                    },
+                ],
+                "two_tier": {},
+            }
+        )
+
+        assert normalized is not None
+        self.assertEqual(normalized["mapped_field_count"], 3)
+        self.assertEqual(normalized["exact_0925_field_count"], 3)
+        self.assertEqual(normalized["cloud_only_field_count"], 5)
+
+        fields_by_title = {
+            str(field["title"]).lower(): field
+            for field in normalized["fields"]
+        }
+        self.assertEqual(fields_by_title["main output priority"]["binding"]["register"], 4537)
+        self.assertEqual(fields_by_title["battery type"]["binding"]["register"], 4539)
+        self.assertEqual(
+            fields_by_title["soc recovery value of battery discharge in mains mode"]["binding"]["register"],
+            4545,
+        )
+        for title in (
+            "lcd backlight",
+            "lcd automatically returns to the homepage",
+            "overload automatic restart",
+            "automatic restart when over temperature",
+            "overload transfer to bypass enable",
+        ):
+            self.assertEqual(fields_by_title[title]["bucket"], "cloud_only")
+            self.assertNotIn("binding", fields_by_title[title])
 
     def test_device_bundle_exports_cloud_evidence_into_ha_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

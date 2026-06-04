@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +17,20 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
+    _resolve_smg_identity_binding,
     _support_capture_ranges,
 )
 from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
+from custom_components.eybond_local.metadata.smg_identity_anchor_catalog_loader import (  # noqa: E402
+    SmgIdentityAnchor,
+    SmgIdentityAnchorLayoutGroup,
+    load_smg_identity_anchor_catalog,
+)
+from custom_components.eybond_local.metadata.smg_identity_rules import (  # noqa: E402
+    SmgIdentityCandidate,
+    score_smg_identity_candidates as _score_smg_identity_candidates,
+)
 from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
     set_external_register_schema_roots,
 )
@@ -399,6 +412,115 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         if inverter is not None:
             self.assertNotEqual(inverter.variant_key, "anenji_anj_11kw_48v_wifi_p")
 
+    async def test_identity_variant_promotion_uses_catalog_layout_routes(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        transport_without_variant_route = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        catalog = load_smg_identity_anchor_catalog()
+        catalog_without_variant_routes = replace(catalog, variant_layout_groups={})
+        with patch(
+            "custom_components.eybond_local.drivers.smg.load_smg_identity_anchor_catalog",
+            return_value=catalog_without_variant_routes,
+        ):
+            binding_without_variant_route = await _resolve_smg_identity_binding(
+                driver._session(transport_without_variant_route, target)
+            )
+
+        assert binding_without_variant_route is not None
+        self.assertEqual(binding_without_variant_route.variant_key, "family_fallback")
+
+        transport_with_variant_route = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        binding_with_variant_route = await _resolve_smg_identity_binding(
+            driver._session(transport_with_variant_route, target)
+        )
+        assert binding_with_variant_route is not None
+        self.assertEqual(binding_with_variant_route.variant_key, "anenji_anj_11kw_48v_wifi_p")
+
+    async def test_identity_variant_layout_routes_do_not_depend_on_variant_map_order(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        catalog = load_smg_identity_anchor_catalog()
+        synthetic_layout_groups = {
+            **catalog.layout_groups,
+            "synthetic_route_a": SmgIdentityAnchorLayoutGroup(
+                key="synthetic_route_a",
+                register_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+                description="Synthetic route A",
+            ),
+            "synthetic_route_b": SmgIdentityAnchorLayoutGroup(
+                key="synthetic_route_b",
+                register_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+                description="Synthetic route B",
+            ),
+        }
+        synthetic_anchors = {
+            **catalog.anchors,
+            "synthetic_anchor_a": SmgIdentityAnchor(
+                key="synthetic_anchor_a",
+                read_group="serial_identity",
+                source_type="block",
+                block_key="serial",
+                variants=("synthetic_variant_a",),
+                layout_groups=("synthetic_route_a",),
+            ),
+            "synthetic_anchor_b": SmgIdentityAnchor(
+                key="synthetic_anchor_b",
+                read_group="serial_identity",
+                source_type="block",
+                block_key="serial",
+                variants=("synthetic_variant_b",),
+                layout_groups=("synthetic_route_b",),
+            ),
+        }
+        synthetic_catalog = replace(
+            catalog,
+            layout_groups=synthetic_layout_groups,
+            variant_layout_groups={
+                "synthetic_variant_a": ("synthetic_route_a",),
+                "synthetic_variant_b": ("synthetic_route_b",),
+            },
+            anchors=synthetic_anchors,
+        )
+
+        def _selection_sensitive_to_partial_routed_evidence(evidence):
+            anchor_keys = set(evidence.anchors)
+            has_anchor_a = "synthetic_anchor_a" in anchor_keys
+            has_anchor_b = "synthetic_anchor_b" in anchor_keys
+            if has_anchor_a and not has_anchor_b:
+                return SimpleNamespace(variant_key="synthetic_variant_a")
+            if has_anchor_b and not has_anchor_a:
+                return SimpleNamespace(variant_key="synthetic_variant_b")
+            if has_anchor_a and has_anchor_b:
+                return SimpleNamespace(variant_key="synthetic_variant_b")
+            return SimpleNamespace(variant_key="family_fallback")
+
+        with patch(
+            "custom_components.eybond_local.drivers.smg.load_smg_identity_anchor_catalog",
+            return_value=synthetic_catalog,
+        ), patch(
+            "custom_components.eybond_local.drivers.smg._select_smg_identity_binding",
+            side_effect=_selection_sensitive_to_partial_routed_evidence,
+        ):
+            selected_binding = await _resolve_smg_identity_binding(driver._session(transport, target))
+
+        assert selected_binding is not None
+        self.assertEqual(selected_binding.variant_key, "synthetic_variant_b")
+
     async def test_read_values_uses_variant_schema_mapping(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
@@ -708,6 +830,122 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["rated_cell_count"], 16)
         self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
         self.assertEqual(inverter.details["rated_power"], 6200)
+
+    async def test_probe_uses_bounded_identity_reads_before_selected_full_probe(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class ProbeReadTrackingTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self.read_requests: list[tuple[int, int]] = []
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                self.read_requests.append((address, count))
+                return super()._handle_read_holding(payload)
+
+        transport = ProbeReadTrackingTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertIn((201, 1), transport.read_requests)
+        self.assertIn((320, 2), transport.read_requests)
+        self.assertIn((171, 1), transport.read_requests)
+        self.assertIn((184, 1), transport.read_requests)
+        self.assertIn((406, 1), transport.read_requests)
+        self.assertIn((420, 1), transport.read_requests)
+        self.assertIn((643, 1), transport.read_requests)
+        self.assertNotIn((186, 46), transport.read_requests)
+        self.assertNotIn((600, 57), transport.read_requests)
+        self.assertNotIn((677, 18), transport.read_requests)
+
+    async def test_probe_falls_back_when_identity_resolution_raises(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class IdentityFailureOnceTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self.failed_identity_read = False
+                self.read_requests: list[tuple[int, int]] = []
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                self.read_requests.append((address, count))
+                if not self.failed_identity_read and address == 201 and count == 1:
+                    self.failed_identity_read = True
+                    raise RuntimeError("identity read failed")
+                return super()._handle_read_holding(payload)
+
+        transport = IdentityFailureOnceTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertTrue(transport.failed_identity_read)
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertEqual(inverter.model_name, "SMG 6200")
+        self.assertNotIn((600, 57), transport.read_requests)
+        self.assertNotIn((677, 18), transport.read_requests)
+
+    async def test_probe_ignores_unrelated_extra_identity_rule_without_extra_full_probe_attempts(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class ProbeReadTrackingTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self.read_requests: list[tuple[int, int]] = []
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                self.read_requests.append((address, count))
+                return super()._handle_read_holding(payload)
+
+        transport = ProbeReadTrackingTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        def _score_with_extra_unrelated_rule(evidence):
+            base = list(_score_smg_identity_candidates(evidence))
+            base.append(
+                SmgIdentityCandidate(
+                    variant_key="synthetic_unrelated_variant",
+                    score=1,
+                    confidence="low",
+                    read_only=True,
+                    provisional=True,
+                    reasons=("synthetic_unrelated_rule",),
+                )
+            )
+            return tuple(base)
+
+        with patch(
+            "custom_components.eybond_local.drivers.smg.score_smg_identity_candidates",
+            side_effect=_score_with_extra_unrelated_rule,
+        ):
+            inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertNotIn((600, 57), transport.read_requests)
+        self.assertNotIn((677, 18), transport.read_requests)
 
     async def test_probe_omits_placeholder_default_device_name(self) -> None:
         driver = SmgModbusDriver()

@@ -18,9 +18,18 @@ from custom_components.eybond_local.collector_endpoint import (  # noqa: E402
     parse_collector_server_endpoint,
     resolve_collector_server_endpoint,
 )
+from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loader import (  # noqa: E402
+    resolve_collector_cloud_family_by_host,
+)
 
 
 class CollectorEndpointTests(unittest.TestCase):
+    def test_default_port_is_catalog_backed_with_compatibility_fallback(self) -> None:
+        self.assertEqual(default_collector_server_port(cloud_family="legacy_binary"), 502)
+        self.assertEqual(default_collector_server_port(cloud_family="smartess_at"), 18899)
+        self.assertEqual(default_collector_server_port(cloud_family="SMARTESS_AT"), 18899)
+        self.assertEqual(default_collector_server_port(cloud_family="unknown_family"), 18899)
+
     def test_format_requires_ipv4_or_hostname_and_tcp(self) -> None:
         self.assertEqual(
             format_collector_server_endpoint(
@@ -98,6 +107,21 @@ class CollectorEndpointTests(unittest.TestCase):
         self.assertFalse(parsed.has_explicit_protocol)
         self.assertEqual(parsed.render(preserve_shape=True), "ess.eybond.com")
         self.assertEqual(parsed.render(preserve_shape=False), "ess.eybond.com,18899,TCP")
+
+    def test_parse_preserves_smartvalue_endpoint_shape_for_host_based_family_resolution(self) -> None:
+        # APK-derived endpoint evidence indicates SmartValue AT collectors use
+        # CLDSRVHOST1 / parameter 21 endpoint semantics with m2m.eybond.com.
+        parsed = inspect_collector_server_endpoint(
+            "m2m.eybond.com,18899,TCP",
+            require_explicit_port=True,
+            require_explicit_protocol=True,
+            require_tcp=True,
+        )
+
+        self.assertEqual(parsed.host, "m2m.eybond.com")
+        self.assertEqual(parsed.port, 18899)
+        self.assertEqual(parsed.protocol, "TCP")
+        self.assertEqual(resolve_collector_cloud_family_by_host(parsed.host), "smartvalue_at")
 
     def test_resolve_uses_family_default_for_host_only_legacy_endpoint(self) -> None:
         self.assertEqual(default_collector_server_port(cloud_family="legacy_binary"), 502)

@@ -25,7 +25,13 @@ class SupportPackageTests(unittest.TestCase):
                 entry_id="entry123",
                 entry_title="SMG 6200",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={
+                    "collector_pn": "E5000025388419",
+                    "collector_cloud_profile_key": "smartess_at",
+                    "collector_cloud_profile_label": "SmartESS AT",
+                    "collector_cloud_profile_source": "smartess_cloud_diagnostics",
+                    "collector_cloud_profile_confidence": "high",
+                },
                 inverter={
                     "driver_key": "modbus_smg",
                     "model_name": "SMG 6200",
@@ -119,6 +125,22 @@ class SupportPackageTests(unittest.TestCase):
                 "builtin",
             )
             self.assertEqual(bundled["entry"]["entry_id"], "entry123")
+            self.assertEqual(
+                bundled["runtime"]["collector"]["collector_cloud_profile_key"],
+                "smartess_at",
+            )
+            self.assertEqual(
+                bundled["runtime"]["collector"]["collector_cloud_profile_label"],
+                "SmartESS AT",
+            )
+            self.assertEqual(
+                bundled["runtime"]["collector"]["collector_cloud_profile_source"],
+                "smartess_cloud_diagnostics",
+            )
+            self.assertEqual(
+                bundled["runtime"]["collector"]["collector_cloud_profile_confidence"],
+                "high",
+            )
             self.assertEqual(
                 bundled["evidence"]["cloud"],
                 {"archive_member": "evidence/cloud_evidence.json"},

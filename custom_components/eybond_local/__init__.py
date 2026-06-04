@@ -835,6 +835,14 @@ async def _async_cleanup_obsolete_entities(
     coordinator,
 ) -> None:
     """Remove entity-registry entries that no longer belong to this entry's driver."""
+    cleanup_allowed, cleanup_reason = _cleanup_obsolete_entities_allowed(coordinator)
+    if not cleanup_allowed:
+        logger.debug(
+            "Skipping obsolete entity cleanup for entry %s: %s",
+            entry.entry_id,
+            cleanup_reason,
+        )
+        return
 
     from homeassistant.helpers import entity_registry as er
 
@@ -958,6 +966,48 @@ async def _async_cleanup_obsolete_entities(
         registry.async_remove(entity_id)
 
 
+def _cleanup_obsolete_entities_allowed(coordinator) -> tuple[bool, str]:
+    """Return whether destructive cleanup can safely run for current metadata state."""
+
+    if getattr(coordinator, "identified_inverter", None) is not None:
+        return True, "live_inverter_identity"
+
+    snapshot = getattr(coordinator, "effective_metadata_snapshot", None)
+    if snapshot is None or not bool(getattr(snapshot, "is_valid", False)):
+        return False, "missing_valid_effective_metadata_snapshot"
+
+    effective_metadata = getattr(coordinator, "effective_metadata", None)
+    if effective_metadata is None:
+        return False, "effective_metadata_unavailable"
+
+    effective_owner_key = str(getattr(effective_metadata, "effective_owner_key", "") or "").strip()
+    effective_profile_name = str(getattr(effective_metadata, "profile_name", "") or "").strip()
+    effective_register_schema_name = str(
+        getattr(effective_metadata, "register_schema_name", "") or ""
+    ).strip()
+    if not (effective_owner_key and effective_profile_name and effective_register_schema_name):
+        return False, "effective_metadata_incomplete"
+
+    snapshot_owner_key = str(getattr(snapshot, "effective_owner_key", "") or "").strip()
+    snapshot_profile_name = str(getattr(snapshot, "profile_name", "") or "").strip()
+    snapshot_register_schema_name = str(
+        getattr(snapshot, "register_schema_name", "") or ""
+    ).strip()
+    if (
+        effective_owner_key != snapshot_owner_key
+        or effective_profile_name != snapshot_profile_name
+        or effective_register_schema_name != snapshot_register_schema_name
+    ):
+        return False, "effective_metadata_mismatch_from_snapshot"
+
+    profile_metadata = getattr(effective_metadata, "profile_metadata", None)
+    register_schema_metadata = getattr(effective_metadata, "register_schema_metadata", None)
+    if profile_metadata is None or register_schema_metadata is None:
+        return False, "effective_metadata_assets_unresolved"
+
+    return True, "snapshot_metadata_consistent"
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EyeBond Local from a config entry."""
 
@@ -981,10 +1031,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_self_heal_enabled_defaults(hass, entry, coordinator)
         await _async_cleanup_obsolete_entities(hass, entry, coordinator)
 
-        platforms_started_with_inverter_identity = bool(coordinator.has_inverter_identity)
+        setup_driver, _setup_inverter, platforms_started_with_inverter_identity = (
+            entity_setup_context(entry, coordinator)
+        )
+        platforms_started_with_driver_fallback = bool(
+            setup_driver is not None and not platforms_started_with_inverter_identity
+        )
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         coordinator.mark_entity_platforms_initialized(
-            has_inverter_identity=platforms_started_with_inverter_identity
+            has_inverter_identity=platforms_started_with_inverter_identity,
+            has_driver_fallback=platforms_started_with_driver_fallback,
         )
         expert_migration_task = hass.async_create_task(
             _async_finalize_expert_entity_migration(hass, entry)

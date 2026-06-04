@@ -12,6 +12,7 @@ from ..runtime_labels import runtime_path_label
 from .profile_loader import DriverProfileMetadata, load_driver_profile
 from .register_schema_loader import load_register_schema
 from .register_schema_models import RegisterSchemaMetadata
+from .effective_metadata_snapshot import EffectiveMetadataSnapshot
 from .smartess_protocol_catalog_loader import (
     SmartEssProtocolCatalogEntry,
     resolve_smartess_protocol_catalog_entry,
@@ -40,6 +41,7 @@ def resolve_effective_metadata_selection(
     driver: Any = None,
     collector: CollectorInfo | None = None,
     entry_data: Mapping[str, Any] | None = None,
+    persisted_snapshot: EffectiveMetadataSnapshot | None = None,
 ) -> EffectiveMetadataSelection:
     """Resolve effective metadata names from runtime state and SmartESS hints."""
 
@@ -48,24 +50,38 @@ def resolve_effective_metadata_selection(
         entry_data=entry_data,
     )
 
+    snapshot_profile_metadata, snapshot_register_schema_metadata = _resolve_snapshot_metadata(
+        persisted_snapshot
+    )
+
     profile_name = _normalized_name(getattr(inverter, "profile_name", ""))
+    if not profile_name and snapshot_profile_metadata is not None:
+        profile_name = _normalized_name(getattr(snapshot_profile_metadata, "source_name", ""))
     if not profile_name:
         profile_name = _normalized_name(getattr(driver, "profile_name", ""))
     if not profile_name and smartess_protocol is not None:
         profile_name = smartess_protocol.profile_name
 
     register_schema_name = _normalized_name(getattr(inverter, "register_schema_name", ""))
+    if not register_schema_name and snapshot_register_schema_metadata is not None:
+        register_schema_name = _normalized_name(
+            getattr(snapshot_register_schema_metadata, "source_name", "")
+        )
     if not register_schema_name:
         register_schema_name = _normalized_name(getattr(driver, "register_schema_name", ""))
     if not register_schema_name and smartess_protocol is not None:
         register_schema_name = smartess_protocol.register_schema_name
 
-    profile_metadata = load_driver_profile(profile_name) if profile_name else None
-    register_schema_metadata = (
-        load_register_schema(register_schema_name) if register_schema_name else None
-    )
+    profile_metadata = snapshot_profile_metadata
+    register_schema_metadata = snapshot_register_schema_metadata
+    if profile_metadata is None and profile_name:
+        profile_metadata = load_driver_profile(profile_name)
+    if register_schema_metadata is None and register_schema_name:
+        register_schema_metadata = load_register_schema(register_schema_name)
 
     effective_owner_key = _normalized_name(getattr(inverter, "driver_key", ""))
+    if not effective_owner_key and snapshot_profile_metadata is not None:
+        effective_owner_key = _normalized_name(persisted_snapshot.effective_owner_key)
     if not effective_owner_key:
         effective_owner_key = _normalized_name(getattr(driver, "key", ""))
     if not effective_owner_key and profile_metadata is not None:
@@ -113,6 +129,19 @@ def _resolve_smartess_protocol_hint(
         asset_id=live_asset_id or saved_asset_id,
         profile_key=live_profile_key or saved_profile_key,
     )
+
+
+def _resolve_snapshot_metadata(
+    snapshot: EffectiveMetadataSnapshot | None,
+) -> tuple[DriverProfileMetadata | None, RegisterSchemaMetadata | None]:
+    if snapshot is None or not snapshot.is_valid:
+        return None, None
+    try:
+        profile_metadata = load_driver_profile(snapshot.profile_name)
+        register_schema_metadata = load_register_schema(snapshot.register_schema_name)
+    except FileNotFoundError:
+        return None, None
+    return profile_metadata, register_schema_metadata
 
 
 def _smartess_driver_name(protocol: SmartEssProtocolCatalogEntry) -> str:

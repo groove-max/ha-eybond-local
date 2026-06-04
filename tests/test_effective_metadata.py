@@ -18,6 +18,9 @@ from custom_components.eybond_local.const import (  # noqa: E402
 from custom_components.eybond_local.metadata.effective_metadata import (  # noqa: E402
     resolve_effective_metadata_selection,
 )
+from custom_components.eybond_local.metadata.effective_metadata_snapshot import (  # noqa: E402
+    build_effective_metadata_snapshot,
+)
 from custom_components.eybond_local.models import CollectorInfo  # noqa: E402
 
 
@@ -73,6 +76,87 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
             "pi30_ascii/models/smartess_0925_compat.json",
         )
 
+    def test_uses_persisted_snapshot_metadata_when_live_inverter_is_absent(self) -> None:
+        selection = resolve_effective_metadata_selection(
+            driver=types.SimpleNamespace(
+                key="modbus_smg",
+                name="SMG / Modbus",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+            persisted_snapshot=build_effective_metadata_snapshot(
+                effective_owner_key="modbus_smg",
+                effective_owner_name="SMG-family runtime",
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                confidence="high",
+                generation=3,
+            ),
+        )
+
+        self.assertEqual(selection.effective_owner_key, "modbus_smg")
+        self.assertEqual(selection.effective_owner_name, "SMG-family runtime")
+        self.assertEqual(selection.profile_name, "modbus_smg/models/anenji_4200_protocol_1.json")
+        self.assertEqual(
+            selection.register_schema_name,
+            "modbus_smg/models/anenji_4200_protocol_1.json",
+        )
+        self.assertEqual(
+            getattr(selection.profile_metadata, "key", ""),
+            "modbus_smg_anenji_4200_protocol_1",
+        )
+        self.assertEqual(
+            getattr(selection.register_schema_metadata, "key", ""),
+            "modbus_smg_anenji_4200_protocol_1",
+        )
+
+    def test_prefers_live_inverter_metadata_over_persisted_snapshot(self) -> None:
+        selection = resolve_effective_metadata_selection(
+            inverter=types.SimpleNamespace(
+                driver_key="modbus_smg",
+                profile_name="modbus_smg/models/smg_6200.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+            driver=types.SimpleNamespace(
+                key="modbus_smg",
+                name="SMG / Modbus",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+            persisted_snapshot=build_effective_metadata_snapshot(
+                effective_owner_key="modbus_smg",
+                effective_owner_name="SMG-family runtime",
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                confidence="high",
+                generation=3,
+            ),
+        )
+
+        self.assertEqual(selection.profile_name, "modbus_smg/models/smg_6200.json")
+        self.assertEqual(selection.register_schema_name, "modbus_smg/models/smg_6200.json")
+
+    def test_invalid_persisted_snapshot_keeps_legacy_fallback(self) -> None:
+        selection = resolve_effective_metadata_selection(
+            driver=types.SimpleNamespace(
+                key="modbus_smg",
+                name="SMG / Modbus",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+            persisted_snapshot=build_effective_metadata_snapshot(
+                effective_owner_key="modbus_smg",
+                effective_owner_name="SMG-family runtime",
+                profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
+                confidence="none",
+                generation=3,
+            ),
+        )
+
+        self.assertEqual(selection.profile_name, "smg_modbus.json")
+        self.assertEqual(selection.register_schema_name, "modbus_smg/models/smg_6200.json")
+
     def test_preserves_runtime_owner_alongside_smartess_family_label(self) -> None:
         selection = resolve_effective_metadata_selection(
             driver=types.SimpleNamespace(
@@ -114,6 +198,25 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         self.assertEqual(selection.effective_owner_name, "SMG-family runtime")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
         self.assertEqual(selection.raw_profile_name, "smartess_local/models/0925.json")
+        self.assertEqual(selection.profile_name, "smg_modbus.json")
+        self.assertEqual(
+            selection.register_schema_name,
+            "modbus_smg/models/smg_6200.json",
+        )
+
+    def test_collector_cloud_profile_identity_does_not_imply_inverter_profile_identity(self) -> None:
+        selection = resolve_effective_metadata_selection(
+            driver=types.SimpleNamespace(
+                key="modbus_smg",
+                name="SMG / Modbus",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+        )
+
+        # Collector cloud profile evidence (for example SmartValue m2m.eybond.com)
+        # is endpoint metadata only and must not rewrite inverter identity.
+        self.assertEqual(selection.effective_owner_key, "modbus_smg")
         self.assertEqual(selection.profile_name, "smg_modbus.json")
         self.assertEqual(
             selection.register_schema_name,

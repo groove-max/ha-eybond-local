@@ -107,7 +107,7 @@
           "collector_operation_mode": "Collector operating mode"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener."
+          "collector_operation_mode": "Cloud app + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener."
         }
       },
       "collector_endpoint_confirm": {
@@ -128,7 +128,7 @@
           "poll_interval": "Poll interval"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
+          "collector_operation_mode": "Cloud app + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
@@ -140,7 +140,7 @@
           "poll_interval": "Poll interval"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
+          "collector_operation_mode": "Cloud app + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
@@ -293,7 +293,7 @@
         },
         "data_description": {
           "poll_interval": "How often to read sensor values from the inverter.",
-          "collector_operation_mode": "SmartESS + HA keeps the collector visible in the SmartESS app while Home Assistant also talks to it locally. Home Assistant only makes that collector reconnect to Home Assistant.",
+          "collector_operation_mode": "Cloud app + HA keeps the collector visible in the vendor cloud app while Home Assistant also talks to it locally. Home Assistant only makes that collector reconnect to Home Assistant.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
         },
         "sections": {
@@ -458,7 +458,7 @@
       "collector_operation_mode": {
         "name": "Collector operation mode",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + HA",
+          "smartess_cloud_home_assistant": "Cloud + HA",
           "home_assistant_only": "Home Assistant only"
         }
       },
@@ -485,7 +485,7 @@
       "collector_operation_mode": {
         "name": "Collector operation mode",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + HA",
+          "smartess_cloud_home_assistant": "Cloud + HA",
           "home_assistant_only": "Home Assistant only"
         }
       },
@@ -581,7 +581,7 @@
         }
       },
       "rollback_collector_server_endpoint": {
-        "name": "Restore SmartESS access",
+        "name": "Restore cloud access",
         "state_attributes": {
           "action_summary": {
             "name": "Action summary"

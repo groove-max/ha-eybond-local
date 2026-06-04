@@ -103,6 +103,12 @@ def _install_homeassistant_stubs() -> None:
     def callback(func):
         return func
 
+    class HomeAssistant:
+        pass
+
+    def split_entity_id(entity_id):
+        return tuple(str(entity_id).split(".", 1))
+
     class SupportsResponse:
         ONLY = "only"
 
@@ -144,7 +150,9 @@ def _install_homeassistant_stubs() -> None:
     config_entries.ConfigFlow = ConfigFlow
     config_entries.ConfigFlowResult = dict
     config_entries.OptionsFlow = OptionsFlow
+    core.HomeAssistant = HomeAssistant
     core.callback = callback
+    core.split_entity_id = split_entity_id
     core.SupportsResponse = SupportsResponse
     data_entry_flow.section = section
 
@@ -2765,6 +2773,27 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             flow._collector_callback_target_endpoint(),
             "192.168.1.50",
         )
+
+    async def test_endpoint_originality_hint_uses_catalog_host_match(self) -> None:
+        flow = self._make_flow()
+
+        hint = flow._endpoint_originality_hint("dtu_ess.eybond.com")
+
+        self.assertIn("original cloud endpoint", hint)
+
+    async def test_endpoint_originality_hint_uses_catalog_port_match(self) -> None:
+        flow = self._make_flow()
+
+        hint = flow._endpoint_originality_hint("collector.example,502,TCP")
+
+        self.assertIn("original cloud endpoint", hint)
+
+    async def test_endpoint_originality_hint_reports_custom_for_unknown_endpoint(self) -> None:
+        flow = self._make_flow()
+
+        hint = flow._endpoint_originality_hint("collector.example,65535,TCP")
+
+        self.assertIn("does not look like the stock cloud address", hint)
 
     async def test_do_scan_keeps_matching_entries_loaded(self) -> None:
         matching = _FakeEntry("match", server_ip="192.168.1.50", tcp_port=8899)
