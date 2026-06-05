@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, replace
 import ipaddress
 import json
 import logging
@@ -28,10 +29,26 @@ from ..const import DEFAULT_REQUEST_TIMEOUT
 from ..link_transport import PayloadLinkTransport
 from ..models import CollectorInfo
 from ..support.proxy_session import InProcessProxyCaptureHandler
+from ..support.shadow_learning_backend import ShadowLearningSeed
+from ..support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandler
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LISTENER_BIND_HOST = "0.0.0.0"
+
+
+@dataclass(frozen=True, slots=True)
+class RouteLease:
+    """Exclusive ownership record for the shared collector callback route."""
+
+    mode: str
+    owner_id: str
+    entry_id: str
+    collector_ip: str
+    listen_port: int
+    upstream_host: str
+    upstream_port: int
+    state: str
 
 
 def _prefer_more_complete_collector_pn(current: str, candidate: str) -> str:
@@ -266,6 +283,10 @@ class EybondRuntimeLinkManager:
         self._auxiliary_at_transports: dict[int, SharedCollectorAtTransport]
         self._proxy_capture_route: SharedProxyCaptureRoute | None = None
         self._proxy_capture_handler: InProcessProxyCaptureHandler | None = None
+        self._shadow_learning_route: SharedProxyCaptureRoute | None = None
+        self._shadow_learning_handler: InProcessFailClosedShadowProxyHandler | None = None
+        self._route_lease_lock = asyncio.Lock()
+        self._route_lease: RouteLease | None = None
         self._announcer: DiscoveryAnnouncer
         self._rebuild_link(self._effective_server_ip)
 
@@ -439,7 +460,8 @@ class EybondRuntimeLinkManager:
     async def async_stop(self) -> None:
         """Stop discovery and the active link transport."""
 
-        await self.async_stop_proxy_capture_route()
+        await self.async_stop_proxy_capture_route(force=True)
+        await self.async_stop_shadow_learning_route(force=True)
         await self._announcer.stop()
         await self._stop_all_transports()
         self._started = False
@@ -511,6 +533,8 @@ class EybondRuntimeLinkManager:
     async def async_start_proxy_capture_route(
         self,
         *,
+        owner_id: str = "",
+        entry_id: str = "",
         collector_ip: str,
         listen_port: int,
         upstream_host: str,
@@ -521,47 +545,306 @@ class EybondRuntimeLinkManager:
     ) -> None:
         """Route one collector's callback connection through the in-process proxy."""
 
-        await self.async_stop_proxy_capture_route()
-        handler = InProcessProxyCaptureHandler(
+        normalized_owner_id = self._normalize_route_owner_id(
+            mode="proxy_capture",
+            owner_id=owner_id,
+            entry_id=entry_id,
+            output_path=output_path,
+        )
+        await self._acquire_route_lease(
+            mode="proxy_capture",
+            owner_id=normalized_owner_id,
+            entry_id=entry_id,
+            collector_ip=collector_ip,
+            listen_port=listen_port,
             upstream_host=upstream_host,
             upstream_port=upstream_port,
-            output_path=output_path,
-            masked_endpoint=masked_endpoint,
-            restore_trigger_path=restore_trigger_path,
         )
-        await handler.start()
-        route = SharedProxyCaptureRoute(
-            host=self._listener_bind_host,
-            port=int(listen_port),
-            collector_ip=collector_ip,
-            handler=handler.handle_client,
-        )
+        handler: InProcessProxyCaptureHandler | None = None
+        route: SharedProxyCaptureRoute | None = None
         try:
+            handler = InProcessProxyCaptureHandler(
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
+                output_path=output_path,
+                masked_endpoint=masked_endpoint,
+                restore_trigger_path=restore_trigger_path,
+            )
+            await handler.start()
+            route = SharedProxyCaptureRoute(
+                host=self._listener_bind_host,
+                port=int(listen_port),
+                collector_ip=collector_ip,
+                handler=handler.handle_client,
+            )
+            await route.start()
+            self._proxy_capture_handler = handler
+            self._proxy_capture_route = route
+            await self._set_route_lease_state(normalized_owner_id, "running")
+        except Exception as exc:
+            self._record_listener_error(exc)
+            try:
+                if route is not None:
+                    await route.stop()
+            finally:
+                try:
+                    if handler is not None:
+                        await handler.stop()
+                finally:
+                    await self._release_route_lease(
+                        mode="proxy_capture",
+                        owner_id=normalized_owner_id,
+                    )
+            raise
+
+    async def async_start_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        entry_id: str = "",
+        collector_ip: str,
+        listen_port: int,
+        upstream_host: str,
+        upstream_port: int,
+        output_path,
+        seed: ShadowLearningSeed,
+    ) -> None:
+        """Route one collector callback connection through the fail-closed shadow proxy."""
+
+        normalized_owner_id = self._normalize_route_owner_id(
+            mode="shadow_learning",
+            owner_id=owner_id,
+            entry_id=entry_id,
+            output_path=output_path,
+        )
+        await self._acquire_route_lease(
+            mode="shadow_learning",
+            owner_id=normalized_owner_id,
+            entry_id=entry_id,
+            collector_ip=collector_ip,
+            listen_port=listen_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+        )
+        handler: InProcessFailClosedShadowProxyHandler | None = None
+        route: SharedProxyCaptureRoute | None = None
+        try:
+            handler = InProcessFailClosedShadowProxyHandler(
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
+                seed=seed,
+                output_path=output_path,
+            )
+            await handler.start()
+            route = SharedProxyCaptureRoute(
+                host=self._listener_bind_host,
+                port=int(listen_port),
+                collector_ip=collector_ip,
+                handler=handler.handle_client,
+            )
             await route.start()
         except Exception as exc:
             self._record_listener_error(exc)
-            await handler.stop()
+            try:
+                if route is not None:
+                    await route.stop()
+            finally:
+                try:
+                    if handler is not None:
+                        await handler.stop()
+                finally:
+                    await self._release_route_lease(
+                        mode="shadow_learning",
+                        owner_id=normalized_owner_id,
+                    )
             raise
-        self._proxy_capture_handler = handler
-        self._proxy_capture_route = route
+        self._shadow_learning_handler = handler
+        self._shadow_learning_route = route
+        await self._set_route_lease_state(normalized_owner_id, "running")
 
-    async def async_stop_proxy_capture_route(self) -> None:
+    async def async_stop_proxy_capture_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
         """Stop the active in-process proxy route, if any."""
 
+        await self._begin_route_stop(
+            mode="proxy_capture",
+            owner_id=owner_id,
+            force=force,
+        )
         route = self._proxy_capture_route
         handler = self._proxy_capture_handler
         self._proxy_capture_route = None
         self._proxy_capture_handler = None
-        if route is not None:
-            await route.stop()
-        if handler is not None:
-            await handler.stop()
+        try:
+            if route is not None:
+                await route.stop()
+            if handler is not None:
+                await handler.stop()
+        finally:
+            await self._release_route_lease(
+                mode="proxy_capture",
+                owner_id=owner_id,
+                force=force,
+            )
+
+    async def async_stop_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
+        """Stop the active in-process shadow-learning route, if any."""
+
+        await self._begin_route_stop(
+            mode="shadow_learning",
+            owner_id=owner_id,
+            force=force,
+        )
+        route = self._shadow_learning_route
+        handler = self._shadow_learning_handler
+        self._shadow_learning_route = None
+        self._shadow_learning_handler = None
+        try:
+            if route is not None:
+                await route.stop()
+            if handler is not None:
+                await handler.stop()
+        finally:
+            await self._release_route_lease(
+                mode="shadow_learning",
+                owner_id=owner_id,
+                force=force,
+            )
+
+    @property
+    def route_lease(self) -> RouteLease | None:
+        """Return the current exclusive callback-route lease."""
+
+        return self._route_lease
+
+    @staticmethod
+    def _normalize_route_owner_id(
+        *,
+        mode: str,
+        owner_id: str,
+        entry_id: str,
+        output_path: object,
+    ) -> str:
+        normalized = str(owner_id or "").strip()
+        if normalized:
+            return normalized
+        return f"{mode}:{str(entry_id or '').strip()}:{str(output_path)}"
+
+    async def _acquire_route_lease(
+        self,
+        *,
+        mode: str,
+        owner_id: str,
+        entry_id: str,
+        collector_ip: str,
+        listen_port: int,
+        upstream_host: str,
+        upstream_port: int,
+    ) -> None:
+        async with self._route_lease_lock:
+            current = self._route_lease
+            if current is not None:
+                raise RuntimeError(f"{current.mode}_route_running")
+            if mode != "proxy_capture" and self.proxy_capture_route_running():
+                raise RuntimeError("proxy_capture_route_running")
+            if mode != "shadow_learning" and self.shadow_learning_route_running():
+                raise RuntimeError("shadow_learning_route_running")
+            self._route_lease = RouteLease(
+                mode=mode,
+                owner_id=owner_id,
+                entry_id=str(entry_id or "").strip(),
+                collector_ip=str(collector_ip or "").strip(),
+                listen_port=int(listen_port),
+                upstream_host=str(upstream_host or "").strip(),
+                upstream_port=int(upstream_port),
+                state="starting",
+            )
+
+    async def _set_route_lease_state(self, owner_id: str, state: str) -> None:
+        async with self._route_lease_lock:
+            current = self._route_lease
+            if current is None or current.owner_id != owner_id:
+                raise RuntimeError("route_lease_owner_mismatch")
+            self._route_lease = replace(current, state=str(state or "").strip())
+
+    async def _begin_route_stop(
+        self,
+        *,
+        mode: str,
+        owner_id: str,
+        force: bool,
+    ) -> None:
+        async with self._route_lease_lock:
+            current = self._route_lease
+            if current is None:
+                return
+            if current.mode != mode:
+                if force:
+                    return
+                raise RuntimeError(f"{current.mode}_route_running")
+            normalized_owner_id = str(owner_id or "").strip()
+            if normalized_owner_id and normalized_owner_id != current.owner_id and not force:
+                raise RuntimeError("route_lease_owner_mismatch")
+            self._route_lease = replace(current, state="stopping")
+
+    async def _release_route_lease(
+        self,
+        *,
+        mode: str,
+        owner_id: str,
+        force: bool = False,
+    ) -> None:
+        async with self._route_lease_lock:
+            current = self._route_lease
+            if current is None or current.mode != mode:
+                return
+            normalized_owner_id = str(owner_id or "").strip()
+            if normalized_owner_id and normalized_owner_id != current.owner_id and not force:
+                raise RuntimeError("route_lease_owner_mismatch")
+            self._route_lease = None
 
     def proxy_capture_route_running(self) -> bool:
         """Return whether an in-process proxy route is currently active."""
 
         handler = self._proxy_capture_handler
         return bool(handler is not None and handler.running)
+
+    def shadow_learning_route_running(self) -> bool:
+        """Return whether an in-process shadow-learning route is currently active."""
+
+        handler = self._shadow_learning_handler
+        return bool(handler is not None and handler.running)
+
+    def shadow_learning_route_ready(self) -> bool:
+        """Return whether the active shadow route has collector and upstream connectivity."""
+
+        handler = self._shadow_learning_handler
+        return bool(handler is not None and handler.ready)
+
+    def shadow_learning_route_status(self) -> dict[str, object]:
+        """Return status details for the active shadow route."""
+
+        handler = self._shadow_learning_handler
+        if handler is None:
+            return {
+                "running": False,
+                "collector_connected": False,
+                "collector_protocol_ingress": False,
+                "route_protocol_activity": False,
+                "upstream_connected": False,
+                "ready": False,
+                "upstream_error": "",
+            }
+        return dict(handler.status())
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:
         """Drop current collector sockets without restarting discovery."""

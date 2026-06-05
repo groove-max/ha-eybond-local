@@ -257,7 +257,8 @@
       "collector_wifi_password_required": "Введіть пароль Wi-Fi.",
       "collector_wifi_password_not_ascii": "На локальному керівному шляху цей колектор приймає лише ASCII-паролі Wi-Fi.",
       "collector_wifi_apply_not_confirmed": "Підтвердьте, що застосування Wi-Fi параметрів може тимчасово відключити колектор.",
-      "proxy_capture_action_failed": "Не вдалося виконати дію захоплення. Перевірте журнал Home Assistant."
+      "proxy_capture_action_failed": "Не вдалося виконати дію захоплення. Перевірте журнал Home Assistant.",
+      "shadow_learning_failed": "Дія shadow learning завершилась помилкою. Перевірте деталі та підтвердження і повторіть спробу."
     },
     "step": {
       "init": {
@@ -347,9 +348,38 @@
           "create_smartess_draft": "Створити чернетку SmartESS",
           "create_profile_draft": "Створити локальну чернетку профілю",
           "create_schema_draft": "Створити локальну чернетку схеми регістрів",
+          "shadow_learning": "SmartESS shadow learning",
           "reload_local_metadata": "Перезавантажити локальні метадані",
           "rollback_local_metadata": "Відкотити локальні метадані",
           "create_support_package": "Створити архів підтримки"
+        }
+      },
+      "shadow_learning": {
+        "title": "SmartESS Shadow Learning",
+        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Preflight:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Trace:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
+        "data": {
+          "shadow_learning_action": "Дія",
+          "shadow_learning_mode": "Режим навчання",
+          "shadow_learning_field_ids": "Ідентифікатори полів",
+          "shadow_learning_numeric_value": "Числове тестове значення",
+          "shadow_learning_max_fields": "Максимум полів",
+          "shadow_learning_include_numeric": "Включати числові поля",
+          "shadow_learning_enum_sweep": "Пробувати всі enum-значення",
+          "username": "SmartESS username",
+          "password": "SmartESS password",
+          "shadow_learning_confirm_cloud_write": "Підтверджую cloud-side control calls для цього запуску",
+          "shadow_learning_confirm_broad_sweep": "Я переглянув план і підтверджую широкий enum/numeric sweep"
+        },
+        "data_description": {
+          "shadow_learning_field_ids": "Список cloud field ID через кому для ручного режиму.",
+          "shadow_learning_numeric_value": "Резервне число для numeric opt-in, якщо немає явної підказки.",
+          "shadow_learning_max_fields": "Жорсткий ліміт кількості полів для попереднього перегляду/запуску.",
+          "shadow_learning_include_numeric": "Дозволяє numeric поля у попередньому перегляді/запуску.",
+          "shadow_learning_enum_sweep": "Пробує всі значення enum, а не одне значення на поле.",
+          "username": "Використовується лише для поточного запуску SmartESS learning.",
+          "password": "Використовується лише для поточного запуску SmartESS learning.",
+          "shadow_learning_confirm_cloud_write": "Обов'язково для запуску навчання, оскільки відправляються SmartESS cloud control calls.",
+          "shadow_learning_confirm_broad_sweep": "Обов'язково перед широкими enum/numeric sweep. Спочатку зробіть preview."
         }
       },
       "proxy_capture": {

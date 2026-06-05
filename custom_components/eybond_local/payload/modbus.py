@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from ..link_models import EybondLinkRoute
 from ..link_transport import PayloadLinkTransport, async_send_payload
@@ -10,6 +11,32 @@ from ..link_transport import PayloadLinkTransport, async_send_payload
 
 class ModbusError(Exception):
     """Raised when a Modbus RTU response cannot be decoded."""
+
+
+@dataclass(frozen=True, slots=True)
+class ModbusReadRequestFrame:
+    """Decoded Modbus RTU read request frame (function 0x03 or 0x04)."""
+
+    slave_id: int
+    function_code: int
+    address: int
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ModbusWriteRequestFrame:
+    """Decoded Modbus RTU write request frame (function 0x06 or 0x10)."""
+
+    slave_id: int
+    function_code: int
+    address: int
+    values: tuple[int, ...]
+
+    @property
+    def count(self) -> int:
+        """Return number of written registers."""
+
+        return len(self.values)
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -30,6 +57,68 @@ def to_signed_16(value: int) -> int:
     """Convert an unsigned 16-bit register into a signed integer."""
 
     return value - 0x10000 if value >= 0x8000 else value
+
+
+def decode_read_request(frame: bytes) -> ModbusReadRequestFrame | None:
+    """Decode one Modbus RTU read request frame when valid."""
+
+    if len(frame) != 8:
+        return None
+    function_code = frame[1]
+    if function_code not in {0x03, 0x04}:
+        return None
+    crc_received = int.from_bytes(frame[-2:], "little")
+    crc_expected = crc16_modbus(frame[:-2])
+    if crc_received != crc_expected:
+        return None
+    return ModbusReadRequestFrame(
+        slave_id=frame[0],
+        function_code=function_code,
+        address=int.from_bytes(frame[2:4], "big"),
+        count=int.from_bytes(frame[4:6], "big"),
+    )
+
+
+def decode_write_request(frame: bytes) -> ModbusWriteRequestFrame | None:
+    """Decode one Modbus RTU write request frame when valid."""
+
+    if len(frame) < 8:
+        return None
+    function_code = frame[1]
+    crc_received = int.from_bytes(frame[-2:], "little")
+    crc_expected = crc16_modbus(frame[:-2])
+    if crc_received != crc_expected:
+        return None
+
+    if function_code == 0x06 and len(frame) == 8:
+        return ModbusWriteRequestFrame(
+            slave_id=frame[0],
+            function_code=function_code,
+            address=int.from_bytes(frame[2:4], "big"),
+            values=(int.from_bytes(frame[4:6], "big"),),
+        )
+
+    if function_code != 0x10 or len(frame) < 9:
+        return None
+
+    address = int.from_bytes(frame[2:4], "big")
+    register_count = int.from_bytes(frame[4:6], "big")
+    byte_count = frame[6]
+    if byte_count != register_count * 2:
+        return None
+    if len(frame) != 9 + byte_count:
+        return None
+
+    values: list[int] = []
+    register_bytes = frame[7:-2]
+    for offset in range(0, len(register_bytes), 2):
+        values.append(int.from_bytes(register_bytes[offset : offset + 2], "big"))
+    return ModbusWriteRequestFrame(
+        slave_id=frame[0],
+        function_code=function_code,
+        address=address,
+        values=tuple(values),
+    )
 
 
 def build_read_holding_request(slave_id: int, address: int, count: int) -> bytes:

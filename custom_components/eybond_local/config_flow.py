@@ -158,7 +158,22 @@ from .onboarding.timeouts import (
     manual_probe_timeout_seconds as _onboarding_manual_probe_timeout_seconds,
 )
 from .smartess_cloud import classify_smartess_cloud_error
+from .smartess_cloud import (
+    DEFAULT_LEARN_NUMERIC_VALUE,
+    SessionCredentials,
+    build_device_settings_action,
+    build_learn_settings_plan,
+    fetch_signed_action,
+    login_with_password,
+)
 from .support.cloud_evidence import fetch_and_export_smartess_device_bundle_cloud_evidence
+from .support.cloud_evidence import load_latest_cloud_evidence
+from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
+from .support.shadow_learning_orchestrator import (
+    async_orchestrate_shadow_learning_settings,
+    orchestrate_shadow_learning_settings,
+)
+from .support.shadow_learning_overlay_generator import generate_shadow_learning_overlay_drafts
 
 CONF_RESULT_KEY = "result_key"
 CONF_COLLECTOR_NETWORK_STATUS = "collector_network_status"
@@ -187,6 +202,19 @@ MANUAL_CONFIRM_ACTION_PROBE_AGAIN = "manual_probe_again"
 MANUAL_CONFIRM_ACTION_EDIT_SETTINGS = "manual_edit_settings"
 MANUAL_CONFIRM_ACTION_CREATE_PENDING = "manual_create_pending"
 PROXY_CAPTURE_ACTION_RESET_TIMER = "reset_timer"
+SHADOW_LEARNING_ACTION_REFRESH = "refresh"
+SHADOW_LEARNING_ACTION_PREFLIGHT = "preflight"
+SHADOW_LEARNING_ACTION_START_SESSION = "start_session"
+SHADOW_LEARNING_ACTION_STOP_SESSION = "stop_session"
+SHADOW_LEARNING_ACTION_PREVIEW_PLAN = "preview_plan"
+SHADOW_LEARNING_ACTION_RUN_LEARNING = "run_learning"
+SHADOW_LEARNING_ACTION_GENERATE_OVERLAY = "generate_overlay"
+SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY = "activate_overlay"
+SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY = "export_support_only"
+SHADOW_LEARNING_MODE_MANUAL = "manual_selected_fields"
+SHADOW_LEARNING_MODE_ENUM_SWEEP = "enum_sweep"
+SHADOW_LEARNING_MODE_NUMERIC_OPT_IN = "numeric_opt_in"
+SHADOW_LEARNING_MODE_SUPPORT_ONLY = "support_package_only"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED = "use_saved"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH = "refresh"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY = "archive_only"
@@ -5090,6 +5118,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._collector_wifi_last_error = ""
         self._collector_wifi_last_result = ""
         self._collector_wifi_networks: tuple[SmartEssBleWifiNetwork, ...] = ()
+        self._shadow_learning_state: dict[str, Any] = {}
 
     def _server_ip_field(self) -> SelectSelector | TextSelector:
         """Return the user-friendly selector for one local server IP."""
@@ -5360,12 +5389,620 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             menu_options.append("create_profile_draft")
         if coordinator is not None and coordinator.effective_register_schema_name:
             menu_options.append("create_schema_draft")
+        menu_options.append("shadow_learning")
 
         return self.async_show_menu(
             step_id="advanced_metadata",
             menu_options=menu_options,
             description_placeholders=placeholders,
         )
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return await self._async_show_diagnostics_result(
+                action_title=self._diagnostics_result_tr(
+                    "shadow_learning_title",
+                    "SmartESS Shadow Learning",
+                ),
+                status=self._diagnostics_result_tr(
+                    "coordinator_not_loaded",
+                    "Coordinator is not loaded.",
+                ),
+                next_step=self._diagnostics_result_tr(
+                    "ensure_entry_loaded",
+                    "Ensure the entry is loaded and the inverter has been detected, then try again.",
+                ),
+            )
+
+        errors: dict[str, str] = {}
+        defaults = dict(user_input or {})
+        action = str(defaults.get("shadow_learning_action") or SHADOW_LEARNING_ACTION_REFRESH).strip()
+        mode = str(defaults.get("shadow_learning_mode") or SHADOW_LEARNING_MODE_MANUAL).strip()
+        selected_field_ids_raw = str(defaults.get("shadow_learning_field_ids") or "").strip()
+        selected_field_ids = [item.strip() for item in selected_field_ids_raw.split(",") if item.strip()]
+        include_numeric = bool(defaults.get("shadow_learning_include_numeric", False))
+        all_choice_values = bool(defaults.get("shadow_learning_enum_sweep", False))
+        effective_include_numeric = bool(include_numeric or mode == SHADOW_LEARNING_MODE_NUMERIC_OPT_IN)
+        effective_all_choice_values = bool(all_choice_values or mode == SHADOW_LEARNING_MODE_ENUM_SWEEP)
+        numeric_value = str(defaults.get("shadow_learning_numeric_value") or DEFAULT_LEARN_NUMERIC_VALUE).strip()
+        if not numeric_value:
+            numeric_value = DEFAULT_LEARN_NUMERIC_VALUE
+        max_fields = int(defaults.get("shadow_learning_max_fields") or 0)
+        requested_plan_signature = {
+            "mode": mode,
+            "selected_field_ids": selected_field_ids,
+            "include_numeric": effective_include_numeric,
+            "all_choice_values": effective_all_choice_values,
+            "numeric_value": numeric_value,
+            "max_fields": max_fields,
+        }
+        username = str(defaults.get("username") or "").strip()
+        password = str(defaults.get("password") or "")
+        confirm_cloud_write = bool(defaults.get("shadow_learning_confirm_cloud_write", False))
+        confirm_broad_sweep = bool(defaults.get("shadow_learning_confirm_broad_sweep", False))
+
+        if user_input is not None:
+            try:
+                if action == SHADOW_LEARNING_ACTION_PREFLIGHT:
+                    preflight = await self._build_shadow_learning_preflight_snapshot(coordinator)
+                    self._shadow_learning_state["preflight"] = preflight
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_preflight_completed",
+                        "Preflight refreshed.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_START_SESSION:
+                    result = await coordinator.async_start_shadow_learning(allow_ack_writes=False)
+                    self._shadow_learning_state["session"] = result
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_session_started",
+                        "Shadow-learning session started.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_STOP_SESSION:
+                    result = await coordinator.async_stop_shadow_learning()
+                    self._shadow_learning_state["session"] = {
+                        **dict(self._shadow_learning_state.get("session") or {}),
+                        **result,
+                    }
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_session_stopped",
+                        "Shadow-learning session stopped.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_PREVIEW_PLAN:
+                    settings_dat = self._shadow_learning_settings_dat(coordinator)
+                    if settings_dat is None:
+                        raise RuntimeError("shadow_learning_settings_unavailable")
+                    plan = build_learn_settings_plan(
+                        settings_dat,
+                        field_ids=selected_field_ids,
+                        include_numeric=effective_include_numeric,
+                        numeric_value=numeric_value,
+                        all_choice_values=effective_all_choice_values,
+                        max_fields=max_fields,
+                    )
+                    self._shadow_learning_state["plan"] = {
+                        **requested_plan_signature,
+                        "signature": dict(requested_plan_signature),
+                        "items": plan,
+                    }
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_plan_ready",
+                        "Learning preview plan is ready.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_RUN_LEARNING:
+                    if not confirm_cloud_write:
+                        errors["shadow_learning_confirm_cloud_write"] = "required"
+                        raise RuntimeError("shadow_learning_missing_confirm_cloud_write")
+                    broad_mode = mode in {SHADOW_LEARNING_MODE_ENUM_SWEEP, SHADOW_LEARNING_MODE_NUMERIC_OPT_IN}
+                    if broad_mode and not confirm_broad_sweep:
+                        errors["shadow_learning_confirm_broad_sweep"] = "required"
+                        raise RuntimeError("shadow_learning_missing_confirm_broad_sweep")
+                    if broad_mode:
+                        plan_state = dict(self._shadow_learning_state.get("plan") or {})
+                        plan_signature = plan_state.get("signature")
+                        if not isinstance(plan_signature, dict) or plan_signature != requested_plan_signature:
+                            raise RuntimeError("shadow_learning_preview_required")
+                    if not username:
+                        errors["username"] = "required"
+                    if not password:
+                        errors["password"] = "required"
+                    if errors:
+                        raise RuntimeError("shadow_learning_credentials_required")
+
+                    route_status = self._shadow_learning_route_status(coordinator)
+                    session_state = self._shadow_learning_session_state(coordinator)
+                    if session_state not in {"ready", "learning"}:
+                        raise RuntimeError("shadow_learning_session_not_ready")
+
+                    identity = self._shadow_learning_cloud_identity(coordinator)
+                    if identity is None:
+                        raise RuntimeError("shadow_learning_identity_unavailable")
+
+                    _login_envelope, session = await self.hass.async_add_executor_job(
+                        lambda: login_with_password(
+                            username=username,
+                            password=password,
+                        )
+                    )
+                    settings_envelope = await self.hass.async_add_executor_job(
+                        lambda: fetch_signed_action(
+                            action=build_device_settings_action(
+                                pn=identity["pn"],
+                                sn=identity["sn"],
+                                devcode=identity["devcode"],
+                                devaddr=identity["devaddr"],
+                            ),
+                            session=SessionCredentials(
+                                token=session.token,
+                                secret=session.secret,
+                                uid=session.uid,
+                                usr=session.usr,
+                                role=session.role,
+                                expire=session.expire,
+                            ),
+                        )
+                    )
+                    settings_dat = settings_envelope.dat
+                    observation_source = self._shadow_learning_observation_source(coordinator)
+                    self._shadow_learning_state["session"] = {
+                        **dict(self._shadow_learning_state.get("session") or {}),
+                        "status": "learning",
+                    }
+                    result = await async_orchestrate_shadow_learning_settings(
+                        settings_dat=settings_dat,
+                        session=session,
+                        pn=identity["pn"],
+                        sn=identity["sn"],
+                        devcode=identity["devcode"],
+                        devaddr=identity["devaddr"],
+                        dry_run=False,
+                        confirm_cloud_write=True,
+                        shadow_session_state=session_state,
+                        field_ids=selected_field_ids,
+                        include_numeric=effective_include_numeric,
+                        numeric_value=numeric_value,
+                        all_choice_values=effective_all_choice_values,
+                        max_fields=max_fields,
+                        continue_on_error=True,
+                        delay_seconds=0.0,
+                        observation_cursor=(
+                            getattr(observation_source, "observation_cursor", None)
+                            if observation_source is not None
+                            else None
+                        ),
+                        current_observations_since=(
+                            getattr(observation_source, "observations_since", None)
+                            if observation_source is not None
+                            else None
+                        ),
+                        wait_for_observations_since=(
+                            (lambda cursor, timeout_seconds: observation_source.wait_for_observations_since(
+                                cursor,
+                                timeout_seconds=timeout_seconds,
+                            ))
+                            if observation_source is not None
+                            and callable(getattr(observation_source, "wait_for_observations_since", None))
+                            else None
+                        ),
+                        is_session_ready=lambda: (
+                            self._shadow_learning_session_state(coordinator) in {"ready", "learning"}
+                            and bool(self._shadow_learning_route_status(coordinator).get("ready"))
+                        ),
+                    )
+                    self._shadow_learning_state["identity"] = identity
+                    self._shadow_learning_state["orchestration"] = result
+                    self._shadow_learning_state["session"] = {
+                        **dict(self._shadow_learning_state.get("session") or {}),
+                        "status": "degraded"
+                        if int(result.get("degraded_count") or 0) > 0
+                        else "ready",
+                    }
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_execution_done",
+                        "Learning execution completed.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_GENERATE_OVERLAY:
+                    orchestration = dict(self._shadow_learning_state.get("orchestration") or {})
+                    correlation = orchestration.get("correlation")
+                    if not isinstance(correlation, dict):
+                        raise RuntimeError("shadow_learning_result_unavailable")
+                    identity = self._shadow_learning_cloud_identity(coordinator) or {}
+                    session = dict(self._shadow_learning_state.get("session") or {})
+                    session_manifest = {
+                        "session_id": str(
+                            session.get("session_id")
+                            or session.get("trace_path")
+                            or datetime.now().strftime("%Y%m%dT%H%M%S")
+                        ),
+                        "collector_pn": coordinator.smartess_collector_pn,
+                        "cloud_pn": str(identity.get("pn") or ""),
+                        "cloud_sn": str(identity.get("sn") or ""),
+                        "devcode": identity.get("devcode"),
+                        "devaddr": identity.get("devaddr"),
+                    }
+                    result = await self.hass.async_add_executor_job(
+                        lambda: generate_shadow_learning_overlay_drafts(
+                            config_dir=Path(self.hass.config.config_dir),
+                            source_profile_name=str(coordinator.effective_profile_name or ""),
+                            source_schema_name=str(coordinator.effective_register_schema_name or ""),
+                            session_manifest=session_manifest,
+                            correlation=correlation,
+                            overwrite=False,
+                        )
+                    )
+                    self._shadow_learning_state["overlay"] = {
+                        "profile_path": str(result.profile_path),
+                        "schema_path": str(result.schema_path),
+                        "generated_capability_count": int(result.generated_capability_count),
+                        "skipped_duplicate_count": int(result.skipped_duplicate_count),
+                        "manifest": dict(result.manifest),
+                        "profile_name": str(result.manifest.get("output", {}).get("profile_name") or ""),
+                        "schema_name": str(result.manifest.get("output", {}).get("schema_name") or ""),
+                    }
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_overlay_generated",
+                        "Learned overlay draft generated.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY:
+                    overlay = dict(self._shadow_learning_state.get("overlay") or {})
+                    profile_name = str(overlay.get("profile_name") or "").strip()
+                    schema_name = str(overlay.get("schema_name") or "").strip()
+                    if not profile_name or not schema_name:
+                        raise RuntimeError("shadow_learning_overlay_unavailable")
+                    activation = await coordinator.async_activate_device_scoped_overlay(
+                        profile_name=profile_name,
+                        register_schema_name=schema_name,
+                    )
+                    self._shadow_learning_state["activation"] = dict(activation)
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_overlay_activated",
+                        "Device-scoped learned overlay activated and reload requested.",
+                    )
+                elif action == SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY:
+                    self._publish_shadow_learning_artifacts(coordinator)
+                    path = await coordinator.async_export_support_package_with_cloud_refresh(
+                        smartess_username="",
+                        smartess_password="",
+                        wants_refresh=False,
+                    )
+                    self._shadow_learning_state["support_package_path"] = str(path)
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_support_exported",
+                        "Support package exported without learning execution.",
+                    )
+                else:
+                    self._shadow_learning_state["status"] = self._tr(
+                        "common.dynamic.shadow_learning_status_refreshed",
+                        "Shadow-learning status refreshed.",
+                    )
+            except Exception as exc:
+                if not errors:
+                    errors["base"] = "shadow_learning_failed"
+                self._shadow_learning_state["status"] = str(exc)
+
+        placeholders = self._shadow_learning_placeholders(coordinator)
+        action_options = [
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_REFRESH, label=self._tr("common.dynamic.shadow_learning_action_refresh", "Refresh status")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_PREFLIGHT, label=self._tr("common.dynamic.shadow_learning_action_preflight", "Run preflight")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_START_SESSION, label=self._tr("common.dynamic.shadow_learning_action_start_session", "Start shadow session")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_STOP_SESSION, label=self._tr("common.dynamic.shadow_learning_action_stop_session", "Stop shadow session")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_PREVIEW_PLAN, label=self._tr("common.dynamic.shadow_learning_action_preview_plan", "Preview learning plan")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_RUN_LEARNING, label=self._tr("common.dynamic.shadow_learning_action_run_learning", "Run learning")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_GENERATE_OVERLAY, label=self._tr("common.dynamic.shadow_learning_action_generate_overlay", "Generate learned overlay draft")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY, label=self._tr("common.dynamic.shadow_learning_action_activate_overlay", "Activate learned overlay")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY, label=self._tr("common.dynamic.shadow_learning_action_export_support", "Support package only")),
+        ]
+        mode_options = [
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_MANUAL, label=self._tr("common.dynamic.shadow_learning_mode_manual", "Manual selected fields")),
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_ENUM_SWEEP, label=self._tr("common.dynamic.shadow_learning_mode_enum", "Enum sweep")),
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_NUMERIC_OPT_IN, label=self._tr("common.dynamic.shadow_learning_mode_numeric", "Numeric opt-in")),
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_SUPPORT_ONLY, label=self._tr("common.dynamic.shadow_learning_mode_support_only", "Support package only")),
+        ]
+
+        return self.async_show_form(
+            step_id="shadow_learning",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("shadow_learning_action", default=action): SelectSelector(
+                        SelectSelectorConfig(options=action_options, mode=SelectSelectorMode.DROPDOWN)
+                    ),
+                    vol.Required("shadow_learning_mode", default=mode): SelectSelector(
+                        SelectSelectorConfig(options=mode_options, mode=SelectSelectorMode.DROPDOWN)
+                    ),
+                    vol.Optional("shadow_learning_field_ids", default=selected_field_ids_raw): _IP_TEXT_SELECTOR,
+                    vol.Optional("shadow_learning_numeric_value", default=numeric_value): _IP_TEXT_SELECTOR,
+                    vol.Optional("shadow_learning_max_fields", default=max_fields): NumberSelector(
+                        NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)
+                    ),
+                    vol.Required("shadow_learning_include_numeric", default=include_numeric): _BOOLEAN_SELECTOR,
+                    vol.Required("shadow_learning_enum_sweep", default=all_choice_values): _BOOLEAN_SELECTOR,
+                    **_smartess_credential_schema_fields(
+                        required=False,
+                        username_default=username,
+                        password_default=password,
+                    ),
+                    vol.Required("shadow_learning_confirm_cloud_write", default=confirm_cloud_write): _BOOLEAN_SELECTOR,
+                    vol.Required("shadow_learning_confirm_broad_sweep", default=confirm_broad_sweep): _BOOLEAN_SELECTOR,
+                }
+            ),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+
+    async def _build_shadow_learning_preflight_snapshot(self, coordinator) -> dict[str, Any]:
+        raw_capture = None
+        if bool(getattr(coordinator.data, "connected", False)):
+            with suppress(Exception):
+                raw_capture = await coordinator._runtime.async_capture_support_evidence()
+        seed, blockers = build_shadow_learning_seed(
+            session_id=f"{self._config_entry.entry_id}_preview",
+            entry_id=self._config_entry.entry_id,
+            collector_pn=coordinator.smartess_collector_pn,
+            collector_cloud_profile_key=coordinator.collector_cloud_profile_key,
+            collector_cloud_profile_label=coordinator.collector_cloud_profile_label,
+            collector_cloud_profile_source=coordinator.collector_cloud_profile_source,
+            collector_cloud_profile_confidence=coordinator.collector_cloud_profile_confidence,
+            collector_callback_endpoint=coordinator.collector_callback_target_endpoint,
+            effective_metadata_snapshot=coordinator.effective_metadata_snapshot,
+            raw_capture=raw_capture,
+        )
+        preflight = build_shadow_learning_preflight(seed)
+        route_status = self._shadow_learning_route_status(coordinator)
+        return {
+            "can_start": bool(preflight.can_start),
+            "blockers": list(blockers or preflight.blockers),
+            "collector_pn": coordinator.smartess_collector_pn,
+            "profile_name": str(coordinator.effective_profile_name or ""),
+            "schema_name": str(coordinator.effective_register_schema_name or ""),
+            "shadow_session_state": self._shadow_learning_session_state(coordinator),
+            "shadow_session_active": bool(route_status.get("running")),
+            "shadow_session_ready": bool(route_status.get("ready")),
+            "shadow_session_running": bool(route_status.get("running")),
+            "shadow_session_collector_connected": bool(route_status.get("collector_connected")),
+            "shadow_session_upstream_connected": bool(route_status.get("upstream_connected")),
+        }
+
+    def _shadow_learning_route_status(self, coordinator) -> dict[str, Any]:
+        route_status_fn = getattr(getattr(coordinator, "_runtime", None), "shadow_learning_route_status", None)
+        if callable(route_status_fn):
+            status = route_status_fn()
+            if isinstance(status, dict):
+                return {
+                    "running": bool(status.get("running")),
+                    "collector_connected": bool(status.get("collector_connected")),
+                    "collector_protocol_ingress": bool(status.get("collector_protocol_ingress")),
+                    "route_protocol_activity": bool(status.get("route_protocol_activity")),
+                    "upstream_connected": bool(status.get("upstream_connected")),
+                    "ready": bool(status.get("ready")),
+                    "upstream_error": str(status.get("upstream_error") or ""),
+                }
+
+        route_running_fn = getattr(getattr(coordinator, "_runtime", None), "shadow_learning_route_running", None)
+        running = bool(route_running_fn()) if callable(route_running_fn) else False
+        return {
+            "running": running,
+            "collector_connected": False,
+            "collector_protocol_ingress": False,
+            "route_protocol_activity": False,
+            "upstream_connected": False,
+            "ready": False,
+            "upstream_error": "",
+        }
+
+    def _shadow_learning_settings_dat(self, coordinator) -> dict[str, Any] | None:
+        record = load_latest_cloud_evidence(
+            Path(self.hass.config.config_dir),
+            entry_id=self._config_entry.entry_id,
+            collector_pn=coordinator.smartess_collector_pn,
+        )
+        if record is None:
+            return None
+        payload = dict(record.payload or {})
+        bundle = payload.get("payload")
+        if not isinstance(bundle, dict):
+            return None
+        normalized = bundle.get("normalized")
+        if not isinstance(normalized, dict):
+            return None
+        settings = normalized.get("device_settings")
+        if not isinstance(settings, dict):
+            return None
+        fields = settings.get("fields")
+        if not isinstance(fields, list):
+            return None
+        return {"field": [dict(item) for item in fields if isinstance(item, dict)]}
+
+    def _shadow_learning_cloud_identity(self, coordinator) -> dict[str, Any] | None:
+        record = load_latest_cloud_evidence(
+            Path(self.hass.config.config_dir),
+            entry_id=self._config_entry.entry_id,
+            collector_pn=coordinator.smartess_collector_pn,
+        )
+        if record is None:
+            return None
+        identity = record.payload.get("device_identity")
+        if not isinstance(identity, dict):
+            return None
+        pn = str(identity.get("pn") or "").strip()
+        sn = str(identity.get("sn") or "").strip()
+        devcode = identity.get("devcode")
+        devaddr = identity.get("devaddr")
+        if not pn or not sn or devcode is None or devaddr is None:
+            return None
+        return {
+            "pn": pn,
+            "sn": sn,
+            "devcode": int(devcode),
+            "devaddr": int(devaddr),
+        }
+
+    def _shadow_learning_observed_writes(self, coordinator) -> tuple[Any, ...]:
+        handler = self._shadow_learning_observation_source(coordinator)
+        observations = getattr(handler, "write_observations", ())
+        return tuple(observations or ())
+
+    def _shadow_learning_observation_source(self, coordinator):
+        runtime = getattr(coordinator, "_runtime", None)
+        hub = getattr(runtime, "_hub", None)
+        link_manager = getattr(hub, "_link_manager", None)
+        return getattr(link_manager, "_shadow_learning_handler", None)
+
+    def _publish_shadow_learning_artifacts(self, coordinator) -> dict[str, Any]:
+        """Publish the current UX artifact state into support-package runtime values."""
+
+        publish = getattr(coordinator, "publish_shadow_learning_artifacts", None)
+        if not callable(publish):
+            return {}
+        state = dict(self._shadow_learning_state or {})
+        plan = dict(state.get("plan") or {})
+        orchestration = dict(state.get("orchestration") or {})
+        correlation = orchestration.get("correlation")
+        if not isinstance(correlation, dict):
+            correlation = {}
+        session = dict(state.get("session") or {})
+        identity = dict(state.get("identity") or {})
+        overlay = dict(state.get("overlay") or {})
+        activation = dict(state.get("activation") or {})
+        device_scope = {
+            "collector_pn": str(
+                getattr(coordinator, "smartess_collector_pn", "") or ""
+            ),
+            "cloud_pn": str(identity.get("pn") or ""),
+            "cloud_sn": str(identity.get("sn") or ""),
+            "devcode": identity.get("devcode"),
+            "devaddr": identity.get("devaddr"),
+        }
+        overlay_manifest = overlay.get("manifest")
+        if isinstance(overlay_manifest, dict):
+            manifest_scope = overlay_manifest.get("scope")
+            if isinstance(manifest_scope, dict):
+                device_scope.update(manifest_scope)
+            elif manifest_scope:
+                device_scope["scope"] = str(manifest_scope)
+        if not activation and overlay:
+            activation = {
+                "status": "draft_generated",
+                "active": False,
+                "scope": device_scope.get("scope") or "device",
+                "activation_scope": device_scope,
+                "profile_name": str(overlay.get("profile_name") or ""),
+                "register_schema_name": str(overlay.get("schema_name") or ""),
+            }
+        return publish(
+            plan=plan,
+            orchestration=orchestration,
+            correlation=correlation,
+            trace_path=str(session.get("trace_path") or ""),
+            profile_draft_path=str(overlay.get("profile_path") or ""),
+            schema_draft_path=str(overlay.get("schema_path") or ""),
+            activation=activation,
+            session_id=str(
+                session.get("session_id")
+                or session.get("trace_path")
+                or ""
+            ),
+            device_scope=device_scope,
+        )
+
+    def _shadow_learning_session_state(self, coordinator) -> str:
+        values = getattr(getattr(coordinator, "data", None), "values", {}) or {}
+        explicit_state = str(values.get("shadow_learning_session_status") or "").strip().lower()
+        route_status = self._shadow_learning_route_status(coordinator)
+
+        # Route status is authoritative for live execution readiness.
+        if bool(route_status.get("ready")):
+            if explicit_state == "learning":
+                return "learning"
+            return "ready"
+        if bool(route_status.get("running")):
+            if bool(route_status.get("collector_connected")) and not bool(route_status.get("route_protocol_activity")):
+                return "waiting_for_collector"
+            if bool(route_status.get("route_protocol_activity")) and not bool(route_status.get("upstream_connected")):
+                return "connecting_upstream"
+            return "degraded"
+
+        if explicit_state in {
+            "preflight",
+            "starting",
+            "restoring",
+            "restore_failed",
+            "failed",
+            "stopped",
+        }:
+            return explicit_state
+        return "stopped"
+
+    def _shadow_learning_placeholders(self, coordinator) -> dict[str, str]:
+        state = dict(self._shadow_learning_state or {})
+        preflight = dict(state.get("preflight") or {})
+        plan = dict(state.get("plan") or {})
+        orchestration = dict(state.get("orchestration") or {})
+        correlation = dict(orchestration.get("correlation") or {})
+        overlay = dict(state.get("overlay") or {})
+        activation = dict(state.get("activation") or {})
+        session = dict(state.get("session") or {})
+        values = getattr(getattr(coordinator, "data", None), "values", {}) or {}
+
+        learned_summary = overlay.get("manifest", {}).get("learned_capabilities", [])
+        destructive_count = 0
+        action_count = 0
+        if isinstance(learned_summary, list):
+            for item in learned_summary:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("value_kind") or "") == "action":
+                    action_count += 1
+                if str(item.get("safety_class") or "") == "destructive":
+                    destructive_count += 1
+
+        blockers = preflight.get("blockers") or []
+        if not isinstance(blockers, list):
+            blockers = []
+        can_start = bool(preflight.get("can_start"))
+        session_state = str(self._shadow_learning_session_state(coordinator) or "").strip()
+        if not session_state:
+            session_state = str(session.get("status") or preflight.get("shadow_session_state") or "").strip()
+        return {
+            "shadow_learning_status": str(state.get("status") or self._tr("common.dynamic.not_run_yet", "Not run yet")),
+            "shadow_learning_preflight": self._tr(
+                "common.dynamic.shadow_learning_preflight_summary",
+                "Can start: {can_start}; blockers: {blockers}",
+                {
+                    "can_start": self._tr("common.dynamic.yes", "Yes") if can_start else self._tr("common.dynamic.no", "No"),
+                    "blockers": ", ".join(blockers) or self._tr("common.dynamic.none", "None"),
+                },
+            ),
+            "shadow_learning_session_state": session_state or self._tr("common.dynamic.not_run_yet", "Not run yet"),
+            "shadow_learning_trace_path": str(session.get("trace_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
+            "shadow_learning_plan_count": str(len(plan.get("items") or [])),
+            "shadow_learning_found_controls": str(int(overlay.get("generated_capability_count") or 0)),
+            "shadow_learning_found_actions": str(action_count),
+            "shadow_learning_found_destructive": str(destructive_count),
+            "shadow_learning_unmatched_fields": str(int(correlation.get("unmatched_attempt_count") or 0)),
+            "shadow_learning_overlay_profile_path": str(overlay.get("profile_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
+            "shadow_learning_overlay_schema_path": str(overlay.get("schema_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
+            "shadow_learning_support_package_path": str(state.get("support_package_path") or values.get("support_package_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
+            "shadow_learning_activation_scope": str(activation.get("scope") or values.get("effective_device_scoped_overlay_scope") or self._tr("common.dynamic.not_available", "Not available")),
+            "shadow_learning_activation_status": (
+                self._tr("common.dynamic.yes", "Yes")
+                if bool(values.get("effective_device_scoped_overlay_active"))
+                else self._tr("common.dynamic.no", "No")
+            ),
+            "shadow_learning_warning": self._tr(
+                "common.dynamic.shadow_learning_warning",
+                "Shadow learning is advanced and optional. Broad enum or numeric sweeps can trigger cloud-side actions and require explicit preview and confirmation.",
+            ),
+        }
 
     @_with_translation_bundle
     async def async_step_proxy_capture(

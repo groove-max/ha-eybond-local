@@ -140,6 +140,56 @@ class WriteExposurePolicyTests(unittest.TestCase):
             )
         )
 
+    def test_device_scoped_learned_capability_can_be_exposed_on_family_fallback_when_activated(self) -> None:
+        learned_capability = WriteCapability(
+            key="learned_shadow_705",
+            register=705,
+            value_kind="u16",
+            note="learned",
+            tested=False,
+            provenance="cloud_hint",
+            experimental=True,
+            metadata_scope="device",
+        )
+
+        self.assertTrue(
+            capability_write_exposure_allowed(
+                learned_capability,
+                control_mode="full",
+                detection_confidence="high",
+                variant_key="family_fallback",
+                profile_source_scope="external",
+                schema_source_scope="external",
+                profile_name="learned/shadow_learning/example/profile.json",
+                device_scoped_overlay_active=True,
+            )
+        )
+
+    def test_non_device_scoped_cloud_hint_capability_stays_blocked_on_family_fallback(self) -> None:
+        non_scoped_capability = WriteCapability(
+            key="learned_shadow_705",
+            register=705,
+            value_kind="u16",
+            note="learned",
+            tested=False,
+            provenance="cloud_hint",
+            experimental=True,
+            metadata_scope="",
+        )
+
+        self.assertFalse(
+            capability_write_exposure_allowed(
+                non_scoped_capability,
+                control_mode="full",
+                detection_confidence="high",
+                variant_key="family_fallback",
+                profile_source_scope="external",
+                schema_source_scope="external",
+                profile_name="learned/shadow_learning/example/profile.json",
+                device_scoped_overlay_active=True,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

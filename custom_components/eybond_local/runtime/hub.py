@@ -454,6 +454,8 @@ class EybondHub:
     async def async_start_proxy_capture_route(
         self,
         *,
+        owner_id: str = "",
+        entry_id: str = "",
         collector_ip: str,
         listen_port: int,
         upstream_host: str,
@@ -464,25 +466,102 @@ class EybondHub:
     ) -> None:
         """Start one in-process proxy capture route on the active runtime link."""
 
+        route_kwargs = {
+            "collector_ip": collector_ip,
+            "listen_port": listen_port,
+            "upstream_host": upstream_host,
+            "upstream_port": upstream_port,
+            "output_path": output_path,
+            "masked_endpoint": masked_endpoint,
+            "restore_trigger_path": restore_trigger_path,
+        }
+        if owner_id:
+            route_kwargs["owner_id"] = owner_id
+        if entry_id:
+            route_kwargs["entry_id"] = entry_id
         await self._link_manager.async_start_proxy_capture_route(
-            collector_ip=collector_ip,
-            listen_port=listen_port,
-            upstream_host=upstream_host,
-            upstream_port=upstream_port,
-            output_path=output_path,
-            masked_endpoint=masked_endpoint,
-            restore_trigger_path=restore_trigger_path,
+            **route_kwargs,
         )
 
-    async def async_stop_proxy_capture_route(self) -> None:
+    async def async_stop_proxy_capture_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
         """Stop the active in-process proxy capture route."""
 
-        await self._link_manager.async_stop_proxy_capture_route()
+        if owner_id or force:
+            await self._link_manager.async_stop_proxy_capture_route(
+                owner_id=owner_id,
+                force=force,
+            )
+        else:
+            await self._link_manager.async_stop_proxy_capture_route()
 
     def proxy_capture_route_running(self) -> bool:
         """Return whether the runtime link currently owns one proxy route."""
 
         return self._link_manager.proxy_capture_route_running()
+
+    async def async_start_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        entry_id: str = "",
+        collector_ip: str,
+        listen_port: int,
+        upstream_host: str,
+        upstream_port: int,
+        output_path,
+        seed,
+    ) -> None:
+        """Start one in-process shadow-learning route on the active runtime link."""
+
+        route_kwargs = {
+            "collector_ip": collector_ip,
+            "listen_port": listen_port,
+            "upstream_host": upstream_host,
+            "upstream_port": upstream_port,
+            "output_path": output_path,
+            "seed": seed,
+        }
+        if owner_id:
+            route_kwargs["owner_id"] = owner_id
+        if entry_id:
+            route_kwargs["entry_id"] = entry_id
+        await self._link_manager.async_start_shadow_learning_route(**route_kwargs)
+
+    async def async_stop_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
+        """Stop the active in-process shadow-learning route."""
+
+        if owner_id or force:
+            await self._link_manager.async_stop_shadow_learning_route(
+                owner_id=owner_id,
+                force=force,
+            )
+        else:
+            await self._link_manager.async_stop_shadow_learning_route()
+
+    def shadow_learning_route_running(self) -> bool:
+        """Return whether the runtime link currently owns one shadow route."""
+
+        return self._link_manager.shadow_learning_route_running()
+
+    def shadow_learning_route_ready(self) -> bool:
+        """Return whether the active shadow route is ready for cloud control learning."""
+
+        return self._link_manager.shadow_learning_route_ready()
+
+    def shadow_learning_route_status(self) -> dict[str, object]:
+        """Return detailed status for the active shadow route."""
+
+        return self._link_manager.shadow_learning_route_status()
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:
         """Drop active collector sockets without changing collector settings."""

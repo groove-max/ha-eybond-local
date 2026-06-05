@@ -221,6 +221,12 @@ def _parse_capability(
     capability_templates: Mapping[str, Mapping[str, Any]],
 ) -> WriteCapability:
     resolved_raw = _resolve_capability_raw(raw, capability_defaults, capability_templates)
+    learned_provenance = resolved_raw.get("learned_provenance")
+    learned_scope = ""
+    if isinstance(learned_provenance, Mapping):
+        learned_scope = str(learned_provenance.get("scope") or "").strip()
+    metadata_scope = str(resolved_raw.get("metadata_scope") or learned_scope or "").strip()
+    experimental = bool(resolved_raw.get("experimental", False) or bool(learned_scope))
     choices = tuple(_parse_choice(item) for item in raw.get("choices", []))
     if not choices:
         choices = tuple(_parse_choice(item) for item in resolved_raw.get("choices", []))
@@ -270,6 +276,8 @@ def _parse_capability(
         ),
         visible_if=_resolve_conditions(resolved_raw.get("visible_if", []), named_conditions),
         editable_if=_resolve_conditions(resolved_raw.get("editable_if", []), named_conditions),
+        experimental=experimental,
+        metadata_scope=metadata_scope,
     )
 
 

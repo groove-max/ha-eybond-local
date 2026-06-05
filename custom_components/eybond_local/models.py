@@ -207,6 +207,8 @@ class WriteCapability:
     safe_operating_modes: tuple[str, ...] = ("Power On", "Standby", "Fault")
     visible_if: tuple["CapabilityCondition", ...] = ()
     editable_if: tuple["CapabilityCondition", ...] = ()
+    experimental: bool = False
+    metadata_scope: str = ""
 
     @property
     def value_key(self) -> str:
@@ -263,6 +265,12 @@ class WriteCapability:
         if self.visible_if or self.editable_if or self.unsafe_while_running:
             return "conditional"
         return "standard"
+
+    @property
+    def is_device_scoped_experimental(self) -> bool:
+        """Return whether this capability belongs to a device-scoped experimental overlay."""
+
+        return self.experimental and self.metadata_scope == "device"
 
     @property
     def enum_options(self) -> list[str]:

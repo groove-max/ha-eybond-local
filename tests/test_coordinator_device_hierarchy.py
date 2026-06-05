@@ -131,6 +131,7 @@ def _install_coordinator_stubs() -> None:
     )
     const.MAX_PROXY_CAPTURE_DURATION_MINUTES = 120
     const.MIN_PROXY_CAPTURE_DURATION_MINUTES = 1
+    const.LOCAL_METADATA_DIR = "eybond_local"
 
     connection_models = _ensure_module("custom_components.eybond_local.connection.models")
     connection_models.build_connection_spec = lambda *args, **kwargs: None
@@ -304,6 +305,66 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: None
     )
 
+    support_shadow_backend = _ensure_module(
+        "custom_components.eybond_local.support.shadow_learning_backend"
+    )
+    support_shadow_backend.build_shadow_learning_preflight = (
+        lambda *args, **kwargs: types.SimpleNamespace(can_start=True, blockers=[])
+    )
+    support_shadow_backend.build_shadow_learning_seed = (
+        lambda *args, **kwargs: (types.SimpleNamespace(write_response_mode="exception"), [])
+    )
+    support_shadow_backend.build_shadow_learning_trace_path = (
+        lambda *args, **kwargs: Path("/tmp/shadow-learning.jsonl")
+    )
+
+    support_shadow_session = _ensure_module(
+        "custom_components.eybond_local.support.shadow_learning_session"
+    )
+    support_shadow_session.build_shadow_learning_lease_deadline = (
+        lambda *args, **kwargs: "2026-06-05T12:20:00+00:00"
+    )
+    support_shadow_session.build_shadow_learning_session_state = (
+        lambda **kwargs: types.SimpleNamespace(
+            **{
+                "route_owner_id": "",
+                "expires_at": "",
+                "restore_attempt_count": 0,
+                "last_restore_attempt_at": "",
+                "last_restore_error": "",
+                "status": "",
+                **kwargs,
+            }
+        )
+    )
+    support_shadow_session.clear_shadow_learning_session_state = (
+        lambda *args, **kwargs: None
+    )
+    support_shadow_session.load_shadow_learning_session_state = (
+        lambda *args, **kwargs: None
+    )
+    support_shadow_session.save_shadow_learning_session_state = (
+        lambda *args, **kwargs: None
+    )
+    support_shadow_session.shadow_learning_session_is_active = (
+        lambda state: bool(state) and str(getattr(state, "status", "")) in {
+            "preflight",
+            "starting",
+            "waiting_for_collector",
+            "connecting_upstream",
+            "ready",
+            "learning",
+            "degraded",
+            "restoring",
+        }
+    )
+    support_shadow_session.shadow_learning_session_is_expired = (
+        lambda *args, **kwargs: False
+    )
+    support_shadow_session.shadow_learning_session_timestamp = (
+        lambda: "2026-06-05T12:00:00+00:00"
+    )
+
     support_workflow = _ensure_module("custom_components.eybond_local.support.workflow")
     support_workflow.build_support_workflow_state = lambda *args, **kwargs: {}
 
@@ -331,6 +392,8 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components.eybond_local.support.proxy_capture",
     "custom_components.eybond_local.support.proxy_session",
     "custom_components.eybond_local.support.proxy_trace",
+    "custom_components.eybond_local.support.shadow_learning_backend",
+    "custom_components.eybond_local.support.shadow_learning_session",
     "custom_components.eybond_local.support.workflow",
     "custom_components.eybond_local.runtime.coordinator",
     "homeassistant",
@@ -2113,6 +2176,90 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertIs(coordinator._active_proxy_capture_state(), cached_state)
 
+    def test_start_proxy_capture_fails_early_when_shadow_learning_owns_route(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            active_shadow_state = types.SimpleNamespace(status="ready")
+            save_calls: list[bool] = []
+            stop_shadow_calls: list[dict[str, object]] = []
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return active_shadow_state
+
+            async def _async_save_proxy_capture_session_state(_state) -> None:
+                save_calls.append(True)
+
+            async def _async_stop_shadow_learning(**kwargs):
+                stop_shadow_calls.append(dict(kwargs))
+
+            coordinator._async_active_shadow_learning_state = _async_active_shadow_learning_state
+            coordinator._async_save_proxy_capture_session_state = _async_save_proxy_capture_session_state
+            coordinator.async_stop_shadow_learning = _async_stop_shadow_learning
+            coordinator._shadow_learning_process_running = lambda: False
+            coordinator._proxy_capture_process_running = lambda: False
+            coordinator.collector_operation_mode_apply_lock_code = lambda: None
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_overview",
+                new_callable=PropertyMock,
+                return_value=types.SimpleNamespace(
+                    can_start=True,
+                    blocking_reason="",
+                    redirect_required=False,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "shadow_learning_route_running"):
+                    await coordinator.async_start_proxy_capture()
+
+            self.assertEqual(save_calls, [])
+            self.assertEqual(stop_shadow_calls, [])
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_start_shadow_learning_fails_early_when_proxy_capture_owns_route(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            active_proxy_state = types.SimpleNamespace(status="running")
+            save_calls: list[bool] = []
+            start_shadow_calls: list[dict[str, object]] = []
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return active_proxy_state
+
+            async def _async_save_shadow_learning_session_state(_state) -> None:
+                save_calls.append(True)
+
+            async def _async_start_shadow_learning_route(**kwargs) -> None:
+                start_shadow_calls.append(dict(kwargs))
+
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator._async_save_shadow_learning_session_state = (
+                _async_save_shadow_learning_session_state
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                proxy_capture_route_running=lambda: False,
+                async_start_shadow_learning_route=_async_start_shadow_learning_route,
+            )
+            coordinator._shadow_learning_process_running = lambda: False
+
+            with self.assertRaisesRegex(RuntimeError, "proxy_capture_route_running"):
+                await coordinator.async_start_shadow_learning(
+                    output_path=Path("/tmp/shadow.jsonl"),
+                    raw_capture={},
+                )
+
+            self.assertEqual(save_calls, [])
+            self.assertEqual(start_shadow_calls, [])
+
+        import asyncio
+
+        asyncio.run(_run())
+
     def test_reconcile_expired_proxy_session_prefers_proxy_restore_trigger(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -2167,6 +2314,417 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(refreshed_snapshots, [30.0])
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_reconcile_expired_shadow_session_stops_with_expired_lease(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            calls: list[dict[str, object]] = []
+            refreshed_snapshots: list[float] = []
+            snapshot = self.RuntimeSnapshot(values={})
+            active_state = types.SimpleNamespace(status="ready")
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-id",
+                options={"poll_interval": 45},
+            )
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return active_state
+
+            async def _async_stop_shadow_learning(**kwargs):
+                calls.append(dict(kwargs))
+
+            async def _async_refresh(*, poll_interval: float):
+                refreshed_snapshots.append(poll_interval)
+                return snapshot
+
+            coordinator._async_active_shadow_learning_state = _async_active_shadow_learning_state
+            coordinator.async_stop_shadow_learning = _async_stop_shadow_learning
+            coordinator._runtime = types.SimpleNamespace(async_refresh=_async_refresh)
+
+            with patch.object(
+                self.coordinator_module,
+                "shadow_learning_session_is_active",
+                return_value=True,
+            ), patch.object(
+                self.coordinator_module,
+                "shadow_learning_session_is_expired",
+                return_value=True,
+            ):
+                result = await coordinator._async_reconcile_shadow_learning_session(snapshot)
+
+            self.assertIs(result, snapshot)
+            self.assertEqual(
+                calls,
+                [
+                    {
+                        "reason": "expired_lease",
+                        "request_refresh": False,
+                        "raise_when_not_running": False,
+                    }
+                ],
+            )
+            self.assertEqual(refreshed_snapshots, [45.0])
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_recover_shadow_learning_state_retries_restore_failed_session(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            calls: list[dict[str, object]] = []
+            state = types.SimpleNamespace(status="restore_failed")
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return state
+
+            async def _async_stop_shadow_learning(**kwargs):
+                calls.append(dict(kwargs))
+
+            coordinator._async_active_shadow_learning_state = _async_active_shadow_learning_state
+            coordinator.async_stop_shadow_learning = _async_stop_shadow_learning
+
+            with patch.object(
+                self.coordinator_module,
+                "shadow_learning_session_is_active",
+                return_value=False,
+            ), patch.object(
+                self.coordinator_module,
+                "shadow_learning_session_is_expired",
+                return_value=False,
+            ):
+                await coordinator._async_recover_shadow_learning_state()
+
+            self.assertEqual(
+                calls,
+                [
+                    {
+                        "reason": "recovered_after_restart",
+                        "request_refresh": False,
+                        "raise_when_not_running": False,
+                    }
+                ],
+            )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_stop_shadow_learning_keeps_recoverable_state_when_restore_fails(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            saved_states: list[object] = []
+            clear_calls: list[bool] = []
+            notify_calls: list[bool] = []
+            published: list[dict[str, object]] = []
+            state = types.SimpleNamespace(
+                entry_id="entry-id",
+                collector_pn="E5000025388419",
+                trace_path="/tmp/shadow.jsonl",
+                original_endpoint="eu.smartess.io,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                upstream_endpoint="eu.smartess.io,18899,TCP",
+                restore_required=True,
+                started_at="2026-06-05T12:00:00+00:00",
+                expires_at="2026-06-05T12:20:00+00:00",
+                restore_attempt_count=1,
+                last_restore_attempt_at="",
+                last_restore_error="",
+            )
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
+            coordinator._runtime = types.SimpleNamespace(
+                async_stop_shadow_learning_route=lambda: asyncio.sleep(0)
+            )
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return state
+
+            async def _async_restore_proxy_capture_endpoint(_endpoint: str):
+                raise RuntimeError("restore_failed")
+
+            async def _async_save_shadow_learning_session_state(new_state):
+                saved_states.append(new_state)
+
+            async def _async_clear_shadow_learning_session_state():
+                clear_calls.append(True)
+
+            async def _async_request_refresh():
+                return None
+
+            coordinator._async_active_shadow_learning_state = _async_active_shadow_learning_state
+            coordinator._async_restore_proxy_capture_endpoint = _async_restore_proxy_capture_endpoint
+            coordinator._async_save_shadow_learning_session_state = _async_save_shadow_learning_session_state
+            coordinator._async_clear_shadow_learning_session_state = _async_clear_shadow_learning_session_state
+            coordinator.async_request_refresh = _async_request_refresh
+            coordinator._notify_proxy_capture_restore_unconfirmed = lambda: notify_calls.append(True)
+            coordinator._publish_tooling_values = lambda **kwargs: published.append(dict(kwargs))
+
+            result = await coordinator.async_stop_shadow_learning()
+
+            self.assertEqual(result["status"], "restore_unconfirmed")
+            self.assertEqual(result["restore_confirmed"], False)
+            self.assertFalse(clear_calls)
+            self.assertEqual(saved_states[-1].status, "restore_failed")
+            self.assertEqual(saved_states[-1].restore_attempt_count, 2)
+            self.assertTrue(notify_calls)
+            self.assertEqual(published[-1]["shadow_learning_session_status"], "restore_failed")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_stop_shadow_learning_clears_state_after_confirmed_restore(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            saved_states: list[object] = []
+            clear_calls: list[bool] = []
+            state = types.SimpleNamespace(
+                entry_id="entry-id",
+                collector_pn="E5000025388419",
+                trace_path="/tmp/shadow.jsonl",
+                original_endpoint="eu.smartess.io,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                upstream_endpoint="eu.smartess.io,18899,TCP",
+                restore_required=True,
+                started_at="2026-06-05T12:00:00+00:00",
+                expires_at="2026-06-05T12:20:00+00:00",
+                restore_attempt_count=0,
+                last_restore_attempt_at="",
+                last_restore_error="",
+            )
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
+            coordinator._runtime = types.SimpleNamespace(
+                async_stop_shadow_learning_route=lambda: asyncio.sleep(0)
+            )
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return state
+
+            async def _async_restore_proxy_capture_endpoint(endpoint: str):
+                return endpoint
+
+            async def _async_save_shadow_learning_session_state(new_state):
+                saved_states.append(new_state)
+
+            async def _async_clear_shadow_learning_session_state():
+                clear_calls.append(True)
+
+            async def _async_request_refresh():
+                return None
+
+            coordinator._async_active_shadow_learning_state = _async_active_shadow_learning_state
+            coordinator._async_restore_proxy_capture_endpoint = _async_restore_proxy_capture_endpoint
+            coordinator._async_save_shadow_learning_session_state = _async_save_shadow_learning_session_state
+            coordinator._async_clear_shadow_learning_session_state = _async_clear_shadow_learning_session_state
+            coordinator.async_request_refresh = _async_request_refresh
+            coordinator._notify_proxy_capture_restore_unconfirmed = lambda: None
+            coordinator._publish_tooling_values = lambda **kwargs: None
+
+            result = await coordinator.async_stop_shadow_learning()
+
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual(result["restore_confirmed"], True)
+            self.assertEqual(result["restored_endpoint"], "eu.smartess.io,18899,TCP")
+            self.assertTrue(clear_calls)
+            self.assertEqual(saved_states[0].status, "restoring")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_start_shadow_learning_keeps_recoverable_state_when_start_fails_after_redirect(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            saved_states: list[object] = []
+            clear_calls: list[bool] = []
+            route_stop_calls: list[bool] = []
+            refresh_calls: list[bool] = []
+            published: list[dict[str, object]] = []
+            set_endpoint_calls: list[tuple[str, bool]] = []
+
+            async def _async_start_shadow_learning_route(**kwargs):
+                del kwargs
+                return None
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                set_endpoint_calls.append((endpoint, apply_changes))
+                return {"readback_endpoint": endpoint}
+
+            async def _async_stop_shadow_learning_route(**kwargs) -> None:
+                self.assertTrue(str(kwargs.get("owner_id") or "").startswith("shadow_learning:"))
+                route_stop_calls.append(True)
+
+            async def _async_preflight_proxy_capture_network(**kwargs) -> None:
+                del kwargs
+                return None
+
+            async def _async_save_shadow_learning_session_state(state) -> None:
+                saved_states.append(state)
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return None
+
+            async def _async_wait_for_shadow_learning_ready(**kwargs) -> None:
+                del kwargs
+                raise RuntimeError("startup_timeout")
+
+            async def _async_best_effort_restore_after_start_failure(_endpoint: str):
+                return False, "restore_write_timeout"
+
+            async def _async_clear_shadow_learning_session_state() -> None:
+                clear_calls.append(True)
+
+            async def _async_request_refresh() -> None:
+                refresh_calls.append(True)
+
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-id",
+                data={},
+                options={"proxy_capture_duration_minutes": 10},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=False,
+                values={"collector_server_endpoint": "eu.smartess.io,18899,TCP"},
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                proxy_capture_route_running=lambda: False,
+                async_start_shadow_learning_route=_async_start_shadow_learning_route,
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+                async_stop_shadow_learning_route=_async_stop_shadow_learning_route,
+            )
+            coordinator._shadow_learning_process_running = lambda: False
+            coordinator._async_preflight_proxy_capture_network = _async_preflight_proxy_capture_network
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator._async_save_shadow_learning_session_state = (
+                _async_save_shadow_learning_session_state
+            )
+            coordinator._async_wait_for_shadow_learning_ready = (
+                _async_wait_for_shadow_learning_ready
+            )
+            coordinator._async_best_effort_restore_after_start_failure = (
+                _async_best_effort_restore_after_start_failure
+            )
+            coordinator._async_clear_shadow_learning_session_state = (
+                _async_clear_shadow_learning_session_state
+            )
+            coordinator.async_request_refresh = _async_request_refresh
+            coordinator._publish_tooling_values = lambda **kwargs: published.append(dict(kwargs))
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "smartess_collector_pn",
+                new_callable=PropertyMock,
+                return_value="E5000025388419",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_callback_target_endpoint",
+                new_callable=PropertyMock,
+                return_value="192.168.1.50,18899,TCP",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_upstream_endpoint",
+                new_callable=PropertyMock,
+                return_value="eu.smartess.io,18899,TCP",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_key",
+                new_callable=PropertyMock,
+                return_value="smartess-default",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_label",
+                new_callable=PropertyMock,
+                return_value="SmartESS Default",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_source",
+                new_callable=PropertyMock,
+                return_value="runtime",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_confidence",
+                new_callable=PropertyMock,
+                return_value="high",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "effective_metadata_snapshot",
+                new_callable=PropertyMock,
+                return_value={},
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_family",
+                new_callable=PropertyMock,
+                return_value="smartess",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "_effective_callback_server_host",
+                new_callable=PropertyMock,
+                return_value="192.168.1.50",
+            ), patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_seed",
+                return_value=(
+                    types.SimpleNamespace(write_response_mode="exception"),
+                    [],
+                ),
+            ), patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_preflight",
+                return_value=types.SimpleNamespace(can_start=True, blockers=[]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "startup_timeout"):
+                    await coordinator.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow-start-failure.jsonl"),
+                        raw_capture={},
+                    )
+
+            self.assertFalse(clear_calls)
+            self.assertEqual(route_stop_calls, [True])
+            self.assertEqual(refresh_calls, [True])
+            self.assertEqual(set_endpoint_calls, [("192.168.1.50,18899,TCP", True)])
+            self.assertEqual(saved_states[-1].status, "restore_failed")
+            self.assertTrue(saved_states[-1].restore_required)
+            self.assertEqual(saved_states[-1].original_endpoint, "eu.smartess.io,18899,TCP")
+            self.assertEqual(saved_states[-1].restore_attempt_count, 1)
+            self.assertEqual(saved_states[-1].last_restore_error, "restore_write_timeout")
+            self.assertTrue(saved_states[-1].route_owner_id.startswith("shadow_learning:"))
+            self.assertEqual(published[-1]["shadow_learning_session_status"], "restore_failed")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_best_effort_restore_after_start_failure_reports_unconfirmed_restore(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            notifications: list[bool] = []
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
+
+            async def _async_restore_proxy_capture_endpoint(_endpoint: str):
+                raise RuntimeError("write_timeout")
+
+            coordinator._async_restore_proxy_capture_endpoint = _async_restore_proxy_capture_endpoint
+            coordinator._notify_proxy_capture_restore_unconfirmed = lambda: notifications.append(True)
+
+            confirmed, reason = await coordinator._async_best_effort_restore_after_start_failure(
+                "eu.smartess.io,18899,TCP"
+            )
+
+            self.assertFalse(confirmed)
+            self.assertEqual(reason, "write_timeout")
+            self.assertTrue(notifications)
 
         import asyncio
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, Mock, patch, sentinel
+import zipfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,7 @@ def _install_homeassistant_stubs() -> None:
     core = types.ModuleType("homeassistant.core")
     data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
     helpers = types.ModuleType("homeassistant.helpers")
+    entity_registry = types.ModuleType("homeassistant.helpers.entity_registry")
     selector = types.ModuleType("homeassistant.helpers.selector")
 
     class ConfigFlow:
@@ -167,6 +170,10 @@ def _install_homeassistant_stubs() -> None:
     selector.TextSelector = _Selector
     selector.TextSelectorConfig = _SelectorConfig
 
+    entity_registry.async_get = lambda _hass: None
+    entity_registry.async_entries_for_config_entry = lambda *_args, **_kwargs: []
+    helpers.entity_registry = entity_registry
+
     voluptuous.Schema = Schema
     voluptuous.Required = Required
     voluptuous.Optional = Optional
@@ -180,6 +187,7 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.core"] = core
     sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
     sys.modules["homeassistant.helpers"] = helpers
+    sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
     sys.modules["homeassistant.helpers.selector"] = selector
 
 
@@ -210,11 +218,23 @@ from custom_components.eybond_local.config_flow import (
     CONF_RESULT_KEY,
     EybondLocalConfigFlow,
     EybondLocalOptionsFlow,
+    SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY,
+    SHADOW_LEARNING_ACTION_GENERATE_OVERLAY,
+    SHADOW_LEARNING_ACTION_REFRESH,
+    SHADOW_LEARNING_ACTION_RUN_LEARNING,
+    SHADOW_LEARNING_MODE_ENUM_SWEEP,
+    SHADOW_LEARNING_MODE_MANUAL,
+    SHADOW_LEARNING_MODE_SUPPORT_ONLY,
     SETUP_MODE_DEEP_SCAN,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED,
     _get_ipv4_interfaces,
     _flatten_sections,
+)
+from custom_components.eybond_local.support.bundle import build_support_bundle_payload
+from custom_components.eybond_local.support.package import (
+    build_shadow_learning_runtime_values,
+    export_support_package,
 )
 from custom_components.eybond_local.collector.smartess_ble import SmartEssBleCandidate
 from custom_components.eybond_local.collector.smartess_ble import (
@@ -4834,6 +4854,724 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flattened["udp_port"], 58899)
         self.assertEqual(flattened["discovery_interval"], 10)
         self.assertEqual(flattened["heartbeat_interval"], 60)
+
+    async def test_shadow_learning_broad_mode_requires_fresh_preview_plan(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(values={}),
+        )
+
+        result = await options.async_step_shadow_learning(
+            {
+                "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                "shadow_learning_mode": SHADOW_LEARNING_MODE_ENUM_SWEEP,
+                "shadow_learning_field_ids": "fieldA,fieldB",
+                "shadow_learning_include_numeric": False,
+                "shadow_learning_enum_sweep": True,
+                "shadow_learning_numeric_value": "1",
+                "shadow_learning_max_fields": 2,
+                "username": "demo",
+                "password": "secret",
+                "shadow_learning_confirm_cloud_write": True,
+                "shadow_learning_confirm_broad_sweep": True,
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"], {"base": "shadow_learning_failed"})
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "shadow_learning_preview_required",
+        )
+        self.assertNotIn("support_package_path", options._shadow_learning_state)
+
+    async def test_shadow_learning_broad_mode_blocks_stale_preview_signature(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_state = {
+            "plan": {
+                "signature": {
+                    "mode": SHADOW_LEARNING_MODE_MANUAL,
+                    "selected_field_ids": ["fieldA"],
+                    "include_numeric": False,
+                    "all_choice_values": False,
+                    "numeric_value": "1",
+                    "max_fields": 1,
+                },
+                "items": [{"id": "fieldA"}],
+            }
+        }
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(values={}),
+        )
+
+        result = await options.async_step_shadow_learning(
+            {
+                "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                "shadow_learning_mode": SHADOW_LEARNING_MODE_ENUM_SWEEP,
+                "shadow_learning_field_ids": "fieldA",
+                "shadow_learning_include_numeric": False,
+                "shadow_learning_enum_sweep": True,
+                "shadow_learning_numeric_value": "1",
+                "shadow_learning_max_fields": 1,
+                "username": "demo",
+                "password": "secret",
+                "shadow_learning_confirm_cloud_write": True,
+                "shadow_learning_confirm_broad_sweep": True,
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"], {"base": "shadow_learning_failed"})
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "shadow_learning_preview_required",
+        )
+        self.assertNotIn("support_package_path", options._shadow_learning_state)
+
+    async def test_shadow_learning_run_learning_rejects_non_ready_session(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_settings_dat = lambda _coordinator: {"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}
+        options._shadow_learning_cloud_identity = lambda _coordinator: {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        }
+        options._shadow_learning_observed_writes = lambda _coordinator: ()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": True,
+                    "collector_connected": True,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={}),
+        )
+
+        with patch.object(config_flow_module, "login_with_password") as login_mock, patch.object(
+            config_flow_module,
+            "fetch_signed_action",
+        ) as fetch_mock:
+            result = await options.async_step_shadow_learning(
+                {
+                    "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                    "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                    "shadow_learning_field_ids": "",
+                    "shadow_learning_include_numeric": False,
+                    "shadow_learning_enum_sweep": False,
+                    "shadow_learning_numeric_value": "1",
+                    "shadow_learning_max_fields": 0,
+                    "username": "demo",
+                    "password": "secret",
+                    "shadow_learning_confirm_cloud_write": True,
+                    "shadow_learning_confirm_broad_sweep": False,
+                }
+            )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"], {"base": "shadow_learning_failed"})
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "shadow_learning_session_not_ready",
+        )
+        login_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+
+    async def test_shadow_learning_run_learning_accepts_ready_session(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_settings_dat = lambda _coordinator: {"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}
+        options._shadow_learning_cloud_identity = lambda _coordinator: {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        }
+        options._shadow_learning_observed_writes = lambda _coordinator: ()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": True,
+                    "collector_connected": True,
+                    "upstream_connected": True,
+                    "ready": True,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={}),
+        )
+        captured: dict[str, object] = {}
+
+        with patch.object(
+            config_flow_module,
+            "login_with_password",
+            return_value=(
+                object(),
+                types.SimpleNamespace(
+                    token="token",
+                    secret="secret",
+                    uid="uid",
+                    usr="usr",
+                    role=1,
+                    expire=1,
+                ),
+            ),
+        ), patch.object(
+            config_flow_module,
+            "fetch_signed_action",
+            return_value=types.SimpleNamespace(dat={"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}),
+        ), patch.object(
+            config_flow_module,
+            "async_orchestrate_shadow_learning_settings",
+            side_effect=lambda **kwargs: captured.update(kwargs) or {
+                "planned_write_count": 1,
+                "executed_result_count": 1,
+                "sent_count": 1,
+                "error_count": 0,
+                "unknown_field_count": 0,
+                "results": [],
+                "correlation": {},
+            },
+        ):
+            result = await options.async_step_shadow_learning(
+                {
+                    "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                    "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                    "shadow_learning_field_ids": "",
+                    "shadow_learning_include_numeric": False,
+                    "shadow_learning_enum_sweep": False,
+                    "shadow_learning_numeric_value": "1",
+                    "shadow_learning_max_fields": 0,
+                    "username": "demo",
+                    "password": "secret",
+                    "shadow_learning_confirm_cloud_write": True,
+                    "shadow_learning_confirm_broad_sweep": False,
+                }
+            )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "Learning execution completed.",
+        )
+        self.assertEqual(captured["shadow_session_state"], "ready")
+
+    async def test_shadow_learning_run_learning_accepts_explicit_learning_state(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_settings_dat = lambda _coordinator: {"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}
+        options._shadow_learning_cloud_identity = lambda _coordinator: {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        }
+        options._shadow_learning_observed_writes = lambda _coordinator: ()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": True,
+                    "collector_connected": True,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={"shadow_learning_session_status": "learning"}),
+        )
+        captured: dict[str, object] = {}
+
+        with patch.object(
+            config_flow_module,
+            "login_with_password",
+            return_value=(
+                object(),
+                types.SimpleNamespace(
+                    token="token",
+                    secret="secret",
+                    uid="uid",
+                    usr="usr",
+                    role=1,
+                    expire=1,
+                ),
+            ),
+        ), patch.object(
+            config_flow_module,
+            "fetch_signed_action",
+            return_value=types.SimpleNamespace(dat={"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}),
+        ), patch.object(
+            config_flow_module,
+            "async_orchestrate_shadow_learning_settings",
+            side_effect=lambda **kwargs: captured.update(kwargs) or {
+                "planned_write_count": 1,
+                "executed_result_count": 1,
+                "sent_count": 1,
+                "error_count": 0,
+                "unknown_field_count": 0,
+                "results": [],
+                "correlation": {},
+            },
+        ):
+            result = await options.async_step_shadow_learning(
+                {
+                    "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                    "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                    "shadow_learning_field_ids": "",
+                    "shadow_learning_include_numeric": False,
+                    "shadow_learning_enum_sweep": False,
+                    "shadow_learning_numeric_value": "1",
+                    "shadow_learning_max_fields": 0,
+                    "username": "demo",
+                    "password": "secret",
+                    "shadow_learning_confirm_cloud_write": True,
+                    "shadow_learning_confirm_broad_sweep": False,
+                }
+            )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"], {"base": "shadow_learning_failed"})
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "shadow_learning_session_not_ready",
+        )
+        self.assertEqual(captured, {})
+
+    async def test_shadow_learning_run_learning_rejects_stale_persisted_ready_state(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_settings_dat = lambda _coordinator: {"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}
+        options._shadow_learning_cloud_identity = lambda _coordinator: {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        }
+        options._shadow_learning_observed_writes = lambda _coordinator: ()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": False,
+                    "collector_connected": False,
+                    "collector_protocol_ingress": False,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={"shadow_learning_session_status": "ready"}),
+        )
+
+        with patch.object(config_flow_module, "login_with_password") as login_mock, patch.object(
+            config_flow_module,
+            "fetch_signed_action",
+        ) as fetch_mock:
+            result = await options.async_step_shadow_learning(
+                {
+                    "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                    "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                    "shadow_learning_field_ids": "",
+                    "shadow_learning_include_numeric": False,
+                    "shadow_learning_enum_sweep": False,
+                    "shadow_learning_numeric_value": "1",
+                    "shadow_learning_max_fields": 0,
+                    "username": "demo",
+                    "password": "secret",
+                    "shadow_learning_confirm_cloud_write": True,
+                    "shadow_learning_confirm_broad_sweep": False,
+                }
+            )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"], {"base": "shadow_learning_failed"})
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "shadow_learning_session_not_ready",
+        )
+        login_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+
+    async def test_shadow_learning_support_only_mode_does_not_export_without_action(self) -> None:
+        options = self._make_options_flow()
+        called = False
+
+        async def _export_support_package_with_cloud_refresh(**_kwargs):
+            nonlocal called
+            called = True
+            return "/config/support/support_archive.zip"
+
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
+            data=types.SimpleNamespace(values={}),
+        )
+
+        result = await options.async_step_shadow_learning(
+            {
+                "shadow_learning_action": SHADOW_LEARNING_ACTION_REFRESH,
+                "shadow_learning_mode": SHADOW_LEARNING_MODE_SUPPORT_ONLY,
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertFalse(called)
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "Shadow-learning status refreshed.",
+        )
+
+    def test_shadow_learning_placeholders_prefer_runtime_session_state(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_state = {
+            "session": {"status": "learning"},
+        }
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": False,
+                    "collector_connected": False,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={}),
+        )
+
+        placeholders = options._shadow_learning_placeholders(options._coordinator())
+
+        self.assertEqual(placeholders["shadow_learning_session_state"], "stopped")
+
+    def test_shadow_learning_placeholders_surface_restore_failed_state(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": False,
+                    "collector_connected": False,
+                    "collector_protocol_ingress": False,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={"shadow_learning_session_status": "restore_failed"}),
+        )
+
+        placeholders = options._shadow_learning_placeholders(options._coordinator())
+
+        self.assertEqual(placeholders["shadow_learning_session_state"], "restore_failed")
+
+    async def test_shadow_learning_explicit_support_export_action_runs_export(self) -> None:
+        options = self._make_options_flow()
+        called = False
+
+        async def _export_support_package_with_cloud_refresh(**_kwargs):
+            nonlocal called
+            called = True
+            return "/config/support/support_archive.zip"
+
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
+            data=types.SimpleNamespace(values={}),
+        )
+
+        result = await options.async_step_shadow_learning(
+            {
+                "shadow_learning_action": SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY,
+                "shadow_learning_mode": SHADOW_LEARNING_MODE_SUPPORT_ONLY,
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertTrue(called)
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "Support package exported without learning execution.",
+        )
+
+    async def test_shadow_learning_real_result_path_exports_all_artifacts_before_activation(
+        self,
+    ) -> None:
+        options = self._make_options_flow()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            options.hass.config.config_dir = temp_dir
+            trace_path = (
+                config_dir
+                / "eybond_local"
+                / "shadow_learning_traces"
+                / "entry_1_session.jsonl"
+            )
+            profile_path = (
+                config_dir
+                / "eybond_local"
+                / "profiles"
+                / "learned"
+                / "shadow_learning"
+                / "device"
+                / "profile.json"
+            )
+            schema_path = (
+                config_dir
+                / "eybond_local"
+                / "register_schemas"
+                / "learned"
+                / "shadow_learning"
+                / "device"
+                / "schema.json"
+            )
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            schema_path.parent.mkdir(parents=True, exist_ok=True)
+            trace_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "shadow_session_manifest",
+                        "session_id": "entry-1-session",
+                        "entry_id": "entry-1",
+                        "collector_pn": "E5000025388419",
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "kind": "shadow_modbus_write_observation",
+                        "payload": {
+                            "register": 201,
+                            "values": [1],
+                            "session_token": "trace-secret",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            overlay_manifest = {
+                "kind": "shadow_learning_device_overlay",
+                "scope": {
+                    "collector_pn": "E5000025388419",
+                    "cloud_sn": "E50000253884199645094801",
+                },
+                "session": {"session_id": "entry-1-session"},
+                "correlation_summary": {"matched_count": 1},
+                "learned_capabilities": [{"key": "learned_mode", "register": 201}],
+                "output": {
+                    "profile_name": "learned/shadow_learning/device/profile.json",
+                    "schema_name": "learned/shadow_learning/device/schema.json",
+                },
+            }
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "shadow_learning_overlay": overlay_manifest,
+                        "capabilities": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            schema_path.write_text(
+                json.dumps(
+                    {
+                        "shadow_learning_overlay": overlay_manifest,
+                        "measurement_descriptions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _Coordinator:
+                smartess_collector_pn = "E5000025388419"
+                effective_profile_name = "smg_modbus.json"
+                effective_register_schema_name = "modbus_smg/models/smg_6200.json"
+
+                def __init__(self) -> None:
+                    self.data = types.SimpleNamespace(
+                        values={},
+                    )
+                    self._runtime = types.SimpleNamespace(
+                        shadow_learning_route_status=lambda: {
+                            "running": True,
+                            "collector_connected": True,
+                            "collector_protocol_ingress": True,
+                            "upstream_connected": True,
+                            "ready": True,
+                            "upstream_error": "",
+                        }
+                    )
+
+                def publish_shadow_learning_artifacts(self, **kwargs):
+                    values = build_shadow_learning_runtime_values(**kwargs)
+                    self.data.values.update(values)
+                    return dict(values["shadow_learning_artifacts"])
+
+                async def async_export_support_package_with_cloud_refresh(self, **_kwargs):
+                    support_bundle = build_support_bundle_payload(
+                        entry_id="entry-1",
+                        entry_title="Shadow Device",
+                        connected=True,
+                        collector={"collector_pn": self.smartess_collector_pn},
+                        inverter={
+                            "driver_key": "modbus_smg",
+                            "model_name": "Unknown SMG",
+                            "serial_number": "E50000253884199645094801",
+                        },
+                        values=dict(self.data.values),
+                        data={"server_ip": "192.168.1.50"},
+                        options={},
+                        profile_name=self.effective_profile_name,
+                        register_schema_name=self.effective_register_schema_name,
+                    )
+                    return str(
+                        export_support_package(
+                            config_dir=config_dir,
+                            entry_id="entry-1",
+                            entry_title="Shadow Device",
+                            support_bundle=support_bundle,
+                            raw_capture={"capture_kind": "modbus_register_dump"},
+                            fixture={"fixture_version": 1, "ranges": []},
+                            anonymized_fixture={
+                                "fixture_version": 1,
+                                "ranges": [],
+                                "anonymized": True,
+                            },
+                        ).path
+                    )
+
+            coordinator = _Coordinator()
+            options._config_entry.runtime_data = coordinator
+            options._shadow_learning_state = {
+                "session": {
+                    "status": "ready",
+                    "session_id": "entry-1-session",
+                    "trace_path": str(trace_path),
+                },
+                "plan": {
+                    "signature": {"mode": SHADOW_LEARNING_MODE_MANUAL},
+                    "items": [
+                        {
+                            "field_id": "sys_eybond_ctrl_53",
+                            "value": "1",
+                        }
+                    ],
+                    "password": "plan-secret",
+                },
+            }
+            options._shadow_learning_cloud_identity = lambda _coordinator: {
+                "pn": "E50000253884199645",
+                "sn": "E50000253884199645094801",
+                "devcode": 2376,
+                "devaddr": 1,
+            }
+
+            orchestration = {
+                "planned_write_count": 1,
+                "executed_result_count": 1,
+                "sent_count": 1,
+                "error_count": 0,
+                "unknown_field_count": 0,
+                "secret_token": "runtime-secret",
+                "results": [
+                    {
+                        "field_id": "sys_eybond_ctrl_53",
+                        "value": "1",
+                        "status": "sent",
+                    }
+                ],
+                "correlation": {
+                    "matched_count": 1,
+                    "unmatched_attempt_count": 0,
+                    "authorization": "Bearer hidden",
+                },
+            }
+            with patch.object(
+                config_flow_module,
+                "login_with_password",
+                return_value=(
+                    object(),
+                    types.SimpleNamespace(
+                        token="login-token",
+                        secret="login-secret",
+                        uid="uid",
+                        usr="usr",
+                        role=1,
+                        expire=1,
+                    ),
+                ),
+            ), patch.object(
+                config_flow_module,
+                "fetch_signed_action",
+                return_value=types.SimpleNamespace(dat={"field": []}),
+            ), patch.object(
+                config_flow_module,
+                "async_orchestrate_shadow_learning_settings",
+                return_value=orchestration,
+            ), patch.object(
+                config_flow_module,
+                "generate_shadow_learning_overlay_drafts",
+                return_value=types.SimpleNamespace(
+                    profile_path=profile_path,
+                    schema_path=schema_path,
+                    generated_capability_count=1,
+                    skipped_duplicate_count=0,
+                    manifest=overlay_manifest,
+                ),
+            ):
+                await options.async_step_shadow_learning(
+                    {
+                        "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                        "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                        "shadow_learning_field_ids": "",
+                        "shadow_learning_include_numeric": False,
+                        "shadow_learning_enum_sweep": False,
+                        "shadow_learning_numeric_value": "1",
+                        "shadow_learning_max_fields": 0,
+                        "username": "user@example.com",
+                        "password": "cloud-password",
+                        "shadow_learning_confirm_cloud_write": True,
+                        "shadow_learning_confirm_broad_sweep": False,
+                    }
+                )
+                await options.async_step_shadow_learning(
+                    {
+                        "shadow_learning_action": SHADOW_LEARNING_ACTION_GENERATE_OVERLAY,
+                        "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                    }
+                )
+                result = await options.async_step_shadow_learning(
+                    {
+                        "shadow_learning_action": SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY,
+                        "shadow_learning_mode": SHADOW_LEARNING_MODE_SUPPORT_ONLY,
+                    }
+                )
+
+            archive_path = Path(options._shadow_learning_state["support_package_path"])
+            with zipfile.ZipFile(archive_path) as archive:
+                names = set(archive.namelist())
+                serialized = "\n".join(
+                    archive.read(name).decode("utf-8", errors="replace")
+                    for name in names
+                    if name.endswith((".json", ".jsonl"))
+                )
+
+            self.assertEqual(result["errors"], {})
+            self.assertIn("evidence/shadow_learning/trace.jsonl", names)
+            self.assertIn("evidence/shadow_learning/learn_plan.json", names)
+            self.assertIn("evidence/shadow_learning/orchestration.json", names)
+            self.assertIn("evidence/shadow_learning/correlation_report.json", names)
+            self.assertIn("evidence/shadow_learning/generated_overlay_profile.json", names)
+            self.assertIn("evidence/shadow_learning/generated_overlay_schema.json", names)
+            self.assertIn("evidence/shadow_learning/activation_manifest.json", names)
+            self.assertNotIn("runtime-secret", serialized)
+            self.assertNotIn("Bearer hidden", serialized)
+            self.assertNotIn("cloud-password", serialized)
+            self.assertNotIn("plan-secret", serialized)
+            self.assertEqual(
+                coordinator.data.values["shadow_learning_device_scope"]["cloud_sn"],
+                "E50000253884199645094801",
+            )
+            self.assertEqual(
+                coordinator.data.values["shadow_learning_activation"]["status"],
+                "draft_generated",
+            )
 
 
 if __name__ == "__main__":

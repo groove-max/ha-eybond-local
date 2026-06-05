@@ -65,6 +65,8 @@ class RuntimeManager(Protocol):
     async def async_start_proxy_capture_route(
         self,
         *,
+        owner_id: str = "",
+        entry_id: str = "",
         collector_ip: str,
         listen_port: int,
         upstream_host: str,
@@ -75,10 +77,46 @@ class RuntimeManager(Protocol):
     ) -> None:
         ...
 
-    async def async_stop_proxy_capture_route(self) -> None:
+    async def async_stop_proxy_capture_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
         ...
 
     def proxy_capture_route_running(self) -> bool:
+        ...
+
+    async def async_start_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        entry_id: str = "",
+        collector_ip: str,
+        listen_port: int,
+        upstream_host: str,
+        upstream_port: int,
+        output_path: Any,
+        seed: Any,
+    ) -> None:
+        ...
+
+    async def async_stop_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
+        ...
+
+    def shadow_learning_route_running(self) -> bool:
+        ...
+
+    def shadow_learning_route_ready(self) -> bool:
+        ...
+
+    def shadow_learning_route_status(self) -> dict[str, object]:
         ...
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:

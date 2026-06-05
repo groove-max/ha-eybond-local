@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import re
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -24,6 +25,10 @@ DEFAULT_APP_VERSION = "3.43.3.0"
 DEFAULT_COMPANY_KEY = "bnrl_frRFjEz8Mkn"
 DEFAULT_DEVICE_TYPE = 2304
 DEFAULT_TIMEOUT = 15.0
+DEFAULT_LEARN_NUMERIC_VALUE = "1"
+
+
+_HINT_RANGE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:~|-|to)\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
 _SMARTESS_0925_EXACT = "exact_0925"
@@ -362,6 +367,28 @@ def build_device_settings_action(*, pn: str, sn: str, devcode: int, devaddr: int
     )
 
 
+def build_device_control_action(
+    *,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    field_id: str,
+    value: str,
+) -> str:
+    return _build_action(
+        "ctrlDevice",
+        [
+            ("pn", pn),
+            ("sn", sn),
+            ("devcode", devcode),
+            ("devaddr", devaddr),
+            ("id", field_id),
+            ("val", value),
+        ],
+    )
+
+
 def build_device_energy_flow_action(*, pn: str, sn: str, devcode: int, devaddr: int) -> str:
     return _build_action(
         "webQueryDeviceEnergyFlowEs",
@@ -540,6 +567,109 @@ def normalize_device_settings(dat: Any) -> dict[str, Any] | None:
         "two_tier_present": isinstance(two_tier, dict) and bool(two_tier),
         "fields": fields,
     }
+
+
+def build_learn_settings_plan(
+    dat: Any,
+    *,
+    field_ids: list[str] | tuple[str, ...],
+    include_numeric: bool,
+    numeric_value: str = DEFAULT_LEARN_NUMERIC_VALUE,
+    all_choice_values: bool = False,
+    max_fields: int = 0,
+) -> list[dict[str, str]]:
+    """Return deterministic plan items for SmartESS learn-settings orchestration."""
+
+    if not isinstance(dat, dict):
+        return []
+    requested_ids = {
+        str(field_id).strip() for field_id in field_ids if str(field_id).strip()
+    }
+    fields = dat.get("field")
+    if not isinstance(fields, list):
+        return []
+
+    plan: list[dict[str, str]] = []
+    visited_fields = 0
+    for raw_field in fields:
+        if not isinstance(raw_field, dict):
+            continue
+        field_id = str(raw_field.get("id") or "").strip()
+        if not field_id:
+            continue
+        if requested_ids and field_id not in requested_ids:
+            continue
+        if max_fields > 0 and visited_fields >= max_fields:
+            break
+
+        candidates = _candidate_learn_setting_values(
+            raw_field,
+            include_numeric=include_numeric,
+            numeric_value=numeric_value,
+            all_choice_values=all_choice_values,
+        )
+        if not candidates:
+            continue
+
+        visited_fields += 1
+        title = str(raw_field.get("name") or "")
+        for candidate in candidates:
+            plan.append(
+                {
+                    "field_id": field_id,
+                    "title": title,
+                    "value": candidate["value"],
+                    "value_label": candidate.get("label", ""),
+                    "value_source": candidate["source"],
+                }
+            )
+    return plan
+
+
+def _candidate_learn_setting_values(
+    field: dict[str, Any],
+    *,
+    include_numeric: bool,
+    numeric_value: str,
+    all_choice_values: bool,
+) -> list[dict[str, str]]:
+    choices = field.get("item")
+    if isinstance(choices, list) and choices:
+        candidates: list[dict[str, str]] = []
+        for raw_choice in choices:
+            if not isinstance(raw_choice, dict):
+                continue
+            raw_value = raw_choice.get("key")
+            if raw_value in (None, ""):
+                continue
+            candidates.append(
+                {
+                    "value": str(raw_value),
+                    "label": str(raw_choice.get("val") or ""),
+                    "source": "choice",
+                }
+            )
+            if not all_choice_values:
+                break
+        return candidates
+
+    if not include_numeric:
+        return []
+    hint_value = _first_numeric_hint_value(str(field.get("hint") or ""))
+    return [
+        {
+            "value": hint_value or str(numeric_value),
+            "label": "",
+            "source": "hint_min" if hint_value else "numeric_default",
+        }
+    ]
+
+
+def _first_numeric_hint_value(hint: str) -> str:
+    match = _HINT_RANGE_RE.search(hint)
+    if not match:
+        return ""
+    return match.group(1)
 
 
 def _resolve_smartess_0925_setting_classification(normalized_title: str) -> dict[str, Any]:

@@ -77,6 +77,7 @@ from ..const import (
     COLLECTOR_OPERATION_MODES,
     DOMAIN,
     DRIVER_HINT_AUTO,
+    LOCAL_METADATA_DIR,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
 )
@@ -153,6 +154,21 @@ from ..support.proxy_trace import (
     publish_proxy_trace_download_copy,
     save_proxy_capture_session_state,
 )
+from ..support.shadow_learning_backend import (
+    build_shadow_learning_preflight,
+    build_shadow_learning_seed,
+    build_shadow_learning_trace_path,
+)
+from ..support.shadow_learning_session import (
+    build_shadow_learning_lease_deadline,
+    build_shadow_learning_session_state,
+    clear_shadow_learning_session_state,
+    load_shadow_learning_session_state,
+    save_shadow_learning_session_state,
+    shadow_learning_session_is_active,
+    shadow_learning_session_is_expired,
+    shadow_learning_session_timestamp,
+)
 from ..support.package import export_support_package
 from ..support.workflow import build_support_workflow_state
 
@@ -168,6 +184,28 @@ _HIDDEN_HA_ONLY_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
 _DEFAULT_PROXY_CAPTURE_PORT = 18899
 _COLLECTOR_HA_PRIMARY_RECONCILE_COOLDOWN_SECONDS = 300.0
 _EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY = "effective_metadata_snapshot"
+_DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
+def _bounded_shadow_learning_artifact_path(
+    *,
+    config_dir: Path,
+    value: object,
+    relative_root: Path,
+) -> str:
+    """Return an existing artifact path only when it stays inside its expected root."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    path = Path(normalized)
+    if not path.is_absolute():
+        return ""
+    root = (config_dir / relative_root).resolve()
+    candidate = path.resolve()
+    if candidate == root or root not in candidate.parents:
+        return ""
+    if not candidate.exists() or not candidate.is_file():
+        return ""
+    return str(candidate)
 _CONF_COLLECTOR_CLOUD_PROFILE_KEY = "collector_cloud_profile_key"
 _CONF_COLLECTOR_CLOUD_PROFILE_LABEL = "collector_cloud_profile_label"
 _CONF_COLLECTOR_CLOUD_PROFILE_SOURCE = "collector_cloud_profile_source"
@@ -484,6 +522,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._cached_smartess_cloud_evidence_record = None
         self._cached_smartess_cloud_evidence_warmed = False
         self._cached_proxy_capture_session_state = None
+        self._cached_shadow_learning_session_state = None
         self._proxy_trace_download_manifest_path = ""
         self._proxy_trace_download_details: tuple[str, str] = ("", "")
         self._proxy_capture_deadline_refresh_handle = None
@@ -619,6 +658,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 self.collector_callback_target_endpoint
             )
         await self._async_recover_proxy_capture_state()
+        await self._async_recover_shadow_learning_state()
         await self._async_warm_smartess_cloud_evidence_cache()
 
     async def async_shutdown(self) -> None:
@@ -628,7 +668,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if self._shutdown_complete:
                 return
             self._cancel_proxy_capture_deadline_refresh()
-            await self._async_stop_proxy_capture_process()
+            try:
+                await self.async_stop_shadow_learning(
+                    reason="shutdown",
+                    request_refresh=False,
+                    raise_when_not_running=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Shadow learning shutdown cleanup failed for entry %s: %s",
+                    self.config_entry.entry_id,
+                    exc,
+                )
+            await self._async_stop_proxy_capture_process(force=True)
             await self._runtime.async_stop()
             self._shutdown_complete = True
 
@@ -1182,6 +1234,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             driver=self.current_driver,
             collector=snapshot.collector,
             entry_data=entry_data,
+            entry_options=self.config_entry.options,
         )
         confidence = str(
             entry_data.get(CONF_DETECTION_CONFIDENCE)
@@ -1347,6 +1400,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         )
         snapshot = await self._async_reconcile_proxy_capture_session(snapshot)
+        snapshot = await self._async_reconcile_shadow_learning_session(snapshot)
         await self._async_remember_collector_server_endpoint(snapshot)
         await self._async_remember_runtime_identity(snapshot)
         # Keep self.data aligned with the fresh snapshot before helpers that
@@ -1385,6 +1439,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         ]
         snapshot.values["effective_schema_source_scope"] = write_exposure_context[
             "schema_source_scope"
+        ]
+        snapshot.values["effective_device_scoped_overlay_active"] = write_exposure_context[
+            "device_scoped_overlay_active"
+        ]
+        snapshot.values["effective_device_scoped_overlay_scope"] = write_exposure_context[
+            "device_scoped_overlay_scope"
+        ]
+        snapshot.values["effective_capabilities_experimental"] = write_exposure_context[
+            "effective_capabilities_experimental"
         ]
         snapshot.values.update(self._support_workflow_values(snapshot))
         snapshot.values.update(self._collector_onboarding_values(snapshot))
@@ -1636,6 +1699,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             raise RuntimeError(str(overview.blocking_reason or "proxy_capture_not_ready"))
         if overview.redirect_required and not confirm_redirect:
             raise ValueError("proxy_capture_redirect_requires_confirmation")
+        active_shadow_state = await self._async_active_shadow_learning_state(require_process=False)
+        if active_shadow_state is not None and shadow_learning_session_is_active(active_shadow_state):
+            raise RuntimeError("shadow_learning_route_running")
+        if self._shadow_learning_process_running():
+            raise RuntimeError("shadow_learning_route_running")
         if self._proxy_capture_process_running():
             raise RuntimeError("proxy_capture_already_running")
 
@@ -1661,6 +1729,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self.async_set_proxy_capture_duration_minutes(configured_duration_minutes)
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        route_owner_id = f"proxy_capture:{self.config_entry.entry_id}:{timestamp}"
         trace_path = await self.hass.async_add_executor_job(
             lambda: build_proxy_capture_trace_path(
                 config_dir=Path(self.hass.config.config_dir),
@@ -1677,6 +1746,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         started_at = datetime.now(timezone.utc).isoformat()
         state = build_proxy_capture_session_state(
             entry_id=self.config_entry.entry_id,
+            route_owner_id=route_owner_id,
             collector_pn=self.smartess_collector_pn,
             trace_path=str(trace_path),
             original_endpoint=overview.current_endpoint,
@@ -1698,6 +1768,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             local_metadata_status="Starting collector proxy capture",
         )
 
+        route_started = False
         try:
             await self._async_preflight_proxy_capture_network(
                 target_host=target_host,
@@ -1706,6 +1777,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 upstream_port=upstream_port,
             )
             await self._runtime.async_start_proxy_capture_route(
+                owner_id=route_owner_id,
+                entry_id=self.config_entry.entry_id,
                 collector_ip=self._proxy_capture_collector_ip(),
                 listen_port=target_port,
                 upstream_host=upstream_host,
@@ -1714,6 +1787,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 masked_endpoint=self.proxy_capture_upstream_endpoint,
                 restore_trigger_path=restore_trigger_path,
             )
+            route_started = True
             if overview.redirect_required:
                 await self._runtime.async_set_collector_server_endpoint(
                     overview.target_endpoint,
@@ -1730,6 +1804,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self._async_wait_for_proxy_capture_reconnect(trace_path)
             running_state = build_proxy_capture_session_state(
                 entry_id=state.entry_id,
+                route_owner_id=state.route_owner_id,
                 collector_pn=state.collector_pn,
                 trace_path=state.trace_path,
                 original_endpoint=state.original_endpoint,
@@ -1744,7 +1819,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         except Exception:
             if overview.redirect_required and overview.current_endpoint:
                 await self._async_best_effort_restore_after_start_failure(overview.current_endpoint)
-            await self._async_stop_proxy_capture_process()
+            if route_started:
+                await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
             await self._async_clear_proxy_capture_session_state()
             try:
                 await self.async_request_refresh()
@@ -1789,6 +1865,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         config_dir = Path(self.hass.config.config_dir)
         stopping_state = build_proxy_capture_session_state(
             entry_id=state.entry_id,
+            route_owner_id=state.route_owner_id,
             collector_pn=state.collector_pn,
             trace_path=state.trace_path,
             original_endpoint=state.original_endpoint,
@@ -1818,6 +1895,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if state.restore_required and state.original_endpoint and restore_mode in {"proxy_trigger", "direct"}:
             restoring_state = build_proxy_capture_session_state(
                 entry_id=state.entry_id,
+                route_owner_id=state.route_owner_id,
                 collector_pn=state.collector_pn,
                 trace_path=state.trace_path,
                 original_endpoint=state.original_endpoint,
@@ -1919,6 +1997,398 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "current_endpoint": current_endpoint,
         }
 
+    async def async_start_shadow_learning(
+        self,
+        *,
+        output_path: Path | None = None,
+        raw_capture: dict[str, Any] | None = None,
+        allow_ack_writes: bool = False,
+    ) -> dict[str, object]:
+        """Start one fail-closed shadow-learning runtime session."""
+
+        active_proxy_state = await self._async_active_proxy_capture_state(require_process=False)
+        if active_proxy_state is not None and proxy_capture_session_is_active(active_proxy_state):
+            raise RuntimeError("proxy_capture_route_running")
+        if self._runtime.proxy_capture_route_running():
+            raise RuntimeError("proxy_capture_route_running")
+        if self._shadow_learning_process_running():
+            raise RuntimeError("shadow_learning_already_running")
+
+        if raw_capture is None and self.data.connected:
+            try:
+                raw_capture = await self._runtime.async_capture_support_evidence()
+            except Exception as exc:
+                logger.debug("Shadow-learning support capture unavailable: %s", exc)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        trace_path = (
+            Path(output_path)
+            if output_path is not None
+            else await self.hass.async_add_executor_job(
+                lambda: build_shadow_learning_trace_path(
+                    config_dir=Path(self.hass.config.config_dir),
+                    entry_id=self.config_entry.entry_id,
+                    collector_pn=self.smartess_collector_pn,
+                    timestamp=timestamp,
+                )
+            )
+        )
+
+        seed, blockers = build_shadow_learning_seed(
+            session_id=f"{self.config_entry.entry_id}_{timestamp}",
+            entry_id=self.config_entry.entry_id,
+            collector_pn=self.smartess_collector_pn,
+            collector_cloud_profile_key=self.collector_cloud_profile_key,
+            collector_cloud_profile_label=self.collector_cloud_profile_label,
+            collector_cloud_profile_source=self.collector_cloud_profile_source,
+            collector_cloud_profile_confidence=self.collector_cloud_profile_confidence,
+            collector_callback_endpoint=self.collector_callback_target_endpoint,
+            effective_metadata_snapshot=self.effective_metadata_snapshot,
+            raw_capture=raw_capture,
+            write_response_mode="ack" if allow_ack_writes else "exception",
+            allow_ack_writes=allow_ack_writes,
+        )
+        if blockers:
+            raise RuntimeError("shadow_learning_preflight_blocked:" + ",".join(blockers))
+        route_owner_id = str(
+            getattr(seed, "session_id", "")
+            or f"shadow_learning:{self.config_entry.entry_id}:{timestamp}"
+        )
+
+        preflight = build_shadow_learning_preflight(seed)
+        if not preflight.can_start:
+            raise RuntimeError("shadow_learning_preflight_blocked:" + ",".join(preflight.blockers))
+
+        callback_endpoint = self.collector_callback_target_endpoint
+        upstream_endpoint = self.proxy_capture_upstream_endpoint
+        if not upstream_endpoint:
+            raise RuntimeError("shadow_learning_upstream_endpoint_unavailable")
+
+        _callback_host, callback_port, _callback_protocol = _resolve_collector_server_endpoint(
+            callback_endpoint,
+            cloud_family=self.collector_cloud_family,
+        )
+        upstream_host, upstream_port, _upstream_protocol = _resolve_collector_server_endpoint(
+            upstream_endpoint,
+            cloud_family=self.collector_cloud_family,
+        )
+        await self._async_preflight_proxy_capture_network(
+            target_host=self._effective_callback_server_host,
+            target_port=callback_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+        )
+
+        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
+        restore_required = bool(current_endpoint and current_endpoint != callback_endpoint)
+        started_at = shadow_learning_session_timestamp()
+        expires_at = build_shadow_learning_lease_deadline(
+            lease_seconds=self.proxy_capture_configured_duration_minutes * 60,
+        )
+        state = build_shadow_learning_session_state(
+            entry_id=self.config_entry.entry_id,
+            route_owner_id=route_owner_id,
+            collector_pn=self.smartess_collector_pn,
+            trace_path=str(trace_path),
+            original_endpoint=current_endpoint,
+            proxy_endpoint=callback_endpoint,
+            upstream_endpoint=upstream_endpoint,
+            restore_required=restore_required,
+            started_at=started_at,
+            expires_at=expires_at,
+            updated_at=started_at,
+            status="preflight",
+        )
+        await self._async_save_shadow_learning_session_state(state)
+        self._publish_tooling_values(
+            shadow_learning_session_status="preflight",
+            shadow_learning_session_ready=False,
+            shadow_learning_trace_path=str(trace_path),
+            shadow_learning_proxy_endpoint=callback_endpoint,
+            shadow_learning_upstream_endpoint=upstream_endpoint,
+            local_metadata_status="Starting shadow-learning route",
+        )
+
+        route_started = False
+        try:
+            starting_state = build_shadow_learning_session_state(
+                entry_id=state.entry_id,
+                route_owner_id=state.route_owner_id,
+                collector_pn=state.collector_pn,
+                trace_path=state.trace_path,
+                original_endpoint=state.original_endpoint,
+                proxy_endpoint=state.proxy_endpoint,
+                upstream_endpoint=state.upstream_endpoint,
+                restore_required=state.restore_required,
+                started_at=state.started_at,
+                expires_at=state.expires_at,
+                updated_at=shadow_learning_session_timestamp(),
+                restore_attempt_count=state.restore_attempt_count,
+                last_restore_attempt_at=state.last_restore_attempt_at,
+                last_restore_error=state.last_restore_error,
+                status="starting",
+            )
+            await self._async_save_shadow_learning_session_state(starting_state)
+            await self._runtime.async_start_shadow_learning_route(
+                owner_id=state.route_owner_id,
+                entry_id=state.entry_id,
+                collector_ip=self._proxy_capture_collector_ip(),
+                listen_port=callback_port,
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
+                output_path=trace_path,
+                seed=seed,
+            )
+            route_started = True
+
+            if restore_required:
+                await self._runtime.async_set_collector_server_endpoint(
+                    callback_endpoint,
+                    apply_changes=True,
+                )
+            else:
+                disconnect_current = getattr(
+                    self._runtime,
+                    "async_disconnect_collector_connections",
+                    None,
+                )
+                if disconnect_current is not None:
+                    await disconnect_current(reason="shadow_learning_start")
+
+            await self._async_wait_for_shadow_learning_ready(
+                trace_path=trace_path,
+                timeout_seconds=75.0,
+            )
+            ready_state = build_shadow_learning_session_state(
+                entry_id=state.entry_id,
+                route_owner_id=state.route_owner_id,
+                collector_pn=state.collector_pn,
+                trace_path=state.trace_path,
+                original_endpoint=state.original_endpoint,
+                proxy_endpoint=state.proxy_endpoint,
+                upstream_endpoint=state.upstream_endpoint,
+                restore_required=state.restore_required,
+                started_at=state.started_at,
+                expires_at=state.expires_at,
+                updated_at=shadow_learning_session_timestamp(),
+                restore_attempt_count=state.restore_attempt_count,
+                last_restore_attempt_at=state.last_restore_attempt_at,
+                last_restore_error=state.last_restore_error,
+                status="ready",
+            )
+            await self._async_save_shadow_learning_session_state(ready_state)
+        except Exception as exc:
+            restore_confirmed = True
+            restore_error = ""
+            if restore_required and current_endpoint:
+                restore_confirmed, restore_error = await self._async_best_effort_restore_after_start_failure(
+                    current_endpoint
+                )
+            if route_started:
+                await self._runtime.async_stop_shadow_learning_route(
+                    owner_id=state.route_owner_id,
+                )
+            if restore_confirmed:
+                await self._async_clear_shadow_learning_session_state()
+            else:
+                failed_state = build_shadow_learning_session_state(
+                    entry_id=state.entry_id,
+                    route_owner_id=state.route_owner_id,
+                    collector_pn=state.collector_pn,
+                    trace_path=state.trace_path,
+                    original_endpoint=state.original_endpoint,
+                    proxy_endpoint=state.proxy_endpoint,
+                    upstream_endpoint=state.upstream_endpoint,
+                    restore_required=state.restore_required,
+                    started_at=state.started_at,
+                    expires_at=state.expires_at,
+                    updated_at=shadow_learning_session_timestamp(),
+                    restore_attempt_count=state.restore_attempt_count + 1,
+                    last_restore_attempt_at=shadow_learning_session_timestamp(),
+                    last_restore_error=restore_error or str(exc),
+                    status="restore_failed",
+                )
+                await self._async_save_shadow_learning_session_state(failed_state)
+            try:
+                await self.async_request_refresh()
+            except Exception as exc:
+                logger.warning(
+                    "Shadow-learning failure refresh failed for entry %s: %s",
+                    self.config_entry.entry_id,
+                    exc,
+                )
+            self._publish_tooling_values(
+                shadow_learning_session_status=("failed" if restore_confirmed else "restore_failed"),
+                shadow_learning_session_ready=False,
+                local_metadata_status="Shadow-learning route failed to start",
+            )
+            raise
+
+        await self.async_request_refresh()
+        self._publish_tooling_values(
+            shadow_learning_session_status="ready",
+            shadow_learning_session_ready=True,
+            shadow_learning_trace_path=str(trace_path),
+            shadow_learning_proxy_endpoint=callback_endpoint,
+            shadow_learning_upstream_endpoint=upstream_endpoint,
+            local_metadata_status="Shadow-learning route ready",
+        )
+        return {
+            "status": "ready",
+            "session_id": state.route_owner_id,
+            "trace_path": str(trace_path),
+            "collector_callback_endpoint": callback_endpoint,
+            "upstream_endpoint": upstream_endpoint,
+            "write_response_mode": seed.write_response_mode,
+            "restore_required": restore_required,
+        }
+
+    def publish_shadow_learning_artifacts(
+        self,
+        *,
+        plan: dict[str, Any] | None = None,
+        orchestration: dict[str, Any] | None = None,
+        correlation: dict[str, Any] | None = None,
+        trace_path: str = "",
+        profile_draft_path: str = "",
+        schema_draft_path: str = "",
+        activation: dict[str, Any] | None = None,
+        session_id: str = "",
+        device_scope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Publish one sanitized shadow-learning artifact bundle for support export."""
+
+        from ..support.package import build_shadow_learning_runtime_values
+
+        config_dir = Path(self.hass.config.config_dir).resolve()
+        normalized_trace_path = _bounded_shadow_learning_artifact_path(
+            config_dir=config_dir,
+            value=trace_path,
+            relative_root=Path(LOCAL_METADATA_DIR) / "shadow_learning_traces",
+        )
+        normalized_profile_path = _bounded_shadow_learning_artifact_path(
+            config_dir=config_dir,
+            value=profile_draft_path,
+            relative_root=Path(LOCAL_METADATA_DIR) / "profiles",
+        )
+        normalized_schema_path = _bounded_shadow_learning_artifact_path(
+            config_dir=config_dir,
+            value=schema_draft_path,
+            relative_root=Path(LOCAL_METADATA_DIR) / "register_schemas",
+        )
+        published_values = build_shadow_learning_runtime_values(
+            plan=plan,
+            orchestration=orchestration,
+            correlation=correlation,
+            trace_path=normalized_trace_path,
+            profile_draft_path=normalized_profile_path,
+            schema_draft_path=normalized_schema_path,
+            activation=activation,
+            session_id=session_id,
+            device_scope=device_scope,
+        )
+        self._publish_tooling_values(**published_values)
+        return dict(published_values["shadow_learning_artifacts"])
+
+    async def async_stop_shadow_learning(
+        self,
+        *,
+        reason: str = "stopped",
+        request_refresh: bool = True,
+        raise_when_not_running: bool = True,
+        clear_failed_restore: bool = False,
+    ) -> dict[str, object]:
+        """Stop one in-process shadow-learning session and restore collector endpoint."""
+
+        state = await self._async_active_shadow_learning_state(require_process=False)
+        if state is None and not self._shadow_learning_process_running():
+            if raise_when_not_running:
+                raise RuntimeError("shadow_learning_not_running")
+            return {"status": "not_running"}
+
+        route_owner_id = str(getattr(state, "route_owner_id", "") or "")
+        if state is not None:
+            stopping_state = build_shadow_learning_session_state(
+                entry_id=state.entry_id,
+                route_owner_id=route_owner_id,
+                collector_pn=state.collector_pn,
+                trace_path=state.trace_path,
+                original_endpoint=state.original_endpoint,
+                proxy_endpoint=state.proxy_endpoint,
+                upstream_endpoint=state.upstream_endpoint,
+                restore_required=state.restore_required,
+                started_at=state.started_at,
+                expires_at=state.expires_at,
+                updated_at=shadow_learning_session_timestamp(),
+                restore_attempt_count=state.restore_attempt_count,
+                last_restore_attempt_at=state.last_restore_attempt_at,
+                last_restore_error=state.last_restore_error,
+                status="restoring",
+            )
+            await self._async_save_shadow_learning_session_state(stopping_state)
+
+        if route_owner_id:
+            await self._runtime.async_stop_shadow_learning_route(
+                owner_id=route_owner_id,
+            )
+        else:
+            await self._runtime.async_stop_shadow_learning_route()
+
+        restored_endpoint = ""
+        restore_confirmed = True
+        restore_error = ""
+        restore_attempt_at = ""
+        if state is not None and state.restore_required and state.original_endpoint:
+            restore_attempt_at = shadow_learning_session_timestamp()
+            try:
+                restored_endpoint = await self._async_restore_proxy_capture_endpoint(
+                    state.original_endpoint
+                )
+            except Exception as exc:
+                restore_confirmed = False
+                restore_error = str(exc)
+                logger.warning(
+                    "Shadow-learning restore failed for entry %s: %s",
+                    self.config_entry.entry_id,
+                    exc,
+                )
+                self._notify_proxy_capture_restore_unconfirmed()
+
+        if restore_confirmed or clear_failed_restore or state is None or not state.restore_required:
+            await self._async_clear_shadow_learning_session_state()
+        else:
+            failed_state = build_shadow_learning_session_state(
+                entry_id=state.entry_id,
+                route_owner_id=route_owner_id,
+                collector_pn=state.collector_pn,
+                trace_path=state.trace_path,
+                original_endpoint=state.original_endpoint,
+                proxy_endpoint=state.proxy_endpoint,
+                upstream_endpoint=state.upstream_endpoint,
+                restore_required=state.restore_required,
+                started_at=state.started_at,
+                expires_at=state.expires_at,
+                updated_at=shadow_learning_session_timestamp(),
+                restore_attempt_count=state.restore_attempt_count + 1,
+                last_restore_attempt_at=restore_attempt_at,
+                last_restore_error=restore_error,
+                status="restore_failed",
+            )
+            await self._async_save_shadow_learning_session_state(failed_state)
+        if request_refresh:
+            await self.async_request_refresh()
+        self._publish_tooling_values(
+            shadow_learning_session_status="stopped" if restore_confirmed else "restore_failed",
+            shadow_learning_session_ready=False,
+            local_metadata_status="Shadow-learning route stopped",
+        )
+        return {
+            "status": "stopped" if restore_confirmed else "restore_unconfirmed",
+            "reason": str(reason or "stopped"),
+            "restored_endpoint": restored_endpoint,
+            "restore_confirmed": restore_confirmed,
+        }
+
     async def async_touch_proxy_capture_lease(self, *, extend: bool = True) -> str:
         """Publish active proxy-session countdown values and optionally refresh the lease."""
 
@@ -1961,6 +2431,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 return duration_minutes
             updated_state = build_proxy_capture_session_state(
                 entry_id=state.entry_id,
+                route_owner_id=state.route_owner_id,
                 collector_pn=state.collector_pn,
                 trace_path=state.trace_path,
                 original_endpoint=state.original_endpoint,
@@ -2432,6 +2903,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             profile_source_scope=context["profile_source_scope"],
             schema_source_scope=context["schema_source_scope"],
             profile_name=context["profile_name"],
+            device_scoped_overlay_active=context["device_scoped_overlay_active"],
         )
 
     def can_expose_preset(self, preset: CapabilityPreset) -> bool:
@@ -2455,9 +2927,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             profile_source_scope=context["profile_source_scope"],
             schema_source_scope=context["schema_source_scope"],
             profile_name=context["profile_name"],
+            device_scoped_overlay_active=context["device_scoped_overlay_active"],
         )
 
-    def _write_exposure_context(self) -> dict[str, str]:
+    def _write_exposure_context(self) -> dict[str, Any]:
         """Return normalized metadata context shared by write exposure checks."""
 
         metadata = self.effective_metadata
@@ -2476,6 +2949,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 getattr(getattr(metadata, "register_schema_metadata", None), "source_scope", "")
                 or ""
             ).strip(),
+            "device_scoped_overlay_active": bool(
+                getattr(metadata, "device_scoped_overlay_active", False)
+            ),
+            "device_scoped_overlay_scope": str(
+                getattr(metadata, "device_scoped_overlay_scope", "") or ""
+            ).strip(),
+            "effective_capabilities_experimental": bool(
+                getattr(metadata, "device_scoped_overlay_active", False)
+            ),
         }
 
     @property
@@ -2538,6 +3020,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             driver=self.current_driver,
             collector=self.data.collector,
             entry_data=self.config_entry.data,
+            entry_options=self.config_entry.options,
             persisted_snapshot=self.effective_metadata_snapshot,
         )
 
@@ -2701,12 +3184,54 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self._notify_proxy_capture_restore_unconfirmed()
             await self._async_clear_proxy_capture_session_state()
 
-    async def _async_stop_proxy_capture_process(self) -> None:
+    async def _async_recover_shadow_learning_state(self) -> None:
+        """Best-effort restore collector callback state after interrupted shadow learning."""
+
+        state = await self._async_active_shadow_learning_state(require_process=False)
+        recoverable_status = str(getattr(state, "status", "") or "").strip()
+        if state is None or (
+            not shadow_learning_session_is_active(state)
+            and recoverable_status != "restore_failed"
+        ):
+            return
+        logger.warning(
+            "Recovering interrupted shadow-learning session for entry %s with state %s",
+            self.config_entry.entry_id,
+            state.status,
+        )
+        try:
+            stop_reason = (
+                "expired_lease"
+                if shadow_learning_session_is_expired(state)
+                else "recovered_after_restart"
+            )
+            await self.async_stop_shadow_learning(
+                reason=stop_reason,
+                request_refresh=False,
+                raise_when_not_running=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Shadow-learning recovery failed for entry %s: %s",
+                self.config_entry.entry_id,
+                exc,
+            )
+            self._notify_proxy_capture_restore_unconfirmed()
+
+    async def _async_stop_proxy_capture_process(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
         """Stop the active shared-ingress proxy capture route when it exists."""
 
         stop_route = getattr(self._runtime, "async_stop_proxy_capture_route", None)
         if stop_route is not None:
-            await stop_route()
+            if owner_id or force:
+                await stop_route(owner_id=owner_id, force=force)
+            else:
+                await stop_route()
 
     async def _async_restore_proxy_capture_endpoint(self, endpoint: str) -> str:
         """Restore one collector callback endpoint captured before proxy redirect."""
@@ -2802,7 +3327,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await asyncio.sleep(1.0)
         raise TimeoutError("proxy_capture_collector_reconnect_timeout")
 
-    async def _async_trigger_proxy_capture_restore(self, *, trace_path: Path) -> bool:
+    async def _async_trigger_proxy_capture_restore(
+        self,
+        *,
+        trace_path: Path,
+        owner_id: str,
+    ) -> bool:
         trigger_path = build_proxy_capture_restore_trigger_path(trace_path)
         await self.hass.async_add_executor_job(
             lambda: trigger_path.write_text(
@@ -2820,20 +3350,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     await self.hass.async_add_executor_job(trigger_path.unlink)
                 except FileNotFoundError:
                     pass
-                await self._async_stop_proxy_capture_process()
+                await self._async_stop_proxy_capture_process(owner_id=owner_id)
                 return True
             if status.get("restore_missing"):
                 break
             await asyncio.sleep(0.5)
-        await self._async_stop_proxy_capture_process()
+        await self._async_stop_proxy_capture_process(owner_id=owner_id)
         return False
 
-    async def _async_best_effort_restore_after_start_failure(self, endpoint: str) -> None:
+    async def _async_best_effort_restore_after_start_failure(self, endpoint: str) -> tuple[bool, str]:
         try:
             await self._async_restore_proxy_capture_endpoint(endpoint)
+            return True, ""
         except Exception as exc:
             logger.warning("Proxy capture start rollback failed for entry %s: %s", self.config_entry.entry_id, exc)
             self._notify_proxy_capture_restore_unconfirmed()
+            return False, str(exc)
 
     async def _async_reconcile_proxy_capture_session(
         self,
@@ -2870,9 +3402,136 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         )
 
+    async def _async_reconcile_shadow_learning_session(
+        self,
+        snapshot: RuntimeSnapshot,
+    ) -> RuntimeSnapshot:
+        """Auto-stop abandoned shadow-learning sessions on lease expiry or route interruption."""
+
+        state = await self._async_active_shadow_learning_state(require_process=False)
+        if state is None or not shadow_learning_session_is_active(state):
+            return snapshot
+
+        stop_reason = ""
+        if shadow_learning_session_is_expired(state):
+            stop_reason = "expired_lease"
+        elif not self._shadow_learning_process_running():
+            stop_reason = "interrupted_process_exit"
+
+        if not stop_reason:
+            return snapshot
+
+        logger.warning(
+            "Stopping shadow learning for entry %s due to %s",
+            self.config_entry.entry_id,
+            stop_reason,
+        )
+        await self.async_stop_shadow_learning(
+            reason=stop_reason,
+            request_refresh=False,
+            raise_when_not_running=False,
+        )
+        return await self._runtime.async_refresh(
+            poll_interval=float(
+                self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
+            )
+        )
+
     def _proxy_capture_process_running(self) -> bool:
         route_running = getattr(self._runtime, "proxy_capture_route_running", None)
         return bool(route_running is not None and route_running())
+
+    def _shadow_learning_process_running(self) -> bool:
+        route_running = getattr(self._runtime, "shadow_learning_route_running", None)
+        return bool(route_running is not None and route_running())
+
+    def _shadow_learning_route_status(self) -> dict[str, object]:
+        route_status = getattr(self._runtime, "shadow_learning_route_status", None)
+        if route_status is None:
+            return {
+                "running": self._shadow_learning_process_running(),
+                "collector_connected": False,
+                "collector_protocol_ingress": False,
+                "route_protocol_activity": False,
+                "upstream_connected": False,
+                "ready": False,
+                "upstream_error": "",
+            }
+        status = route_status()
+        if not isinstance(status, dict):
+            return {
+                "running": self._shadow_learning_process_running(),
+                "collector_connected": False,
+                "collector_protocol_ingress": False,
+                "route_protocol_activity": False,
+                "upstream_connected": False,
+                "ready": False,
+                "upstream_error": "",
+            }
+        return {
+            "running": bool(status.get("running")),
+            "collector_connected": bool(status.get("collector_connected")),
+            "collector_protocol_ingress": bool(status.get("collector_protocol_ingress")),
+            "route_protocol_activity": bool(status.get("route_protocol_activity")),
+            "upstream_connected": bool(status.get("upstream_connected")),
+            "ready": bool(status.get("ready")),
+            "upstream_error": str(status.get("upstream_error") or ""),
+        }
+
+    async def _async_wait_for_shadow_learning_ready(
+        self,
+        *,
+        trace_path: Path,
+        timeout_seconds: float,
+    ) -> None:
+        del trace_path
+        deadline = asyncio.get_running_loop().time() + max(float(timeout_seconds), 1.0)
+        phase = "waiting_for_collector"
+        while asyncio.get_running_loop().time() < deadline:
+            if not self._shadow_learning_process_running():
+                raise RuntimeError("shadow_learning_route_stopped")
+            status = self._shadow_learning_route_status()
+            upstream_error = str(status.get("upstream_error") or "")
+            if upstream_error:
+                raise RuntimeError(f"shadow_learning_upstream_connect_failed:{upstream_error}")
+            if bool(status.get("ready")):
+                return
+            collector_connected = bool(status.get("collector_connected"))
+            next_phase = "connecting_upstream" if collector_connected else "waiting_for_collector"
+            if next_phase != phase:
+                phase = next_phase
+                state = await self._async_active_shadow_learning_state(require_process=False)
+                if state is not None:
+                    await self._async_save_shadow_learning_session_state(
+                        build_shadow_learning_session_state(
+                            entry_id=state.entry_id,
+                            route_owner_id=state.route_owner_id,
+                            collector_pn=state.collector_pn,
+                            trace_path=state.trace_path,
+                            original_endpoint=state.original_endpoint,
+                            proxy_endpoint=state.proxy_endpoint,
+                            upstream_endpoint=state.upstream_endpoint,
+                            restore_required=state.restore_required,
+                            started_at=state.started_at,
+                            expires_at=state.expires_at,
+                            updated_at=shadow_learning_session_timestamp(),
+                            restore_attempt_count=state.restore_attempt_count,
+                            last_restore_attempt_at=state.last_restore_attempt_at,
+                            last_restore_error=state.last_restore_error,
+                            status=phase,
+                        )
+                    )
+                self._publish_tooling_values(
+                    shadow_learning_session_status=phase,
+                    shadow_learning_session_ready=False,
+                    local_metadata_status=(
+                        "Shadow-learning waiting for collector"
+                        if phase == "waiting_for_collector"
+                        else "Shadow-learning connecting upstream"
+                    ),
+                )
+            await asyncio.sleep(1.0)
+        raise TimeoutError("shadow_learning_collector_reconnect_timeout")
 
     async def _async_guarded_proxy_capture_restore(
         self,
@@ -2888,7 +3547,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             current_endpoint=current_endpoint,
         )
         if not state.restore_required or not state.original_endpoint:
-            await self._async_stop_proxy_capture_process()
+            await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
             return {
                 "current_endpoint": current_endpoint,
                 "restored_endpoint": current_endpoint,
@@ -2898,7 +3557,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             }
 
         if restore_skipped_reason:
-            await self._async_stop_proxy_capture_process()
+            await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
             return {
                 "current_endpoint": current_endpoint,
                 "restored_endpoint": current_endpoint,
@@ -2910,6 +3569,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if prefer_proxy_restore_trigger and self._proxy_capture_process_running():
             restored_by_trigger = await self._async_trigger_proxy_capture_restore(
                 trace_path=Path(state.trace_path),
+                owner_id=state.route_owner_id,
             )
             if restored_by_trigger:
                 return {
@@ -2938,7 +3598,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             restored_endpoint = await self._async_restore_proxy_capture_endpoint(state.original_endpoint)
         except Exception as exc:
             logger.warning("Proxy capture direct restore failed for entry %s: %s", self.config_entry.entry_id, exc)
-            await self._async_stop_proxy_capture_process()
+            await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
             return {
                 "current_endpoint": current_endpoint,
                 "restored_endpoint": current_endpoint,
@@ -2947,7 +3607,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 "restore_skipped_reason": "",
             }
 
-        await self._async_stop_proxy_capture_process()
+        await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
         return {
             "current_endpoint": current_endpoint,
             "restored_endpoint": restored_endpoint,
@@ -3243,6 +3903,69 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._publish_tooling_values(local_metadata_status="Reloading local metadata")
         await self.hass.config_entries.async_reload(self.config_entry.entry_id)
 
+    async def async_activate_device_scoped_overlay(
+        self,
+        *,
+        profile_name: str,
+        register_schema_name: str,
+    ) -> dict[str, Any]:
+        """Persist one explicit device-scoped learned overlay activation and reload."""
+
+        normalized_profile_name = str(profile_name or "").strip()
+        normalized_schema_name = str(register_schema_name or "").strip()
+        if not normalized_profile_name or not normalized_schema_name:
+            raise ValueError("device_scoped_overlay_activation_requires_profile_and_schema")
+
+        collector = self.data.collector
+        inverter = self.identified_inverter
+        write_context = self._write_exposure_context()
+        activation_scope: dict[str, Any] = {
+            "effective_owner_key": str(self.effective_owner_key or "").strip(),
+            "base_profile_name": str(self.effective_profile_name or "").strip(),
+            "base_register_schema_name": str(self.effective_register_schema_name or "").strip(),
+            "variant_key": str(write_context.get("variant_key") or "").strip(),
+            "collector_pn": str(
+                getattr(collector, "collector_pn", "")
+                or self.config_entry.data.get(CONF_COLLECTOR_PN, "")
+                or ""
+            ).strip(),
+            "smartess_protocol_asset_id": str(
+                getattr(collector, "smartess_protocol_asset_id", "")
+                or self.config_entry.data.get(CONF_SMARTESS_PROTOCOL_ASSET_ID, "")
+                or ""
+            ).strip(),
+            "smartess_protocol_profile_key": str(
+                getattr(collector, "smartess_protocol_profile_key", "")
+                or self.config_entry.data.get(CONF_SMARTESS_PROFILE_KEY, "")
+                or ""
+            ).strip(),
+            "smartess_device_address": (
+                getattr(collector, "smartess_device_address", None)
+                if getattr(collector, "smartess_device_address", None) is not None
+                else self.config_entry.data.get(CONF_SMARTESS_DEVICE_ADDRESS)
+            ),
+            "inverter_model": str(getattr(inverter, "model_name", "") or "").strip(),
+            "inverter_serial": str(getattr(inverter, "serial_number", "") or "").strip(),
+        }
+        activation = {
+            "profile_name": normalized_profile_name,
+            "register_schema_name": normalized_schema_name,
+            "scope": "device",
+            "activated_at": datetime.now(timezone.utc).isoformat(),
+            "activation_scope": activation_scope,
+        }
+
+        options = dict(self.config_entry.options)
+        options[_DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY] = activation
+        self._async_update_entry_without_reload(options=options)
+
+        clear_local_metadata_loader_caches()
+        self._publish_tooling_values(
+            local_metadata_status="Device-scoped learned overlay activated; reloading local metadata",
+        )
+        await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+        return activation
+
     async def async_rollback_local_metadata(self) -> tuple[str, ...]:
         """Remove active managed local overrides and reload the entry."""
 
@@ -3436,6 +4159,45 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._cached_proxy_capture_session_state = None
         self._cancel_proxy_capture_deadline_refresh()
         self._clear_proxy_capture_session_runtime_values()
+
+    async def _async_active_shadow_learning_state(self, *, require_process: bool = True):
+        """Return the persisted active shadow-learning state when it belongs to this entry."""
+
+        del require_process
+        state = await self.hass.async_add_executor_job(
+            lambda: load_shadow_learning_session_state(Path(self.hass.config.config_dir))
+        )
+        if state is None:
+            self._cached_shadow_learning_session_state = None
+            return None
+        if state.entry_id and state.entry_id != self.config_entry.entry_id:
+            self._cached_shadow_learning_session_state = None
+            return None
+        collector_pn = self.smartess_collector_pn
+        if collector_pn and state.collector_pn and state.collector_pn != collector_pn:
+            self._cached_shadow_learning_session_state = None
+            return None
+        self._cached_shadow_learning_session_state = state
+        return state
+
+    async def _async_save_shadow_learning_session_state(self, state) -> None:
+        """Persist one shadow-learning session state without blocking the event loop."""
+
+        await self.hass.async_add_executor_job(
+            lambda: save_shadow_learning_session_state(
+                config_dir=Path(self.hass.config.config_dir),
+                state=state,
+            )
+        )
+        self._cached_shadow_learning_session_state = state
+
+    async def _async_clear_shadow_learning_session_state(self) -> None:
+        """Delete persisted shadow-learning session state without blocking the event loop."""
+
+        await self.hass.async_add_executor_job(
+            lambda: clear_shadow_learning_session_state(Path(self.hass.config.config_dir))
+        )
+        self._cached_shadow_learning_session_state = None
 
     def _clear_proxy_capture_session_runtime_values(self) -> None:
         """Drop stale transient proxy-session values from both cache and current snapshot."""

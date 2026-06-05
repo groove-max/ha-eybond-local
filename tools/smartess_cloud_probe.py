@@ -26,7 +26,13 @@ from custom_components.eybond_local.support.cloud_evidence import (
     build_smartess_device_bundle_cloud_evidence,
     export_cloud_evidence,
 )
-from custom_components.eybond_local.smartess_cloud import normalize_device_settings
+from custom_components.eybond_local.smartess_cloud import (
+    build_device_control_action as _shared_build_device_control_action,
+    normalize_device_settings,
+)
+from custom_components.eybond_local.support.shadow_learning_orchestrator import (
+    orchestrate_shadow_learning_settings,
+)
 
 
 DEFAULT_BASE_URL = "https://android.shinemonitor.com/public/"
@@ -339,16 +345,13 @@ def build_device_control_action(
     field_id: str,
     value: str,
 ) -> str:
-    return _build_action(
-        "ctrlDevice",
-        [
-            ("pn", pn),
-            ("sn", sn),
-            ("devcode", devcode),
-            ("devaddr", devaddr),
-            ("id", field_id),
-            ("val", value),
-        ],
+    return _shared_build_device_control_action(
+        pn=pn,
+        sn=sn,
+        devcode=devcode,
+        devaddr=devaddr,
+        field_id=field_id,
+        value=value,
     )
 
 
@@ -781,8 +784,11 @@ def _run_learn_settings(args: argparse.Namespace) -> dict[str, Any]:
     session_source, session = _resolve_session(args)
     if session is None:
         raise SmartEssCloudError("learn_settings_requires_session_or_login")
+    shadow_session_active = bool(getattr(args, "shadow_session_active", False))
     if not args.dry_run and not args.confirm_cloud_write:
         raise SmartEssCloudError("learn_settings_requires_confirm_cloud_write")
+    if not args.dry_run and not shadow_session_active:
+        raise SmartEssCloudError("learn_settings_requires_active_shadow_session")
 
     settings_action = build_device_settings_action(
         pn=args.pn,
@@ -799,62 +805,34 @@ def _run_learn_settings(args: argparse.Namespace) -> dict[str, Any]:
         app_version=args.app_version,
         timeout=args.timeout,
     )
-    plan = _build_learn_settings_plan(
-        settings_envelope.dat,
-        field_ids=args.field_id,
-        include_numeric=args.include_numeric,
-        numeric_value=args.numeric_value,
-        all_choice_values=args.all_choice_values,
-        max_fields=args.max_fields,
+    output_path = Path(args.output) if str(args.output or "").strip() else None
+    normalized = orchestrate_shadow_learning_settings(
+        settings_dat=settings_envelope.dat,
+        session=session,
+        pn=args.pn,
+        sn=args.sn,
+        devcode=args.devcode,
+        devaddr=args.devaddr,
+        dry_run=bool(args.dry_run),
+        confirm_cloud_write=bool(args.confirm_cloud_write),
+        shadow_session_ready=shadow_session_active,
+        field_ids=list(args.field_id or []),
+        include_numeric=bool(args.include_numeric),
+        numeric_value=str(args.numeric_value),
+        all_choice_values=bool(args.all_choice_values),
+        max_fields=int(args.max_fields),
+        continue_on_error=bool(args.continue_on_error),
+        delay_seconds=float(args.delay_seconds),
+        base_url=args.base_url,
+        language=args.language,
+        app_id=args.app_id,
+        app_version=args.app_version,
+        timeout=args.timeout,
+        fetch_action=fetch_signed_action,
     )
 
-    output_path = Path(args.output) if str(args.output or "").strip() else None
-    results: list[dict[str, Any]] = []
-    for item in plan:
-        control_action = build_device_control_action(
-            pn=args.pn,
-            sn=args.sn,
-            devcode=args.devcode,
-            devaddr=args.devaddr,
-            field_id=item["field_id"],
-            value=item["value"],
-        )
-        result: dict[str, Any] = {
-            "field_id": item["field_id"],
-            "title": item["title"],
-            "value": item["value"],
-            "value_label": item.get("value_label", ""),
-            "value_source": item["value_source"],
-            "dry_run": bool(args.dry_run),
-            "action": "ctrlDevice",
-        }
-        if args.dry_run:
-            result["status"] = "planned"
-        else:
-            try:
-                envelope = fetch_signed_action(
-                    action=control_action,
-                    session=session,
-                    base_url=args.base_url,
-                    language=args.language,
-                    app_id=args.app_id,
-                    app_version=args.app_version,
-                    timeout=args.timeout,
-                )
-                result["status"] = "sent"
-                result["response"] = {"err": envelope.err, "desc": envelope.desc}
-                result["dat"] = envelope.dat
-            except SmartEssCloudError as exc:
-                result["status"] = "error"
-                result["error"] = str(exc)
-                if not args.continue_on_error:
-                    _append_jsonl(output_path, result)
-                    results.append(result)
-                    break
+    for result in normalized["results"]:
         _append_jsonl(output_path, result)
-        results.append(result)
-        if not args.dry_run and args.delay_seconds > 0:
-            time.sleep(args.delay_seconds)
 
     return _build_command_output(
         command="learn-settings",
@@ -869,18 +847,13 @@ def _run_learn_settings(args: argparse.Namespace) -> dict[str, Any]:
             "all_choice_values": args.all_choice_values,
             "max_fields": args.max_fields,
             "dry_run": args.dry_run,
+            "shadow_session_active": shadow_session_active,
             "output": str(output_path or ""),
         },
         session_source=session_source,
         session=session,
         envelope=ApiEnvelope(err=settings_envelope.err, desc=settings_envelope.desc, dat=None, raw={}),
-        normalized={
-            "planned_write_count": len(plan),
-            "executed_result_count": len(results),
-            "sent_count": sum(1 for result in results if result.get("status") == "sent"),
-            "error_count": sum(1 for result in results if result.get("status") == "error"),
-            "results": results,
-        },
+        normalized=normalized,
     )
 
 
@@ -1194,6 +1167,7 @@ def _build_parser() -> argparse.ArgumentParser:
     learn_parser.add_argument("--output", default="")
     learn_parser.add_argument("--dry-run", action="store_true")
     learn_parser.add_argument("--confirm-cloud-write", action="store_true")
+    learn_parser.add_argument("--shadow-session-active", action="store_true")
     learn_parser.add_argument("--continue-on-error", action="store_true", default=True)
     learn_parser.set_defaults(func=_run_learn_settings)
 

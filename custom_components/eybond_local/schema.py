@@ -20,12 +20,17 @@ def capability_write_exposure_allowed(
     profile_source_scope: str = "",
     schema_source_scope: str = "",
     profile_name: str = "",
+    device_scoped_overlay_active: bool = False,
 ) -> bool:
     """Return whether runtime should expose one capability as writable."""
 
-    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name):
+    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name) and not (
+        device_scoped_overlay_active and _is_device_scoped_learned_capability(capability)
+    ):
         return False
-    if not capability.allows_runtime_write_without_local_proof:
+    if not capability.allows_runtime_write_without_local_proof and not (
+        device_scoped_overlay_active and _is_device_scoped_learned_capability(capability)
+    ):
         return False
     if capability.provenance == "verified" and not _has_confirmed_local_metadata_proof(
         profile_source_scope=profile_source_scope,
@@ -49,10 +54,11 @@ def preset_write_exposure_allowed(
     profile_source_scope: str = "",
     schema_source_scope: str = "",
     profile_name: str = "",
+    device_scoped_overlay_active: bool = False,
 ) -> bool:
     """Return whether runtime should expose one preset as writable."""
 
-    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name):
+    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name) and not device_scoped_overlay_active:
         return False
     if not can_expose_preset(
         preset,
@@ -73,6 +79,7 @@ def preset_write_exposure_allowed(
             profile_source_scope=profile_source_scope,
             schema_source_scope=schema_source_scope,
             profile_name=profile_name,
+            device_scoped_overlay_active=device_scoped_overlay_active,
         ):
             return False
     return True
@@ -232,6 +239,7 @@ def serialize_capability(
             profile_source_scope=str(values.get("effective_profile_source_scope") or ""),
             schema_source_scope=str(values.get("effective_schema_source_scope") or ""),
             profile_name=str(values.get("effective_profile_name") or ""),
+            device_scoped_overlay_active=bool(values.get("effective_device_scoped_overlay_active")),
         )
     effective_editable = runtime_state.editable and policy_allowed
     entity_kind = entity_kind_for_capability(capability)
@@ -296,6 +304,9 @@ def serialize_capability(
             "tier": capability.resolved_support_tier,
             "notes": capability.support_notes,
         },
+        "experimental": capability.experimental,
+        "metadata_scope": capability.metadata_scope,
+        "device_scoped": capability.is_device_scoped_experimental,
         "blocked_reason": blocked_reason,
         "blocked_code": blocked_code,
         "blocked_suggested_action": blocked_action,
@@ -348,6 +359,7 @@ def serialize_preset(
             profile_source_scope=str(values.get("effective_profile_source_scope") or ""),
             schema_source_scope=str(values.get("effective_schema_source_scope") or ""),
             profile_name=str(values.get("effective_profile_name") or ""),
+            device_scoped_overlay_active=bool(values.get("effective_device_scoped_overlay_active")),
         )
     reasons = list(runtime_state.reasons)
     if policy_active and runtime_state.visible and not policy_allowed:
@@ -592,6 +604,10 @@ def _is_family_fallback_variant(*, variant_key: str, profile_name: str) -> bool:
     if normalized_variant_key == "family_fallback":
         return True
     return str(profile_name or "").strip().endswith("/family_fallback.json")
+
+
+def _is_device_scoped_learned_capability(capability: WriteCapability) -> bool:
+    return capability.is_device_scoped_experimental
 
 
 def _policy_is_active(values: Mapping[str, Any]) -> bool:

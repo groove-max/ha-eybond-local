@@ -478,6 +478,282 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(route_kwargs["port"], 502)
         self.assertEqual(route_kwargs["collector_ip"], "192.168.1.14")
 
+    def test_route_lease_blocks_shadow_while_proxy_start_is_in_progress(self) -> None:
+        manager = self._build_manager()
+        proxy_start_entered = asyncio.Event()
+        allow_proxy_start = asyncio.Event()
+
+        class _Handler:
+            running = False
+            ready = False
+
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                self.running = True
+
+            async def stop(self) -> None:
+                self.running = False
+
+            async def handle_client(self, reader, writer) -> None:
+                pass
+
+            def status(self) -> dict[str, object]:
+                return {"running": self.running, "ready": self.ready}
+
+        class _Route:
+            def __init__(self, **kwargs) -> None:
+                self.port = int(kwargs["port"])
+
+            async def start(self) -> None:
+                if self.port == 502:
+                    proxy_start_entered.set()
+                    await allow_proxy_start.wait()
+
+            async def stop(self) -> None:
+                pass
+
+        async def _run() -> None:
+            with patch(
+                "custom_components.eybond_local.runtime.link.InProcessProxyCaptureHandler",
+                _Handler,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.InProcessFailClosedShadowProxyHandler",
+                _Handler,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.SharedProxyCaptureRoute",
+                _Route,
+            ):
+                proxy_start = asyncio.create_task(
+                    manager.async_start_proxy_capture_route(
+                        owner_id="proxy-owner",
+                        entry_id="entry-1",
+                        collector_ip="192.168.1.14",
+                        listen_port=502,
+                        upstream_host="cloud.example",
+                        upstream_port=18899,
+                        output_path=Path("/tmp/proxy.jsonl"),
+                    )
+                )
+                await proxy_start_entered.wait()
+
+                with self.assertRaisesRegex(RuntimeError, "proxy_capture_route_running"):
+                    await manager.async_start_shadow_learning_route(
+                        owner_id="shadow-owner",
+                        entry_id="entry-1",
+                        collector_ip="192.168.1.14",
+                        listen_port=503,
+                        upstream_host="cloud.example",
+                        upstream_port=18899,
+                        output_path=Path("/tmp/shadow.jsonl"),
+                        seed=object(),
+                    )
+
+                self.assertEqual(manager.route_lease.owner_id, "proxy-owner")
+                self.assertEqual(manager.route_lease.state, "starting")
+                allow_proxy_start.set()
+                await proxy_start
+                self.assertTrue(manager.proxy_capture_route_running())
+                self.assertFalse(manager.shadow_learning_route_running())
+                await manager.async_stop_proxy_capture_route(owner_id="proxy-owner")
+                self.assertIsNone(manager.route_lease)
+
+        asyncio.run(_run())
+
+    def test_route_lease_is_released_after_start_failure(self) -> None:
+        manager = self._build_manager()
+
+        class _Handler:
+            running = False
+            ready = False
+
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                self.running = True
+
+            async def stop(self) -> None:
+                self.running = False
+
+            async def handle_client(self, reader, writer) -> None:
+                pass
+
+            def status(self) -> dict[str, object]:
+                return {"running": self.running, "ready": self.ready}
+
+        class _Route:
+            fail_next = True
+
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                if self.fail_next:
+                    type(self).fail_next = False
+                    raise RuntimeError("bind_failed")
+
+            async def stop(self) -> None:
+                pass
+
+        async def _run() -> None:
+            with patch(
+                "custom_components.eybond_local.runtime.link.InProcessProxyCaptureHandler",
+                _Handler,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.InProcessFailClosedShadowProxyHandler",
+                _Handler,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.SharedProxyCaptureRoute",
+                _Route,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "bind_failed"):
+                    await manager.async_start_proxy_capture_route(
+                        owner_id="proxy-owner",
+                        entry_id="entry-1",
+                        collector_ip="192.168.1.14",
+                        listen_port=502,
+                        upstream_host="cloud.example",
+                        upstream_port=18899,
+                        output_path=Path("/tmp/proxy.jsonl"),
+                    )
+                self.assertIsNone(manager.route_lease)
+
+                await manager.async_start_shadow_learning_route(
+                    owner_id="shadow-owner",
+                    entry_id="entry-1",
+                    collector_ip="192.168.1.14",
+                    listen_port=503,
+                    upstream_host="cloud.example",
+                    upstream_port=18899,
+                    output_path=Path("/tmp/shadow.jsonl"),
+                    seed=object(),
+                )
+                self.assertEqual(manager.route_lease.owner_id, "shadow-owner")
+                await manager.async_stop_shadow_learning_route(owner_id="shadow-owner")
+
+        asyncio.run(_run())
+
+    def test_route_stop_rejects_mismatched_owner(self) -> None:
+        manager = self._build_manager()
+
+        class _Handler:
+            running = False
+
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                self.running = True
+
+            async def stop(self) -> None:
+                self.running = False
+
+            async def handle_client(self, reader, writer) -> None:
+                pass
+
+        class _Route:
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        async def _run() -> None:
+            with patch(
+                "custom_components.eybond_local.runtime.link.InProcessProxyCaptureHandler",
+                _Handler,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.SharedProxyCaptureRoute",
+                _Route,
+            ):
+                await manager.async_start_proxy_capture_route(
+                    owner_id="proxy-owner",
+                    entry_id="entry-1",
+                    collector_ip="192.168.1.14",
+                    listen_port=502,
+                    upstream_host="cloud.example",
+                    upstream_port=18899,
+                    output_path=Path("/tmp/proxy.jsonl"),
+                )
+                with self.assertRaisesRegex(RuntimeError, "route_lease_owner_mismatch"):
+                    await manager.async_stop_proxy_capture_route(owner_id="other-owner")
+                self.assertTrue(manager.proxy_capture_route_running())
+                self.assertEqual(manager.route_lease.owner_id, "proxy-owner")
+                await manager.async_stop_proxy_capture_route(owner_id="proxy-owner")
+
+        asyncio.run(_run())
+
+    def test_route_lease_blocks_proxy_while_shadow_is_running(self) -> None:
+        manager = self._build_manager()
+
+        class _Handler:
+            running = False
+            ready = False
+
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                self.running = True
+
+            async def stop(self) -> None:
+                self.running = False
+
+            async def handle_client(self, reader, writer) -> None:
+                pass
+
+            def status(self) -> dict[str, object]:
+                return {"running": self.running, "ready": self.ready}
+
+        class _Route:
+            def __init__(self, **_kwargs) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        async def _run() -> None:
+            with patch(
+                "custom_components.eybond_local.runtime.link.InProcessFailClosedShadowProxyHandler",
+                _Handler,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.SharedProxyCaptureRoute",
+                _Route,
+            ):
+                await manager.async_start_shadow_learning_route(
+                    owner_id="shadow-owner",
+                    entry_id="entry-1",
+                    collector_ip="192.168.1.14",
+                    listen_port=503,
+                    upstream_host="cloud.example",
+                    upstream_port=18899,
+                    output_path=Path("/tmp/shadow.jsonl"),
+                    seed=object(),
+                )
+                with self.assertRaisesRegex(RuntimeError, "shadow_learning_route_running"):
+                    await manager.async_start_proxy_capture_route(
+                        owner_id="proxy-owner",
+                        entry_id="entry-1",
+                        collector_ip="192.168.1.14",
+                        listen_port=502,
+                        upstream_host="cloud.example",
+                        upstream_port=18899,
+                        output_path=Path("/tmp/proxy.jsonl"),
+                    )
+                self.assertTrue(manager.shadow_learning_route_running())
+                self.assertFalse(manager.proxy_capture_route_running())
+                await manager.async_stop_shadow_learning_route(owner_id="shadow-owner")
+
+        asyncio.run(_run())
+
     def test_async_ensure_connected_raises_when_transport_never_connects(self) -> None:
         manager = self._build_manager()
         manager._transport = _FakeTransport(connected=False, connect_result=False)  # type: ignore[assignment]
