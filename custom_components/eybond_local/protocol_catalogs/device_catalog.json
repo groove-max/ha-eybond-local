@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026.06.0",
+  "description": "Offline device identification catalog: deterministic fingerprint lookup over immutable identity registers. Entries are capture-derived; see provenance per entry.",
+  "transports": {
+    "eybond_modbus": {
+      "identity_probe": {
+        "read_blocks": [[171, 14], [643, 2]],
+        "fields": {
+          "layout_code": {"register": 184},
+          "model_code": {"register": 171},
+          "rated_power": {"register": 643},
+          "serial_ascii": {"register": 186, "words": 12}
+        }
+      }
+    }
+  },
+  "layouts": [
+    {
+      "key": "smg",
+      "transport": "eybond_modbus",
+      "layout_codes": [1, 11],
+      "rated_power_register_valid": true,
+      "base_schema": "modbus_smg/base.json"
+    },
+    {
+      "key": "anenji_11k",
+      "transport": "eybond_modbus",
+      "layout_codes": [3, 4, 5, 6],
+      "rated_power_register_valid": false,
+      "base_schema": ""
+    }
+  ],
+  "devices": [
+    {
+      "entry_key": "smg_6200",
+      "fingerprint": {"layout_code": 1, "model_code": 7680, "rated_power_one_of": [6200]},
+      "structural": ["serial_ascii_plausible"],
+      "model_name": "SMG 6200",
+      "tier": "full",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "default",
+        "register_schema_name": "modbus_smg/models/smg_6200.json",
+        "profile_name": "smg_modbus.json"
+      },
+      "cloud_hints": {"devcodes": [2376]},
+      "provenance": {
+        "sources": ["corpus:E50000253884199645 (16 captures, 2026-04..06)"],
+        "confidence": "verified-on-hardware"
+      }
+    },
+    {
+      "entry_key": "anenji_4200",
+      "fingerprint": {"layout_code": 1, "model_code": 13569, "rated_power_one_of": [4200]},
+      "structural": ["serial_ascii_plausible"],
+      "model_name": "Anenji 4200 (protocol 1)",
+      "tier": "full",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "anenji_4200_protocol_1",
+        "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+        "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json"
+      },
+      "cloud_hints": {"devcodes": []},
+      "provenance": {
+        "sources": ["legacy:smg_identity_rules anenji_4200_protocol_1"],
+        "confidence": "rule-migrated"
+      }
+    },
+    {
+      "entry_key": "smg_variant_4200",
+      "fingerprint": {"layout_code": 11, "model_code": 30721},
+      "structural": ["serial_ascii_plausible"],
+      "model_name": "SMG family 4200 variant",
+      "tier": "partial",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "default",
+        "register_schema_name": "modbus_smg/base.json",
+        "profile_name": ""
+      },
+      "cloud_hints": {"devcodes": [6514]},
+      "provenance": {
+        "sources": ["corpus:E5000025335865 (5 captures)"],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "anenji_anj_11kw",
+      "fingerprint": {"layout_code": 4, "model_code": 32768},
+      "structural": ["serial_ascii_plausible"],
+      "model_name": "Anenji ANJ-11KW-48V-WIFI-P",
+      "tier": "full",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "anenji_anj_11kw_48v_wifi_p",
+        "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        "profile_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"
+      },
+      "cloud_hints": {"devcodes": [6544]},
+      "provenance": {
+        "sources": [
+          "corpus:E5000025374544 (3 captures)",
+          "legacy:smg_identity_rules anenji_anj_11kw_48v_wifi_p"
+        ],
+        "confidence": "capture-derived"
+      }
+    }
+  ],
+  "family_defaults": [
+    {
+      "when_layout_codes": [1, 11],
+      "tier": "partial",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "default",
+        "register_schema_name": "modbus_smg/base.json",
+        "profile_name": ""
+      },
+      "note": "Known SMG layout, unknown model: base reads only; writes require learning."
+    }
+  ]
+}
