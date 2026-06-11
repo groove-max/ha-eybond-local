@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
+    _apply_capability_read_back,
     _resolve_smg_identity_binding,
     _support_capture_ranges,
 )
@@ -830,6 +831,95 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["rated_cell_count"], 16)
         self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
         self.assertEqual(inverter.details["rated_power"], 6200)
+
+    async def test_probe_detects_6200_despite_out_of_enum_settings_and_state(self) -> None:
+        # Regression for the real incident: a leaked shadow-learning write pushed
+        # output_source_priority out of its enum, and detection then rejected an obvious SMG
+        # 6200 (-> no_supported_driver_matched, all entities unavailable). Identity must rest on
+        # immutable anchors (rated_power), NEVER on user settings (output_source_priority,
+        # output_mode) or runtime state (operating_mode). All three are forced out of range here.
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._smg_family_registers(rated_power=6200)
+        registers[301] = 3   # output_source_priority: enum only defines 0..2
+        registers[300] = 7   # output_mode: enum only defines 0..4
+        registers[201] = 99  # operating_mode: mode_names only defines 0..6
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertEqual(inverter.model_name, "SMG 6200")
+        self.assertEqual(inverter.details["rated_power"], 6200)
+
+    def test_capability_read_back_fills_learned_register_state(self) -> None:
+        # Learned-overlay controls have a register but no decode spec, so without read-back the
+        # switch toggles yet shows no state. The driver reads the raw register from the polled
+        # blocks into values[value_key], WITHOUT touching register_schema_name (which would
+        # break write-exposure for every control). Already-decoded keys are never overwritten,
+        # and registers outside the polled blocks are skipped.
+        values: dict[str, object] = {"buzzer_mode": "Beeps ON"}
+        config = [0] * 44  # config block 300..343
+        config[304 - 300] = 1  # Beeps -> on
+        config[338 - 300] = 0  # Auto AC Output -> off
+        caps = (
+            SimpleNamespace(value_key="learned_beeps_304", key="learned_beeps_304", register=304),
+            SimpleNamespace(value_key="learned_auto_338", key="learned_auto_338", register=338),
+            SimpleNamespace(value_key="buzzer_mode", key="buzzer_mode", register=303),  # already decoded
+            SimpleNamespace(value_key="learned_eq_999", key="learned_eq_999", register=999),  # not polled
+        )
+
+        _apply_capability_read_back(values, caps, ((300, config),))
+
+        self.assertEqual(values["learned_beeps_304"], 1)
+        self.assertEqual(values["learned_auto_338"], 0)
+        self.assertEqual(values["buzzer_mode"], "Beeps ON")  # spec value not clobbered
+        self.assertNotIn("learned_eq_999", values)  # outside polled blocks -> skipped
+
+    def test_capability_read_back_scales_by_divisor(self) -> None:
+        # A learned scaled number (divisor 10): raw register 560 -> native 56.0, so the number
+        # entity shows the displayed value, consistent with its native_min/max and write encode.
+        values: dict[str, object] = {}
+        config = [0] * 44
+        config[320 - 300] = 560
+        caps = (
+            SimpleNamespace(value_key="learned_v_320", key="learned_v_320", register=320, divisor=10),
+        )
+        _apply_capability_read_back(values, caps, ((300, config),))
+        self.assertEqual(values["learned_v_320"], 56.0)
+
+    async def test_read_out_of_block_capability_registers(self) -> None:
+        # Out-of-block controls (Boot method 406, Output control 420) are read directly; in-block
+        # controls and momentary actions are skipped.
+        from custom_components.eybond_local.drivers.smg import (
+            _read_out_of_block_capability_registers,
+        )
+
+        reads: list[int] = []
+
+        class _Session:
+            async def read_holding(self, register: int, count: int):
+                reads.append(register)
+                return [{406: 1, 420: 0}.get(register, 0)]
+
+        caps = (
+            SimpleNamespace(value_key="boot_406", key="boot_406", register=406, value_kind="enum"),
+            SimpleNamespace(value_key="output_420", key="output_420", register=420, value_kind="bool"),
+            SimpleNamespace(value_key="in_block_304", key="in_block_304", register=304, value_kind="bool"),
+            SimpleNamespace(value_key="action_460", key="action_460", register=460, value_kind="action"),
+        )
+        extra = await _read_out_of_block_capability_registers(
+            _Session(), caps, ((300, [0] * 44),)
+        )
+
+        self.assertEqual(sorted(reads), [406, 420])  # 304 in-block, 460 action -> not read
+        self.assertIn((406, [1]), extra)
+        self.assertIn((420, [0]), extra)
 
     async def test_probe_uses_bounded_identity_reads_before_selected_full_probe(self) -> None:
         driver = SmgModbusDriver()

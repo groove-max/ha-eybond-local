@@ -222,7 +222,8 @@
       }
     },
     "progress": {
-      "scanning_network": "Scanning the local network for EyeBond collectors…"
+      "scanning_network": "Scanning the local network for EyeBond collectors…",
+      "shadow_learning": "{control_discovery_hint}"
     },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",
@@ -258,7 +259,7 @@
       "collector_wifi_password_not_ascii": "This collector accepts only ASCII Wi-Fi passwords on the local management path.",
       "collector_wifi_apply_not_confirmed": "Confirm that applying Wi-Fi settings may temporarily disconnect the collector.",
       "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details.",
-      "shadow_learning_failed": "Shadow learning action failed. Check details and confirmations, then try again."
+      "shadow_learning_failed": "Control discovery action failed. Check details and confirmations, then try again."
     },
     "step": {
       "init": {
@@ -348,38 +349,77 @@
           "create_smartess_draft": "Create SmartESS draft",
           "create_profile_draft": "Create local profile draft",
           "create_schema_draft": "Create local register schema draft",
-          "shadow_learning": "SmartESS shadow learning",
+          "shadow_learning": "Add controls for this device",
           "reload_local_metadata": "Reload local metadata",
           "rollback_local_metadata": "Rollback local metadata",
           "create_support_package": "Create support archive"
         }
       },
       "shadow_learning": {
-        "title": "SmartESS Shadow Learning",
-        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Preflight:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Trace:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
         "data": {
-          "shadow_learning_action": "Action",
-          "shadow_learning_mode": "Learning mode",
-          "shadow_learning_field_ids": "Selected field IDs",
-          "shadow_learning_numeric_value": "Numeric probe value",
-          "shadow_learning_max_fields": "Max fields",
-          "shadow_learning_include_numeric": "Include numeric fields",
-          "shadow_learning_enum_sweep": "Try all enum choices",
-          "username": "SmartESS username",
-          "password": "SmartESS password",
-          "shadow_learning_confirm_cloud_write": "I confirm cloud-side control calls for this run",
-          "shadow_learning_confirm_broad_sweep": "I reviewed the preview and confirm broad enum/numeric sweep"
+          "shadow_learning_confirm_cloud_write": "Yes, briefly send test commands to this device to find its controls"
         },
         "data_description": {
-          "shadow_learning_field_ids": "Comma-separated cloud field IDs for manual mode. Leave empty to use all available fields for the selected mode.",
-          "shadow_learning_numeric_value": "Fallback numeric value for numeric opt-in mode when no explicit hint is available.",
-          "shadow_learning_max_fields": "Hard cap on how many fields are included in preview/run.",
-          "shadow_learning_include_numeric": "Allows numeric fields in preview/run when supported by mode.",
-          "shadow_learning_enum_sweep": "Allows testing every enum choice instead of only one value per field.",
-          "username": "Used only for the current SmartESS learning execution action.",
-          "password": "Used only for the current SmartESS learning execution action.",
-          "shadow_learning_confirm_cloud_write": "Required for learning execution because SmartESS cloud control calls are sent.",
-          "shadow_learning_confirm_broad_sweep": "Required before broad enum or numeric sweeps. Always preview first."
+          "shadow_learning_confirm_cloud_write": "To find the controls, Home Assistant briefly sends test commands to this device through SmartESS. The device's settings are not changed."
+        }
+      },
+      "shadow_learning_credentials": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "username": "SmartESS username",
+          "password": "SmartESS password"
+        },
+        "data_description": {
+          "username": "Used only for the current control discovery action.",
+          "password": "Used only for the current control discovery action."
+        }
+      },
+      "shadow_learning_review": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "enabled_controls": "Controls to add"
+        },
+        "data_description": {
+          "enabled_controls": "Tick the controls you want in Home Assistant. Risky ones are left off by default."
+        }
+      },
+      "shadow_learning_result": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "result_action": "What would you like to do?"
+        }
+      },
+      "shadow_learning_advanced": {
+        "title": "Add controls for this device",
+        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Readiness:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Evidence:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
+        "data": {
+          "shadow_learning_action": "Action",
+          "shadow_learning_mode": "Discovery mode",
+          "shadow_learning_field_ids": "Selected settings",
+          "shadow_learning_numeric_value": "Numeric test value",
+          "shadow_learning_max_fields": "Maximum settings",
+          "shadow_learning_include_numeric": "Include numeric settings",
+          "shadow_learning_enum_sweep": "Try all option values",
+          "username": "SmartESS username",
+          "password": "SmartESS password",
+          "shadow_learning_confirm_cloud_write": "Yes, briefly send test commands to this device to find its controls",
+          "shadow_learning_confirm_broad_sweep": "I reviewed the preview and confirm testing all option values and numeric settings"
+        },
+        "data_description": {
+          "shadow_learning_field_ids": "Comma-separated SmartESS setting IDs for the selected-settings mode. Leave empty to use all available settings for the selected mode.",
+          "shadow_learning_numeric_value": "Fallback numeric value for the numeric mode when no explicit hint is available.",
+          "shadow_learning_max_fields": "Hard cap on how many settings are included in preview/run.",
+          "shadow_learning_include_numeric": "Allows numeric settings in preview/run when supported by mode.",
+          "shadow_learning_enum_sweep": "Allows testing every option value instead of only one value per setting.",
+          "username": "Used only for the current control discovery action.",
+          "password": "Used only for the current control discovery action.",
+          "shadow_learning_confirm_cloud_write": "To find the controls, Home Assistant briefly sends test commands to this device through SmartESS. The device's settings are not changed.",
+          "shadow_learning_confirm_broad_sweep": "Required before testing all option values or numeric settings. Always preview first."
         }
       },
       "proxy_capture": {
@@ -481,6 +521,9 @@
         "title": "Diagnostics Result",
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
       }
+    },
+    "progress": {
+      "shadow_learning": "{control_discovery_hint}"
     }
   },
   "entity": {

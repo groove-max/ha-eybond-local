@@ -50,7 +50,9 @@ class EybondCapabilitySwitch(CoordinatorEntity[EybondLocalCoordinator], SwitchEn
 
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_switch_{capability.key}"
         self._attr_name = capability.display_name
-        self._attr_entity_registry_enabled_default = capability.enabled_default
+        self._attr_entity_registry_enabled_default = coordinator.capability_enabled_by_default(
+            capability
+        )
 
     @property
     def device_info(self):

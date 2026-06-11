@@ -222,7 +222,8 @@
       }
     },
     "progress": {
-      "scanning_network": "Scanning the local network for EyeBond collectors…"
+      "scanning_network": "Scanning the local network for EyeBond collectors…",
+      "shadow_learning": "{control_discovery_hint}"
     },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",

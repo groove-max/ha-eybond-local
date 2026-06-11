@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+import dataclasses
 from datetime import datetime, timedelta, timezone
 import ipaddress
 import logging
@@ -103,6 +105,8 @@ from ..metadata.local_metadata import (
     create_local_schema_draft,
     rollback_local_metadata_overrides,
 )
+from ..metadata.profile_loader import builtin_base_profile_name
+from ..metadata.register_schema_loader import builtin_base_schema_name
 from ..naming import collector_display_name
 from ..metadata.smartess_draft import (
     SmartEssKnownFamilyDraftPlan,
@@ -159,6 +163,7 @@ from ..support.shadow_learning_backend import (
     build_shadow_learning_seed,
     build_shadow_learning_trace_path,
 )
+from ..support.shadow_learning_proxy import route_status_indicates_control_ready
 from ..support.shadow_learning_session import (
     build_shadow_learning_lease_deadline,
     build_shadow_learning_session_state,
@@ -170,6 +175,7 @@ from ..support.shadow_learning_session import (
     shadow_learning_session_timestamp,
 )
 from ..support.package import export_support_package
+from ..support.shadow_learning_review_model import normalize_activation_selection
 from ..support.workflow import build_support_workflow_state
 
 logger = logging.getLogger(__name__)
@@ -310,6 +316,63 @@ def _resolve_collector_server_endpoint(
         require_explicit_protocol=False,
         cloud_family=cloud_family,
     )
+
+
+def _collector_server_endpoints_equal(
+    left: str,
+    right: str,
+    *,
+    cloud_family: str = "",
+) -> bool:
+    """Return whether two collector endpoints resolve to the same target."""
+
+    try:
+        return _resolve_collector_server_endpoint(
+            left,
+            cloud_family=cloud_family,
+        ) == _resolve_collector_server_endpoint(
+            right,
+            cloud_family=cloud_family,
+        )
+    except ValueError:
+        return str(left or "").strip() == str(right or "").strip()
+
+
+def _resolve_shadow_learning_main_redirect(
+    *,
+    home_assistant_primary: bool,
+    current_endpoint: str,
+    rollback_target: str,
+    upstream_endpoint: str,
+    callback_endpoint: str,
+) -> tuple[str, bool]:
+    """Return (restore_endpoint, redirect_required) for a shadow-learning main-endpoint switch.
+
+    When the collector is already in HA-only mode it is already isolated on the HA endpoint:
+    there is nothing to redirect and -- crucially -- nothing to restore. Restoring to the
+    real-server rollback target in that case would move an already-isolated collector ONTO the
+    real server after the scan (and leave its control entities unavailable). Mirrors proxy
+    capture, which also no-ops when already HA-only.
+
+    Otherwise (SmartESS + HA) the persisted main param-21 endpoint is the real server. Drive
+    the redirect (and restore target) off the REAL upstream endpoint -- the remembered rollback
+    target, else the upstream the proxy forwards to, else the live endpoint -- NOT the
+    possibly-already-HA live endpoint (the additive callback can make it look like HA, which
+    would skip the switch and leave the collector live on the real server). This moves the main
+    endpoint to the proxy for the whole scan and restores it to the real server afterwards.
+    """
+
+    if home_assistant_primary:
+        return "", False
+    restore_endpoint = str(
+        (rollback_target or "").strip()
+        or (upstream_endpoint or "").strip()
+        or (current_endpoint or "").strip()
+    ).strip()
+    redirect_required = bool(
+        restore_endpoint and restore_endpoint != str(callback_endpoint or "").strip()
+    )
+    return restore_endpoint, redirect_required
 
 
 def _normalize_preserved_collector_server_endpoint(endpoint: str) -> str:
@@ -492,6 +555,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             driver_hint=entry.options.get(CONF_DRIVER_HINT, entry.data.get(CONF_DRIVER_HINT, "auto")),
             connection_mode=entry.data.get(CONF_CONNECTION_MODE, ""),
         )
+        # The runtime inverter is built from built-in detection and never carries the
+        # learned overlay capabilities on its own. Give the runtime a hook so that, once
+        # a device-scoped overlay is active, the activated learned controls are merged
+        # into the detected inverter -- otherwise they exist only in effective metadata
+        # and never become entities (or writable) because every entity/write path reads
+        # the runtime inverter's capabilities.
+        self._device_overlay_merge_status = ""
+        set_overlay_applier = getattr(self._runtime, "set_inverter_overlay_applier", None)
+        if callable(set_overlay_applier):
+            set_overlay_applier(self._apply_device_overlay_to_inverter)
         super().__init__(
             hass,
             logger,
@@ -1308,6 +1381,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 current_endpoint
             ):
                 return
+            if await self._async_shadow_learning_blocks_endpoint_reconcile():
+                snapshot.values[
+                    "collector_operation_endpoint_sync_status"
+                ] = "shadow_learning_active"
+                return
             if self.proxy_capture_overview.status in {
                 "starting",
                 "running",
@@ -1384,6 +1462,24 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             result.get("status") or "applied"
         )
 
+    async def _async_shadow_learning_blocks_endpoint_reconcile(self) -> bool:
+        """Return whether shadow learning temporarily owns the collector endpoint.
+
+        In SmartESS+HA mode the steady-state reconcile normally restores a local
+        callback endpoint back to SmartESS. During shadow learning that same
+        endpoint is the safety boundary. Restoring it mid-run gives SmartESS a
+        direct route to the collector and can leak the next ``ctrlDevice`` write
+        to the real inverter.
+        """
+
+        if self._shadow_learning_process_running():
+            return True
+        try:
+            state = await self._async_active_shadow_learning_state(require_process=False)
+        except Exception:
+            return False
+        return bool(state is not None and shadow_learning_session_is_active(state))
+
     def _prune_hidden_collector_values_for_mode(self, snapshot: RuntimeSnapshot) -> None:
         """Hide collector diagnostics that do not apply in Home-Assistant-primary mode."""
 
@@ -1446,9 +1542,30 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot.values["effective_device_scoped_overlay_scope"] = write_exposure_context[
             "device_scoped_overlay_scope"
         ]
+        # Store as a sorted list, not the raw frozenset: snapshot values are serialized
+        # to JSON for the support package, and a frozenset is not JSON-serializable
+        # (it raised "Object of type frozenset is not JSON serializable" and blocked
+        # every export once a selection existed). The reader accepts list/tuple/set.
+        _selected_control_keys = write_exposure_context["selected_control_keys"]
+        snapshot.values["effective_device_scoped_overlay_selected_control_keys"] = (
+            sorted(_selected_control_keys) if _selected_control_keys is not None else None
+        )
         snapshot.values["effective_capabilities_experimental"] = write_exposure_context[
             "effective_capabilities_experimental"
         ]
+        # Diagnostics: what the device-overlay merge decided this cycle, and the resulting
+        # inverter capability picture. Surfaced into the support package so the merge is
+        # observable on-device instead of inferred (the support bundle does not otherwise
+        # serialize inverter.capabilities).
+        _runtime_inverter = getattr(snapshot, "inverter", None)
+        _runtime_capabilities = tuple(getattr(_runtime_inverter, "capabilities", ()) or ())
+        snapshot.values["effective_overlay_merge_status"] = self._device_overlay_merge_status
+        snapshot.values["effective_inverter_capability_count"] = len(_runtime_capabilities)
+        snapshot.values["effective_inverter_learned_capability_keys"] = sorted(
+            str(getattr(capability, "key", ""))
+            for capability in _runtime_capabilities
+            if getattr(capability, "is_device_scoped_experimental", False)
+        )
         snapshot.values.update(self._support_workflow_values(snapshot))
         snapshot.values.update(self._collector_onboarding_values(snapshot))
         snapshot.values.update(self._tooling_values)
@@ -1997,6 +2114,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "current_endpoint": current_endpoint,
         }
 
+    def _shadow_learning_main_redirect(self, callback_endpoint: str) -> tuple[str, bool]:
+        """Return (restore_endpoint, redirect_required) for the scan's main-endpoint switch.
+
+        SAFETY: the collector's MAIN (param 21) endpoint must be moved to the local proxy for
+        the whole session. In "SmartESS + HA" the HA callback is *additive* -- it does NOT
+        rewrite param 21 -- so the collector keeps a live link to the real cloud, and a
+        mid-scan reconnect/reboot lets a real ctrlDevice command reach the inverter. Drive the
+        redirect (and the restore target) off the REAL upstream endpoint (the remembered
+        rollback target / upstream), not the possibly-already-HA live endpoint: gating on the
+        live endpoint would skip the param-21 switch (leaving the collector on the real server)
+        and would later restore to HA, stranding the collector off SmartESS.
+        """
+
+        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
+        return _resolve_shadow_learning_main_redirect(
+            home_assistant_primary=self.collector_home_assistant_primary,
+            current_endpoint=current_endpoint,
+            rollback_target=self.collector_server_endpoint_rollback_target,
+            upstream_endpoint=self.proxy_capture_upstream_endpoint,
+            callback_endpoint=callback_endpoint,
+        )
+
     async def async_start_shadow_learning(
         self,
         *,
@@ -2079,8 +2218,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             upstream_port=upstream_port,
         )
 
-        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
-        restore_required = bool(current_endpoint and current_endpoint != callback_endpoint)
+        restore_endpoint, restore_required = self._shadow_learning_main_redirect(callback_endpoint)
         started_at = shadow_learning_session_timestamp()
         expires_at = build_shadow_learning_lease_deadline(
             lease_seconds=self.proxy_capture_configured_duration_minutes * 60,
@@ -2090,7 +2228,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             route_owner_id=route_owner_id,
             collector_pn=self.smartess_collector_pn,
             trace_path=str(trace_path),
-            original_endpoint=current_endpoint,
+            original_endpoint=restore_endpoint,
             proxy_endpoint=callback_endpoint,
             upstream_endpoint=upstream_endpoint,
             restore_required=restore_required,
@@ -2141,11 +2279,29 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
             route_started = True
 
+            min_ready_sequence = 0
             if restore_required:
-                await self._runtime.async_set_collector_server_endpoint(
+                min_ready_sequence = int(
+                    self._shadow_learning_route_status().get(
+                        "collector_connection_sequence"
+                    )
+                    or 0
+                )
+                redirect_result = await self._runtime.async_set_collector_server_endpoint(
                     callback_endpoint,
                     apply_changes=True,
                 )
+                readback_endpoint = str(
+                    redirect_result.get("readback_endpoint") or ""
+                ).strip()
+                if not readback_endpoint or not _collector_server_endpoints_equal(
+                    readback_endpoint,
+                    callback_endpoint,
+                    cloud_family=self.collector_cloud_family,
+                ):
+                    raise RuntimeError(
+                        "shadow_learning_endpoint_redirect_not_confirmed"
+                    )
             else:
                 disconnect_current = getattr(
                     self._runtime,
@@ -2158,6 +2314,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self._async_wait_for_shadow_learning_ready(
                 trace_path=trace_path,
                 timeout_seconds=75.0,
+                min_collector_connection_sequence=min_ready_sequence,
             )
             ready_state = build_shadow_learning_session_state(
                 entry_id=state.entry_id,
@@ -2180,9 +2337,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         except Exception as exc:
             restore_confirmed = True
             restore_error = ""
-            if restore_required and current_endpoint:
+            if restore_required and restore_endpoint:
                 restore_confirmed, restore_error = await self._async_best_effort_restore_after_start_failure(
-                    current_endpoint
+                    restore_endpoint
                 )
             if route_started:
                 await self._runtime.async_stop_shadow_learning_route(
@@ -2904,7 +3061,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             schema_source_scope=context["schema_source_scope"],
             profile_name=context["profile_name"],
             device_scoped_overlay_active=context["device_scoped_overlay_active"],
+            selected_control_keys=context["selected_control_keys"],
         )
+
+    def capability_enabled_by_default(self, capability: WriteCapability) -> bool:
+        """Entity-registry default-enabled state for one capability.
+
+        Learned overlay capabilities are generated with ``enabled_default=False`` so they
+        stay inactive until activation. Once the user has selected and activated a device-
+        scoped learned control (so it is exposable), enable it by default -- otherwise the
+        entity would be created but registered disabled and stay hidden on the device page.
+        Every other capability keeps its declared default.
+        """
+
+        if capability.is_device_scoped_experimental and self.can_expose_capability(capability):
+            return True
+        return capability.enabled_default
 
     def can_expose_preset(self, preset: CapabilityPreset) -> bool:
         """Whether one preset should exist as a writable HA entity."""
@@ -2928,6 +3100,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             schema_source_scope=context["schema_source_scope"],
             profile_name=context["profile_name"],
             device_scoped_overlay_active=context["device_scoped_overlay_active"],
+            selected_control_keys=context["selected_control_keys"],
         )
 
     def _write_exposure_context(self) -> dict[str, Any]:
@@ -2955,6 +3128,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "device_scoped_overlay_scope": str(
                 getattr(metadata, "device_scoped_overlay_scope", "") or ""
             ).strip(),
+            "selected_control_keys": getattr(
+                metadata, "device_scoped_overlay_selected_control_keys", None
+            ),
             "effective_capabilities_experimental": bool(
                 getattr(metadata, "device_scoped_overlay_active", False)
             ),
@@ -3000,6 +3176,75 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if detected_model or detected_serial:
             return inverter
         return None
+
+    def _apply_device_overlay_to_inverter(self, inverter, collector):
+        """Merge activated device-scoped learned controls into the detected inverter.
+
+        The runtime detects the inverter against built-in bindings, so its capabilities
+        never include the learned overlay controls. This hook (invoked by the runtime
+        right after detection) resolves the effective metadata for the detected device
+        and, when a device-scoped overlay is active, appends the activated learned
+        capabilities (plus any capability group they require) so they materialize as
+        entities and are writable. Detected capabilities are preserved; none are removed.
+        """
+
+        if inverter is None:
+            self._device_overlay_merge_status = "inverter_none"
+            return inverter
+        try:
+            metadata = resolve_effective_metadata_selection(
+                inverter=inverter,
+                driver=None,
+                collector=collector,
+                entry_data=self.config_entry.data,
+                entry_options=self.config_entry.options,
+                persisted_snapshot=self.effective_metadata_snapshot,
+            )
+            if not metadata.device_scoped_overlay_active:
+                self._device_overlay_merge_status = "inactive"
+                return inverter
+            profile = metadata.profile_metadata
+            if profile is None:
+                self._device_overlay_merge_status = "no_profile_metadata"
+                return inverter
+            existing_keys = {capability.key for capability in inverter.capabilities}
+            learned = tuple(
+                capability
+                for capability in profile.capabilities
+                if capability.is_device_scoped_experimental
+                and capability.key not in existing_keys
+            )
+            if not learned:
+                already = sum(
+                    1
+                    for capability in inverter.capabilities
+                    if getattr(capability, "is_device_scoped_experimental", False)
+                )
+                self._device_overlay_merge_status = f"no_new_learned(already={already})"
+                return inverter
+            needed_group_keys = {capability.group for capability in learned}
+            existing_group_keys = {group.key for group in inverter.capability_groups}
+            extra_groups = tuple(
+                group
+                for group in profile.groups
+                if group.key in needed_group_keys and group.key not in existing_group_keys
+            )
+            self._device_overlay_merge_status = (
+                f"merged({'+'.join(capability.key for capability in learned)})"
+            )
+            return dataclasses.replace(
+                inverter,
+                capabilities=inverter.capabilities + learned,
+                capability_groups=inverter.capability_groups + extra_groups,
+            )
+        except Exception as exc:
+            self._device_overlay_merge_status = f"error:{type(exc).__name__}:{exc}"
+            logger.warning(
+                "Failed to merge device-scoped learned controls into the detected "
+                "inverter; activated controls will not appear this cycle",
+                exc_info=True,
+            )
+            return inverter
 
     @property
     def has_inverter_identity(self) -> bool:
@@ -3451,6 +3696,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return {
                 "running": self._shadow_learning_process_running(),
                 "collector_connected": False,
+                "collector_connection_sequence": 0,
                 "collector_protocol_ingress": False,
                 "route_protocol_activity": False,
                 "upstream_connected": False,
@@ -3462,6 +3708,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return {
                 "running": self._shadow_learning_process_running(),
                 "collector_connected": False,
+                "collector_connection_sequence": 0,
                 "collector_protocol_ingress": False,
                 "route_protocol_activity": False,
                 "upstream_connected": False,
@@ -3471,6 +3718,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return {
             "running": bool(status.get("running")),
             "collector_connected": bool(status.get("collector_connected")),
+            "collector_connection_sequence": int(status.get("collector_connection_sequence") or 0),
             "collector_protocol_ingress": bool(status.get("collector_protocol_ingress")),
             "route_protocol_activity": bool(status.get("route_protocol_activity")),
             "upstream_connected": bool(status.get("upstream_connected")),
@@ -3483,6 +3731,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         *,
         trace_path: Path,
         timeout_seconds: float,
+        min_collector_connection_sequence: int = 0,
     ) -> None:
         del trace_path
         deadline = asyncio.get_running_loop().time() + max(float(timeout_seconds), 1.0)
@@ -3494,7 +3743,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             upstream_error = str(status.get("upstream_error") or "")
             if upstream_error:
                 raise RuntimeError(f"shadow_learning_upstream_connect_failed:{upstream_error}")
-            if bool(status.get("ready")):
+            # Return the instant the collector has reconnected to our proxy and is speaking our
+            # protocol -- the same moment proxy capture keys off. Do NOT wait for the full
+            # ``ready`` flag: it additionally requires the short-lived upstream proxy->cloud
+            # socket, which connects on demand, so waiting for it false-timed-out here and
+            # triggered a premature restore of the collector back to the real server. This is the
+            # SAME predicate the per-write control gate uses, so start and gate never disagree.
+            if route_status_indicates_control_ready(status):
+                if (
+                    min_collector_connection_sequence > 0
+                    and int(status.get("collector_connection_sequence") or 0)
+                    <= min_collector_connection_sequence
+                ):
+                    await asyncio.sleep(1.0)
+                    continue
                 return
             collector_connected = bool(status.get("collector_connected"))
             next_phase = "connecting_upstream" if collector_connected else "waiting_for_collector"
@@ -3908,8 +4170,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         *,
         profile_name: str,
         register_schema_name: str,
+        selection: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Persist one explicit device-scoped learned overlay activation and reload."""
+        """Persist one explicit device-scoped learned overlay activation and reload.
+
+        ``selection`` carries the user's control choices for this device (built from the
+        review screen via ``build_activation_selection``). When provided, the activation
+        records ``selected_controls`` (with user labels), ``excluded_controls`` (with
+        retained reasons), and ``selected_control_keys`` so runtime exposes only the
+        selected learned controls. When omitted, the activation declares no selection and
+        runtime keeps exposing every learned control (legacy behavior).
+        """
 
         normalized_profile_name = str(profile_name or "").strip()
         normalized_schema_name = str(register_schema_name or "").strip()
@@ -3921,8 +4192,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         write_context = self._write_exposure_context()
         activation_scope: dict[str, Any] = {
             "effective_owner_key": str(self.effective_owner_key or "").strip(),
-            "base_profile_name": str(self.effective_profile_name or "").strip(),
-            "base_register_schema_name": str(self.effective_register_schema_name or "").strip(),
+            # Rebase to the built-in base: when activating an overlay while another is
+            # already active, ``effective_*_name`` is the *previous* overlay's learned
+            # name. Storing that raw would poison the device-scope match on reload (the
+            # runtime base resolves to the built-in name), silently suppressing the
+            # activation. The scope matcher also rebases defensively, so old activations
+            # self-heal; this keeps newly written activations clean at the source.
+            "base_profile_name": str(
+                builtin_base_profile_name(self.effective_profile_name or "")
+            ).strip(),
+            "base_register_schema_name": str(
+                builtin_base_schema_name(self.effective_register_schema_name or "")
+            ).strip(),
             "variant_key": str(write_context.get("variant_key") or "").strip(),
             "collector_pn": str(
                 getattr(collector, "collector_pn", "")
@@ -3954,6 +4235,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "activated_at": datetime.now(timezone.utc).isoformat(),
             "activation_scope": activation_scope,
         }
+        if selection is not None:
+            activation.update(normalize_activation_selection(selection))
 
         options = dict(self.config_entry.options)
         options[_DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY] = activation

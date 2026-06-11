@@ -100,6 +100,24 @@ def _install_homeassistant_stubs() -> None:
                 "description_placeholders": description_placeholders or {},
             }
 
+        def async_show_progress(self, *, step_id, progress_action, progress_task, description_placeholders=None):
+            return {
+                "type": "progress",
+                "step_id": step_id,
+                "progress_action": progress_action,
+                "progress_task": progress_task,
+                "description_placeholders": description_placeholders or {},
+            }
+
+        def async_show_progress_done(self, *, next_step_id):
+            return {
+                "type": "progress_done",
+                "next_step_id": next_step_id,
+            }
+
+        def async_update_progress(self, progress):
+            self._test_progress = progress
+
         def async_create_entry(self, *, data):
             return {"type": "create_entry", "data": data}
 
@@ -166,7 +184,7 @@ def _install_homeassistant_stubs() -> None:
     selector.SelectOptionDict = SelectOptionDict
     selector.SelectSelector = _Selector
     selector.SelectSelectorConfig = _SelectorConfig
-    selector.SelectSelectorMode = types.SimpleNamespace(DROPDOWN="dropdown")
+    selector.SelectSelectorMode = types.SimpleNamespace(DROPDOWN="dropdown", LIST="list")
     selector.TextSelector = _Selector
     selector.TextSelectorConfig = _SelectorConfig
 
@@ -235,6 +253,9 @@ from custom_components.eybond_local.support.bundle import build_support_bundle_p
 from custom_components.eybond_local.support.package import (
     build_shadow_learning_runtime_values,
     export_support_package,
+)
+from custom_components.eybond_local.support.shadow_learning_review_model import (
+    build_learned_control_review_model,
 )
 from custom_components.eybond_local.collector.smartess_ble import SmartEssBleCandidate
 from custom_components.eybond_local.collector.smartess_ble import (
@@ -4861,7 +4882,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             data=types.SimpleNamespace(values={}),
         )
 
-        result = await options.async_step_shadow_learning(
+        result = await options.async_step_shadow_learning_advanced(
             {
                 "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                 "shadow_learning_mode": SHADOW_LEARNING_MODE_ENUM_SWEEP,
@@ -4904,7 +4925,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             data=types.SimpleNamespace(values={}),
         )
 
-        result = await options.async_step_shadow_learning(
+        result = await options.async_step_shadow_learning_advanced(
             {
                 "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                 "shadow_learning_mode": SHADOW_LEARNING_MODE_ENUM_SWEEP,
@@ -4955,7 +4976,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             config_flow_module,
             "fetch_signed_action",
         ) as fetch_mock:
-            result = await options.async_step_shadow_learning(
+            result = await options.async_step_shadow_learning_advanced(
                 {
                     "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                     "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
@@ -5035,7 +5056,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "correlation": {},
             },
         ):
-            result = await options.async_step_shadow_learning(
+            result = await options.async_step_shadow_learning_advanced(
                 {
                     "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                     "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
@@ -5054,9 +5075,145 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(
             result["description_placeholders"]["shadow_learning_status"],
-            "Learning execution completed.",
+            "Control discovery completed.",
         )
         self.assertEqual(captured["shadow_session_state"], "ready")
+
+    async def test_shadow_learning_run_learning_rejects_primed_route_without_upstream(self) -> None:
+        options = self._make_options_flow()
+        options._shadow_learning_settings_dat = lambda _coordinator: {"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}
+        options._shadow_learning_cloud_identity = lambda _coordinator: {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        }
+        options._shadow_learning_observed_writes = lambda _coordinator: ()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            _runtime=types.SimpleNamespace(
+                # Start-primed route: collector->proxy is live, but proxy->cloud upstream is not.
+                # This is sufficient for start readiness, but not safe for a live ctrlDevice:
+                # SmartESS may deliver over the real-server connection and bypass our proxy.
+                shadow_learning_route_status=lambda: {
+                    "running": True,
+                    "collector_connected": True,
+                    "collector_protocol_ingress": True,
+                    "route_protocol_activity": True,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                }
+            ),
+            data=types.SimpleNamespace(values={"shadow_learning_session_status": "ready"}),
+        )
+        captured: dict[str, object] = {}
+
+        with patch.object(
+            config_flow_module,
+            "login_with_password",
+            return_value=(
+                object(),
+                types.SimpleNamespace(
+                    token="token",
+                    secret="secret",
+                    uid="uid",
+                    usr="usr",
+                    role=1,
+                    expire=1,
+                ),
+            ),
+        ) as login_mock, patch.object(
+            config_flow_module,
+            "fetch_signed_action",
+            return_value=types.SimpleNamespace(dat={"field": [{"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}]}),
+        ) as fetch_mock, patch.object(
+            config_flow_module,
+            "async_orchestrate_shadow_learning_settings",
+            side_effect=lambda **kwargs: captured.update(kwargs) or {
+                "planned_write_count": 1,
+                "executed_result_count": 1,
+                "sent_count": 1,
+                "error_count": 0,
+                "unknown_field_count": 0,
+                "results": [],
+                "correlation": {},
+            },
+        ):
+            result = await options.async_step_shadow_learning_advanced(
+                {
+                    "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
+                    "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
+                    "shadow_learning_field_ids": "",
+                    "shadow_learning_include_numeric": False,
+                    "shadow_learning_enum_sweep": False,
+                    "shadow_learning_numeric_value": "1",
+                    "shadow_learning_max_fields": 0,
+                    "username": "demo",
+                    "password": "secret",
+                    "shadow_learning_confirm_cloud_write": True,
+                    "shadow_learning_confirm_broad_sweep": False,
+                }
+            )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(
+            result["description_placeholders"]["shadow_learning_status"],
+            "shadow_learning_session_not_ready",
+        )
+        login_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+        self.assertEqual(captured, {})
+
+    def test_shadow_learning_route_rejects_control_when_collector_off_proxy(self) -> None:
+        # SAFETY-CRITICAL: control is allowed ONLY while the collector's main link is on our
+        # proxy right now (collector_connected). A sticky "reached us once" signal
+        # (collector_protocol_ingress) plus residual route activity must NOT grant control --
+        # after a mid-scan revert the collector is back on the real server and a ctrlDevice
+        # would reach the inverter (it turned off the user's output).
+        options = object.__new__(config_flow_module.EybondLocalOptionsFlow)
+
+        def _coordinator(collector_connected: bool) -> object:
+            return types.SimpleNamespace(
+                _runtime=types.SimpleNamespace(
+                    shadow_learning_route_status=lambda: {
+                        "running": True,
+                        "collector_connected": collector_connected,
+                        # Stale/sticky signals that must never override the live-socket check.
+                        "collector_protocol_ingress": True,
+                        "route_protocol_activity": True,
+                        "upstream_connected": False,
+                        "ready": False,
+                        "upstream_error": "",
+                    }
+                )
+            )
+
+        # Reverted to the real server (no live collector socket) -> blocked despite stale flags.
+        self.assertFalse(
+            options._shadow_learning_route_accepts_control(_coordinator(False))
+        )
+        # Collector on our proxy but upstream down -> blocked for writes.
+        self.assertFalse(
+            options._shadow_learning_route_accepts_control(_coordinator(True))
+        )
+
+        self.assertTrue(
+            options._shadow_learning_route_accepts_control(
+                types.SimpleNamespace(
+                    _runtime=types.SimpleNamespace(
+                        shadow_learning_route_status=lambda: {
+                            "running": True,
+                            "collector_connected": True,
+                            "collector_protocol_ingress": True,
+                            "route_protocol_activity": True,
+                            "upstream_connected": True,
+                            "ready": True,
+                            "upstream_error": "",
+                        }
+                    )
+                )
+            )
+        )
 
     async def test_shadow_learning_run_learning_accepts_explicit_learning_state(self) -> None:
         options = self._make_options_flow()
@@ -5113,7 +5270,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "correlation": {},
             },
         ):
-            result = await options.async_step_shadow_learning(
+            result = await options.async_step_shadow_learning_advanced(
                 {
                     "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                     "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
@@ -5165,7 +5322,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             config_flow_module,
             "fetch_signed_action",
         ) as fetch_mock:
-            result = await options.async_step_shadow_learning(
+            result = await options.async_step_shadow_learning_advanced(
                 {
                     "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                     "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
@@ -5204,7 +5361,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             data=types.SimpleNamespace(values={}),
         )
 
-        result = await options.async_step_shadow_learning(
+        result = await options.async_step_shadow_learning_advanced(
             {
                 "shadow_learning_action": SHADOW_LEARNING_ACTION_REFRESH,
                 "shadow_learning_mode": SHADOW_LEARNING_MODE_SUPPORT_ONLY,
@@ -5215,7 +5372,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(called)
         self.assertEqual(
             result["description_placeholders"]["shadow_learning_status"],
-            "Shadow-learning status refreshed.",
+            "Control discovery status refreshed.",
         )
 
     def test_shadow_learning_placeholders_prefer_runtime_session_state(self) -> None:
@@ -5274,7 +5431,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             data=types.SimpleNamespace(values={}),
         )
 
-        result = await options.async_step_shadow_learning(
+        result = await options.async_step_shadow_learning_advanced(
             {
                 "shadow_learning_action": SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY,
                 "shadow_learning_mode": SHADOW_LEARNING_MODE_SUPPORT_ONLY,
@@ -5285,7 +5442,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(called)
         self.assertEqual(
             result["description_placeholders"]["shadow_learning_status"],
-            "Support package exported without learning execution.",
+            "Support package exported without running control discovery.",
         )
 
     async def test_shadow_learning_real_result_path_exports_all_artifacts_before_activation(
@@ -5515,7 +5672,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     manifest=overlay_manifest,
                 ),
             ):
-                await options.async_step_shadow_learning(
+                await options.async_step_shadow_learning_advanced(
                     {
                         "shadow_learning_action": SHADOW_LEARNING_ACTION_RUN_LEARNING,
                         "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
@@ -5530,13 +5687,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                         "shadow_learning_confirm_broad_sweep": False,
                     }
                 )
-                await options.async_step_shadow_learning(
+                await options.async_step_shadow_learning_advanced(
                     {
                         "shadow_learning_action": SHADOW_LEARNING_ACTION_GENERATE_OVERLAY,
                         "shadow_learning_mode": SHADOW_LEARNING_MODE_MANUAL,
                     }
                 )
-                result = await options.async_step_shadow_learning(
+                result = await options.async_step_shadow_learning_advanced(
                     {
                         "shadow_learning_action": SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY,
                         "shadow_learning_mode": SHADOW_LEARNING_MODE_SUPPORT_ONLY,
@@ -5572,6 +5729,1015 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 coordinator.data.values["shadow_learning_activation"]["status"],
                 "draft_generated",
             )
+
+    # ---- Guided control-discovery wizard skeleton (EYB-REF-040) ----
+
+    def _wizard_options_flow(self) -> EybondLocalOptionsFlow:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(values={}),
+        )
+        return options
+
+    async def test_control_discovery_entry_shows_consent_not_action_dropdown(self) -> None:
+        options = self._wizard_options_flow()
+
+        result = await options.async_step_shadow_learning()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning")
+        self.assertIn(
+            "shadow_learning_confirm_cloud_write", result["data_schema"].schema
+        )
+        # The long technical action/mode dropdown must be gone from the normal path.
+        self.assertNotIn("shadow_learning_action", result["data_schema"].schema)
+        self.assertNotIn("shadow_learning_mode", result["data_schema"].schema)
+        self.assertNotIn("shadow_learning_field_ids", result["data_schema"].schema)
+
+    async def test_control_discovery_intro_requires_consent(self) -> None:
+        options = self._wizard_options_flow()
+
+        result = await options.async_step_shadow_learning(
+            {"shadow_learning_confirm_cloud_write": False}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning")
+        self.assertEqual(
+            result["errors"], {"shadow_learning_confirm_cloud_write": "required"}
+        )
+        self.assertNotIn("wizard_consent", options._shadow_learning_state)
+
+    async def test_control_discovery_consent_advances_to_credentials(self) -> None:
+        options = self._wizard_options_flow()
+
+        result = await options.async_step_shadow_learning(
+            {"shadow_learning_confirm_cloud_write": True}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_credentials")
+        self.assertTrue(options._shadow_learning_state["wizard_consent"])
+        # Credentials step asks only for SmartESS username/password.
+        self.assertEqual(set(result["data_schema"].schema), {"username", "password"})
+
+    async def test_control_discovery_credentials_require_username_and_password(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["wizard_consent"] = True
+
+        result = await options.async_step_shadow_learning_credentials(
+            {"username": "", "password": ""}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_credentials")
+        self.assertEqual(
+            result["errors"], {"username": "required", "password": "required"}
+        )
+        self.assertNotIn("wizard_credentials", options._shadow_learning_state)
+
+    async def test_control_discovery_credentials_unreachable_without_consent(self) -> None:
+        options = self._wizard_options_flow()
+
+        result = await options.async_step_shadow_learning_credentials(
+            {"username": "demo", "password": "secret"}
+        )
+
+        # Falls back to the intro/consent step; credentials are not accepted.
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning")
+        self.assertNotIn("wizard_credentials", options._shadow_learning_state)
+
+    async def test_control_discovery_credentials_advance_through_progress(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_progress_task"] = _DoneTask()
+
+        result = await options.async_step_shadow_learning_credentials(
+            {"username": "demo", "password": "secret"}
+        )
+
+        self.assertEqual(result["type"], "progress_done")
+        self.assertEqual(result["next_step_id"], "shadow_learning_review")
+        self.assertEqual(
+            options._shadow_learning_state["wizard_credentials"],
+            {"username": "demo", "password": "secret"},
+        )
+
+    async def test_control_discovery_progress_creates_task_and_shows_progress(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_credentials"] = {
+            "username": "demo",
+            "password": "secret",
+        }
+
+        result = await options.async_step_shadow_learning_progress()
+
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(result["step_id"], "shadow_learning_progress")
+        self.assertEqual(result["progress_action"], "shadow_learning")
+        task = options._shadow_learning_state["wizard_progress_task"]
+        self.assertIsNotNone(task)
+        # The placeholder runner performs no live operation; let it finish cleanly.
+        await task
+
+    async def test_control_discovery_progress_completes_to_review(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_credentials"] = {
+            "username": "demo",
+            "password": "secret",
+        }
+        options._shadow_learning_state["wizard_progress_task"] = _DoneTask()
+
+        result = await options.async_step_shadow_learning_progress()
+
+        self.assertEqual(result["type"], "progress_done")
+        self.assertEqual(result["next_step_id"], "shadow_learning_review")
+        self.assertIsNone(options._shadow_learning_state["wizard_progress_task"])
+
+    async def test_control_discovery_progress_unreachable_without_credentials(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["wizard_consent"] = True
+
+        result = await options.async_step_shadow_learning_progress()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning")
+
+    def test_set_control_discovery_progress_records_stage_and_clamps(self) -> None:
+        options = self._wizard_options_flow()
+
+        options._set_control_discovery_progress(0.45, "testing", done=10, total=23)
+        progress = options._shadow_learning_state["progress"]
+        self.assertEqual(progress["stage"], "testing")
+        self.assertAlmostEqual(progress["fraction"], 0.45)
+        self.assertEqual(progress["done"], 10)
+        self.assertEqual(progress["total"], 23)
+
+        # Fractions are clamped into [0, 1] for the determinate progress bar.
+        options._set_control_discovery_progress(1.5, "finalizing")
+        self.assertEqual(options._shadow_learning_state["progress"]["fraction"], 1.0)
+        options._set_control_discovery_progress(-0.5, "preflight")
+        self.assertEqual(options._shadow_learning_state["progress"]["fraction"], 0.0)
+
+    async def test_control_discovery_review_forwards_to_result(self) -> None:
+        options = self._wizard_options_flow()
+
+        # An empty review (nothing found / failed run) skips the redundant
+        # intermediate "nothing found" page and forwards straight to the result.
+        shown = await options.async_step_shadow_learning_review()
+        self.assertEqual(shown["type"], "form")
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+
+    @staticmethod
+    def _review_capabilities() -> list[dict[str, Any]]:
+        """A normal-risk control plus a high-risk (reset/destructive) control."""
+
+        return [
+            {
+                "key": "learned_backlight_700",
+                "title": "Backlight Control",
+                "register": 700,
+                "value_kind": "bool",
+                "learned_provenance": {
+                    "cloud_field_id": "sys_backlight_700",
+                    "confidence": "high",
+                    "safety_class": "setting",
+                    "evidence_hash": "aaaa",
+                },
+            },
+            {
+                "key": "learned_reset_690",
+                "title": "Reset user parameters",
+                "register": 690,
+                "value_kind": "action",
+                "learned_provenance": {
+                    "cloud_field_id": "sys_reset_690",
+                    "confidence": "high",
+                    "safety_class": "destructive_action",
+                    "evidence_hash": "bbbb",
+                },
+            },
+        ]
+
+    def _seed_control_discovery_review(
+        self, options, capabilities=None, *, phase="edit", skipped=None
+    ) -> dict[str, Any]:
+        """Embed a real review model in flow state the way the runner would.
+
+        Defaults to the ``edit`` review page (where rename/enable fields live);
+        pass ``phase="overview"`` to exercise the read-only overview page, and
+        ``skipped`` to seed the already-supported control list.
+        """
+
+        review_model = build_learned_control_review_model(
+            capabilities if capabilities is not None else self._review_capabilities()
+        )
+        manifest: dict[str, Any] = {"review_model": review_model}
+        if skipped is not None:
+            manifest["skipped_duplicates"] = list(skipped)
+        options._shadow_learning_state["overlay"] = {"manifest": manifest}
+        if phase is not None:
+            options._shadow_learning_state["review_phase"] = phase
+        return review_model
+
+    async def test_control_discovery_review_edit_lists_controls_as_checkboxes(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)  # phase="edit" by default
+
+        result = await options.async_step_shadow_learning_review()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_review")
+        # A single multi-select field — no per-control rename/enable fields.
+        schema = result["data_schema"].schema
+        self.assertEqual({str(key) for key in schema}, {"enabled_controls"})
+        selector = next(
+            value for key, value in schema.items() if str(key) == "enabled_controls"
+        )
+        labels = [option["label"] for option in selector.config.kwargs["options"]]
+        # Each option is labelled with the control's friendly name (no field IDs).
+        self.assertIn("Backlight Control", labels)
+        self.assertIn("Reset user parameters", labels)
+        self.assertNotIn("sys_reset_690", labels)
+        placeholders = result["description_placeholders"]
+        self.assertEqual(placeholders["control_discovery_count"], "2")
+        on_count = int(placeholders["control_discovery_on_count"])
+        off_count = int(placeholders["control_discovery_off_count"])
+        self.assertEqual(on_count + off_count, 2)
+        self.assertGreaterEqual(off_count, 1)
+        # Descriptions/types live on the overview page, not here.
+        self.assertNotIn("control_discovery_table", placeholders)
+
+    async def test_control_discovery_review_overview_lists_new_and_existing(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(
+            options,
+            phase="overview",
+            skipped=[
+                {"field_id": "bse_eybond_ctrl_48", "field_name": "Output Mode", "register": 300},
+                {"field_id": "bse_eybond_ctrl_49", "field_name": "Output priority", "register": 301},
+            ],
+        )
+
+        result = await options.async_step_shadow_learning_review()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_review")
+        # Overview is read-only: no rename/enable fields on this page.
+        self.assertEqual(dict(result["data_schema"].schema), {})
+        placeholders = result["description_placeholders"]
+        self.assertEqual(placeholders["control_discovery_new_count"], "2")
+        self.assertEqual(placeholders["control_discovery_existing_count"], "2")
+        overview = placeholders["control_discovery_overview"]
+        # New controls and already-supported controls both appear, marked, with
+        # friendly types and a suggested-state note (no field IDs / risk codes).
+        self.assertIn("Backlight Control", overview)
+        self.assertIn("Output Mode", overview)
+        self.assertIn("Output priority", overview)
+        self.assertIn("Switch", overview)
+        self.assertIn("Button", overview)
+        self.assertIn("Risky", overview)
+        self.assertNotIn("destructive_action", overview)
+        self.assertNotIn("sys_reset_690", overview)
+
+    async def test_control_discovery_review_overview_continues_to_edit(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options, phase="overview")
+
+        result = await options.async_step_shadow_learning_review({})
+
+        # Continuing from the overview lands on the edit page with the selection.
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_review")
+        self.assertIn("enabled_controls", {str(key) for key in result["data_schema"].schema})
+
+    async def test_control_discovery_review_defaults_disable_risky_controls(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)
+        controls = options._control_discovery_review_controls()
+
+        default_enabled = options._control_discovery_default_enabled_keys(controls, {})
+
+        # Normal control is pre-selected; risky control is not.
+        self.assertIn("learned_backlight_700", default_enabled)
+        self.assertNotIn("learned_reset_690", default_enabled)
+
+    async def test_control_discovery_review_stores_user_choices(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)
+
+        # User flips the defaults: enable the risky control, leave the normal off.
+        forwarded = await options.async_step_shadow_learning_review(
+            {"enabled_controls": ["learned_reset_690"]}
+        )
+
+        # On submit the wizard advances to the result step.
+        self.assertEqual(forwarded["type"], "form")
+        self.assertEqual(forwarded["step_id"], "shadow_learning_result")
+
+        selections = options._shadow_learning_state["review_selections"]
+        controls = selections["controls"]
+        # The friendly discovered name is used as-is (there is no rename field).
+        self.assertEqual(controls["learned_backlight_700"]["label"], "Backlight Control")
+        self.assertFalse(controls["learned_backlight_700"]["enabled"])
+        self.assertTrue(controls["learned_reset_690"]["enabled"])
+        self.assertEqual(selections["enabled_by_user"], ["learned_reset_690"])
+        self.assertEqual(selections["excluded_by_user"], ["learned_backlight_700"])
+
+    async def test_control_discovery_review_keeps_disabled_controls_in_evidence(self) -> None:
+        options = self._wizard_options_flow()
+        review_model = self._seed_control_discovery_review(options)
+
+        # Add nothing: both controls left off.
+        await options.async_step_shadow_learning_review({"enabled_controls": []})
+
+        # The discovered evidence is untouched: every control (including the ones
+        # the user left disabled) is still present in learned_all...
+        learned_keys = {
+            entry["key"]
+            for entry in options._shadow_learning_state["overlay"]["manifest"][
+                "review_model"
+            ]["learned_all"]
+        }
+        self.assertEqual(learned_keys, {"learned_backlight_700", "learned_reset_690"})
+        # ...and the developer field name / default label is captured as evidence.
+        reset_entry = next(
+            entry
+            for entry in review_model["learned_all"]
+            if entry["key"] == "learned_reset_690"
+        )
+        self.assertEqual(reset_entry["field_name"], "Reset user parameters")
+        self.assertEqual(reset_entry["default_label"], "Reset user parameters")
+        # Both controls were recorded as excluded by the user.
+        self.assertEqual(
+            set(options._shadow_learning_state["review_selections"]["excluded_by_user"]),
+            {"learned_backlight_700", "learned_reset_690"},
+        )
+
+    async def test_control_discovery_review_preserves_prior_selection_on_revisit(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)
+
+        # First pass: flip both controls (enable risky, disable normal).
+        await options.async_step_shadow_learning_review(
+            {"enabled_controls": ["learned_reset_690"]}
+        )
+
+        # Revisiting reflects the user's prior choice, not the defaults.
+        controls = options._control_discovery_review_controls()
+        default_enabled = options._control_discovery_default_enabled_keys(
+            controls, options._control_discovery_prior_selections()
+        )
+        self.assertNotIn("learned_backlight_700", default_enabled)
+        self.assertIn("learned_reset_690", default_enabled)
+
+    async def test_control_discovery_review_empty_uses_empty_copy(self) -> None:
+        options = self._wizard_options_flow()
+
+        # Empty review forwards to the result screen, which carries the detailed
+        # "nothing found" copy directly (no intermediate empty page).
+        shown = await options.async_step_shadow_learning_review()
+
+        self.assertEqual(shown["type"], "form")
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+        self.assertIn(
+            "No controls were found",
+            shown["description_placeholders"]["control_discovery_hint"],
+        )
+
+    async def test_control_discovery_result_drops_credentials_and_returns_to_menu(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["wizard_credentials"] = {
+            "username": "demo",
+            "password": "secret",
+        }
+
+        shown = await options.async_step_shadow_learning_result()
+        self.assertEqual(shown["type"], "form")
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+        # Credentials are dropped as soon as the result step is reached.
+        self.assertNotIn("wizard_credentials", options._shadow_learning_state)
+
+        done = await options.async_step_shadow_learning_result({})
+        self.assertEqual(done["type"], "menu")
+        self.assertEqual(done["step_id"], "init")
+
+    async def test_control_discovery_result_failed_run_shows_failure_copy(self) -> None:
+        options = self._wizard_options_flow()
+        # Discovery ran but failed (e.g. the device never reconnected in time):
+        # the copy must say so, not claim that nothing was found.
+        options._shadow_learning_state["discovery"] = {
+            "status": "error",
+            "reason": "shadow_learning_session_not_ready",
+        }
+
+        shown = await options.async_step_shadow_learning_result()
+
+        self.assertEqual(shown["type"], "form")
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+        hint = shown["description_placeholders"]["control_discovery_hint"]
+        self.assertIn("couldn't finish", hint)
+        self.assertNotIn("No controls were found", hint)
+
+    async def test_control_discovery_empty_result_can_create_support_package(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["session"] = {
+            "session_id": "empty-run",
+            "trace_path": "/config/eybond_local/shadow_learning_traces/empty.jsonl",
+        }
+        options._shadow_learning_state["orchestration"] = {
+            "planned_write_count": 1,
+            "executed_result_count": 1,
+            "sent_count": 1,
+            "degraded_count": 1,
+            "results": [{"field_id": "sys_eybond_ctrl_53", "reason": "session_not_ready"}],
+            "correlation": {
+                "matched_count": 0,
+                "unmatched_attempt_count": 0,
+                "degraded_attempt_count": 1,
+            },
+        }
+        exported: dict[str, Any] = {}
+        published: list[dict[str, Any]] = []
+
+        async def _fake_export(**kwargs):
+            exported.update(kwargs)
+            return "/config/eybond_local/support/empty.zip"
+
+        def _fake_publish(**kwargs):
+            published.append(kwargs)
+            values = build_shadow_learning_runtime_values(**kwargs)
+            options._config_entry.runtime_data.data.values.update(values)
+            return dict(values["shadow_learning_artifacts"])
+
+        options._config_entry.runtime_data.publish_shadow_learning_artifacts = (
+            _fake_publish
+        )
+        options._config_entry.runtime_data.async_export_support_package_with_cloud_refresh = (
+            _fake_export
+        )
+
+        shown = await options.async_step_shadow_learning_result()
+        self.assertEqual(shown["type"], "form")
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+        self.assertIn("result_action", shown["data_schema"].schema)
+
+        result = await options.async_step_shadow_learning_result(
+            {"result_action": "create_support_package"}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_result")
+        self.assertEqual(exported.get("wants_refresh"), False)
+        self.assertEqual(
+            options._shadow_learning_state["support_package_path"],
+            "/config/eybond_local/support/empty.zip",
+        )
+        self.assertTrue(published)
+        self.assertEqual(
+            options._config_entry.runtime_data.data.values[
+                "shadow_learning_orchestration"
+            ]["degraded_count"],
+            1,
+        )
+
+    async def test_control_discovery_full_path_never_persists_credentials(self) -> None:
+        options = self._wizard_options_flow()
+
+        await options.async_step_shadow_learning(
+            {"shadow_learning_confirm_cloud_write": True}
+        )
+        progress = await options.async_step_shadow_learning_credentials(
+            {"username": "demo", "password": "secret"}
+        )
+        self.assertEqual(progress["type"], "progress")
+        # Let the placeholder runner finish, then complete the progress step.
+        await options._shadow_learning_state["wizard_progress_task"]
+        done = await options.async_step_shadow_learning_progress()
+        self.assertEqual(done["next_step_id"], "shadow_learning_review")
+
+        await options.async_step_shadow_learning_review({})
+        await options.async_step_shadow_learning_result({})
+
+        self.assertNotIn("username", options._config_entry.options)
+        self.assertNotIn("password", options._config_entry.options)
+        self.assertNotIn("username", options._config_entry.data)
+        self.assertNotIn("password", options._config_entry.data)
+        self.assertNotIn("wizard_credentials", options._shadow_learning_state)
+
+    async def test_control_discovery_result_activates_selected_controls(self) -> None:
+        # EYB-REF-047 (closes F1): the guided result step must actually activate
+        # exactly the controls the user selected on the review screen — not just
+        # store them in flow state and discard them at the end of the wizard.
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)
+        # The automatic runner records the generated overlay's profile/schema
+        # names; the seed helper only embeds the review model, so add them.
+        options._shadow_learning_state["overlay"].update(
+            {"profile_name": "learned/p.json", "schema_name": "learned/s.json"}
+        )
+        # User keeps the normal control and leaves the risky one off.
+        await options.async_step_shadow_learning_review(
+            {"enabled_controls": ["learned_backlight_700"]}
+        )
+
+        recorded: dict[str, Any] = {}
+
+        async def _fake_activate(*, profile_name, register_schema_name, selection=None):
+            recorded["profile_name"] = profile_name
+            recorded["register_schema_name"] = register_schema_name
+            recorded["selection"] = selection
+            return {
+                "scope": "device",
+                "profile_name": profile_name,
+                **(selection or {}),
+            }
+
+        options._config_entry.runtime_data.async_activate_device_scoped_overlay = (
+            _fake_activate
+        )
+
+        # The result screen offers the activate / support / close actions.
+        shown = await options.async_step_shadow_learning_result()
+        self.assertEqual(shown["type"], "form")
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+        self.assertIn("result_action", shown["data_schema"].schema)
+
+        done = await options.async_step_shadow_learning_result(
+            {"result_action": "activate_selected"}
+        )
+
+        # The guided flow activated the device-scoped overlay with exactly the
+        # user's selection: only the enabled control, carrying its user label.
+        self.assertEqual(recorded["profile_name"], "learned/p.json")
+        self.assertEqual(recorded["register_schema_name"], "learned/s.json")
+        self.assertEqual(
+            recorded["selection"]["selected_control_keys"], ["learned_backlight_700"]
+        )
+        selected = {c["key"]: c for c in recorded["selection"]["selected_controls"]}
+        self.assertEqual(selected["learned_backlight_700"]["label"], "Backlight Control")
+        excluded_keys = {c["key"] for c in recorded["selection"]["excluded_controls"]}
+        self.assertIn("learned_reset_690", excluded_keys)
+        # The activation is recorded, and applying confirms on the same screen
+        # instead of bouncing back to the menu (the user leaves deliberately).
+        self.assertEqual(
+            options._shadow_learning_state["activation"]["scope"], "device"
+        )
+        self.assertEqual(done["type"], "form")
+        self.assertEqual(done["step_id"], "shadow_learning_result")
+        self.assertIn(
+            "added to Home Assistant",
+            done["description_placeholders"]["control_discovery_hint"],
+        )
+
+    async def test_control_discovery_result_creates_support_package(self) -> None:
+        # The secondary result action exports a support package without a live
+        # SmartESS refresh, preserves the reviewed selection for support evidence,
+        # and keeps the user on the result screen without activating runtime controls.
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)
+        options._shadow_learning_state["overlay"].update(
+            {"profile_name": "learned/p.json", "schema_name": "learned/s.json"}
+        )
+        await options.async_step_shadow_learning_review(
+            {"enabled_controls": ["learned_backlight_700"]}
+        )
+
+        exported: dict[str, Any] = {}
+
+        async def _fake_export(**kwargs):
+            exported.update(kwargs)
+            return "/config/eybond_local/support/eybond_support.zip"
+
+        published: list[dict[str, Any]] = []
+
+        def _fake_publish(**kwargs):
+            published.append(kwargs)
+            values = build_shadow_learning_runtime_values(**kwargs)
+            options._config_entry.runtime_data.data.values.update(values)
+            return dict(values["shadow_learning_artifacts"])
+
+        async def _unexpected_activate(**_kwargs):
+            raise AssertionError("support export must not activate learned controls")
+
+        options._config_entry.runtime_data.publish_shadow_learning_artifacts = (
+            _fake_publish
+        )
+        options._config_entry.runtime_data.async_activate_device_scoped_overlay = (
+            _unexpected_activate
+        )
+        options._config_entry.runtime_data.async_export_support_package_with_cloud_refresh = (
+            _fake_export
+        )
+
+        result = await options.async_step_shadow_learning_result(
+            {"result_action": "create_support_package"}
+        )
+
+        self.assertEqual(
+            options._shadow_learning_state["support_package_path"],
+            "/config/eybond_local/support/eybond_support.zip",
+        )
+        # No live SmartESS operation: the export is requested without a refresh.
+        self.assertEqual(exported.get("wants_refresh"), False)
+        self.assertEqual(exported.get("smartess_username"), "")
+        self.assertTrue(published)
+        activation = options._config_entry.runtime_data.data.values[
+            "shadow_learning_activation"
+        ]
+        self.assertEqual(activation["status"], "review_selected")
+        self.assertFalse(activation["active"])
+        self.assertEqual(
+            activation["selected_control_keys"], ["learned_backlight_700"]
+        )
+        selected = {item["key"]: item for item in activation["selected_controls"]}
+        excluded = {item["key"]: item for item in activation["excluded_controls"]}
+        self.assertEqual(selected["learned_backlight_700"]["label"], "Backlight Control")
+        self.assertIn("learned_reset_690", excluded)
+        # The result screen is re-rendered so the user can still enable controls.
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_result")
+
+    async def test_control_discovery_result_activation_failure_surfaces_error(self) -> None:
+        # When activation cannot proceed (here: the overlay has no generated
+        # profile/schema), the failure is surfaced as a plain form error and the
+        # wizard stays on the result screen instead of raising or silently
+        # returning to the menu.
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options)
+        await options.async_step_shadow_learning_review(
+            {"enabled_controls": ["learned_backlight_700"]}
+        )
+
+        result = await options.async_step_shadow_learning_result(
+            {"result_action": "activate_selected"}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_result")
+        self.assertEqual(result["errors"], {"base": "shadow_learning_failed"})
+
+    async def test_advanced_metadata_menu_routes_to_wizard_not_dropdown(self) -> None:
+        # The single "Add controls for this device" entry must route to the
+        # guided wizard intro (async_step_shadow_learning), and the hidden
+        # technical dropdown (async_step_shadow_learning_advanced) must never be
+        # offered as a normal menu option.
+        options = self._make_options_flow()
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            options._config_entry.runtime_data = types.SimpleNamespace(
+                current_driver=None,
+                effective_owner_name="",
+                effective_owner_key="",
+                smartess_family_name="",
+                effective_profile_name=None,
+                effective_register_schema_name=None,
+                effective_profile_metadata=None,
+                effective_register_schema_metadata=None,
+                data=types.SimpleNamespace(values={}),
+            )
+
+            result = await options.async_step_advanced_metadata()
+
+        self.assertEqual(result["type"], "menu")
+        self.assertIn("shadow_learning", result["menu_options"])
+        self.assertNotIn("shadow_learning_advanced", result["menu_options"])
+
+    async def test_control_discovery_intro_carries_friendly_hint_placeholder(self) -> None:
+        # The intro screen is rendered from the plain-language hint placeholder,
+        # not the legacy technical status table. Guards the translations wiring
+        # (translations/*.json shadow_learning.description == {control_discovery_hint}).
+        options = self._wizard_options_flow()
+
+        result = await options.async_step_shadow_learning()
+
+        self.assertEqual(result["type"], "form")
+        hint = result["description_placeholders"].get("control_discovery_hint")
+        self.assertTrue(hint)
+        self.assertNotIn("{", hint)
+
+    # ---- Automatic control-discovery runner (EYB-REF-041) ----
+
+    class _RunnerCoordinator:
+        smartess_collector_pn = "E5000025388419"
+        effective_profile_name = "smg_modbus.json"
+        effective_register_schema_name = "modbus_smg/models/smg_6200.json"
+
+        def __init__(self, *, ready: bool = True) -> None:
+            self.data = types.SimpleNamespace(values={})
+            self._runtime = types.SimpleNamespace(
+                shadow_learning_route_status=lambda: {
+                    "running": True,
+                    "collector_connected": True,
+                    "collector_protocol_ingress": True,
+                    "upstream_connected": True,
+                    "ready": ready,
+                    "upstream_error": "",
+                }
+            )
+            self.started: list[dict] = []
+            self.stopped: list[dict] = []
+            self.published: list[dict] = []
+
+        async def async_start_shadow_learning(self, **kwargs):
+            self.started.append(kwargs)
+            return {
+                "status": "ready",
+                "session_id": "auto-session",
+                "trace_path": "/config/eybond_local/shadow_learning_traces/auto.jsonl",
+            }
+
+        async def async_stop_shadow_learning(self, **kwargs):
+            self.stopped.append(kwargs)
+            return {"status": "stopped", "restore_confirmed": True}
+
+        def publish_shadow_learning_artifacts(self, **kwargs):
+            self.published.append(kwargs)
+            return {}
+
+    def _runner_options_flow(self, coordinator):
+        """Build an options flow wired to run the automatic discovery pipeline.
+
+        The expensive preflight/identity/observation helpers are stubbed the
+        same way the advanced-path tests stub them, so each test focuses on the
+        runner's orchestration, plan shape, and fail-closed cleanup.
+        """
+
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = coordinator
+
+        async def _fake_preflight(_coordinator):
+            return {"can_start": True, "blockers": []}
+
+        options._build_shadow_learning_preflight_snapshot = _fake_preflight
+        options._shadow_learning_cloud_identity = lambda _coordinator: {
+            "pn": "E50000253884199645",
+            "sn": "E50000253884199645094801",
+            "devcode": 2376,
+            "devaddr": 1,
+        }
+        options._shadow_learning_observation_source = lambda _coordinator: None
+        options._shadow_learning_state["wizard_credentials"] = {
+            "username": "demo@example.com",
+            "password": "cloud-secret",
+        }
+        return options
+
+    def _runner_cloud_patches(
+        self,
+        *,
+        captured: dict,
+        fetch_side_effect=None,
+        orchestration_override: dict | None = None,
+    ):
+        bundle = {
+            "request": {
+                "params": {
+                    "pn": "E50000253884199645",
+                    "sn": "E50000253884199645094801",
+                    "devcode": 2376,
+                    "devaddr": 1,
+                }
+            },
+            "responses": {
+                "device_settings": {
+                    "dat": {
+                        "field": [
+                            {"id": "sys_eybond_ctrl_53", "item": [{"key": "0"}]}
+                        ]
+                    }
+                }
+            },
+        }
+        orchestration = orchestration_override or {
+            "planned_write_count": 1,
+            "executed_result_count": 1,
+            "sent_count": 1,
+            "error_count": 0,
+            "degraded_count": 0,
+            "leaked_count": 0,
+            "unknown_field_count": 0,
+            "results": [],
+            "correlation": {"matched_count": 1, "unmatched_attempt_count": 0},
+        }
+        fetch_kwargs = {}
+        if fetch_side_effect is not None:
+            fetch_kwargs["side_effect"] = fetch_side_effect
+        else:
+            fetch_kwargs["return_value"] = bundle
+        return (
+            patch.object(
+                config_flow_module,
+                "login_with_password",
+                return_value=(
+                    object(),
+                    types.SimpleNamespace(
+                        token="token",
+                        secret="secret",
+                        uid="uid",
+                        usr="usr",
+                        role=1,
+                        expire=1,
+                    ),
+                ),
+            ),
+            patch.object(config_flow_module, "fetch_device_bundle_for_collector", **fetch_kwargs),
+            patch.object(
+                config_flow_module,
+                "async_orchestrate_shadow_learning_settings",
+                side_effect=lambda **kwargs: captured.update(kwargs) or dict(orchestration),
+            ),
+            patch.object(
+                config_flow_module,
+                "generate_shadow_learning_overlay_drafts",
+                return_value=types.SimpleNamespace(
+                    profile_path=Path("/config/eybond_local/profiles/learned/p.json"),
+                    schema_path=Path("/config/eybond_local/register_schemas/learned/s.json"),
+                    generated_capability_count=2,
+                    skipped_duplicate_count=0,
+                    manifest={
+                        "output": {
+                            "profile_name": "learned/p.json",
+                            "schema_name": "learned/s.json",
+                        }
+                    },
+                ),
+            ),
+        )
+
+    async def test_control_discovery_runner_runs_full_pipeline_without_preview_plan(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+
+        with login_p, fetch_p, orchestrate_p as orchestrate_mock, overlay_p as overlay_mock:
+            await options._async_run_control_discovery()
+
+        # One automatic pass: session started fail-closed, learning run, overlay
+        # drafted, session stopped — with no preview-plan/action step in between.
+        self.assertEqual(len(coordinator.started), 1)
+        self.assertEqual(coordinator.started[0].get("allow_ack_writes"), False)
+        orchestrate_mock.assert_called_once()
+        overlay_mock.assert_called_once()
+        self.assertEqual(len(coordinator.stopped), 1)
+
+        # The plan is built internally and is bounded: all fields, every choice value swept (so
+        # the overlay learns each control's value set) AND numeric fields included (one
+        # observe-only write each to learn their register + display divisor), capped field count.
+        self.assertEqual(list(captured["field_ids"]), [])
+        self.assertTrue(captured["include_numeric"])
+        self.assertTrue(captured["all_choice_values"])
+        self.assertEqual(
+            captured["max_fields"],
+            config_flow_module.CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
+        )
+        self.assertGreater(config_flow_module.CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS, 0)
+
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "ok")
+        self.assertEqual(
+            options._shadow_learning_state["overlay"]["generated_capability_count"], 2
+        )
+
+    async def test_control_discovery_runner_uses_live_bundle_identity_without_saved_evidence(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_cloud_identity = lambda _coordinator: None
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+
+        with login_p, fetch_p as bundle_mock, orchestrate_p as orchestrate_mock, overlay_p:
+            await options._async_run_control_discovery()
+
+        bundle_mock.assert_called_once_with(
+            username="demo@example.com",
+            password="cloud-secret",
+            collector_pn="E5000025388419",
+        )
+        orchestrate_mock.assert_called_once()
+        self.assertEqual(captured["pn"], "E50000253884199645")
+        self.assertEqual(captured["sn"], "E50000253884199645094801")
+        self.assertEqual(captured["devcode"], 2376)
+        self.assertEqual(captured["devaddr"], 1)
+        self.assertEqual(
+            options._shadow_learning_state["identity"]["sn"],
+            "E50000253884199645094801",
+        )
+
+    async def test_control_discovery_runner_surfaces_trace_path(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+
+        with login_p, fetch_p, orchestrate_p, overlay_p:
+            await options._async_run_control_discovery()
+
+        # Acceptance: the trace path created for the session is visible afterwards.
+        placeholders = options._shadow_learning_placeholders(coordinator)
+        self.assertEqual(
+            placeholders["shadow_learning_trace_path"],
+            "/config/eybond_local/shadow_learning_traces/auto.jsonl",
+        )
+
+    async def test_control_discovery_runner_is_fail_closed_on_failure(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(
+            captured=captured,
+            fetch_side_effect=RuntimeError("settings_fetch_boom"),
+        )
+
+        with login_p, fetch_p, orchestrate_p as orchestrate_mock, overlay_p as overlay_mock:
+            await options._async_run_control_discovery()
+
+        # The session was started, the cloud fetch failed, and cleanup still ran:
+        # the runner never raises and records the failure in flow state.
+        self.assertEqual(len(coordinator.started), 1)
+        orchestrate_mock.assert_not_called()
+        overlay_mock.assert_not_called()
+        # Fail-closed: a stop+restore was attempted, tolerant of an already-stopped
+        # session (raise_when_not_running=False).
+        self.assertEqual(len(coordinator.stopped), 1)
+        self.assertFalse(coordinator.stopped[0].get("raise_when_not_running", True))
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
+        self.assertIn("settings_fetch_boom", options._shadow_learning_state["discovery"]["reason"])
+
+    async def test_control_discovery_runner_treats_leaked_write_as_failure(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        leaked_orchestration = {
+            "planned_write_count": 62,
+            "executed_result_count": 30,
+            "sent_count": 0,
+            "error_count": 29,
+            "degraded_count": 0,
+            "leaked_count": 1,
+            "unknown_field_count": 0,
+            "results": [{"status": "leaked", "reason": "control_leaked_unproxied"}],
+            "correlation": {"matched_count": 29, "unmatched_attempt_count": 1},
+        }
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(
+            captured=captured,
+            orchestration_override=leaked_orchestration,
+        )
+
+        with login_p, fetch_p, orchestrate_p as orchestrate_mock, overlay_p as overlay_mock:
+            await options._async_run_control_discovery()
+
+        orchestrate_mock.assert_called_once()
+        overlay_mock.assert_not_called()
+        self.assertEqual(len(coordinator.stopped), 1)
+        self.assertFalse(coordinator.stopped[0].get("raise_when_not_running", True))
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
+        self.assertIn(
+            "SAFETY STOP",
+            options._shadow_learning_state["discovery"]["reason"],
+        )
+        self.assertNotIn("overlay", options._shadow_learning_state)
+
+    async def test_control_discovery_runner_requires_credentials(self) -> None:
+        # No live SmartESS operation may start without the transient credentials
+        # gathered earlier in the wizard.
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state.pop("wizard_credentials", None)
+
+        await options._async_run_control_discovery()
+
+        self.assertEqual(len(coordinator.started), 0)
+        self.assertEqual(len(coordinator.stopped), 0)
+        self.assertEqual(
+            options._shadow_learning_state["discovery"]["reason"], "credentials_required"
+        )
+
+    async def test_control_discovery_runner_blocks_when_preflight_not_ready(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+
+        async def _blocked_preflight(_coordinator):
+            return {"can_start": False, "blockers": ["collector_not_connected"]}
+
+        options._build_shadow_learning_preflight_snapshot = _blocked_preflight
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+
+        with login_p as login_mock, fetch_p, orchestrate_p, overlay_p:
+            await options._async_run_control_discovery()
+
+        # Preflight gate prevents the session from starting and any cloud login.
+        self.assertEqual(len(coordinator.started), 0)
+        login_mock.assert_not_called()
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
+        self.assertIn(
+            "shadow_learning_preflight_blocked",
+            options._shadow_learning_state["discovery"]["reason"],
+        )
 
 
 if __name__ == "__main__":

@@ -194,6 +194,9 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
             shadow_session_ready=True,
             field_ids=[],
             include_numeric=False,
+            # Simulates a non-NACK cloud response to exercise execution/correlation; in real
+            # observe-only runs a success response is a leak, covered by a dedicated test.
+            abort_on_unproxied_write=False,
             fetch_action=_ok_fetch,
         )
 
@@ -425,6 +428,7 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             wait_for_observations_since=source.wait_for_observations_since,
             is_session_ready=lambda: True,
             correlation_timeout_seconds=0.3,
+            abort_on_unproxied_write=False,  # simulated success exercises correlation, not safety
             fetch_action=_fetch,
         )
 
@@ -434,6 +438,161 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["observation_count"], 2)
         self.assertEqual(result["correlation"]["unmatched_write_count"], 1)
         self.assertEqual(result["correlation"]["unmatched_writes"][0]["raw_payload_hex"], "second")
+
+    async def test_async_correlation_attaches_observation_when_cloud_rejects_write(self) -> None:
+        # Observe-only (exception) mode: ctrlDevice raises an ERR_FAIL NACK, but
+        # the Modbus write is still delivered and observed, so it must correlate.
+        settings_dat = {
+            "field": [
+                {"id": "sys_eybond_ctrl_53", "name": "Backlight", "item": [{"key": "0", "val": "Off"}]},
+            ]
+        }
+        source = _FakeObservationSource()
+        loop = asyncio.get_running_loop()
+
+        def _nacking_fetch(**_kwargs):
+            loop.call_soon_threadsafe(
+                source.add,
+                ShadowWriteObservation(
+                    register=305,
+                    values=(0,),
+                    function_code=16,
+                    devcode=2376,
+                    devaddr=1,
+                    raw_payload_hex="nacked-write",
+                    timestamp="2026-06-05T12:00:00.050000+00:00",
+                ),
+            )
+            raise RuntimeError("action_failed:1:ERR_FAIL(Read-Only Register)")
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            observed_writes=source.all,
+            observation_cursor=source.observation_cursor,
+            current_observations_since=source.observations_since,
+            wait_for_observations_since=source.wait_for_observations_since,
+            is_session_ready=lambda: True,
+            correlation_timeout_seconds=0.3,
+            continue_on_error=True,
+            fetch_action=_nacking_fetch,
+        )
+
+        self.assertEqual(result["results"][0]["status"], "error")
+        self.assertIn("ERR_FAIL", result["results"][0]["error"])
+        self.assertEqual(result["correlation"]["matched_count"], 1)
+        self.assertEqual(result["results"][0]["observation"]["raw_payload_hex"], "nacked-write")
+        self.assertEqual(result["correlation"]["unmatched_write_count"], 0)
+
+    async def test_async_hard_aborts_on_unproxied_write_success(self) -> None:
+        # SAFETY-CRITICAL: in observe-only mode every write is NACKed (ERR_FAIL). A *success*
+        # (ERR_NONE) proves the write bypassed our proxy and reached the real inverter -- the
+        # collector reverted off our proxy mid-run. The run must hard-stop on the FIRST such
+        # write so no further controls can leak (this is the bug that shut off the inverter).
+        settings_dat = {
+            "field": [
+                {"id": "sys_eybond_ctrl_53", "name": "Backlight", "item": [
+                    {"key": "0", "val": "Off"}, {"key": "1", "val": "On"},
+                ]},
+                {"id": "sys_eybond_ctrl_54", "name": "Other", "item": [{"key": "0", "val": "Z"}]},
+            ]
+        }
+        source = _FakeObservationSource()
+        calls = {"value": 0}
+
+        def _leaking_fetch(**_kwargs):
+            calls["value"] += 1
+            # Cloud accepts the write (no NACK) -> it was delivered to the real inverter.
+            return type("_Envelope", (), {"err": 0, "desc": "ERR_NONE", "dat": {}})()
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            all_choice_values=True,
+            observed_writes=source.all,
+            observation_cursor=source.observation_cursor,
+            current_observations_since=source.observations_since,
+            wait_for_observations_since=source.wait_for_observations_since,
+            is_session_ready=lambda: True,
+            correlation_timeout_seconds=0.2,
+            fetch_action=_leaking_fetch,
+        )
+
+        # Aborted after exactly one write; the leak is flagged and nothing else was attempted.
+        self.assertEqual(calls["value"], 1)
+        self.assertEqual(result["leaked_count"], 1)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["status"], "leaked")
+        self.assertEqual(result["results"][0]["reason"], "control_leaked_unproxied")
+
+    async def test_on_progress_is_called_once_per_planned_write(self) -> None:
+        settings_dat = {
+            "field": [
+                {"id": "f1", "name": "F1", "item": [{"key": "0", "val": "A"}]},
+                {"id": "f2", "name": "F2", "item": [{"key": "0", "val": "B"}]},
+            ]
+        }
+        calls: list[tuple[int, int]] = []
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            dry_run=True,
+            confirm_cloud_write=False,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            on_progress=lambda done, total: calls.append((done, total)),
+        )
+        self.assertEqual(result["planned_write_count"], 2)
+        self.assertEqual(calls, [(0, 2), (1, 2)])
+
+    async def test_on_progress_errors_do_not_break_the_run(self) -> None:
+        settings_dat = {
+            "field": [
+                {"id": "f1", "name": "F1", "item": [{"key": "0", "val": "A"}]},
+            ]
+        }
+
+        def _boom(done: int, total: int) -> None:
+            raise RuntimeError("progress sink failed")
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000253884199645",
+            sn="E50000253884199645094801",
+            devcode=2376,
+            devaddr=1,
+            dry_run=True,
+            confirm_cloud_write=False,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            on_progress=_boom,
+        )
+        self.assertEqual(result["planned_write_count"], 1)
 
     async def test_async_correlation_times_out_without_new_write(self) -> None:
         settings_dat = {
@@ -464,6 +623,7 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             wait_for_observations_since=source.wait_for_observations_since,
             is_session_ready=lambda: True,
             correlation_timeout_seconds=0.08,
+            abort_on_unproxied_write=False,  # simulated success exercises correlation, not safety
             fetch_action=_fetch,
         )
 
@@ -503,6 +663,7 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             wait_for_observations_since=source.wait_for_observations_since,
             is_session_ready=lambda: call_count["value"] == 0,
             correlation_timeout_seconds=0.2,
+            abort_on_unproxied_write=False,  # simulated success exercises degraded path, not safety
             fetch_action=_fetch,
         )
 

@@ -132,6 +132,47 @@ def builtin_register_schema_path(schema_name: str) -> Path:
     return (REGISTER_SCHEMAS_DIR / schema_name).resolve()
 
 
+def load_register_schema_raw(schema_name: str) -> dict[str, Any]:
+    """Return the literal (un-merged) JSON mapping for one register schema name.
+
+    Unlike :func:`load_register_schema`, parent ``extends`` references are left
+    intact so callers can walk an overlay back to its built-in base.
+    """
+
+    schema_path = _resolve_schema_path(schema_name)
+    return json.loads(schema_path.read_text(encoding="utf-8"))
+
+
+def builtin_base_schema_name(schema_name: str) -> str:
+    """Return the built-in base schema name underlying ``schema_name``.
+
+    Local overlays (e.g. activated shadow-learning drafts) live in an external
+    root and ``extends`` a built-in schema. Discovery and draft tooling must
+    extend that built-in base, not the overlay itself -- re-wrapping an overlay
+    name in ``builtin:`` resolves to a non-existent install-dir path. Walk the
+    ``extends`` chain until the name resolves to a built-in (or absolute) schema.
+    """
+
+    current = str(schema_name or "").strip()
+    if current.startswith(BUILTIN_SCHEMA_PREFIX):
+        return current.removeprefix(BUILTIN_SCHEMA_PREFIX)
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            schema_path = _resolve_schema_path(current)
+        except FileNotFoundError:
+            break
+        if _register_schema_source_scope(schema_path) != "external":
+            return current
+        raw = json.loads(schema_path.read_text(encoding="utf-8"))
+        parent = str(raw.get("extends") or "").strip().removeprefix(BUILTIN_SCHEMA_PREFIX)
+        if not parent:
+            break
+        current = parent
+    return current
+
+
 def _resolve_relative_parent_schema_path(schema_path: Path, parent_ref: str) -> Path:
     candidate = (schema_path.parent / parent_ref).resolve()
     if candidate.is_file():

@@ -649,9 +649,9 @@ def _candidate_learn_setting_values(
                     "source": "choice",
                 }
             )
-            if not all_choice_values:
-                break
-        return candidates
+        if all_choice_values:
+            return candidates
+        return candidates[:1]
 
     if not include_numeric:
         return []

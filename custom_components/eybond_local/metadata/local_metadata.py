@@ -13,8 +13,12 @@ from ..const import (
     LOCAL_PROFILES_DIR,
     LOCAL_REGISTER_SCHEMAS_DIR,
 )
-from .profile_loader import load_driver_profile_raw
-from .register_schema_loader import builtin_register_schema_path, load_register_schema
+from .profile_loader import builtin_base_profile_name, load_driver_profile_raw
+from .register_schema_loader import (
+    builtin_base_schema_name,
+    builtin_register_schema_path,
+    load_register_schema,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +210,9 @@ def create_local_profile_draft(
     """Copy one built-in profile into the local experimental profile root."""
 
     ensure_local_metadata_dirs(config_dir)
+    # Rebase an activated learned overlay back to its built-in base so the draft
+    # extends the stable built-in profile, not the overlay itself.
+    source_profile_name = builtin_base_profile_name(source_profile_name)
     output_name = output_profile_name or source_profile_name
     destination = local_profile_path(config_dir, output_name)
     _ensure_can_write(destination, local_profiles_root(config_dir), overwrite=overwrite)
@@ -229,6 +236,10 @@ def create_local_schema_draft(
     """Create one minimal local schema overlay that extends a built-in schema."""
 
     ensure_local_metadata_dirs(config_dir)
+    # Rebase an activated learned overlay back to its built-in base so the draft
+    # extends the stable built-in schema, not the overlay itself (which would
+    # re-wrap the overlay name in ``builtin:`` and resolve to a missing file).
+    source_schema_name = builtin_base_schema_name(source_schema_name)
     output_name = output_schema_name or source_schema_name
     destination = local_register_schema_path(config_dir, output_name)
     _ensure_can_write(

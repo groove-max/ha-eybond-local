@@ -115,11 +115,13 @@ class SmgIdentityRuleCatalogTests(unittest.TestCase):
         )
 
         default_rule = catalog.rules[0]
+        # Identity rests on IMMUTABLE anchors only. operating_mode (runtime state) was removed
+        # so a transient/unknown mode cannot block identification; output_rating_voltage/
+        # frequency remain solely as structural sanity (registers outside any control sweep).
         self.assertEqual(
             tuple(requirement.anchor_key for requirement in default_rule.required),
             (
                 "rated_power",
-                "operating_mode",
                 "output_rating_voltage",
                 "output_rating_frequency",
             ),

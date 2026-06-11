@@ -222,7 +222,8 @@
       }
     },
     "progress": {
-      "scanning_network": "Сканирование локальной сети на наличие коллекторов EyeBond…"
+      "scanning_network": "Сканирование локальной сети на наличие коллекторов EyeBond…",
+      "shadow_learning": "{control_discovery_hint}"
     },
     "error": {
       "invalid_ip": "Некорректный IPv4-адрес.",
@@ -258,7 +259,7 @@
       "collector_wifi_password_not_ascii": "На локальном управляющем пути этот коллектор принимает только ASCII-пароли Wi-Fi.",
       "collector_wifi_apply_not_confirmed": "Подтвердите, что применение Wi-Fi настроек может временно отключить коллектор.",
       "proxy_capture_action_failed": "Не удалось выполнить действие захвата. Проверьте журнал Home Assistant.",
-      "shadow_learning_failed": "Действие shadow learning завершилось ошибкой. Проверьте детали и подтверждения и попробуйте снова."
+      "shadow_learning_failed": "Действие обнаружения элементов управления завершилось ошибкой. Проверьте детали и подтверждения и попробуйте снова."
     },
     "step": {
       "init": {
@@ -348,38 +349,77 @@
           "create_smartess_draft": "Создать черновик SmartESS",
           "create_profile_draft": "Создать локальный черновик профиля",
           "create_schema_draft": "Создать локальный черновик схемы регистров",
-          "shadow_learning": "SmartESS shadow learning",
+          "shadow_learning": "Добавить элементы управления для этого устройства",
           "reload_local_metadata": "Перезагрузить локальные метаданные",
           "rollback_local_metadata": "Откатить локальные метаданные",
           "create_support_package": "Создать архив поддержки"
         }
       },
       "shadow_learning": {
-        "title": "SmartESS Shadow Learning",
-        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Preflight:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Trace:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
+        "title": "Добавить элементы управления для этого устройства",
+        "description": "{control_discovery_hint}",
         "data": {
-          "shadow_learning_action": "Действие",
-          "shadow_learning_mode": "Режим обучения",
-          "shadow_learning_field_ids": "Идентификаторы полей",
-          "shadow_learning_numeric_value": "Числовое тестовое значение",
-          "shadow_learning_max_fields": "Максимум полей",
-          "shadow_learning_include_numeric": "Включать числовые поля",
-          "shadow_learning_enum_sweep": "Пробовать все enum-значения",
-          "username": "SmartESS username",
-          "password": "SmartESS password",
-          "shadow_learning_confirm_cloud_write": "Подтверждаю cloud-side control calls для этого запуска",
-          "shadow_learning_confirm_broad_sweep": "Я просмотрел план и подтверждаю широкий enum/numeric sweep"
+          "shadow_learning_confirm_cloud_write": "Да, ненадолго отправлять на это устройство тестовые команды, чтобы найти его элементы управления"
         },
         "data_description": {
-          "shadow_learning_field_ids": "Список cloud field ID через запятую для ручного режима.",
-          "shadow_learning_numeric_value": "Резервное число для numeric opt-in, если нет явной подсказки.",
-          "shadow_learning_max_fields": "Жесткий лимит числа полей для предпросмотра/запуска.",
-          "shadow_learning_include_numeric": "Разрешает numeric поля в предпросмотре/запуске.",
-          "shadow_learning_enum_sweep": "Пробует все значения enum, а не одно значение на поле.",
-          "username": "Используется только для текущего запуска SmartESS learning.",
-          "password": "Используется только для текущего запуска SmartESS learning.",
-          "shadow_learning_confirm_cloud_write": "Обязательно для запуска обучения, так как отправляются SmartESS cloud control calls.",
-          "shadow_learning_confirm_broad_sweep": "Обязательно перед широкими enum/numeric sweep. Сначала сделайте preview."
+          "shadow_learning_confirm_cloud_write": "Чтобы найти элементы управления, Home Assistant ненадолго отправляет на это устройство тестовые команды через SmartESS. Настройки устройства не меняются."
+        }
+      },
+      "shadow_learning_credentials": {
+        "title": "Добавить элементы управления для этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "username": "Имя пользователя SmartESS",
+          "password": "Пароль SmartESS"
+        },
+        "data_description": {
+          "username": "Используется только для текущего обнаружения элементов управления.",
+          "password": "Используется только для текущего обнаружения элементов управления."
+        }
+      },
+      "shadow_learning_review": {
+        "title": "Добавить элементы управления для этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "enabled_controls": "Какие элементы управления добавить"
+        },
+        "data_description": {
+          "enabled_controls": "Отметьте элементы управления, которые хотите видеть в Home Assistant. Рискованные по умолчанию выключены."
+        }
+      },
+      "shadow_learning_result": {
+        "title": "Добавить элементы управления для этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "result_action": "Что вы хотите сделать?"
+        }
+      },
+      "shadow_learning_advanced": {
+        "title": "Добавить элементы управления для этого устройства",
+        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Readiness:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Evidence:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
+        "data": {
+          "shadow_learning_action": "Действие",
+          "shadow_learning_mode": "Режим обнаружения",
+          "shadow_learning_field_ids": "Выбранные настройки",
+          "shadow_learning_numeric_value": "Числовое тестовое значение",
+          "shadow_learning_max_fields": "Максимум настроек",
+          "shadow_learning_include_numeric": "Включить числовые настройки",
+          "shadow_learning_enum_sweep": "Пробовать все значения параметров",
+          "username": "Имя пользователя SmartESS",
+          "password": "Пароль SmartESS",
+          "shadow_learning_confirm_cloud_write": "Да, ненадолго отправлять на это устройство тестовые команды, чтобы найти его элементы управления",
+          "shadow_learning_confirm_broad_sweep": "Я просмотрел план и подтверждаю проверку всех значений параметров и числовых настроек"
+        },
+        "data_description": {
+          "shadow_learning_field_ids": "Список идентификаторов настроек SmartESS через запятую для режима выбранных настроек.",
+          "shadow_learning_numeric_value": "Резервное число для числового режима, если нет явной подсказки.",
+          "shadow_learning_max_fields": "Жесткий лимит числа настроек для предпросмотра/запуска.",
+          "shadow_learning_include_numeric": "Разрешает числовые настройки в предпросмотре/запуске.",
+          "shadow_learning_enum_sweep": "Пробует все значения параметров, а не одно значение на настройку.",
+          "username": "Используется только для текущего обнаружения элементов управления.",
+          "password": "Используется только для текущего обнаружения элементов управления.",
+          "shadow_learning_confirm_cloud_write": "Чтобы найти элементы управления, Home Assistant ненадолго отправляет на это устройство тестовые команды через SmartESS. Настройки устройства не меняются.",
+          "shadow_learning_confirm_broad_sweep": "Обязательно перед проверкой всех значений параметров или числовых настроек. Сначала сделайте предпросмотр."
         }
       },
       "proxy_capture": {
@@ -481,6 +521,9 @@
         "title": "Результат диагностики",
         "description": "**{action_title}**\n\n{status}\n\n**Путь:** `{path}`\n**Скачать:** {download_markdown}\n\n**Следующий шаг:** {next_step}"
       }
+    },
+    "progress": {
+      "shadow_learning": "{control_discovery_hint}"
     }
   },
   "entity": {

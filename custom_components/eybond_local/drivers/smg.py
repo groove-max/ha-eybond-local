@@ -160,9 +160,10 @@ class SmgModbusDriver(InverterDriver):
                 schema.block("serial").start,
                 schema.block("serial").count,
             )
+            # Read the serial for display/diagnostics only. The SmartESS server does NOT bind
+            # identity to the inverter serial, and neither do we: a short or blank serial must
+            # not block detection of an otherwise-identified inverter.
             serial_number = _decode_ascii_words(serial_block)
-            if len(serial_number) < 6:
-                return None
 
             live_block = await session.read_holding(
                 schema.block("live").start,
@@ -318,6 +319,20 @@ class SmgModbusDriver(InverterDriver):
             values.pop("battery_voltage", None)
 
         values.update(_derive_runtime_states(values))
+        # Read-back for controls that have a register but no decode spec -- notably
+        # learned-overlay controls, which otherwise toggle but report no current state. This
+        # never changes the schema/scope, so the write-exposure proof is unaffected.
+        polled_blocks = (
+            (status_block_start, status_block),
+            (live_block_start, live_block),
+            (config_block_start, config_block),
+        )
+        # A few learned controls (e.g. Boot method reg 406, Output control reg 420) sit OUTSIDE
+        # the polled blocks; read those single registers directly so they too report state.
+        extra_blocks = await _read_out_of_block_capability_registers(
+            session, inverter.capabilities, polled_blocks
+        )
+        _apply_capability_read_back(values, inverter.capabilities, polled_blocks + extra_blocks)
         return values
 
     async def async_write_capability(
@@ -428,6 +443,101 @@ def _specs_for_block(
         for spec in specs
         if start_register <= spec.register and (spec.register + spec.word_count) <= block_end
     )
+
+
+async def _read_out_of_block_capability_registers(
+    session: ModbusSession,
+    capabilities,
+    polled_blocks: tuple[tuple[int, list[int]], ...],
+) -> tuple[tuple[int, list[int]], ...]:
+    """Read writable-capability registers that fall OUTSIDE the polled blocks.
+
+    Most controls live in the status/live/config blocks the driver already reads, but a few
+    learned-overlay controls (e.g. Boot method 406, Output control 420) do not. Read those single
+    registers directly so their selects/numbers report current state too. De-duplicated and
+    bounded (at most 16 extra reads per refresh); ``action`` controls have no readable state and
+    are skipped; individual read failures are skipped silently.
+    """
+
+    polled: set[int] = set()
+    for start, block in polled_blocks:
+        polled.update(range(start, start + len(block)))
+
+    needed: set[int] = set()
+    for capability in capabilities:
+        if str(getattr(capability, "value_kind", "") or "") == "action":
+            continue
+        register = int(getattr(capability, "register", 0) or 0)
+        if register <= 0:
+            continue
+        for offset in range(max(int(getattr(capability, "word_count", 1) or 1), 1)):
+            if register + offset not in polled:
+                needed.add(register + offset)
+
+    extra: list[tuple[int, list[int]]] = []
+    for register in sorted(needed)[:16]:
+        try:
+            raw = await session.read_holding(register, 1)
+        except ModbusError:
+            continue
+        if raw:
+            extra.append((register, [int(raw[0])]))
+    return tuple(extra)
+
+
+def _apply_capability_read_back(
+    values: dict[str, Any],
+    capabilities,
+    register_blocks: tuple[tuple[int, list[int]], ...],
+) -> None:
+    """Fill ``values`` for writable capabilities that have a register but no decode spec.
+
+    Built-in controls are decoded from the schema spec-sets, so their value is already
+    present. Learned-overlay controls carry a register but no schema spec, so without this they
+    would toggle yet report no current state (``is_on`` reads an absent ``value_key``). We read
+    the raw register straight from the blocks the driver already polled -- crucially WITHOUT
+    changing the inverter's ``register_schema_name`` (which would flip the metadata scope and
+    break write-exposure for every control). Registers outside every polled block are skipped.
+    """
+
+    register_map: dict[int, int] = {}
+    for start, block in register_blocks:
+        for index, raw in enumerate(block):
+            register_map[start + index] = raw
+
+    for capability in capabilities:
+        value_key = getattr(capability, "value_key", "") or getattr(capability, "key", "")
+        if not value_key or value_key in values:
+            continue
+        register = int(getattr(capability, "register", 0) or 0)
+        if register <= 0 or register not in register_map:
+            continue
+        word_count = int(getattr(capability, "word_count", 1) or 1)
+        if word_count >= 2:
+            high = register_map.get(register)
+            low = register_map.get(register + 1)
+            if high is None or low is None:
+                continue
+            if str(getattr(capability, "combine", "") or "") == "u32_high_first":
+                raw_value = (high << 16) | low
+            else:
+                raw_value = (low << 16) | high
+        else:
+            raw_value = register_map[register]
+        value_kind = str(getattr(capability, "value_kind", "") or "")
+        divisor = int(getattr(capability, "divisor", 0) or 0)
+        if value_kind == "enum":
+            # A select reads the decoded LABEL (a string), like built-in enums. Map the raw
+            # register value to its label via the capability's enum map; without this the select
+            # gets a bare int and shows "unknown".
+            enum_map = getattr(capability, "enum_value_map", None) or {}
+            values[value_key] = enum_map.get(raw_value, f"Unknown ({raw_value})")
+        elif divisor > 1:
+            # Scaled number: store the NATIVE (display) value, since the number entity reads
+            # value_key as-is and its native_min/max + the write encode use the same divisor.
+            values[value_key] = round(raw_value / divisor, decimals_for_divisor(divisor))
+        else:
+            values[value_key] = raw_value
 
 
 def _decode_block(
@@ -1729,19 +1839,19 @@ def _is_valid_smg_probe(
     *,
     rated_power: int = 0,
 ) -> bool:
-    if live_values.get("operating_mode") not in schema.enum_map_for("mode_names").values():
-        return False
+    # Identity must rest on IMMUTABLE protocol/hardware anchors (protocol_number, device_type,
+    # rated_power), never on the inverter's current *settings* or runtime *state*. We
+    # deliberately do NOT gate on operating_mode (runtime state), output_mode, or
+    # output_source_priority (user-settable): a single changed or stray-written setting
+    # otherwise makes a correctly-identified inverter undetectable -- real incident: a leaked
+    # shadow-learning write pushed output_source_priority out of its enum and bricked detection
+    # of an obvious SMG 6200. Those values are still read for display/diagnostics. Output-rating
+    # presence stays only as structural sanity (registers 320/321, outside any control sweep);
+    # the variant anchors below are immutable identity (with anenji disambiguation unchanged).
+    del schema, live_values  # runtime state / live enum maps must not influence identity
     if config_values.get("output_rating_voltage", 0) <= 0:
         return False
     if config_values.get("output_rating_frequency", 0) <= 0:
-        return False
-
-    output_mode = config_values.get("output_mode")
-    if isinstance(output_mode, str) and output_mode.startswith("Unknown"):
-        return False
-
-    output_source_priority = config_values.get("output_source_priority")
-    if isinstance(output_source_priority, str) and output_source_priority.startswith("Unknown"):
         return False
 
     if variant_key == _SMG_ANENJI_4200_PROTOCOL_1_VARIANT:

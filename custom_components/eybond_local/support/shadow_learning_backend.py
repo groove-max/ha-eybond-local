@@ -20,6 +20,11 @@ from .shadow_learning import ShadowWriteObservation, write_observation_from_modb
 
 _SHADOW_TRACE_DIR = "shadow_learning_traces"
 
+# Cloud-issued AT commands that control where the DTU connects. These are always
+# answered from the shadow seed (never forwarded to the collector) so the cloud
+# cannot redirect the DTU away from the local proxy.
+_CLOUD_REDIRECT_AT_COMMAND_PREFIX = "CLDSRVHOST"
+
 
 def utc_now_iso() -> str:
     """Return one UTC ISO-8601 timestamp."""
@@ -557,6 +562,103 @@ class InProcessShadowLearningHandler:
             fcode=header.fcode,
         )
 
+    async def _handle_modbus_frame(self, frame: bytes, *, remote: str) -> bytes | None:
+        """Handle one bare Modbus RTU frame from the cloud (no collector header).
+
+        This DTU exchanges raw Modbus RTU on the data plane after AT
+        registration, so these frames carry no eybond collector wrapper. Reads
+        are answered from the synthetic register bank; writes are observed for
+        learning and NACK'd with a Modbus exception (the proven exception-mode
+        path) so the cloud records no successful write. Nothing is forwarded to
+        the physical inverter, and the response is returned as raw Modbus RTU.
+        """
+
+        read_request = decode_read_request(frame)
+        if read_request is not None:
+            values = self._read_register_values(read_request.address, read_request.count)
+            await self._append_event(
+                "shadow_modbus_read_request",
+                "cloud_to_shadow",
+                {
+                    "remote": remote,
+                    "function_code": read_request.function_code,
+                    "address": read_request.address,
+                    "count": read_request.count,
+                    "values": values,
+                },
+            )
+            response = self._build_modbus_read_response(read_request, values)
+            await self._append_event(
+                "shadow_modbus_read_response",
+                "shadow_to_cloud",
+                {
+                    "remote": remote,
+                    "function_code": read_request.function_code,
+                    "address": read_request.address,
+                    "count": read_request.count,
+                    "values": values,
+                },
+            )
+            return response
+
+        write_request = decode_write_request(frame)
+        if write_request is None:
+            await self._append_event(
+                "shadow_unknown_frame",
+                "cloud_to_shadow",
+                {"remote": remote, "payload_hex": frame.hex()},
+            )
+            return self._build_raw_modbus_exception(frame, exception_code=0x01)
+
+        observation = write_observation_from_modbus_request(
+            frame=frame,
+            devcode=None,
+            devaddr=write_request.slave_id,
+            timestamp=utc_now_iso(),
+            source="shadow_learning",
+        )
+        if observation is not None:
+            self._write_observations.append(observation)
+            async with self._observation_condition:
+                self._observation_condition.notify_all()
+            await self._append_event(
+                "shadow_modbus_write_observation",
+                "cloud_to_shadow",
+                observation.to_json_dict(),
+            )
+        else:
+            await self._append_event(
+                "shadow_modbus_write_request",
+                "cloud_to_shadow",
+                {
+                    "remote": remote,
+                    "payload_hex": frame.hex(),
+                    "function_code": write_request.function_code,
+                    "address": write_request.address,
+                    "values": list(write_request.values),
+                },
+            )
+
+        if self._seed.write_response_mode == "ack":
+            self._apply_write_request(write_request)
+            response = self._build_modbus_write_ack_response(write_request)
+            response_mode = "ack"
+        else:
+            response = self._build_modbus_exception_response(write_request, exception_code=0x01)
+            response_mode = "exception"
+        await self._append_event(
+            "shadow_modbus_write_response",
+            "shadow_to_cloud",
+            {
+                "remote": remote,
+                "function_code": write_request.function_code,
+                "address": write_request.address,
+                "values": list(write_request.values),
+                "response_mode": response_mode,
+            },
+        )
+        return response
+
     async def _append_event(self, kind: str, direction: str, payload: dict[str, Any]) -> None:
         writer = self._writer
         if writer is None:
@@ -569,6 +671,30 @@ class InProcessShadowLearningHandler:
                 "payload": dict(payload),
             }
         )
+
+    def should_forward_cloud_at(self, line: bytes) -> bool:
+        """Return whether a cloud-issued AT line should be forwarded to the collector.
+
+        The shadow answers AT queries it can satisfy authoritatively (identity
+        such as ``QID``, and the ``CLDSRVHOST*`` redirect family it must keep
+        pointed at the local proxy). Any *query* it would only answer with an
+        empty value — e.g. ``DTUPN`` or ``INTPARA58`` the cloud uses to confirm
+        the device during registration — is forwarded to the real collector so
+        the cloud receives the device's genuine response. AT writes and
+        ``CLDSRVHOST*`` are never forwarded, so the cloud can neither reconfigure
+        the DTU nor redirect it off the proxy.
+        """
+
+        try:
+            command = parse_at_command(line)
+        except Exception:
+            return False
+        if command.operation != "query":
+            return False
+        normalized = str(command.command or "").strip().upper()
+        if normalized.startswith(_CLOUD_REDIRECT_AT_COMMAND_PREFIX):
+            return False
+        return not self._at_response_value(normalized)
 
     def _at_response_value(self, command: str) -> str:
         normalized = str(command or "").strip().upper()
@@ -612,6 +738,15 @@ class InProcessShadowLearningHandler:
 
     def _build_modbus_exception_response(self, request, *, exception_code: int) -> bytes:
         payload = bytearray([request.slave_id, request.function_code | 0x80, exception_code])
+        payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
+        return bytes(payload)
+
+    def _build_raw_modbus_exception(self, frame: bytes, *, exception_code: int) -> bytes:
+        """Build a bare Modbus RTU exception for an undecodable raw frame."""
+
+        unit = frame[0] if len(frame) > 0 else 0
+        function = frame[1] if len(frame) > 1 else 0
+        payload = bytearray([unit, function | 0x80, exception_code])
         payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
         return bytes(payload)
 

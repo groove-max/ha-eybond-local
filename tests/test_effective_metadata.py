@@ -240,6 +240,20 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
             "modbus_smg/models/smg_6200.json",
         )
 
+    def test_selection_without_overlay_has_no_selected_control_keys(self) -> None:
+        selection = resolve_effective_metadata_selection(
+            driver=types.SimpleNamespace(
+                key="modbus_smg",
+                name="SMG / Modbus",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+        )
+
+        # No active device-scoped overlay -> no selected-control filtering applies.
+        self.assertFalse(selection.device_scoped_overlay_active)
+        self.assertIsNone(selection.device_scoped_overlay_selected_control_keys)
+
     def test_applies_activated_device_scoped_overlay_when_runtime_identity_matches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -395,6 +409,9 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
             clear_profile_loader_cache()
             clear_register_schema_loader_cache()
 
+            # Runtime is a different device (collector PN mismatch) — the overlay
+            # must not apply. (Identity is pinned by collector_pn/devcode/devaddr,
+            # not by the SmartESS-namespace session.cloud_sn.)
             selection = resolve_effective_metadata_selection(
                 inverter=types.SimpleNamespace(
                     driver_key="modbus_smg",
@@ -403,7 +420,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
                     serial_number="SN-OTHER",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000025OTHER99",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -418,6 +435,63 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
             self.assertFalse(selection.device_scoped_overlay_active)
             self.assertEqual(selection.profile_name, "smg_modbus.json")
             self.assertEqual(selection.register_schema_name, "modbus_smg/models/smg_6200.json")
+
+    def test_device_scope_matches_when_runtime_devcode_and_devaddr_differ(self) -> None:
+        # Regression (real device): the overlay session.devcode (SmartESS device
+        # type, 2376) differs from the runtime collector.last_devcode (1), the
+        # device address is unknown, and session.cloud_sn != inverter serial — yet
+        # it is the same device (matching collector_pn + activation_scope), so the
+        # overlay must apply. Gating on these SmartESS-namespace session fields was
+        # what kept the activated control from appearing.
+        from custom_components.eybond_local.metadata.effective_metadata import (
+            _device_scope_matches_runtime,
+        )
+
+        matches = _device_scope_matches_runtime(
+            manifest={
+                "scope": "device",
+                "source_profile_name": "smg_modbus.json",
+                "source_schema_name": "modbus_smg/models/smg_6200.json",
+                "session": {
+                    "collector_pn": "E50000253884199645",
+                    "cloud_sn": "E50000253884199645094801",
+                    "devcode": 2376,
+                    "devaddr": 1,
+                },
+            },
+            activation={
+                "activation_scope": {
+                    "effective_owner_key": "modbus_smg",
+                    "base_profile_name": "smg_modbus.json",
+                    "base_register_schema_name": "modbus_smg/models/smg_6200.json",
+                    "variant_key": "default",
+                    "smartess_protocol_asset_id": "0000",
+                    "inverter_model": "SMG 6200",
+                    "inverter_serial": "92632511100118",
+                    "smartess_device_address": None,
+                }
+            },
+            inverter=types.SimpleNamespace(
+                serial_number="92632511100118",
+                model_name="SMG 6200",
+                variant_key="default",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="E50000253884199645",
+                last_devcode=1,
+                heartbeat_devcode=None,
+                smartess_device_address=None,
+                smartess_protocol_asset_id="0000",
+                smartess_protocol_profile_key="",
+            ),
+            entry_data={"collector_pn": "E50000253884199645"},
+            effective_owner_key="modbus_smg",
+            base_profile_name="smg_modbus.json",
+            base_register_schema_name="modbus_smg/models/smg_6200.json",
+            smartess_protocol=types.SimpleNamespace(asset_id="0000", profile_key=""),
+        )
+
+        self.assertTrue(matches)
 
 
 if __name__ == "__main__":

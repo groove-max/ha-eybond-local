@@ -17,13 +17,29 @@ from ..metadata.local_metadata import (
     local_register_schema_path,
     local_register_schemas_root,
 )
-from ..metadata.profile_loader import load_driver_profile
-from ..metadata.register_schema_loader import load_register_schema
+from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
+from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
 from .shadow_learning import deterministic_evidence_hash
+from .shadow_learning_review_model import build_learned_control_review_model
 
 
 _LEARNED_PROFILE_TITLE_SUFFIX = " (Local Shadow Learned Draft)"
 _LEARNED_SCHEMA_TITLE_SUFFIX = " (Local Shadow Learned Draft)"
+
+# Capability group the learned controls are assigned to. The generated overlay
+# must also *define* this group (base profiles do not), otherwise activating the
+# overlay fails profile validation with ``unknown_group_for_capability``.
+_LEARNED_CAPABILITY_GROUP_KEY = "config"
+
+# TEMPORARY VALIDATION TOGGLE -- KEEP False in committed code.
+# When True, the overlay generator emits a learned control for EVERY scan-correlated register,
+# including ones that duplicate a built-in control (which are normally deduplicated by
+# register/title). Use it to add and validate ALL discovered controls (e.g. 23 instead of 6),
+# then set it back to False and re-scan. WARNING while it is True: activating the overlay
+# creates duplicate entities -- a learned control alongside the built-in one for the same
+# register -- so it is for validation only, not normal use.
+_EMIT_BUILTIN_DUPLICATE_CONTROLS = True
+
 _ACTION_KEYWORDS = (
     "reset",
     "reboot",
@@ -67,6 +83,13 @@ def generate_shadow_learning_overlay_drafts(
     """Generate one inactive learned profile/schema overlay pair from correlation evidence."""
 
     ensure_local_metadata_dirs(config_dir)
+    # A previously activated learned overlay surfaces as the runtime's effective
+    # profile/schema name. Re-running discovery must extend the built-in base the
+    # overlay derives from: extending the overlay itself would re-wrap its name in
+    # ``builtin:`` (resolving to a non-existent install-dir path) and accumulate the
+    # overlay's session token into the new output names. Rebase to the built-in base.
+    source_profile_name = builtin_base_profile_name(source_profile_name)
+    source_schema_name = builtin_base_schema_name(source_schema_name)
     profile = load_driver_profile(source_profile_name)
     schema = load_register_schema(_builtin_schema_ref(source_schema_name))
 
@@ -88,6 +111,7 @@ def generate_shadow_learning_overlay_drafts(
         correlation=correlation,
         session_manifest=normalized_manifest,
     )
+    review_model = build_learned_control_review_model(capabilities)
     generated_at = datetime.now(timezone.utc).isoformat()
     manifest = {
         "kind": "shadow_learning_device_overlay",
@@ -104,6 +128,7 @@ def generate_shadow_learning_overlay_drafts(
         },
         "learned_capabilities": list(learned_summary["generated"]),
         "skipped_duplicates": list(learned_summary["skipped"]),
+        "review_model": review_model,
         "output": {
             "profile_name": profile_output_name,
             "schema_name": schema_output_name,
@@ -121,6 +146,15 @@ def generate_shadow_learning_overlay_drafts(
         "draft_of": str(source_profile_name),
         "experimental": True,
         "shadow_learning_overlay": manifest,
+        "groups": [
+            {
+                "key": _LEARNED_CAPABILITY_GROUP_KEY,
+                "title": "Learned controls",
+                "order": 900,
+                "description": "Controls discovered from SmartESS shadow-learning.",
+                "icon": "mdi:cog-outline",
+            }
+        ],
         "capabilities": capabilities,
     }
 
@@ -163,8 +197,15 @@ def _build_learned_capabilities(
     session_manifest: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     existing_keys = {capability.key for capability in source_profile.capabilities}
-    existing_titles = {_normalize_title(capability.title or capability.key) for capability in source_profile.capabilities}
-    existing_registers = {int(capability.register) for capability in source_profile.capabilities}
+    if _EMIT_BUILTIN_DUPLICATE_CONTROLS:
+        # Validation mode: do not deduplicate against built-in controls, so every discovered
+        # register becomes a learned control. (existing_keys is kept so learned keys stay
+        # unique; learned keys are prefixed and never collide with built-in keys anyway.)
+        existing_titles: set[str] = set()
+        existing_registers: set[int] = set()
+    else:
+        existing_titles = {_normalize_title(capability.title or capability.key) for capability in source_profile.capabilities}
+        existing_registers = {int(capability.register) for capability in source_profile.capabilities}
 
     grouped = _group_matched_records(correlation)
     generated: list[dict[str, Any]] = []
@@ -231,7 +272,7 @@ def _build_learned_capabilities(
             "advanced": bool(classification["advanced"]),
             "requires_confirm": bool(classification["requires_confirm"]),
             "unsafe_while_running": bool(classification["unsafe_while_running"]),
-            "group": "config",
+            "group": _LEARNED_CAPABILITY_GROUP_KEY,
             "order": next_order,
             "learned_provenance": provenance,
         }
@@ -241,12 +282,18 @@ def _build_learned_capabilities(
         maximum = classification.get("maximum")
         action_value = classification.get("action_value")
         enum_map = classification.get("enum_map")
+        divisor = classification.get("divisor")
+        unit = classification.get("unit")
         if minimum is not None:
             capability["minimum"] = int(minimum)
         if maximum is not None:
             capability["maximum"] = int(maximum)
         if action_value is not None:
             capability["action_value"] = int(action_value)
+        if divisor is not None:
+            capability["divisor"] = int(divisor)
+        if unit:
+            capability["unit"] = str(unit)
         if isinstance(enum_map, dict):
             capability["enum_map"] = {int(key): str(value) for key, value in enum_map.items()}
 
@@ -305,6 +352,8 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "sequence_index": _to_int(item.get("sequence_index")) or 0,
                 "requested_value": requested_value,
+                "value_label": str(item.get("value_label") or "").strip(),
+                "value_source": str(item.get("value_source") or "").strip(),
                 "requested_at": str(item.get("requested_at") or "").strip(),
                 "observation": {
                     "register": register,
@@ -351,6 +400,23 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(output, key=lambda item: (int(item["register"]), str(item["field_name"])))
 
 
+_ON_OFF_OFF_RE = re.compile(r"\boff\b")
+_ON_OFF_ON_RE = re.compile(r"\bon\b")
+
+
+def _looks_like_on_off(labeled_options: list[tuple[int, str]]) -> bool:
+    """Whether a 2-option set reads as a disable/enable (off/on) pair -> render as a switch."""
+
+    has_off = has_on = False
+    for _value, label in labeled_options:
+        lowered = label.lower()
+        if "disable" in lowered or _ON_OFF_OFF_RE.search(lowered):
+            has_off = True
+        if "enable" in lowered or _ON_OFF_ON_RE.search(lowered):
+            has_on = True
+    return has_off and has_on
+
+
 def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
     field_name = str(group.get("field_name") or "")
     field_id = str(group.get("field_id") or "")
@@ -371,22 +437,66 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
             max_word_count = max(max_word_count, len(values))
             first_observed_value = int(values[0])
 
-    is_action = any(keyword in normalized_text for keyword in _ACTION_KEYWORDS)
     is_destructive = any(keyword in normalized_text for keyword in _DESTRUCTIVE_KEYWORDS)
 
-    if is_action:
+    # Authoritative path: a SmartESS "choice" field carries discrete labeled options. Map each
+    # option's first observed register value (the value the runtime read-back reads, and the one
+    # we write back) to its SmartESS label, in sweep order.
+    is_choice = any(str(sample.get("value_source") or "") == "choice" for sample in samples)
+    option_label_by_value: dict[int, str] = {}
+    option_order: list[int] = []
+    for sample in samples:
+        label = str(sample.get("value_label") or "").strip()
+        values = list(sample.get("observation", {}).get("values") or [])
+        if not label or not values:
+            continue
+        observed = int(values[0])
+        if observed not in option_label_by_value:
+            option_label_by_value[observed] = label
+            option_order.append(observed)
+    labeled_options = [(value, option_label_by_value[value]) for value in option_order]
+
+    # Authoritative: a single-option choice is a momentary trigger -- a button ("Forced EQ
+    # Charging Once", "Exit Fault Mode", "Clear Record"). A DESTRUCTIVE keyword (clear/reset/...)
+    # also forces a button as a safety net even without that signal. A non-destructive name
+    # keyword like "restart" must NOT: "Auto Restart When Overload" is a 2-option Disable/Enable
+    # setting (switch), not a button.
+    if is_destructive or (is_choice and len(labeled_options) == 1):
         return {
             "value_kind": "action",
             "word_count": 1,
             "combine": "u16",
-            "action_value": first_observed_value,
+            "action_value": labeled_options[0][0] if labeled_options else first_observed_value,
             "advanced": True,
             "requires_confirm": True,
             "unsafe_while_running": is_destructive,
             "safety_class": "destructive_action" if is_destructive else "action",
-            "confidence": "medium" if len(samples) == 1 else "high",
+            "confidence": "high" if labeled_options else ("medium" if len(samples) == 1 else "high"),
         }
 
+    # Labeled multi-option choice: a 2-option off/on pair is a switch; anything else is a SELECT
+    # keyed by the register value with the real SmartESS labels (fixes "enums are bare ordinals"
+    # and "Output Voltage/Frequency render as numeric fields").
+    if len(labeled_options) >= 2:
+        enum_map = {value: label for value, label in labeled_options}
+        value_kind = (
+            "bool"
+            if len(labeled_options) == 2 and _looks_like_on_off(labeled_options)
+            else "enum"
+        )
+        return {
+            "value_kind": value_kind,
+            "word_count": 1,
+            "combine": "u16",
+            "enum_map": enum_map,
+            "advanced": False,
+            "requires_confirm": False,
+            "unsafe_while_running": False,
+            "safety_class": "setting",
+            "confidence": "high",
+        }
+
+    # --- Fallbacks for label-less evidence (older runs / genuinely numeric fields) ---
     if all_requested_int and set(requested_int_values) == {0, 1}:
         return {
             "value_kind": "bool",
@@ -416,20 +526,60 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
             "confidence": "high",
         }
 
-    minimum = min(requested_int_values) if requested_int_values else None
-    maximum = max(requested_int_values) if requested_int_values else None
-    return {
-        "value_kind": "u32_high_first" if max_word_count == 2 else "u16",
+    # Numeric field: derive the display divisor from the observed write. The cloud writes the
+    # register in raw units for the displayed value we sent (e.g. wrote 56.0 -> register 560 ->
+    # divisor 10), so divisor = observed_register / written_value, validated to a power of ten.
+    # No min/max is recorded -- per design the DEVICE validates the value, not the front-end.
+    divisor = 1
+    for sample in samples:
+        try:
+            written = float(str(sample.get("requested_value") or "").strip())
+        except ValueError:
+            continue
+        observed = list(sample.get("observation", {}).get("values") or [])
+        if not observed or written == 0:
+            continue
+        ratio = abs(int(observed[0])) / abs(written)
+        candidate = int(round(ratio))
+        if candidate in (10, 100, 1000) and abs(ratio - candidate) < 0.05:
+            divisor = candidate
+        break
+
+    if max_word_count == 2:
+        value_kind = "u32_high_first"
+    elif divisor > 1:
+        value_kind = "scaled_u16"
+    else:
+        value_kind = "u16"
+    classification = {
+        "value_kind": value_kind,
         "word_count": 2 if max_word_count == 2 else 1,
         "combine": "u32_high_first" if max_word_count == 2 else "u16",
-        "minimum": minimum,
-        "maximum": maximum,
         "advanced": False,
         "requires_confirm": False,
         "unsafe_while_running": False,
         "safety_class": "setting",
         "confidence": "medium" if len(samples) == 1 else "high",
     }
+    if divisor > 1:
+        classification["divisor"] = divisor
+    # SmartESS shows a unit for numeric settings; derive the common ones from the field name so
+    # the number entity carries V/A/Hz/°C/W/% (ambiguous ones like "Time" are left unitless).
+    lowered_name = field_name.lower()
+    for keyword, unit in (
+        ("voltage", "V"),
+        ("current", "A"),
+        ("frequency", "Hz"),
+        ("temperature", "°C"),
+        ("power", "W"),
+        ("soc", "%"),
+        ("capacity", "Ah"),
+        ("time", "min"),
+    ):
+        if keyword in lowered_name:
+            classification["unit"] = unit
+            break
+    return classification
 
 
 def _safe_matched_count(correlation: dict[str, Any]) -> int:

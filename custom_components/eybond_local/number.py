@@ -148,7 +148,9 @@ class EybondCapabilityNumber(CoordinatorEntity[EybondLocalCoordinator], NumberEn
         self._attr_native_min_value = capability.native_minimum if capability.native_minimum is not None else 0.0
         self._attr_native_max_value = capability.native_maximum if capability.native_maximum is not None else 65535.0
         self._attr_native_step = capability.native_step
-        self._attr_entity_registry_enabled_default = capability.enabled_default
+        self._attr_entity_registry_enabled_default = coordinator.capability_enabled_by_default(
+            capability
+        )
         self._attr_native_unit_of_measurement = capability.unit
 
     @property

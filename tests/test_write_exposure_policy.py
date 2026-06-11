@@ -121,6 +121,40 @@ class WriteExposurePolicyTests(unittest.TestCase):
             )
         )
 
+    def test_verified_builtin_control_stays_exposed_under_active_device_overlay(self) -> None:
+        # Regression: activating a device-scoped overlay makes the effective metadata
+        # "external", which fails _has_confirmed_local_metadata_proof and would suppress
+        # EVERY verified built-in control -- the whole inverter's settings went unavailable
+        # the moment one learned control was activated. A device-scoped overlay extends the
+        # proven built-in base, so its built-in verified controls remain exposable.
+        capability = self.smg_profile.get_capability("charge_source_priority")
+
+        self.assertTrue(
+            capability_write_exposure_allowed(
+                capability,
+                control_mode="auto",
+                detection_confidence="high",
+                variant_key="default",
+                profile_source_scope="external",
+                schema_source_scope="external",
+                profile_name="learned/shadow_learning/example/profile.json",
+                device_scoped_overlay_active=True,
+            )
+        )
+        # Without an active overlay, external metadata still requires the built-in proof.
+        self.assertFalse(
+            capability_write_exposure_allowed(
+                capability,
+                control_mode="auto",
+                detection_confidence="high",
+                variant_key="default",
+                profile_source_scope="external",
+                schema_source_scope="external",
+                profile_name="modbus_smg/default.json",
+                device_scoped_overlay_active=False,
+            )
+        )
+
     def test_verified_presets_require_confirmed_local_metadata_proof(self) -> None:
         capabilities_by_key = {cap.key: cap for cap in self.smg_profile.capabilities}
         preset = next(
@@ -162,6 +196,107 @@ class WriteExposurePolicyTests(unittest.TestCase):
                 schema_source_scope="external",
                 profile_name="learned/shadow_learning/example/profile.json",
                 device_scoped_overlay_active=True,
+            )
+        )
+
+    def _learned_capability(self, key: str = "learned_shadow_705", register: int = 705) -> WriteCapability:
+        return WriteCapability(
+            key=key,
+            register=register,
+            value_kind="u16",
+            note="learned",
+            tested=False,
+            provenance="cloud_hint",
+            experimental=True,
+            metadata_scope="device",
+        )
+
+    def _allowed(self, capability: WriteCapability, **overrides) -> bool:
+        kwargs = dict(
+            control_mode="full",
+            detection_confidence="high",
+            variant_key="family_fallback",
+            profile_source_scope="external",
+            schema_source_scope="external",
+            profile_name="learned/shadow_learning/example/profile.json",
+            device_scoped_overlay_active=True,
+        )
+        kwargs.update(overrides)
+        return capability_write_exposure_allowed(capability, **kwargs)
+
+    def test_selected_device_scoped_capability_is_exposed(self) -> None:
+        capability = self._learned_capability()
+
+        self.assertTrue(
+            self._allowed(capability, selected_control_keys=frozenset({"learned_shadow_705"}))
+        )
+
+    def test_selected_device_scoped_capability_is_exposed_under_auto_control_mode(self) -> None:
+        # Regression: the device runs control_mode="auto", and learned controls are
+        # observed from cloud traffic (never write-tested, so ``tested=False``), so the
+        # base control-mode gate withheld them under "auto" -- the activated, selected
+        # control never appeared as an entity. The per-control activation is the explicit
+        # opt-in, so it must be exposed under "auto" (and "full"), not only "full".
+        capability = self._learned_capability()
+
+        self.assertTrue(
+            self._allowed(
+                capability,
+                control_mode="auto",
+                selected_control_keys=frozenset({"learned_shadow_705"}),
+            )
+        )
+
+    def test_selected_device_scoped_capability_is_blocked_under_read_only(self) -> None:
+        # Read-only is a deliberate "no writes at all" mode and still suppresses even an
+        # activated, selected learned control.
+        capability = self._learned_capability()
+
+        self.assertFalse(
+            self._allowed(
+                capability,
+                control_mode="read_only",
+                selected_control_keys=frozenset({"learned_shadow_705"}),
+            )
+        )
+
+    def test_unselected_device_scoped_capability_is_blocked(self) -> None:
+        capability = self._learned_capability()
+
+        # A selection is declared but does not include this control's key.
+        self.assertFalse(
+            self._allowed(capability, selected_control_keys=frozenset({"learned_shadow_999"}))
+        )
+
+    def test_empty_selection_blocks_all_device_scoped_capabilities(self) -> None:
+        capability = self._learned_capability()
+
+        # An explicit empty selection exposes nothing (fail-closed).
+        self.assertFalse(self._allowed(capability, selected_control_keys=frozenset()))
+
+    def test_legacy_activation_without_selection_exposes_learned_capability(self) -> None:
+        capability = self._learned_capability()
+
+        # ``None`` selection means a legacy activation that predates selected-control
+        # activation: every learned control stays exposed for backward compatibility.
+        self.assertTrue(self._allowed(capability, selected_control_keys=None))
+
+    def test_selection_does_not_affect_verified_model_capability(self) -> None:
+        verified_capability = self.smg_profile.get_capability("charge_source_priority")
+
+        # A verified, locally-proven capability is not a device-scoped learned control, so
+        # the selection filter must never gate it — even an empty selection leaves it exposed.
+        self.assertTrue(
+            capability_write_exposure_allowed(
+                verified_capability,
+                control_mode="auto",
+                detection_confidence="high",
+                variant_key="smg_6200",
+                profile_source_scope="builtin",
+                schema_source_scope="builtin",
+                profile_name="modbus_smg/default.json",
+                device_scoped_overlay_active=True,
+                selected_control_keys=frozenset(),
             )
         )
 

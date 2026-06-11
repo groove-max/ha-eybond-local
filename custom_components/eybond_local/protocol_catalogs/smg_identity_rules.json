@@ -11,10 +11,6 @@
           "one_of": [6200]
         },
         {
-          "anchor_key": "operating_mode",
-          "known_enum": true
-        },
-        {
           "anchor_key": "output_rating_voltage",
           "min": 1
         },
@@ -24,7 +20,6 @@
         }
       ],
       "preferred": [
-        "serial",
         "protocol_number",
         "device_type"
       ]

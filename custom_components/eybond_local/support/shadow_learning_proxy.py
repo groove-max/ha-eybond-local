@@ -9,12 +9,61 @@ from typing import Any, TextIO
 
 from ..collector.protocol import HEADER_SIZE, decode_header
 from ..collector.smartess_local import parse_query_collector_response, parse_set_collector_response
+from ..payload.modbus import crc16_modbus
 from .collector_cloud_proxy import JsonLineWriter
 from .shadow_learning_backend import InProcessShadowLearningHandler, ShadowLearningSeed, utc_now_iso
 
 
 _COLLECTOR_FORWARD_FCODES = frozenset({1, 2, 3, 22, 23, 24, 31, 32, 50})
 _CLOUD_CORRELATED_RESPONSE_FCODES = frozenset({2, 3})
+
+# Modbus RTU request function codes with a fixed 8-byte frame (read holding /
+# read input / write single). Write-multiple (0x10) has a variable length.
+_MODBUS_FIXED_LEN_FCODES = frozenset({3, 4, 6})
+_MODBUS_WRITE_MULTIPLE_FCODE = 16
+
+# Sentinel: the buffer head looks like a Modbus RTU frame that is still
+# accumulating bytes; the caller must wait rather than try collector framing.
+_MODBUS_INCOMPLETE = object()
+
+
+def route_status_indicates_control_ready(status: dict[str, Any]) -> bool:
+    """Whether the collector has reconnected to OUR proxy after the endpoint switch and is
+    speaking our protocol -- i.e. its new (post-reboot) param-21 endpoint is applied and it is
+    live on us. This is the same moment proxy capture keys off (its ``connect`` event).
+
+    It deliberately does NOT require the short-lived upstream proxy->cloud socket
+    (``upstream_connected`` / the full ``ready`` flag): that socket connects on demand and
+    SmartESS closes it after bootstrap, so requiring it made the reconnect wait false-timeout and
+    trigger a premature restore of the collector to the real server. Per-write control uses the
+    stricter ``route_status_indicates_control_write_ready`` predicate below. Callers handle
+    ``running`` / ``upstream_error`` separately (the wait raises on them; the gate returns False).
+    """
+
+    if not bool(status.get("collector_connected")):
+        return False
+    return bool(
+        status.get("ready")
+        or status.get("route_protocol_activity")
+        or status.get("collector_protocol_ingress")
+    )
+
+
+def route_status_indicates_control_write_ready(status: dict[str, Any]) -> bool:
+    """Whether it is safe to send one live SmartESS control command now.
+
+    Start-up readiness and per-write readiness are intentionally different.
+    The start path may proceed once the collector has reconnected and spoken to
+    our proxy, because the proxy->cloud socket can be short-lived while SmartESS
+    registration settles. A live ``ctrlDevice`` write is stricter: SmartESS can
+    only be intercepted while the proxy currently has both the collector socket
+    and the upstream cloud socket. If upstream is gone, the cloud may deliver the
+    command over the collector's real-server connection instead.
+    """
+
+    if not route_status_indicates_control_ready(status):
+        return False
+    return bool(status.get("ready") or status.get("upstream_connected"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +94,7 @@ class InProcessFailClosedShadowProxyHandler:
         self._tasks: set[asyncio.Task[None]] = set()
         self._running = False
         self._collector_connected = False
+        self._collector_connection_sequence = 0
         self._collector_protocol_ingress = False
         self._route_protocol_activity = False
         self._upstream_connected = False
@@ -98,6 +148,7 @@ class InProcessFailClosedShadowProxyHandler:
         return {
             "running": self._running,
             "collector_connected": self._collector_connected,
+            "collector_connection_sequence": self._collector_connection_sequence,
             "collector_protocol_ingress": self._collector_protocol_ingress,
             "route_protocol_activity": self._route_protocol_activity,
             "upstream_connected": self._upstream_connected,
@@ -194,6 +245,7 @@ class InProcessFailClosedShadowProxyHandler:
 
         collector_peer = collector_writer.get_extra_info("peername") or ("", 0)
         remote = f"{collector_peer[0] or ''}:{collector_peer[1] or 0}"
+        self._collector_connection_sequence += 1
         self._collector_connected = True
         self._collector_protocol_ingress = False
         self._upstream_connected = False
@@ -283,6 +335,18 @@ class InProcessFailClosedShadowProxyHandler:
                             {"remote": remote, "payload_ascii": payload.decode("ascii", errors="replace")},
                         )
                         continue
+                    if kind == "modbus":
+                        # Genuine device-originated Modbus RTU (uncommon in
+                        # observe-only mode) is forwarded upstream unchanged.
+                        async with upstream_write_lock:
+                            upstream_writer.write(payload)
+                            await upstream_writer.drain()
+                        await self._append_event(
+                            "shadow_proxy_forward_collector_modbus",
+                            "collector_to_cloud",
+                            {"remote": remote, "payload_hex": payload.hex()},
+                        )
+                        continue
                     header = decode_header(payload[:HEADER_SIZE])
                     if header.fcode in _COLLECTOR_FORWARD_FCODES:
                         pending_requests[int(header.tid)] = _PendingCollectorRequest(
@@ -349,12 +413,37 @@ class InProcessFailClosedShadowProxyHandler:
                     kind, payload = message
                     self._route_protocol_activity = True
                     if kind == "at":
+                        if self._backend.should_forward_cloud_at(payload):
+                            # Identity/telemetry queries the shadow can't answer
+                            # (e.g. DTUPN, INTPARA58) go to the real collector;
+                            # its genuine reply returns upstream via
+                            # _collector_to_cloud so cloud registration succeeds.
+                            async with collector_write_lock:
+                                collector_writer.write(payload)
+                                await collector_writer.drain()
+                            await self._append_event(
+                                "shadow_proxy_forward_cloud_at",
+                                "cloud_to_collector",
+                                {"remote": remote, "payload_ascii": payload.decode("ascii", errors="replace")},
+                            )
+                            continue
                         response = await self._backend._handle_at_line(payload, remote=remote)
                         await self._append_event(
                             "shadow_proxy_intercept_cloud_at",
                             "cloud_to_shadow",
                             {"remote": remote, "payload_ascii": payload.decode("ascii", errors="replace")},
                         )
+                        if response is not None:
+                            async with upstream_write_lock:
+                                upstream_writer.write(response)
+                                await upstream_writer.drain()
+                        continue
+
+                    if kind == "modbus":
+                        # Bare Modbus RTU control/poll traffic: answer reads from
+                        # the shadow bank and observe + NACK writes locally. It
+                        # is never forwarded to the inverter.
+                        response = await self._backend._handle_modbus_frame(payload, remote=remote)
                         if response is not None:
                             async with upstream_write_lock:
                                 upstream_writer.write(response)
@@ -489,6 +578,16 @@ def _consume_next_message(buffer: bytearray) -> tuple[str, bytes] | None:
         line = bytes(buffer[: newline + 1])
         del buffer[: newline + 1]
         return "at", line
+    # SmartESS DTUs that exchange bare Modbus RTU on the data plane (after AT
+    # registration) send frames with no eybond collector header. Detect and
+    # consume those first; a CRC-valid Modbus frame is unambiguous, and a head
+    # that merely looks like Modbus but is still arriving must wait rather than
+    # be misparsed as a (short) collector frame.
+    modbus = _consume_modbus_rtu_frame(buffer)
+    if modbus is _MODBUS_INCOMPLETE:
+        return None
+    if modbus is not None:
+        return "modbus", modbus
     if len(buffer) < HEADER_SIZE:
         return None
     header = decode_header(bytes(buffer[:HEADER_SIZE]))
@@ -500,6 +599,41 @@ def _consume_next_message(buffer: bytearray) -> tuple[str, bytes] | None:
     frame = bytes(buffer[:total_len])
     del buffer[:total_len]
     return "frame", frame
+
+
+def _consume_modbus_rtu_frame(buffer: bytearray) -> bytes | object | None:
+    """Consume one complete Modbus RTU frame from the head of ``buffer``.
+
+    Returns the frame bytes when a complete, CRC-valid Modbus RTU request is at
+    the head; ``_MODBUS_INCOMPLETE`` when the head is a recognised Modbus
+    function code still accumulating bytes (the caller must wait); or ``None``
+    when the head is not Modbus (the caller falls back to collector framing).
+    """
+
+    if len(buffer) < 2:
+        return None
+    function = buffer[1]
+    if function in _MODBUS_FIXED_LEN_FCODES:
+        frame_length = 8
+    elif function == _MODBUS_WRITE_MULTIPLE_FCODE:
+        if len(buffer) < 7:
+            return _MODBUS_INCOMPLETE
+        frame_length = 9 + buffer[6]
+    else:
+        return None
+    if len(buffer) < frame_length:
+        return _MODBUS_INCOMPLETE
+    frame = bytes(buffer[:frame_length])
+    if not _modbus_crc_is_valid(frame):
+        return None
+    del buffer[:frame_length]
+    return frame
+
+
+def _modbus_crc_is_valid(frame: bytes) -> bool:
+    if len(frame) < 4:
+        return False
+    return crc16_modbus(frame[:-2]) == int.from_bytes(frame[-2:], "little")
 
 
 def _is_allowlisted_correlated_response(

@@ -206,27 +206,27 @@ When local detection only reaches a collector-only or low-confidence state, EyeB
 - **Export SmartESS cloud evidence** is the standalone advanced action when you want the evidence itself for review or experimental metadata work.
 - **Evidence files stay on disk until you remove them manually**. The latest matching file for the entry is reused automatically.
 
-## Advanced Shadow Learning Workflow
+## Advanced Control Discovery Workflow
 
-Shadow learning is an advanced diagnostics workflow for unsupported or partially matched devices. It is optional and does not affect normal runtime polling.
+**Add controls for this device** is an advanced diagnostics workflow (control discovery) for unsupported or partially matched devices. It is optional and does not affect normal runtime polling.
 
-During a shadow-learning session, EyeBond Local uses a fail-closed proxy-shadow route:
+During a control-discovery session, EyeBond Local uses a fail-closed proxy-shadow route:
 
 - collector session traffic required to keep the cloud session alive is forwarded upstream,
 - cloud write/read commands are intercepted locally by the synthetic shadow backend,
 - unknown cloud-to-collector traffic is blocked by default,
-- learning controls are accepted only while the shadow session is explicitly `ready` or `learning`.
+- discovery controls are accepted only while the session is explicitly `ready` or `learning`.
 
-1. Start a shadow-learning session from **Diagnostics and experimental metadata**.
-2. Run a small, intentional control sample in SmartESS so local shadow trace captures paired write observations.
-3. Generate learned local overlay drafts from the captured evidence.
-4. Activate the learned draft for this one device only (device-scoped activation).
+1. Open **Add controls for this device** from **Diagnostics and experimental metadata → Advanced metadata tools**.
+2. Run a small, intentional control sample in SmartESS so the discovery session captures paired write observations.
+3. Generate discovered-control overlay drafts from the captured evidence.
+4. Activate the discovered-control draft for this one device only (device-scoped activation).
 5. Export a support archive and share it for review.
 
 Important scope boundary:
 
-- A learned overlay activation is device-scoped evidence and should be treated as experimental local metadata.
-- Model-level support promotion is a separate developer step after review. Promotion does not happen automatically from local learned overlays.
+- A discovered-control overlay activation is device-scoped evidence and should be treated as experimental local metadata.
+- Model-level support promotion is a separate developer step after review. Promotion does not happen automatically from local discovered-control overlays.
 
 ---
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime
 import asyncio
 import time
@@ -27,6 +28,9 @@ _CONTROL_STATUS_PLANNED = "planned"
 _CONTROL_STATUS_SENT = "sent"
 _CONTROL_STATUS_ERROR = "error"
 _CONTROL_STATUS_DEGRADED = "degraded"
+# SAFETY-CRITICAL: a write whose cloud response was a *success* (ERR_NONE) in observe-only
+# mode -- proof it bypassed our proxy and reached the real inverter. See the hard-abort below.
+_CONTROL_STATUS_LEAKED = "leaked"
 
 
 def orchestrate_shadow_learning_settings(
@@ -46,6 +50,7 @@ def orchestrate_shadow_learning_settings(
     all_choice_values: bool = False,
     max_fields: int = 0,
     continue_on_error: bool = True,
+    abort_on_unproxied_write: bool = True,
     delay_seconds: float = 0.0,
     observed_writes: list[ShadowWriteObservation] | tuple[ShadowWriteObservation, ...] | None = None,
     base_url: str = DEFAULT_BASE_URL,
@@ -112,11 +117,19 @@ def orchestrate_shadow_learning_settings(
                 timeout=timeout,
             )
             attempt["status"] = _CONTROL_STATUS_SENT
+            response_err = int(getattr(envelope, "err", -1))
             attempt["response"] = {
-                "err": int(getattr(envelope, "err", -1)),
+                "err": response_err,
                 "desc": str(getattr(envelope, "desc", "")),
             }
             attempt["dat"] = getattr(envelope, "dat", None)
+            # SAFETY-CRITICAL: a successful response (ERR_NONE) in observe-only mode means the
+            # write bypassed our proxy and reached the real inverter. Abort immediately.
+            if abort_on_unproxied_write and response_err == 0:
+                attempt["status"] = _CONTROL_STATUS_LEAKED
+                attempt["reason"] = "control_leaked_unproxied"
+                attempts.append(attempt)
+                break
         except Exception as exc:  # pragma: no cover - exact cloud errors are caller-dependent
             attempt["status"] = _CONTROL_STATUS_ERROR
             attempt["error"] = str(exc)
@@ -139,6 +152,7 @@ def orchestrate_shadow_learning_settings(
         "executed_result_count": len(attempts),
         "sent_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_SENT),
         "error_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_ERROR),
+        "leaked_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_LEAKED),
         "unknown_field_count": sum(1 for item in attempts if bool(item.get("unknown_field"))),
         "results": attempts,
         "correlation": correlation,
@@ -162,6 +176,7 @@ async def async_orchestrate_shadow_learning_settings(
     all_choice_values: bool = False,
     max_fields: int = 0,
     continue_on_error: bool = True,
+    abort_on_unproxied_write: bool = True,
     delay_seconds: float = 0.0,
     observed_writes: list[ShadowWriteObservation] | tuple[ShadowWriteObservation, ...] | None = None,
     observation_cursor: Callable[[], int] | None = None,
@@ -175,8 +190,13 @@ async def async_orchestrate_shadow_learning_settings(
     timeout: float = DEFAULT_TIMEOUT,
     correlation_timeout_seconds: float = 2.0,
     fetch_action: Callable[..., Any] = fetch_signed_action,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
-    """Plan and execute one SmartESS learn-settings run with async per-attempt observation correlation."""
+    """Plan and execute one SmartESS learn-settings run with async per-attempt observation correlation.
+
+    ``on_progress(completed, total)`` is invoked before each planned write so
+    callers can surface live progress; it must not raise.
+    """
 
     if not dry_run and not confirm_cloud_write:
         raise SmartEssCloudError("learn_settings_requires_confirm_cloud_write")
@@ -197,7 +217,11 @@ async def async_orchestrate_shadow_learning_settings(
     run_observations: list[ShadowWriteObservation] = []
 
     attempts: list[dict[str, Any]] = []
+    plan_total = len(plan)
     for sequence_index, item in enumerate(plan):
+        if on_progress is not None:
+            with suppress(Exception):
+                on_progress(sequence_index, plan_total)
         action = build_device_control_action(
             pn=pn,
             sn=sn,
@@ -249,18 +273,36 @@ async def async_orchestrate_shadow_learning_settings(
                 timeout=timeout,
             )
             attempt["status"] = _CONTROL_STATUS_SENT
+            response_err = int(getattr(envelope, "err", -1))
             attempt["response"] = {
-                "err": int(getattr(envelope, "err", -1)),
+                "err": response_err,
                 "desc": str(getattr(envelope, "desc", "")),
             }
             attempt["dat"] = getattr(envelope, "dat", None)
+            # SAFETY-CRITICAL hard stop. In observe-only mode our shadow proxy NACKs EVERY
+            # write, so the cloud must return ERR_FAIL (handled in the except below). A
+            # *successful* response (err == 0 / ERR_NONE) proves this write was NOT intercepted
+            # by us: the collector had dropped off our proxy during the cloud's delivery (a
+            # revert/reboot race the pre-send gate cannot catch) and the write reached the REAL
+            # inverter. That leaks a live control change onto the hardware (it shut off the
+            # user's output). Abort the whole run now so no further writes can leak --
+            # unconditionally, regardless of continue_on_error, because this is a safety event.
+            if abort_on_unproxied_write and response_err == 0:
+                attempt["status"] = _CONTROL_STATUS_LEAKED
+                attempt["reason"] = "control_leaked_unproxied"
+                attempts.append(attempt)
+                break
         except Exception as exc:  # pragma: no cover - exact cloud errors are caller-dependent
+            # In observe-only (exception) mode SmartESS rejects every write with
+            # an expected NACK, yet the Modbus write is still delivered to the
+            # shadow and observed. Keep correlating that observation instead of
+            # skipping the attempt, so the delivered write maps to its cloud
+            # field. A genuine non-delivery simply yields no observation.
             attempt["status"] = _CONTROL_STATUS_ERROR
             attempt["error"] = str(exc)
-            attempts.append(attempt)
             if not continue_on_error:
+                attempts.append(attempt)
                 break
-            continue
 
         observations = await _wait_for_attempt_observations(
             cursor_start=cursor_start,
@@ -302,6 +344,7 @@ async def async_orchestrate_shadow_learning_settings(
         "sent_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_SENT),
         "error_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_ERROR),
         "degraded_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_DEGRADED),
+        "leaked_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_LEAKED),
         "unknown_field_count": sum(1 for item in attempts if bool(item.get("unknown_field"))),
         "results": attempts,
         "correlation": correlation,
@@ -336,6 +379,11 @@ def summarize_shadow_learning_attempts(
                     "field_id": str(attempt.get("field_id") or ""),
                     "field_name": str(attempt.get("field_name") or ""),
                     "requested_value": str(attempt.get("requested_value") or ""),
+                    # Carry the SmartESS option label + field kind so the overlay generator can
+                    # classify the control from its real definition (enum labels, switch vs
+                    # select vs button) instead of guessing from raw swept values.
+                    "value_label": str(attempt.get("value_label") or ""),
+                    "value_source": str(attempt.get("value_source") or ""),
                     "requested_at": str(attempt.get("requested_at") or ""),
                     "unknown_field": bool(attempt.get("unknown_field")),
                     "observation": observation,
@@ -422,6 +470,8 @@ def correlate_cloud_attempts_with_shadow_writes(
                 "field_id": str(attempt.get("field_id") or ""),
                 "field_name": str(attempt.get("field_name") or ""),
                 "requested_value": str(attempt.get("requested_value") or ""),
+                "value_label": str(attempt.get("value_label") or ""),
+                "value_source": str(attempt.get("value_source") or ""),
                 "requested_at": str(attempt.get("requested_at") or ""),
                 "unknown_field": bool(attempt.get("unknown_field")),
                 "observation": observation.to_json_dict(),

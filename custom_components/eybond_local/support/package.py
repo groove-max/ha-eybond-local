@@ -18,6 +18,7 @@ from ..const import (
     LOCAL_SUPPORT_PACKAGES_DIR,
 )
 from .bundle import build_support_marker
+from .shadow_learning_review_model import build_control_discovery_evidence
 
 
 _CLOUD_EVIDENCE_ARCHIVE_MEMBER = "evidence/cloud_evidence.json"
@@ -33,6 +34,7 @@ _SHADOW_CORRELATION_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/correlation_report.json"
 _SHADOW_OVERLAY_PROFILE_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/generated_overlay_profile.json"
 _SHADOW_OVERLAY_SCHEMA_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/generated_overlay_schema.json"
 _SHADOW_ACTIVATION_MANIFEST_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/activation_manifest.json"
+_SHADOW_CONTROL_DISCOVERY_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/control_discovery.json"
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
 
 _SENSITIVE_FIELD_PARTS = ("password", "secret", "token", "authorization")
@@ -156,6 +158,11 @@ def export_support_package(
         readme_lines.append("- evidence/cloud_evidence.json")
     if shadow_manifest_members:
         readme_lines.append(f"- {_SHADOW_ARCHIVE_ROOT}/... (optional shadow-learning evidence)")
+    if shadow_manifest_members.get("control_discovery"):
+        readme_lines.append(
+            f"- {_SHADOW_CONTROL_DISCOVERY_MEMBER} "
+            "(all discovered controls, selected/excluded subsets, user labels, risk reasons)"
+        )
     readme_lines.extend(
         [
             "",
@@ -192,7 +199,14 @@ def export_support_package(
                 continue
             archive.writestr(
                 member_name,
-                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False) + "\n",
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=False,
+                    default=_json_default,
+                )
+                + "\n",
             )
 
     if not publish_download_copy:
@@ -325,6 +339,22 @@ def _build_shadow_learning_archive_members(
     if overlay_schema_payload is not None and "shadow_learning_overlay" in overlay_schema_payload:
         members[_SHADOW_OVERLAY_SCHEMA_MEMBER] = _sanitize_payload(overlay_schema_payload)
         manifest_members["generated_overlay_schema"] = _SHADOW_OVERLAY_SCHEMA_MEMBER
+
+    review_model = _overlay_review_model(overlay_profile_payload)
+    if review_model is None:
+        review_model = _overlay_review_model(overlay_schema_payload)
+    control_discovery = build_control_discovery_evidence(
+        review_model=review_model,
+        activation=activation_manifest or None,
+    )
+    discovery_counts = control_discovery.get("counts", {})
+    if (
+        discovery_counts.get("discovered")
+        or discovery_counts.get("selected")
+        or discovery_counts.get("excluded")
+    ):
+        members[_SHADOW_CONTROL_DISCOVERY_MEMBER] = _sanitize_payload(control_discovery)
+        manifest_members["control_discovery"] = _SHADOW_CONTROL_DISCOVERY_MEMBER
 
     orchestration = _dict_value(runtime_values, "shadow_learning_orchestration")
     if orchestration:
@@ -576,9 +606,31 @@ def _load_json_dict(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _json_default(value: Any) -> Any:
+    """Best-effort JSON fallback so a stray non-serializable value can't fail an export.
+
+    Runtime snapshots occasionally carry sets/frozensets (e.g. selected-control keys) or
+    other container types; the support archive must still serialize rather than abort with
+    "Object of type frozenset is not JSON serializable".
+    """
+
+    if isinstance(value, (set, frozenset)):
+        return sorted(value, key=str)
+    if isinstance(value, (tuple, list)):
+        return list(value)
+    return str(value)
+
+
 def _to_jsonl(records: list[dict[str, Any]]) -> str:
     return "".join(
-        json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=_json_default,
+        )
+        + "\n"
         for record in records
     )
 
@@ -596,6 +648,14 @@ def _dict_value(payload: dict[str, Any] | None, key: str) -> dict[str, Any]:
         return {}
     value = payload.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def _overlay_review_model(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the embedded learned-control review model from a generated overlay payload."""
+
+    overlay = _dict_value(payload, "shadow_learning_overlay")
+    review_model = overlay.get("review_model")
+    return review_model if isinstance(review_model, dict) else None
 
 
 def _sanitize_payload(value: Any) -> Any:

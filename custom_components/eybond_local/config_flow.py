@@ -163,6 +163,7 @@ from .smartess_cloud import (
     SessionCredentials,
     build_device_settings_action,
     build_learn_settings_plan,
+    fetch_device_bundle_for_collector,
     fetch_signed_action,
     login_with_password,
 )
@@ -173,7 +174,12 @@ from .support.shadow_learning_orchestrator import (
     async_orchestrate_shadow_learning_settings,
     orchestrate_shadow_learning_settings,
 )
+from .support.shadow_learning_proxy import route_status_indicates_control_write_ready
 from .support.shadow_learning_overlay_generator import generate_shadow_learning_overlay_drafts
+from .support.shadow_learning_review_model import (
+    build_activation_selection,
+    default_learned_control_label,
+)
 
 CONF_RESULT_KEY = "result_key"
 CONF_COLLECTOR_NETWORK_STATUS = "collector_network_status"
@@ -215,6 +221,20 @@ SHADOW_LEARNING_MODE_MANUAL = "manual_selected_fields"
 SHADOW_LEARNING_MODE_ENUM_SWEEP = "enum_sweep"
 SHADOW_LEARNING_MODE_NUMERIC_OPT_IN = "numeric_opt_in"
 SHADOW_LEARNING_MODE_SUPPORT_ONLY = "support_package_only"
+# Upper bound on the number of settings the automatic guided control-discovery
+# pipeline (EYB-REF-041) will probe in one run. The automatic plan already tests
+# only choice/enum settings, one value each (no numeric writes, no enum sweep);
+# this cap keeps the normal user path a bounded probe instead of an open-ended
+# sweep even when a device exposes a very large settings table.
+CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS = 40
+# Guided control-discovery result-screen actions (EYB-REF-047). The final wizard
+# screen offers three explicit choices: enable the controls the user turned on,
+# create a support package, or close. Activation is always an explicit user
+# action — guided discovery never silently enables writable controls.
+CONTROL_DISCOVERY_RESULT_ACTION_ACTIVATE = "activate_selected"
+CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT = "create_support_package"
+CONTROL_DISCOVERY_RESULT_ACTION_RETRY = "retry"
+CONTROL_DISCOVERY_RESULT_ACTION_DONE = "done"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED = "use_saved"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH = "refresh"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY = "archive_only"
@@ -767,6 +787,17 @@ _MULTILINE_LOG_TEXT_SELECTOR = _build_multiline_log_text_selector()
 _PASSWORD_TEXT_SELECTOR = TextSelector(TextSelectorConfig(type="password"))
 
 _BOOLEAN_SELECTOR = BooleanSelector()
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Best-effort int coercion; returns ``None`` for empty/non-numeric values."""
+
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _smartess_credential_schema_fields(
@@ -5402,12 +5433,1289 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
+        """Guided control-discovery wizard — step 1: intro and consent.
+
+        Replaces the former technical action dropdown (now
+        ``async_step_shadow_learning_advanced``) with one linear user-facing
+        workflow: intro/consent -> credentials -> progress -> review -> result.
+        No live SmartESS operation runs until the user gives explicit consent.
+        """
         coordinator = self._coordinator()
         if coordinator is None:
             return await self._async_show_diagnostics_result(
                 action_title=self._diagnostics_result_tr(
                     "shadow_learning_title",
-                    "SmartESS Shadow Learning",
+                    "Add controls for this device",
+                ),
+                status=self._diagnostics_result_tr(
+                    "coordinator_not_loaded",
+                    "Coordinator is not loaded.",
+                ),
+                next_step=self._diagnostics_result_tr(
+                    "ensure_entry_loaded",
+                    "Ensure the entry is loaded and the inverter has been detected, then try again.",
+                ),
+            )
+
+        errors: dict[str, str] = {}
+        consent = bool((user_input or {}).get("shadow_learning_confirm_cloud_write", False))
+        if user_input is not None:
+            if consent:
+                # Start a fresh wizard pass: drop any prior run's transient state
+                # (credentials are never persisted) before advancing.
+                self._shadow_learning_state.pop("wizard_credentials", None)
+                self._shadow_learning_state.pop("wizard_progress_task", None)
+                self._shadow_learning_state["wizard_consent"] = True
+                return await self.async_step_shadow_learning_credentials()
+            errors["shadow_learning_confirm_cloud_write"] = "required"
+
+        return self.async_show_form(
+            step_id="shadow_learning",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "shadow_learning_confirm_cloud_write",
+                        default=consent,
+                    ): _BOOLEAN_SELECTOR,
+                }
+            ),
+            errors=errors,
+            description_placeholders=self._control_discovery_placeholders(
+                coordinator,
+                "common.dynamic.control_discovery_intro_hint",
+                "Home Assistant will briefly sign in to SmartESS to find which "
+                "settings it can control on this device. Your login is used only "
+                "for this check and is not saved.\n\n"
+                "⚠️ Before you continue, fully CLOSE the SmartESS mobile app. If it "
+                "stays open it competes with this check for the device and can "
+                "disrupt the scan or interfere with the inverter.\n\n"
+                "Confirm below to continue.",
+            ),
+        )
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning_credentials(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Guided control-discovery wizard — step 2: SmartESS credentials.
+
+        Asks only for the SmartESS username/password. Credentials are held in
+        transient flow state for the current run only and are never written to
+        the config entry or its options.
+        """
+        coordinator = self._coordinator()
+        if coordinator is None or not bool(self._shadow_learning_state.get("wizard_consent")):
+            # Credentials are unreachable without a coordinator and prior consent.
+            return await self.async_step_shadow_learning()
+
+        errors: dict[str, str] = {}
+        defaults = dict(user_input or {})
+        username = str(defaults.get("username") or "").strip()
+        password = str(defaults.get("password") or "")
+        if user_input is not None:
+            if not username:
+                errors["username"] = "required"
+            if not password:
+                errors["password"] = "required"
+            if not errors:
+                # Transient only — used by the automatic runner (EYB-REF-041)
+                # and dropped at the result step; never persisted to the entry.
+                self._shadow_learning_state["wizard_credentials"] = {
+                    "username": username,
+                    "password": password,
+                }
+                return await self.async_step_shadow_learning_progress()
+
+        return self.async_show_form(
+            step_id="shadow_learning_credentials",
+            data_schema=vol.Schema(
+                _smartess_credential_schema_fields(
+                    required=True,
+                    username_default=username,
+                    password_default="",
+                )
+            ),
+            errors=errors,
+            description_placeholders=self._control_discovery_placeholders(
+                coordinator,
+                "common.dynamic.control_discovery_credentials_hint",
+                "Enter your SmartESS username and password. They are used only "
+                "for this one check and are not saved.",
+            ),
+        )
+
+    def _set_control_discovery_progress(
+        self, fraction: float, stage: str, *, done: int = 0, total: int = 0
+    ) -> None:
+        """Advance the guided control-discovery progress bar.
+
+        Records the latest fraction and drives the determinate progress bar via
+        ``async_update_progress`` when the running Home Assistant core supports it
+        (older cores just show the spinner). The progress step label stays static
+        — only the bar animates — because re-rendering the dialog to update text
+        visibly flickers. ``stage``/``done``/``total`` are accepted for call-site
+        readability and future use.
+        """
+
+        clamped = max(0.0, min(1.0, float(fraction)))
+        self._shadow_learning_state["progress"] = {
+            "fraction": clamped,
+            "stage": str(stage),
+            "done": int(done),
+            "total": int(total),
+        }
+        update = getattr(self, "async_update_progress", None)
+        if callable(update):
+            with suppress(Exception):
+                update(clamped)
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning_progress(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Guided control-discovery wizard — step 3: automatic progress.
+
+        Shows ``async_show_progress`` while the automatic discovery runner works,
+        rendering a determinate progress bar (on cores that support it) and a
+        stage-specific label that updates as the runner advances, then moves on
+        to the review screen.
+        """
+        coordinator = self._coordinator()
+        if coordinator is None or not self._shadow_learning_state.get("wizard_credentials"):
+            # Progress is unreachable until consent + credentials are gathered.
+            return await self.async_step_shadow_learning()
+
+        pipeline = self._shadow_learning_state.get("wizard_progress_task")
+        if pipeline is None:
+            # Fresh run: start at the review overview page once it completes.
+            self._shadow_learning_state.pop("review_phase", None)
+            # Prime the determinate bar at an explicit 0% before the first real
+            # update. HA's progress bar mis-renders its fill on the very first
+            # non-zero value (the scale only draws correctly from the second
+            # update on); seeding 0% makes that sacrificial first render an empty
+            # bar, so the first visible fill (the next update) renders correctly.
+            self._set_control_discovery_progress(0.0, "starting")
+            pipeline = self.hass.async_create_task(self._async_run_control_discovery())
+            self._shadow_learning_state["wizard_progress_task"] = pipeline
+
+        if pipeline.done():
+            self._shadow_learning_state["wizard_progress_task"] = None
+            return self.async_show_progress_done(
+                next_step_id="shadow_learning_review",
+            )
+
+        # The dialog renders once (progress_task is the pipeline itself, so HA
+        # only re-runs this step when discovery finishes). The label is therefore
+        # static — the live feedback is the determinate bar, which the runner
+        # advances via async_update_progress as each stage completes. Re-rendering
+        # the dialog on a timer to animate the label visibly flickers, so we don't.
+        fraction = max(0.0, min(1.0, float(
+            dict(self._shadow_learning_state.get("progress") or {}).get("fraction") or 0.0
+        )))
+        update = getattr(self, "async_update_progress", None)
+        if callable(update):
+            with suppress(Exception):
+                update(fraction)
+        return self.async_show_progress(
+            step_id="shadow_learning_progress",
+            progress_action="shadow_learning",
+            progress_task=pipeline,
+            description_placeholders=self._control_discovery_placeholders(
+                coordinator,
+                "common.dynamic.control_discovery_progress_status",
+                "Checking which controls are available…",
+            ),
+        )
+
+    async def _async_run_control_discovery(self) -> None:
+        """Run the automatic control-discovery pipeline for the guided wizard.
+
+        Executed as the progress-step background task. In one pass — and with no
+        preview-plan, manual field-id, numeric-value, or action-sequencing step —
+        it performs: preflight -> start the fail-closed shadow session -> fetch
+        SmartESS settings -> build a bounded automatic plan -> run learning ->
+        generate the device-scoped overlay draft -> stop the session and restore
+        the collector endpoint -> publish support artifacts.
+
+        Fail-closed: any failure attempts to stop the shadow session and restore
+        the endpoint, records the error in flow state, and preserves whatever
+        trace/support evidence already exists. This coroutine never raises, so the
+        progress step always advances to the review screen.
+        """
+
+        coordinator = self._coordinator()
+        if coordinator is None:
+            self._shadow_learning_state["discovery"] = {
+                "status": "error",
+                "reason": "coordinator_not_loaded",
+            }
+            return None
+
+        credentials = dict(self._shadow_learning_state.get("wizard_credentials") or {})
+        username = str(credentials.get("username") or "").strip()
+        password = str(credentials.get("password") or "")
+        if not username or not password:
+            self._shadow_learning_state["discovery"] = {
+                "status": "error",
+                "reason": "credentials_required",
+            }
+            return None
+
+        try:
+            await self._async_execute_control_discovery(
+                coordinator,
+                username=username,
+                password=password,
+            )
+        except Exception as exc:
+            # Fail-closed cleanup: stop the shadow session and restore the
+            # collector endpoint, then surface the failure in flow state.
+            await self._async_control_discovery_failsafe_stop(coordinator)
+            self._shadow_learning_state["discovery"] = {
+                "status": "error",
+                "reason": str(exc),
+            }
+            self._shadow_learning_state["status"] = self._tr(
+                "common.dynamic.control_discovery_failed",
+                "Control discovery could not finish. The temporary SmartESS "
+                "connection was closed.",
+            )
+            # Preserve whatever trace/support evidence already exists.
+            with suppress(Exception):
+                self._publish_shadow_learning_artifacts(coordinator)
+        return None
+
+    async def _async_execute_control_discovery(
+        self,
+        coordinator,
+        *,
+        username: str,
+        password: str,
+    ) -> None:
+        """Run the automatic discovery happy path; raise on any failure.
+
+        Fail-closed cleanup after a failure is owned by the caller
+        (``_async_run_control_discovery``); this method only stops the session
+        itself on its own successful exit.
+        """
+
+        # The progress step already primed the bar at 0%. Give the frontend a
+        # brief moment to actually paint that empty bar before the first non-zero
+        # value, so the determinate scale renders correctly from the start instead
+        # of mis-drawing the very first fill (an HA progress-dialog quirk).
+        await asyncio.sleep(0.5)
+        self._set_control_discovery_progress(0.03, "preflight")
+        preflight = await self._build_shadow_learning_preflight_snapshot(coordinator)
+        self._shadow_learning_state["preflight"] = preflight
+        if not bool(preflight.get("can_start")):
+            blockers = preflight.get("blockers") or []
+            if not isinstance(blockers, list):
+                blockers = []
+            raise RuntimeError(
+                "shadow_learning_preflight_blocked:" + ",".join(str(item) for item in blockers)
+                if blockers
+                else "shadow_learning_preflight_blocked"
+            )
+
+        self._set_control_discovery_progress(0.10, "connecting")
+        session = await coordinator.async_start_shadow_learning(allow_ack_writes=False)
+        self._shadow_learning_state["session"] = dict(session or {})
+        self._publish_shadow_learning_artifacts(coordinator)
+
+        if not self._shadow_learning_route_accepts_control(coordinator):
+            raise RuntimeError("shadow_learning_session_not_ready")
+
+        self._set_control_discovery_progress(0.18, "fetching")
+        cloud_bundle = await self.hass.async_add_executor_job(
+            lambda: fetch_device_bundle_for_collector(
+                username=username,
+                password=password,
+                collector_pn=str(coordinator.smartess_collector_pn or ""),
+            )
+        )
+        identity = (
+            self._shadow_learning_cloud_identity_from_bundle(cloud_bundle)
+            or self._shadow_learning_cloud_identity(coordinator)
+        )
+        if identity is None:
+            raise RuntimeError("shadow_learning_identity_unavailable")
+        self._shadow_learning_state["identity"] = identity
+        self._publish_shadow_learning_artifacts(coordinator)
+
+        _login_envelope, cloud_session = await self.hass.async_add_executor_job(
+            lambda: login_with_password(
+                username=username,
+                password=password,
+            )
+        )
+        settings_dat = self._shadow_learning_settings_dat_from_bundle(cloud_bundle)
+        if settings_dat is None:
+            settings_envelope = await self.hass.async_add_executor_job(
+                lambda: fetch_signed_action(
+                    action=build_device_settings_action(
+                        pn=identity["pn"],
+                        sn=identity["sn"],
+                        devcode=identity["devcode"],
+                        devaddr=identity["devaddr"],
+                    ),
+                    session=SessionCredentials(
+                        token=cloud_session.token,
+                        secret=cloud_session.secret,
+                        uid=cloud_session.uid,
+                        usr=cloud_session.usr,
+                        role=cloud_session.role,
+                        expire=cloud_session.expire,
+                    ),
+                ),
+            )
+            settings_dat = settings_envelope.dat
+
+        observation_source = self._shadow_learning_observation_source(coordinator)
+        self._shadow_learning_state["session"] = {
+            **dict(self._shadow_learning_state.get("session") or {}),
+            "status": "learning",
+        }
+
+        def _on_test_progress(done: int, total: int) -> None:
+            # The learning sweep is the long phase; map its 0..1 share onto the
+            # 0.30..0.85 slice of the overall progress bar and surface a counter.
+            fraction = 0.30 + 0.55 * (done / total) if total > 0 else 0.30
+            self._set_control_discovery_progress(
+                fraction, "testing", done=min(done + 1, total) if total else 0, total=total
+            )
+
+        self._set_control_discovery_progress(0.30, "testing")
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=cloud_session,
+            pn=identity["pn"],
+            sn=identity["sn"],
+            devcode=identity["devcode"],
+            devaddr=identity["devaddr"],
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            # Full automatic plan: every choice/enum setting is swept across all of its values
+            # so the overlay learns each control's value set. Pure-numeric fields are now
+            # included too -- a single (NACK'd, observe-only) write per field reveals its
+            # register and the cloud's display divisor (raw register / written value), so they
+            # materialize as number entities with correct read scaling. No min/max is learned:
+            # the device validates the value, not the front-end.
+            field_ids=[],
+            include_numeric=True,
+            all_choice_values=True,
+            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
+            continue_on_error=True,
+            delay_seconds=0.0,
+            observation_cursor=(
+                getattr(observation_source, "observation_cursor", None)
+                if observation_source is not None
+                else None
+            ),
+            current_observations_since=(
+                getattr(observation_source, "observations_since", None)
+                if observation_source is not None
+                else None
+            ),
+            wait_for_observations_since=(
+                (lambda cursor, timeout_seconds: observation_source.wait_for_observations_since(
+                    cursor,
+                    timeout_seconds=timeout_seconds,
+                ))
+                if observation_source is not None
+                and callable(getattr(observation_source, "wait_for_observations_since", None))
+                else None
+            ),
+            is_session_ready=lambda: self._shadow_learning_route_accepts_control(coordinator),
+            on_progress=_on_test_progress,
+        )
+        self._shadow_learning_state["orchestration"] = result
+        self._shadow_learning_state["session"] = {
+            **dict(self._shadow_learning_state.get("session") or {}),
+            "status": "degraded"
+            if (
+                int(result.get("degraded_count") or 0) > 0
+                or int(result.get("leaked_count") or 0) > 0
+            )
+            else "ready",
+        }
+        self._publish_shadow_learning_artifacts(coordinator)
+
+        orchestration = dict(self._shadow_learning_state.get("orchestration") or {})
+        planned_count = int(orchestration.get("planned_write_count") or 0)
+        executed_count = int(orchestration.get("executed_result_count") or 0)
+        leaked_count = int(orchestration.get("leaked_count") or 0)
+        degraded_count = int(orchestration.get("degraded_count") or 0)
+        if leaked_count > 0:
+            # SAFETY: at least one control write was accepted by the cloud (ERR_NONE) instead of
+            # NACKed by our proxy -- proof the collector dropped off the proxy mid-run and the
+            # write reached the REAL inverter. The run was hard-stopped at the first such write,
+            # but a live change may already have been applied to the hardware. Do not build or
+            # offer a partial overlay from a safety-aborted run; let the caller perform the
+            # fail-closed stop/restore path and surface this as an error.
+            raise RuntimeError(
+                self._tr(
+                    "common.dynamic.control_discovery_leaked",
+                    "SAFETY STOP: the inverter dropped off the local proxy during the scan and a "
+                    "control command reached the real inverter before the scan was halted. CHECK "
+                    "THE INVERTER NOW (especially its output/on-off state). Run the scan only in "
+                    "HA-only mode until this is resolved.",
+                )
+            )
+        if degraded_count > 0:
+            raise RuntimeError(
+                self._tr(
+                    "common.dynamic.control_discovery_degraded",
+                    "The temporary SmartESS connection dropped during the scan. The scan was "
+                    "stopped before adding controls. Please try again.",
+                )
+            )
+        if planned_count > 0 and executed_count < planned_count:
+            raise RuntimeError(
+                self._tr(
+                    "common.dynamic.control_discovery_run_incomplete",
+                    "The device could not be fully checked this time. The temporary SmartESS "
+                    "connection was closed before the scan finished. Please try again.",
+                )
+            )
+
+        self._set_control_discovery_progress(0.88, "building")
+        correlation = result.get("correlation")
+        if isinstance(correlation, dict):
+            await self._async_generate_control_discovery_overlay(
+                coordinator,
+                identity=identity,
+                correlation=correlation,
+            )
+
+        # Success path: stop the session and restore the endpoint, then publish
+        # the final artifact bundle. (Failure cleanup is owned by the caller.)
+        self._set_control_discovery_progress(0.95, "finalizing")
+        await self._async_control_discovery_stop(coordinator)
+        self._publish_shadow_learning_artifacts(coordinator)
+        self._set_control_discovery_progress(1.0, "finalizing")
+        self._shadow_learning_state["status"] = self._tr(
+            "common.dynamic.control_discovery_done",
+            "Control discovery finished. The temporary SmartESS connection is closed.",
+        )
+        found_controls = int(
+            dict(self._shadow_learning_state.get("overlay") or {}).get(
+                "generated_capability_count"
+            )
+            or 0
+        )
+        sent_count = int(orchestration.get("sent_count") or 0)
+        # A run that found nothing AND transmitted no probes at all did not actually
+        # observe the device -- it stalled on the connection (e.g. the collector never
+        # reconnected through the temporary proxy). That is a retryable error, not a
+        # genuine "this device has no controls" result, so surface it as a failure with a
+        # clear retry hint instead of the misleading "nothing found this time" message.
+        if found_controls == 0 and sent_count == 0:
+            self._shadow_learning_state["discovery"] = {
+                "status": "error",
+                "reason": self._tr(
+                    "common.dynamic.control_discovery_run_incomplete",
+                    "The device could not be probed this time (the temporary SmartESS "
+                    "connection did not come up). Please try the scan again.",
+                ),
+                "found_controls": 0,
+            }
+        else:
+            self._shadow_learning_state["discovery"] = {
+                "status": "ok",
+                "found_controls": found_controls,
+            }
+        return None
+
+    async def _async_generate_control_discovery_overlay(
+        self,
+        coordinator,
+        *,
+        identity: dict[str, Any],
+        correlation: dict[str, Any],
+    ) -> None:
+        """Generate the inactive device-scoped overlay draft from correlation evidence."""
+
+        session = dict(self._shadow_learning_state.get("session") or {})
+        session_manifest = {
+            "session_id": str(
+                session.get("session_id")
+                or session.get("trace_path")
+                or datetime.now().strftime("%Y%m%dT%H%M%S")
+            ),
+            "collector_pn": coordinator.smartess_collector_pn,
+            "cloud_pn": str(identity.get("pn") or ""),
+            "cloud_sn": str(identity.get("sn") or ""),
+            "devcode": identity.get("devcode"),
+            "devaddr": identity.get("devaddr"),
+        }
+        result = await self.hass.async_add_executor_job(
+            lambda: generate_shadow_learning_overlay_drafts(
+                config_dir=Path(self.hass.config.config_dir),
+                source_profile_name=str(coordinator.effective_profile_name or ""),
+                source_schema_name=str(coordinator.effective_register_schema_name or ""),
+                session_manifest=session_manifest,
+                correlation=correlation,
+                overwrite=False,
+            )
+        )
+        self._shadow_learning_state["overlay"] = {
+            "profile_path": str(result.profile_path),
+            "schema_path": str(result.schema_path),
+            "generated_capability_count": int(result.generated_capability_count),
+            "skipped_duplicate_count": int(result.skipped_duplicate_count),
+            "manifest": dict(result.manifest),
+            "profile_name": str(result.manifest.get("output", {}).get("profile_name") or ""),
+            "schema_name": str(result.manifest.get("output", {}).get("schema_name") or ""),
+        }
+        self._publish_shadow_learning_artifacts(coordinator)
+        return None
+
+    async def _async_control_discovery_stop(self, coordinator) -> dict[str, Any]:
+        """Stop the shadow session and restore the endpoint on the success path."""
+
+        stop = getattr(coordinator, "async_stop_shadow_learning", None)
+        if not callable(stop):
+            return {}
+        result = await stop(reason="control_discovery_done")
+        merged = {
+            **dict(self._shadow_learning_state.get("session") or {}),
+            **(dict(result) if isinstance(result, dict) else {}),
+            "status": "stopped",
+        }
+        self._shadow_learning_state["session"] = merged
+        return dict(result) if isinstance(result, dict) else {}
+
+    async def _async_control_discovery_failsafe_stop(self, coordinator) -> None:
+        """Best-effort fail-closed stop + endpoint restore after a discovery failure.
+
+        Tolerant of an already-stopped or never-started session: it never raises,
+        so it is safe to call regardless of how far the pipeline progressed.
+        """
+
+        stop = getattr(coordinator, "async_stop_shadow_learning", None)
+        if not callable(stop):
+            return None
+        try:
+            result = await stop(
+                reason="control_discovery_failed",
+                raise_when_not_running=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Control discovery fail-closed stop failed for entry %s: %s",
+                getattr(self._config_entry, "entry_id", ""),
+                exc,
+            )
+            return None
+        if isinstance(result, dict):
+            self._shadow_learning_state["session"] = {
+                **dict(self._shadow_learning_state.get("session") or {}),
+                **result,
+            }
+        return None
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning_review(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Guided control-discovery wizard — step 4: review what was found.
+
+        Shown as two pages on the same step. Page one is a read-only overview of
+        everything discovered for this device: the new controls that can be added
+        and the controls already supported by Home Assistant (so the user sees the
+        full picture, including ones left off). Page two lets the user rename and
+        enable the new controls. Normal-risk controls default to enabled; risky or
+        uncertain ones default to disabled.
+
+        Choices are stored in transient flow state (``review_selections``); the
+        discovered evidence (``review_model.learned_all``) is never mutated, so
+        disabled controls are preserved for the support package and an edited
+        label never overwrites the developer-facing field name.
+        """
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return await self.async_step_shadow_learning()
+
+        new_controls = self._control_discovery_review_controls()
+        already_controls = self._control_discovery_already_supported_controls()
+
+        # Nothing discovered at all (or discovery failed earlier): skip the
+        # redundant "nothing found" page entirely and go straight to the detailed
+        # result screen, which explains empty vs failed and offers retry / support
+        # / return. Showing an intermediate empty page first was pure friction.
+        if not new_controls and not already_controls:
+            return await self.async_step_shadow_learning_result()
+
+        # Page one: read-only overview of everything found.
+        if str(self._shadow_learning_state.get("review_phase") or "overview") != "edit":
+            if user_input is not None:
+                if new_controls:
+                    self._shadow_learning_state["review_phase"] = "edit"
+                    return await self.async_step_shadow_learning_review()
+                return await self.async_step_shadow_learning_result()
+            new_count = len(new_controls)
+            existing_count = len(already_controls)
+            on_count = sum(1 for control in new_controls if bool(control.get("enabled_by_default")))
+            overview_placeholders = {
+                "control_discovery_count": str(new_count + existing_count),
+                "control_discovery_new_count": str(new_count),
+                "control_discovery_existing_count": str(existing_count),
+                "control_discovery_on_count": str(on_count),
+                "control_discovery_off_count": str(new_count - on_count),
+                "control_discovery_overview": self._control_discovery_overview_markdown(
+                    new_controls, already_controls
+                ),
+            }
+            return self.async_show_form(
+                step_id="shadow_learning_review",
+                data_schema=vol.Schema({}),
+                errors={},
+                description_placeholders=self._control_discovery_placeholders(
+                    coordinator,
+                    "common.dynamic.control_discovery_overview_intro",
+                    "Found {control_discovery_count} control(s) for this device — "
+                    "{control_discovery_new_count} new, "
+                    "{control_discovery_existing_count} already in Home Assistant. "
+                    "Continue to choose which new controls to add.\n\n"
+                    "{control_discovery_overview}",
+                    hint_placeholders=overview_placeholders,
+                    extra=overview_placeholders,
+                ),
+            )
+
+        # Page two: pick which new controls to add. Each option is labelled with
+        # the control's friendly name (the entity is named that automatically —
+        # there is no rename field), and the descriptions live on the overview.
+        prior = self._control_discovery_prior_selections()
+        if user_input is not None:
+            self._store_control_discovery_selections(new_controls, user_input)
+            self._shadow_learning_state.pop("review_phase", None)
+            return await self.async_step_shadow_learning_result()
+
+        options = [
+            SelectOptionDict(
+                value=str(control.get("key") or ""),
+                label=self._control_discovery_control_label(control),
+            )
+            for control in new_controls
+            if str(control.get("key") or "")
+        ]
+        default_enabled = self._control_discovery_default_enabled_keys(new_controls, prior)
+        review_placeholders = {
+            "control_discovery_count": str(len(new_controls)),
+            "control_discovery_on_count": str(len(default_enabled)),
+            "control_discovery_off_count": str(len(new_controls) - len(default_enabled)),
+        }
+        return self.async_show_form(
+            step_id="shadow_learning_review",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "enabled_controls", default=default_enabled
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=options,
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    )
+                }
+            ),
+            errors={},
+            description_placeholders=self._control_discovery_placeholders(
+                coordinator,
+                "common.dynamic.control_discovery_review_intro",
+                "Turn on the controls you want to add to Home Assistant. Risky "
+                "ones are left off — turn them on only if you know what they do.",
+                hint_placeholders=review_placeholders,
+                extra=review_placeholders,
+            ),
+        )
+
+    def _control_discovery_review_controls(self) -> list[dict[str, Any]]:
+        """Return the discovered controls (``review_model.learned_all``) to review.
+
+        Reads the deterministic review model embedded in the generated overlay
+        manifest (EYB-REF-042). Returns copies so callers cannot mutate the stored
+        evidence, and an empty list when no overlay/review model exists (e.g. a
+        failed or empty discovery run).
+        """
+
+        overlay = self._shadow_learning_state.get("overlay")
+        overlay = overlay if isinstance(overlay, dict) else {}
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        review_model = manifest.get("review_model")
+        review_model = review_model if isinstance(review_model, dict) else {}
+        learned_all = review_model.get("learned_all")
+        if not isinstance(learned_all, list):
+            return []
+        return [dict(entry) for entry in learned_all if isinstance(entry, dict)]
+
+    def _control_discovery_failed(self) -> bool:
+        """Return whether the discovery run ended in an error (vs a genuine empty result)."""
+
+        discovery = self._shadow_learning_state.get("discovery")
+        return isinstance(discovery, dict) and str(discovery.get("status") or "") == "error"
+
+    def _control_discovery_error_detail(self) -> str:
+        """Return the best-available failure detail (discovery reason or last status).
+
+        Surfaced to the user on the result screen so a failed run / failed support
+        export is self-diagnosable instead of showing only a generic error.
+        """
+
+        discovery = self._shadow_learning_state.get("discovery")
+        reason = str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
+        if not reason:
+            reason = str(self._shadow_learning_state.get("status") or "")
+        return reason.strip()
+
+    def _control_discovery_already_supported_controls(self) -> list[dict[str, Any]]:
+        """Return controls discovered but already supported by the base schema.
+
+        These come from the overlay manifest's ``skipped_duplicates`` (registers
+        already mapped by Home Assistant). They are shown read-only on the review
+        overview so the user sees the full picture of what was found, not only the
+        new additions.
+        """
+
+        overlay = self._shadow_learning_state.get("overlay")
+        overlay = overlay if isinstance(overlay, dict) else {}
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        skipped = manifest.get("skipped_duplicates")
+        if not isinstance(skipped, list):
+            return []
+        return [dict(entry) for entry in skipped if isinstance(entry, dict)]
+
+    def _control_discovery_overview_markdown(
+        self,
+        new_controls: list[dict[str, Any]],
+        already_controls: list[dict[str, Any]],
+    ) -> str:
+        """Render a readable, non-technical overview of everything discovered.
+
+        A markdown bullet list (which renders reliably in the flow form) grouped
+        into new controls — each with its friendly type and suggested state — and
+        controls already in Home Assistant.
+        """
+
+        def clean(value: Any) -> str:
+            return str(value or "").replace("\n", " ").strip()
+
+        lines: list[str] = []
+        if new_controls:
+            heading = self._tr(
+                "common.dynamic.control_discovery_overview_new_heading",
+                "New controls found ({count})",
+                {"count": str(len(new_controls))},
+            )
+            lines.append(f"**{heading}**")
+            for control in new_controls:
+                name = clean(self._control_discovery_control_label(control))
+                type_label = clean(
+                    self._control_discovery_type_label(str(control.get("value_kind") or ""))
+                )
+                status = clean(self._control_discovery_status_note(control))
+                lines.append(f"- {name} — {type_label} · {status}")
+        if already_controls:
+            if lines:
+                lines.append("")
+            heading = self._tr(
+                "common.dynamic.control_discovery_overview_existing_heading",
+                "Already in Home Assistant ({count})",
+                {"count": str(len(already_controls))},
+            )
+            lines.append(f"**{heading}**")
+            for control in already_controls:
+                name = clean(control.get("field_name") or control.get("field_id"))
+                lines.append(f"- {name}")
+        return "\n".join(lines)
+
+    def _control_discovery_prior_selections(self) -> dict[str, dict[str, Any]]:
+        """Return any previously stored per-control selections, keyed by control key."""
+
+        selections = self._shadow_learning_state.get("review_selections")
+        selections = selections if isinstance(selections, dict) else {}
+        controls = selections.get("controls")
+        return controls if isinstance(controls, dict) else {}
+
+    def _control_discovery_default_enabled_keys(
+        self,
+        controls: list[dict[str, Any]],
+        prior: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        """Return the control keys that should be pre-selected on the edit page.
+
+        Honours a prior selection when the user revisits the screen, otherwise
+        falls back to the review model's ``enabled_by_default`` decision
+        (normal-risk on, high-risk/uncertain off).
+        """
+
+        enabled: list[str] = []
+        for control in controls:
+            key = str(control.get("key") or "")
+            if not key:
+                continue
+            saved = prior.get(key)
+            saved = saved if isinstance(saved, dict) else {}
+            if "enabled" in saved:
+                is_on = bool(saved.get("enabled"))
+            else:
+                is_on = bool(control.get("enabled_by_default"))
+            if is_on:
+                enabled.append(key)
+        return enabled
+
+    def _store_control_discovery_selections(
+        self,
+        controls: list[dict[str, Any]],
+        user_input: dict[str, Any],
+    ) -> None:
+        """Persist the user's per-control name + enable choices into flow state.
+
+        Stores choices keyed by the discovered control key under
+        ``review_selections`` for the activation / support-package steps. This is
+        additive flow state: it never edits the overlay manifest, so the discovered
+        evidence (including disabled controls and the original field names) stays
+        intact.
+        """
+
+        selected_raw = user_input.get("enabled_controls")
+        selected = (
+            {str(key) for key in selected_raw}
+            if isinstance(selected_raw, (list, tuple, set))
+            else set()
+        )
+        stored: dict[str, dict[str, Any]] = {}
+        enabled_by_user: list[str] = []
+        excluded_by_user: list[str] = []
+        for control in controls:
+            key = str(control.get("key") or "")
+            if not key:
+                continue
+            # The friendly discovered name is used as-is (no rename field); it
+            # becomes the entity's label when activated.
+            label = self._control_discovery_control_label(control)
+            enabled = key in selected
+            stored[key] = {
+                "key": key,
+                "register": _coerce_int(control.get("register")) or 0,
+                "field_id": str(control.get("field_id") or ""),
+                "value_kind": str(control.get("value_kind") or ""),
+                "risk_level": str(control.get("risk_level") or ""),
+                "label": label,
+                "default_label": label,
+                "enabled": enabled,
+                "enabled_by_default": bool(control.get("enabled_by_default")),
+            }
+            if enabled:
+                enabled_by_user.append(key)
+            else:
+                excluded_by_user.append(key)
+        self._shadow_learning_state["review_selections"] = {
+            "controls": stored,
+            "enabled_by_user": enabled_by_user,
+            "excluded_by_user": excluded_by_user,
+        }
+
+    def _control_discovery_control_label(self, control: dict[str, Any]) -> str:
+        """Return the discovered default label for one control."""
+
+        default_label = str(control.get("default_label") or "").strip()
+        if default_label:
+            return default_label
+        return default_learned_control_label(
+            field_name=str(control.get("field_name") or ""),
+            field_id=str(control.get("field_id") or ""),
+            register=_coerce_int(control.get("register")),
+        )
+
+
+    def _control_discovery_type_label(self, value_kind: str) -> str:
+        """Map an internal value kind to a friendly, non-technical control type."""
+
+        kind = str(value_kind or "").strip().lower()
+        if kind == "bool":
+            return self._tr("common.dynamic.control_discovery_type_switch", "Switch")
+        if kind == "enum":
+            return self._tr("common.dynamic.control_discovery_type_select", "Option")
+        if kind == "action":
+            return self._tr("common.dynamic.control_discovery_type_button", "Button")
+        if kind in {"u16", "u32_high_first", "u32_low_first"}:
+            return self._tr("common.dynamic.control_discovery_type_number", "Number")
+        return self._tr("common.dynamic.control_discovery_type_other", "Setting")
+
+    def _control_discovery_status_note(self, control: dict[str, Any]) -> str:
+        """Return a short, non-technical suggested-state note for one control."""
+
+        risk = str(control.get("risk_level") or "").strip().lower()
+        if risk == "high":
+            return self._tr(
+                "common.dynamic.control_discovery_status_high",
+                "Risky — off by default",
+            )
+        if risk == "uncertain" or not bool(control.get("enabled_by_default")):
+            return self._tr(
+                "common.dynamic.control_discovery_status_uncertain",
+                "Needs a check — off by default",
+            )
+        return self._tr(
+            "common.dynamic.control_discovery_status_normal",
+            "Suggested on",
+        )
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning_result(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Guided control-discovery wizard — step 5: final result.
+
+        The discovery session is already stopped by this point and the transient
+        credentials gathered for the run are dropped here, so nothing sensitive
+        is retained after the wizard ends.
+
+        The action selector adapts to the run's outcome:
+
+        - **Apply the selected parameters** — only when the user actually turned
+          on at least one discovered control. It activates the device-scoped
+          learned overlay with exactly that selection (and labels) via
+          ``build_activation_selection`` + ``async_activate_device_scoped_overlay``.
+          On success it CONFIRMS on the same screen (does not bounce to the menu);
+        - **Try the scan again** — shown in place of Apply when the run failed;
+          restarts the guided wizard;
+        - **Download the support package** — always offered; confirms in place;
+        - **Return to the menu** — leaves the wizard.
+
+        Activation is never automatic. After any in-place action the default
+        selection becomes "Return to the menu" so the next submit leaves cleanly.
+        """
+        coordinator = self._coordinator()
+        # Drop transient credentials once the wizard reaches its end.
+        self._shadow_learning_state.pop("wizard_credentials", None)
+        if coordinator is None:
+            return await self.async_step_shadow_learning()
+
+        controls = self._control_discovery_review_controls()
+        error_detail = self._control_discovery_error_detail()
+        failed = self._control_discovery_failed() or bool(error_detail)
+        selected_count = self._control_discovery_enabled_selection_count()
+        can_activate = bool(controls) and selected_count > 0
+
+        errors: dict[str, str] = {}
+        notice = ""
+        if user_input is not None:
+            action = str(
+                user_input.get("result_action") or CONTROL_DISCOVERY_RESULT_ACTION_DONE
+            )
+            if action == CONTROL_DISCOVERY_RESULT_ACTION_RETRY:
+                # Re-run the guided wizard from the consent step (it resets the
+                # run's transient state); credentials are re-gathered there.
+                for key in (
+                    "discovery",
+                    "progress",
+                    "review_phase",
+                    "review_selections",
+                    "wizard_progress_task",
+                ):
+                    self._shadow_learning_state.pop(key, None)
+                return await self.async_step_shadow_learning()
+            if action == CONTROL_DISCOVERY_RESULT_ACTION_ACTIVATE and can_activate:
+                error = await self._async_control_discovery_activate_selection(
+                    coordinator
+                )
+                if error is None:
+                    # Confirm and STAY on this screen -- applying must not bounce
+                    # the user straight back to the menu.
+                    notice = self._tr(
+                        "common.dynamic.control_discovery_result_notice_applied",
+                        "✓ The selected control(s) were added to Home Assistant.",
+                    )
+                else:
+                    errors["base"] = error
+            elif action == CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT:
+                error = await self._async_control_discovery_export_support(
+                    coordinator
+                )
+                if error is None:
+                    notice = self._tr(
+                        "common.dynamic.control_discovery_result_notice_support",
+                        "✓ Support package saved.",
+                    )
+                else:
+                    errors["base"] = error
+            else:  # CONTROL_DISCOVERY_RESULT_ACTION_DONE
+                return await self.async_step_init()
+
+        # "Apply the selected parameters" shows only when the user turned on at
+        # least one discovered control; on a failed run it is replaced by "Try the
+        # scan again". Support + Return are always offered.
+        action_options: list[SelectOptionDict] = []
+        if can_activate:
+            action_options.append(
+                SelectOptionDict(
+                    value=CONTROL_DISCOVERY_RESULT_ACTION_ACTIVATE,
+                    label=self._tr(
+                        "common.dynamic.control_discovery_result_action_activate",
+                        "Apply the selected parameters",
+                    ),
+                )
+            )
+        elif failed:
+            action_options.append(
+                SelectOptionDict(
+                    value=CONTROL_DISCOVERY_RESULT_ACTION_RETRY,
+                    label=self._tr(
+                        "common.dynamic.control_discovery_result_action_retry",
+                        "Try the scan again",
+                    ),
+                )
+            )
+        action_options.append(
+            SelectOptionDict(
+                value=CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT,
+                label=self._tr(
+                    "common.dynamic.control_discovery_result_action_support",
+                    "Download the support package",
+                ),
+            )
+        )
+        action_options.append(
+            SelectOptionDict(
+                value=CONTROL_DISCOVERY_RESULT_ACTION_DONE,
+                label=self._tr(
+                    "common.dynamic.control_discovery_result_action_done",
+                    "Return to the menu",
+                ),
+            )
+        )
+        # After a successful action default to leaving; otherwise to the primary
+        # (apply / retry / support) option.
+        default_action = (
+            CONTROL_DISCOVERY_RESULT_ACTION_DONE if notice else action_options[0]["value"]
+        )
+
+        if controls:
+            if can_activate:
+                body_key = "common.dynamic.control_discovery_result_intro"
+                body_default = (
+                    "Discovery finished and the temporary SmartESS connection is "
+                    "closed. {control_discovery_selected_count} control(s) are "
+                    "turned on. Apply them, download the support package, or return "
+                    "to the menu."
+                )
+            else:
+                body_key = "common.dynamic.control_discovery_result_intro_none_selected"
+                body_default = (
+                    "Discovery finished and the temporary SmartESS connection is "
+                    "closed. You did not turn on any of the discovered controls, so "
+                    "there is nothing to apply. Download the support package, or "
+                    "return to the menu."
+                )
+            hint_placeholders = {"control_discovery_selected_count": str(selected_count)}
+        elif failed:
+            body_key = "common.dynamic.control_discovery_result_failed"
+            body_default = (
+                "The check couldn't finish ({control_discovery_error}). Try the "
+                "scan again, download the support package so the developer can see "
+                "what happened, or return to the menu."
+            )
+            hint_placeholders = {"control_discovery_error": error_detail or "unknown error"}
+        else:
+            body_key = "common.dynamic.control_discovery_result_empty_with_support"
+            body_default = (
+                "The check has finished and the temporary SmartESS connection is "
+                "closed. No controls were found to add this time. Download the "
+                "support package so the developer can inspect what happened, or "
+                "return to the menu."
+            )
+            hint_placeholders = {}
+
+        placeholders = self._control_discovery_placeholders(
+            coordinator,
+            body_key,
+            body_default,
+            hint_placeholders=hint_placeholders,
+            extra=hint_placeholders,
+        )
+        if notice:
+            placeholders["control_discovery_hint"] = (
+                f"{notice}\n\n{placeholders.get('control_discovery_hint', '')}"
+            )
+        return self.async_show_form(
+            step_id="shadow_learning_result",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "result_action",
+                        default=default_action,
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=action_options,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+
+    def _control_discovery_enabled_selection_count(self) -> int:
+        """Return how many discovered controls the user has turned on."""
+
+        selections = self._shadow_learning_state.get("review_selections")
+        selections = selections if isinstance(selections, dict) else {}
+        enabled = selections.get("enabled_by_user")
+        return len(enabled) if isinstance(enabled, list) else 0
+
+    def _control_discovery_review_selection_payload(
+        self,
+        overlay: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return the user's reviewed control selection without activating it."""
+
+        selections = self._shadow_learning_state.get("review_selections")
+        selections = selections if isinstance(selections, dict) else {}
+        selected_controls = selections.get("controls")
+        if not isinstance(selected_controls, dict) or not selected_controls:
+            return {}
+
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        review_model = manifest.get("review_model")
+        review_model = review_model if isinstance(review_model, dict) else {}
+        return build_activation_selection(
+            review_model=review_model,
+            selections=selections,
+        )
+
+    async def _async_control_discovery_activate_selection(
+        self, coordinator
+    ) -> str | None:
+        """Activate the user-selected discovered controls for this device.
+
+        Builds the activation selection from the review model
+        (``overlay.manifest.review_model``, EYB-REF-042) and the user's review
+        choices (``review_selections``, EYB-REF-043) and activates the
+        device-scoped learned overlay with exactly those controls (EYB-REF-044),
+        so runtime exposes only what the user turned on. Returns ``None`` on
+        success or an error code for the result form on failure.
+
+        The discovered evidence is read-only here: ``build_activation_selection``
+        never mutates the overlay manifest, so ``learned_all`` (including the
+        disabled controls) stays intact for the support package.
+        """
+
+        overlay = self._shadow_learning_state.get("overlay")
+        overlay = overlay if isinstance(overlay, dict) else {}
+        profile_name = str(overlay.get("profile_name") or "").strip()
+        schema_name = str(overlay.get("schema_name") or "").strip()
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        review_model = manifest.get("review_model")
+        review_model = review_model if isinstance(review_model, dict) else {}
+        selections = self._shadow_learning_state.get("review_selections")
+        selections = selections if isinstance(selections, dict) else {}
+        try:
+            if not profile_name or not schema_name:
+                raise RuntimeError("shadow_learning_overlay_unavailable")
+            selection = build_activation_selection(
+                review_model=review_model,
+                selections=selections,
+            )
+            activation = await coordinator.async_activate_device_scoped_overlay(
+                profile_name=profile_name,
+                register_schema_name=schema_name,
+                selection=selection,
+            )
+            self._shadow_learning_state["activation"] = dict(activation)
+            self._publish_shadow_learning_artifacts(coordinator)
+            self._shadow_learning_state["status"] = self._tr(
+                "common.dynamic.shadow_learning_status_overlay_activated",
+                "Discovered controls activated for this device and reload "
+                "requested.",
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user as a form error
+            self._shadow_learning_state["status"] = str(exc)
+            return "shadow_learning_failed"
+
+    async def _async_control_discovery_export_support(
+        self, coordinator
+    ) -> str | None:
+        """Export a support package from the guided result screen.
+
+        Mirrors the advanced path's support-only export: publishes the current
+        UX artifacts and writes a sanitized support archive without re-running
+        any live SmartESS operation. Returns ``None`` on success or an error code
+        on failure.
+        """
+
+        try:
+            self._publish_shadow_learning_artifacts(coordinator)
+            path = await coordinator.async_export_support_package_with_cloud_refresh(
+                smartess_username="",
+                smartess_password="",
+                wants_refresh=False,
+            )
+            self._shadow_learning_state["support_package_path"] = str(path)
+            self._shadow_learning_state["status"] = self._tr(
+                "common.dynamic.shadow_learning_status_support_exported",
+                "Support package exported without running control discovery.",
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user as a form error
+            self._shadow_learning_state["status"] = str(exc)
+            return "shadow_learning_failed"
+
+    def _control_discovery_placeholders(
+        self,
+        coordinator,
+        hint_key: str,
+        hint_default: str,
+        *,
+        hint_placeholders: dict[str, Any] | None = None,
+        extra: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Build wizard description placeholders plus one step-specific hint.
+
+        Reuses the existing shadow-learning placeholder set so the status table
+        renders, and adds ``control_discovery_hint`` for the guided steps. The
+        hint string lives in ``flow_translations``; wiring it into the rendered
+        step templates (``translations/*.json``) is a follow-up.
+
+        ``hint_placeholders`` lets a dynamic step (the review screen) format the
+        hint with run-specific values (e.g. the discovered control count and a
+        summary table). ``extra`` exposes those same values as standalone
+        placeholders for templates that prefer to render them separately.
+        """
+
+        placeholders = dict(self._shadow_learning_placeholders(coordinator))
+        placeholders["control_discovery_hint"] = self._tr(
+            hint_key, hint_default, hint_placeholders
+        )
+        if extra:
+            placeholders.update(extra)
+        return placeholders
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning_advanced(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return await self._async_show_diagnostics_result(
+                action_title=self._diagnostics_result_tr(
+                    "shadow_learning_title",
+                    "Add controls for this device",
                 ),
                 status=self._diagnostics_result_tr(
                     "coordinator_not_loaded",
@@ -5453,7 +6761,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._shadow_learning_state["preflight"] = preflight
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_preflight_completed",
-                        "Preflight refreshed.",
+                        "Readiness check refreshed.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_START_SESSION:
                     result = await coordinator.async_start_shadow_learning(allow_ack_writes=False)
@@ -5461,7 +6769,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._publish_shadow_learning_artifacts(coordinator)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_session_started",
-                        "Shadow-learning session started.",
+                        "Control discovery session started.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_STOP_SESSION:
                     result = await coordinator.async_stop_shadow_learning()
@@ -5472,7 +6780,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._publish_shadow_learning_artifacts(coordinator)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_session_stopped",
-                        "Shadow-learning session stopped.",
+                        "Control discovery session stopped.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_PREVIEW_PLAN:
                     settings_dat = self._shadow_learning_settings_dat(coordinator)
@@ -5494,7 +6802,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._publish_shadow_learning_artifacts(coordinator)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_plan_ready",
-                        "Learning preview plan is ready.",
+                        "Discovery preview plan is ready.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_RUN_LEARNING:
                     if not confirm_cloud_write:
@@ -5516,9 +6824,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     if errors:
                         raise RuntimeError("shadow_learning_credentials_required")
 
-                    route_status = self._shadow_learning_route_status(coordinator)
-                    session_state = self._shadow_learning_session_state(coordinator)
-                    if session_state not in {"ready", "learning"}:
+                    if not self._shadow_learning_route_accepts_control(coordinator):
                         raise RuntimeError("shadow_learning_session_not_ready")
 
                     identity = self._shadow_learning_cloud_identity(coordinator)
@@ -5564,7 +6870,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         devaddr=identity["devaddr"],
                         dry_run=False,
                         confirm_cloud_write=True,
-                        shadow_session_state=session_state,
+                        shadow_session_state="ready",
                         field_ids=selected_field_ids,
                         include_numeric=effective_include_numeric,
                         numeric_value=numeric_value,
@@ -5591,10 +6897,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                             and callable(getattr(observation_source, "wait_for_observations_since", None))
                             else None
                         ),
-                        is_session_ready=lambda: (
-                            self._shadow_learning_session_state(coordinator) in {"ready", "learning"}
-                            and bool(self._shadow_learning_route_status(coordinator).get("ready"))
-                        ),
+                        is_session_ready=lambda: self._shadow_learning_route_accepts_control(coordinator),
                     )
                     self._shadow_learning_state["identity"] = identity
                     self._shadow_learning_state["orchestration"] = result
@@ -5607,7 +6910,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._publish_shadow_learning_artifacts(coordinator)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_execution_done",
-                        "Learning execution completed.",
+                        "Control discovery completed.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_GENERATE_OVERLAY:
                     orchestration = dict(self._shadow_learning_state.get("orchestration") or {})
@@ -5650,7 +6953,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._publish_shadow_learning_artifacts(coordinator)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_overlay_generated",
-                        "Learned overlay draft generated.",
+                        "Discovered controls draft generated.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY:
                     overlay = dict(self._shadow_learning_state.get("overlay") or {})
@@ -5666,7 +6969,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._publish_shadow_learning_artifacts(coordinator)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_overlay_activated",
-                        "Device-scoped learned overlay activated and reload requested.",
+                        "Discovered controls activated for this device and reload requested.",
                     )
                 elif action == SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY:
                     self._publish_shadow_learning_artifacts(coordinator)
@@ -5678,12 +6981,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     self._shadow_learning_state["support_package_path"] = str(path)
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_support_exported",
-                        "Support package exported without learning execution.",
+                        "Support package exported without running control discovery.",
                     )
                 else:
                     self._shadow_learning_state["status"] = self._tr(
                         "common.dynamic.shadow_learning_status_refreshed",
-                        "Shadow-learning status refreshed.",
+                        "Control discovery status refreshed.",
                     )
             except Exception as exc:
                 if not errors:
@@ -5693,24 +6996,24 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         placeholders = self._shadow_learning_placeholders(coordinator)
         action_options = [
             SelectOptionDict(value=SHADOW_LEARNING_ACTION_REFRESH, label=self._tr("common.dynamic.shadow_learning_action_refresh", "Refresh status")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_PREFLIGHT, label=self._tr("common.dynamic.shadow_learning_action_preflight", "Run preflight")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_START_SESSION, label=self._tr("common.dynamic.shadow_learning_action_start_session", "Start shadow session")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_STOP_SESSION, label=self._tr("common.dynamic.shadow_learning_action_stop_session", "Stop shadow session")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_PREVIEW_PLAN, label=self._tr("common.dynamic.shadow_learning_action_preview_plan", "Preview learning plan")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_RUN_LEARNING, label=self._tr("common.dynamic.shadow_learning_action_run_learning", "Run learning")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_GENERATE_OVERLAY, label=self._tr("common.dynamic.shadow_learning_action_generate_overlay", "Generate learned overlay draft")),
-            SelectOptionDict(value=SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY, label=self._tr("common.dynamic.shadow_learning_action_activate_overlay", "Activate learned overlay")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_PREFLIGHT, label=self._tr("common.dynamic.shadow_learning_action_preflight", "Check readiness")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_START_SESSION, label=self._tr("common.dynamic.shadow_learning_action_start_session", "Start discovery session")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_STOP_SESSION, label=self._tr("common.dynamic.shadow_learning_action_stop_session", "Stop discovery session")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_PREVIEW_PLAN, label=self._tr("common.dynamic.shadow_learning_action_preview_plan", "Preview discovery plan")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_RUN_LEARNING, label=self._tr("common.dynamic.shadow_learning_action_run_learning", "Run control discovery")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_GENERATE_OVERLAY, label=self._tr("common.dynamic.shadow_learning_action_generate_overlay", "Generate discovered controls draft")),
+            SelectOptionDict(value=SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY, label=self._tr("common.dynamic.shadow_learning_action_activate_overlay", "Activate discovered controls")),
             SelectOptionDict(value=SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY, label=self._tr("common.dynamic.shadow_learning_action_export_support", "Support package only")),
         ]
         mode_options = [
-            SelectOptionDict(value=SHADOW_LEARNING_MODE_MANUAL, label=self._tr("common.dynamic.shadow_learning_mode_manual", "Manual selected fields")),
-            SelectOptionDict(value=SHADOW_LEARNING_MODE_ENUM_SWEEP, label=self._tr("common.dynamic.shadow_learning_mode_enum", "Enum sweep")),
-            SelectOptionDict(value=SHADOW_LEARNING_MODE_NUMERIC_OPT_IN, label=self._tr("common.dynamic.shadow_learning_mode_numeric", "Numeric opt-in")),
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_MANUAL, label=self._tr("common.dynamic.shadow_learning_mode_manual", "Selected settings")),
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_ENUM_SWEEP, label=self._tr("common.dynamic.shadow_learning_mode_enum", "Try all option values")),
+            SelectOptionDict(value=SHADOW_LEARNING_MODE_NUMERIC_OPT_IN, label=self._tr("common.dynamic.shadow_learning_mode_numeric", "Include numeric settings")),
             SelectOptionDict(value=SHADOW_LEARNING_MODE_SUPPORT_ONLY, label=self._tr("common.dynamic.shadow_learning_mode_support_only", "Support package only")),
         ]
 
         return self.async_show_form(
-            step_id="shadow_learning",
+            step_id="shadow_learning_advanced",
             data_schema=vol.Schema(
                 {
                     vol.Required("shadow_learning_action", default=action): SelectSelector(
@@ -5740,8 +7043,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
 
     async def _build_shadow_learning_preflight_snapshot(self, coordinator) -> dict[str, Any]:
+        connected = bool(getattr(coordinator.data, "connected", False))
         raw_capture = None
-        if bool(getattr(coordinator.data, "connected", False)):
+        if connected:
             with suppress(Exception):
                 raw_capture = await coordinator._runtime.async_capture_support_evidence()
         seed, blockers = build_shadow_learning_seed(
@@ -5757,10 +7061,19 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             raw_capture=raw_capture,
         )
         preflight = build_shadow_learning_preflight(seed)
+        effective_blockers = list(blockers or preflight.blockers)
+        if not connected:
+            # The register seed can only be captured from a LIVE collector. When it is offline
+            # the seed is empty and the only blocker is the cryptic "missing_register_seed";
+            # surface the real cause so the user knows to bring the collector back online rather
+            # than suspecting a code regression.
+            effective_blockers = ["collector_not_connected"] + [
+                blocker for blocker in effective_blockers if blocker != "missing_register_seed"
+            ]
         route_status = self._shadow_learning_route_status(coordinator)
         return {
             "can_start": bool(preflight.can_start),
-            "blockers": list(blockers or preflight.blockers),
+            "blockers": effective_blockers,
             "collector_pn": coordinator.smartess_collector_pn,
             "profile_name": str(coordinator.effective_profile_name or ""),
             "schema_name": str(coordinator.effective_register_schema_name or ""),
@@ -5822,6 +7135,22 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return None
         return {"field": [dict(item) for item in fields if isinstance(item, dict)]}
 
+    def _shadow_learning_settings_dat_from_bundle(
+        self, bundle: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Return raw SmartESS settings dat from a live device bundle."""
+
+        if not isinstance(bundle, dict):
+            return None
+        responses = bundle.get("responses")
+        if not isinstance(responses, dict):
+            return None
+        settings = responses.get("device_settings")
+        if not isinstance(settings, dict):
+            return None
+        dat = settings.get("dat")
+        return dict(dat) if isinstance(dat, dict) else None
+
     def _shadow_learning_cloud_identity(self, coordinator) -> dict[str, Any] | None:
         record = load_latest_cloud_evidence(
             Path(self.hass.config.config_dir),
@@ -5846,6 +7175,32 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "devaddr": int(devaddr),
         }
 
+    def _shadow_learning_cloud_identity_from_bundle(
+        self, bundle: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Return pn/sn/devcode/devaddr from a live SmartESS device bundle."""
+
+        if not isinstance(bundle, dict):
+            return None
+        request = bundle.get("request")
+        if not isinstance(request, dict):
+            return None
+        params = request.get("params")
+        if not isinstance(params, dict):
+            return None
+        pn = str(params.get("pn") or "").strip()
+        sn = str(params.get("sn") or "").strip()
+        devcode = _coerce_int(params.get("devcode"))
+        devaddr = _coerce_int(params.get("devaddr"))
+        if not pn or not sn or devcode is None or devaddr is None:
+            return None
+        return {
+            "pn": pn,
+            "sn": sn,
+            "devcode": devcode,
+            "devaddr": devaddr,
+        }
+
     def _shadow_learning_observed_writes(self, coordinator) -> tuple[Any, ...]:
         handler = self._shadow_learning_observation_source(coordinator)
         observations = getattr(handler, "write_observations", ())
@@ -5853,8 +7208,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
     def _shadow_learning_observation_source(self, coordinator):
         runtime = getattr(coordinator, "_runtime", None)
-        hub = getattr(runtime, "_hub", None)
-        link_manager = getattr(hub, "_link_manager", None)
+        # ``coordinator._runtime`` is the EybondHub itself, which owns
+        # ``_link_manager`` directly; navigate to it without an intermediate
+        # ``_hub`` hop. A wrapped runtime that exposes the hub under ``_hub`` is
+        # still supported as a fallback.
+        link_manager = getattr(runtime, "_link_manager", None)
+        if link_manager is None:
+            hub = getattr(runtime, "_hub", None)
+            link_manager = getattr(hub, "_link_manager", None)
         return getattr(link_manager, "_shadow_learning_handler", None)
 
     def _publish_shadow_learning_artifacts(self, coordinator) -> dict[str, Any]:
@@ -5866,6 +7227,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         state = dict(self._shadow_learning_state or {})
         plan = dict(state.get("plan") or {})
         orchestration = dict(state.get("orchestration") or {})
+        if not orchestration:
+            discovery = state.get("discovery")
+            if isinstance(discovery, dict) and discovery:
+                orchestration = {
+                    "source": "control_discovery_runner",
+                    "status": str(discovery.get("status") or ""),
+                    "reason": str(discovery.get("reason") or ""),
+                    "preflight": dict(state.get("preflight") or {}),
+                }
         correlation = orchestration.get("correlation")
         if not isinstance(correlation, dict):
             correlation = {}
@@ -5898,6 +7268,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "profile_name": str(overlay.get("profile_name") or ""),
                 "register_schema_name": str(overlay.get("schema_name") or ""),
             }
+            review_selection = self._control_discovery_review_selection_payload(
+                overlay
+            )
+            if review_selection:
+                activation.update(review_selection)
+                activation["status"] = "review_selected"
         return publish(
             plan=plan,
             orchestration=orchestration,
@@ -5941,6 +7317,33 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         }:
             return explicit_state
         return "stopped"
+
+    def _shadow_learning_route_accepts_control(self, coordinator) -> bool:
+        """Return whether SmartESS control commands may be sent through the route.
+
+        SAFETY-CRITICAL. A ``ctrlDevice`` is delivered cloud -> the collector's
+        MAIN (param-21) link. That write reaches the inverter UNPROXIED unless the
+        param-21 link currently terminates on our proxy. The only real-time signal
+        for that is ``collector_connected`` -- the live collector->proxy socket,
+        which is STABLE for the duration of a scan (it is the separate *upstream*
+        proxy->cloud socket that is short-lived, not this one). If the collector
+        reboots after the endpoint switch and reconnects onto the real server, or
+        reverts mid-scan, ``collector_connected`` drops and control must stop
+        immediately. A "reached us once" signal is NOT acceptable here: it stays
+        true after a revert and let probing continue onto the real server, which
+        turned off the user's inverter output.
+        """
+
+        status = self._shadow_learning_route_status(coordinator)
+        if not bool(status.get("running")):
+            return False
+        if str(status.get("upstream_error") or "").strip():
+            return False
+        # SAFETY: start readiness and write readiness are deliberately different.
+        # Start only needs a collector->proxy reconnect; an actual ctrlDevice must
+        # also have a live proxy->cloud upstream socket, otherwise SmartESS may
+        # deliver the command over the real-server route and bypass our shadow.
+        return route_status_indicates_control_write_ready(status)
 
     def _shadow_learning_placeholders(self, coordinator) -> dict[str, str]:
         state = dict(self._shadow_learning_state or {})
@@ -6000,7 +7403,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             "shadow_learning_warning": self._tr(
                 "common.dynamic.shadow_learning_warning",
-                "Shadow learning is advanced and optional. Broad enum or numeric sweeps can trigger cloud-side actions and require explicit preview and confirmation.",
+                "Control discovery is advanced and optional. It briefly uses SmartESS to test which settings Home Assistant can control. Testing all option values or numeric settings can trigger cloud-side actions and requires explicit preview and confirmation.",
             ),
         }
 

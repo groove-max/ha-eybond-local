@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .control_policy import can_expose_capability, can_expose_preset, controls_reason
+from .control_policy import (
+    CONTROL_MODE_READ_ONLY,
+    can_expose_capability,
+    can_expose_preset,
+    controls_reason,
+)
 from .models import CapabilityPreset, CapabilityPresetItem, DetectedInverter, WriteCapability
 
 UI_SCHEMA_VERSION = 4
@@ -21,22 +26,51 @@ def capability_write_exposure_allowed(
     schema_source_scope: str = "",
     profile_name: str = "",
     device_scoped_overlay_active: bool = False,
+    selected_control_keys: frozenset[str] | None = None,
 ) -> bool:
     """Return whether runtime should expose one capability as writable."""
 
-    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name) and not (
-        device_scoped_overlay_active and _is_device_scoped_learned_capability(capability)
+    overlay_exposes_learned = device_scoped_overlay_active and _is_device_scoped_learned_capability(
+        capability
+    )
+    # A device-scoped learned control is exposed only when the user selected it. When the
+    # activation declares a selection (``selected_control_keys`` is a set), only those keys
+    # pass and an empty selection exposes none; ``None`` means a legacy activation with no
+    # selection, which keeps the prior behavior of exposing every learned control.
+    if (
+        overlay_exposes_learned
+        and selected_control_keys is not None
+        and capability.key not in selected_control_keys
     ):
         return False
-    if not capability.allows_runtime_write_without_local_proof and not (
-        device_scoped_overlay_active and _is_device_scoped_learned_capability(capability)
-    ):
+    if _is_family_fallback_variant(variant_key=variant_key, profile_name=profile_name) and not overlay_exposes_learned:
         return False
-    if capability.provenance == "verified" and not _has_confirmed_local_metadata_proof(
-        profile_source_scope=profile_source_scope,
-        schema_source_scope=schema_source_scope,
-    ):
+    if not capability.allows_runtime_write_without_local_proof and not overlay_exposes_learned:
         return False
+    if (
+        capability.provenance == "verified"
+        and not device_scoped_overlay_active
+        and not _has_confirmed_local_metadata_proof(
+            profile_source_scope=profile_source_scope,
+            schema_source_scope=schema_source_scope,
+        )
+    ):
+        # ``_has_confirmed_local_metadata_proof`` requires a built-in profile + schema. When
+        # a device-scoped overlay is active the effective metadata is "external", so this
+        # would suppress every verified built-in control and the whole inverter's settings
+        # would go unavailable the moment one learned control is activated. A device-scoped
+        # overlay *extends* the proven built-in base, so its built-in verified controls
+        # remain proven -- treat an active overlay as satisfying the proof.
+        return False
+    if overlay_exposes_learned:
+        # A device-scoped learned control the user explicitly discovered, selected, and
+        # activated is exposed under auto/full regardless of the base control-mode gate.
+        # That gate withholds *untested* controls under "auto" (learned controls are
+        # observed from cloud traffic, never write-tested, so ``capability.tested`` is
+        # False) -- but the activation itself is the deliberate per-control opt-in that
+        # gate is meant to require, so demanding control_mode="full" on top would hide
+        # the very control the user just added. Read-only still suppresses all writes.
+        return control_mode != CONTROL_MODE_READ_ONLY
     return can_expose_capability(
         capability,
         control_mode=control_mode,
@@ -55,6 +89,7 @@ def preset_write_exposure_allowed(
     schema_source_scope: str = "",
     profile_name: str = "",
     device_scoped_overlay_active: bool = False,
+    selected_control_keys: frozenset[str] | None = None,
 ) -> bool:
     """Return whether runtime should expose one preset as writable."""
 
@@ -80,6 +115,7 @@ def preset_write_exposure_allowed(
             schema_source_scope=schema_source_scope,
             profile_name=profile_name,
             device_scoped_overlay_active=device_scoped_overlay_active,
+            selected_control_keys=selected_control_keys,
         ):
             return False
     return True
@@ -240,6 +276,7 @@ def serialize_capability(
             schema_source_scope=str(values.get("effective_schema_source_scope") or ""),
             profile_name=str(values.get("effective_profile_name") or ""),
             device_scoped_overlay_active=bool(values.get("effective_device_scoped_overlay_active")),
+            selected_control_keys=_selected_control_keys_from_values(values),
         )
     effective_editable = runtime_state.editable and policy_allowed
     entity_kind = entity_kind_for_capability(capability)
@@ -360,6 +397,7 @@ def serialize_preset(
             schema_source_scope=str(values.get("effective_schema_source_scope") or ""),
             profile_name=str(values.get("effective_profile_name") or ""),
             device_scoped_overlay_active=bool(values.get("effective_device_scoped_overlay_active")),
+            selected_control_keys=_selected_control_keys_from_values(values),
         )
     reasons = list(runtime_state.reasons)
     if policy_active and runtime_state.visible and not policy_allowed:
@@ -608,6 +646,24 @@ def _is_family_fallback_variant(*, variant_key: str, profile_name: str) -> bool:
 
 def _is_device_scoped_learned_capability(capability: WriteCapability) -> bool:
     return capability.is_device_scoped_experimental
+
+
+def _selected_control_keys_from_values(values: Mapping[str, Any]) -> frozenset[str] | None:
+    """Read the device-scoped overlay selected-control keys from a runtime value set.
+
+    Returns ``None`` when the activation declared no selection (legacy activation), so the
+    serializer preserves the prior exposure behavior. Returns a frozenset (possibly empty)
+    when a selection is present so only the selected learned controls remain editable.
+    """
+
+    raw = values.get("effective_device_scoped_overlay_selected_control_keys")
+    if raw is None:
+        return None
+    if isinstance(raw, frozenset):
+        return raw
+    if isinstance(raw, (list, tuple, set)):
+        return frozenset(str(key).strip() for key in raw if str(key or "").strip())
+    return None
 
 
 def _policy_is_active(values: Mapping[str, Any]) -> bool:

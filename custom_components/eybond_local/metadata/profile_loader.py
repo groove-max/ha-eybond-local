@@ -172,6 +172,34 @@ def builtin_profile_path(profile_name: str) -> Path:
     return (PROFILES_DIR / profile_name).resolve()
 
 
+def builtin_base_profile_name(profile_name: str) -> str:
+    """Return the built-in base profile name underlying ``profile_name``.
+
+    Local overlays (e.g. activated shadow-learning drafts) live in an external
+    root and ``extends`` a built-in profile. Tooling that derives a new draft must
+    start from that built-in base, not the overlay -- otherwise output names and
+    parent references accumulate the overlay's own session token. Walk the
+    ``extends``/``draft_of`` chain until the name resolves to a built-in profile.
+    """
+
+    current = str(profile_name or "").strip()
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            profile_path = _resolve_profile_path(current)
+        except FileNotFoundError:
+            break
+        if _profile_source_scope(profile_path) != "external":
+            return current
+        raw = json.loads(profile_path.read_text(encoding="utf-8"))
+        parent = str(raw.get("extends") or raw.get("draft_of") or "").strip()
+        if not parent:
+            break
+        current = parent
+    return current
+
+
 def _resolve_relative_parent_profile_path(profile_path: Path, parent_ref: str) -> Path:
     candidate = (profile_path.parent / parent_ref).resolve()
     if candidate.is_file():

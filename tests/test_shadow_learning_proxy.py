@@ -30,7 +30,11 @@ from custom_components.eybond_local.payload.modbus import (
     crc16_modbus,
 )
 from custom_components.eybond_local.support.shadow_learning_backend import ShadowLearningSeed
-from custom_components.eybond_local.support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandler
+from custom_components.eybond_local.support.shadow_learning_proxy import (
+    InProcessFailClosedShadowProxyHandler,
+    route_status_indicates_control_ready,
+    route_status_indicates_control_write_ready,
+)
 
 
 def _read_trace(path: Path) -> list[dict[str, object]]:
@@ -693,6 +697,274 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
                 for event in trace
             )
         )
+
+    async def test_unanswerable_cloud_at_query_is_forwarded_and_redirect_stays_local(self) -> None:
+        upstream_at_responses: list[bytes] = []
+        cloud_done = asyncio.Event()
+
+        async def _upstream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            # DTUPN is not in the shadow seed → it must be forwarded to the real
+            # collector and the device's genuine PN relayed back to the cloud.
+            writer.write(b"AT+DTUPN?\r\n")
+            await writer.drain()
+            upstream_at_responses.append(await reader.readuntil(b"\n"))
+            # CLDSRVHOST1 is a redirect command → answered locally from seed,
+            # never forwarded, so the DTU keeps pointing at the proxy.
+            writer.write(b"AT+CLDSRVHOST1?\r\n")
+            await writer.drain()
+            upstream_at_responses.append(await reader.readuntil(b"\n"))
+            cloud_done.set()
+            writer.close()
+            await writer.wait_closed()
+
+        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_port = upstream_server.sockets[0].getsockname()[1]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = Path(tmp) / "shadow_proxy.jsonl"
+            handler = InProcessFailClosedShadowProxyHandler(
+                upstream_host="127.0.0.1",
+                upstream_port=upstream_port,
+                seed=_seed(),
+                output_path=trace_path,
+            )
+            await handler.start()
+            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_port = proxy_server.sockets[0].getsockname()[1]
+
+            collector_reader, collector_writer = await asyncio.open_connection("127.0.0.1", proxy_port)
+            forwarded = await asyncio.wait_for(collector_reader.readuntil(b"\n"), timeout=1.0)
+            self.assertEqual(forwarded, b"AT+DTUPN?\r\n")
+            collector_writer.write(b"AT+DTUPN:E5000025388419\r\n")
+            await collector_writer.drain()
+
+            await asyncio.wait_for(cloud_done.wait(), timeout=1.0)
+
+            collector_writer.close()
+            await collector_writer.wait_closed()
+            proxy_server.close()
+            await proxy_server.wait_closed()
+            await handler.stop()
+            trace = _read_trace(trace_path)
+
+        upstream_server.close()
+        await upstream_server.wait_closed()
+
+        dtupn = parse_at_response(upstream_at_responses[0])
+        self.assertEqual(dtupn.command, "DTUPN")
+        self.assertEqual(dtupn.value, "E5000025388419")
+        cldsrv = parse_at_response(upstream_at_responses[1])
+        self.assertEqual(cldsrv.command, "CLDSRVHOST1")
+        self.assertEqual(cldsrv.value, "192.168.1.50,18899,TCP")
+
+        forwarded_commands = {
+            event.get("payload", {}).get("payload_ascii", "").strip()
+            for event in trace
+            if event.get("kind") == "shadow_proxy_forward_cloud_at"
+        }
+        self.assertIn("AT+DTUPN?", forwarded_commands)
+        self.assertNotIn("AT+CLDSRVHOST1?", forwarded_commands)
+
+    async def test_cloud_write_not_forwarded_to_collector_with_at_forwarding(self) -> None:
+        upstream_write_response: list[bytes] = []
+        cloud_done = asyncio.Event()
+
+        cloud_write = build_collector_request(
+            61,
+            build_write_multiple_request(1, 300, [42]),
+            devcode=2376,
+            collector_addr=1,
+            fcode=4,
+        )
+
+        async def _upstream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            writer.write(b"AT+DTUPN?\r\n")
+            await writer.drain()
+            await reader.readuntil(b"\n")  # genuine DTUPN reply relayed from collector
+            writer.write(cloud_write)
+            await writer.drain()
+            upstream_write_response.append(await reader.readexactly(13))
+            cloud_done.set()
+            writer.close()
+            await writer.wait_closed()
+
+        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_port = upstream_server.sockets[0].getsockname()[1]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            handler = InProcessFailClosedShadowProxyHandler(
+                upstream_host="127.0.0.1",
+                upstream_port=upstream_port,
+                seed=_seed(),
+                output_path=Path(tmp) / "shadow_proxy.jsonl",
+            )
+            await handler.start()
+            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_port = proxy_server.sockets[0].getsockname()[1]
+
+            collector_reader, collector_writer = await asyncio.open_connection("127.0.0.1", proxy_port)
+            forwarded_at = await asyncio.wait_for(collector_reader.readuntil(b"\n"), timeout=1.0)
+            self.assertEqual(forwarded_at, b"AT+DTUPN?\r\n")
+            collector_writer.write(b"AT+DTUPN:E5000025388419\r\n")
+            await collector_writer.drain()
+
+            await asyncio.wait_for(cloud_done.wait(), timeout=1.0)
+
+            # The collector must receive only the forwarded AT query — never the
+            # modbus write, which is intercepted and NACK'd to the cloud locally.
+            extra = b""
+            try:
+                extra = await asyncio.wait_for(collector_reader.read(64), timeout=0.2)
+            except asyncio.TimeoutError:
+                extra = b""
+            self.assertEqual(extra, b"")
+
+            collector_writer.close()
+            await collector_writer.wait_closed()
+            proxy_server.close()
+            await proxy_server.wait_closed()
+            await handler.stop()
+
+        upstream_server.close()
+        await upstream_server.wait_closed()
+
+        response_header = decode_header(upstream_write_response[0][:HEADER_SIZE])
+        response_payload = upstream_write_response[0][HEADER_SIZE:]
+        self.assertEqual(response_header.tid, 61)
+        self.assertEqual(response_header.fcode, 4)
+        self.assertEqual(response_payload[1], 0x90)
+
+    async def test_cloud_raw_modbus_read_answered_and_write_observed_and_nacked(self) -> None:
+        # This DTU family exchanges bare Modbus RTU (no collector header) after
+        # AT registration. Reads must be answered from the synthetic bank and
+        # writes observed + NACK'd, with nothing forwarded to the collector.
+        read_request = build_read_holding_request(1, 300, 2)
+        write_request = build_write_multiple_request(1, 300, [5])
+        responses: list[bytes] = []
+        cloud_done = asyncio.Event()
+
+        async def _upstream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            writer.write(read_request)
+            await writer.drain()
+            responses.append(await reader.readexactly(9))  # 01 03 04 <4 data> <crc>
+            writer.write(write_request)
+            await writer.drain()
+            responses.append(await reader.readexactly(5))  # 01 90 01 <crc>
+            cloud_done.set()
+            writer.close()
+            await writer.wait_closed()
+
+        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_port = upstream_server.sockets[0].getsockname()[1]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = Path(tmp) / "shadow_proxy.jsonl"
+            handler = InProcessFailClosedShadowProxyHandler(
+                upstream_host="127.0.0.1",
+                upstream_port=upstream_port,
+                seed=_seed(),
+                output_path=trace_path,
+            )
+            await handler.start()
+            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_port = proxy_server.sockets[0].getsockname()[1]
+
+            collector_reader, collector_writer = await asyncio.open_connection("127.0.0.1", proxy_port)
+            await asyncio.wait_for(cloud_done.wait(), timeout=1.0)
+
+            # The collector (real inverter side) must never see this traffic.
+            self.assertEqual(await asyncio.wait_for(collector_reader.read(1), timeout=0.3), b"")
+
+            collector_writer.close()
+            await collector_writer.wait_closed()
+            proxy_server.close()
+            await proxy_server.wait_closed()
+            await handler.stop()
+            trace = _read_trace(trace_path)
+
+        upstream_server.close()
+        await upstream_server.wait_closed()
+
+        # Read answered from the seed register bank {300: 10, 301: 11}.
+        read_response = responses[0]
+        self.assertEqual(read_response[:3], bytes([1, 3, 4]))
+        self.assertEqual(int.from_bytes(read_response[3:5], "big"), 10)
+        self.assertEqual(int.from_bytes(read_response[5:7], "big"), 11)
+        self.assertEqual(int.from_bytes(read_response[-2:], "little"), crc16_modbus(read_response[:-2]))
+
+        # Write NACK'd with a Modbus exception (function 0x10 | 0x80 = 0x90).
+        write_response = responses[1]
+        self.assertEqual(write_response[0], 1)
+        self.assertEqual(write_response[1], 0x90)
+        self.assertEqual(int.from_bytes(write_response[-2:], "little"), crc16_modbus(write_response[:-2]))
+
+        # The write was observed for learning, decoded to register 300 = [5].
+        observations = [
+            event for event in trace if event.get("kind") == "shadow_modbus_write_observation"
+        ]
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]["payload"]["register"], 300)
+        self.assertEqual(observations[0]["payload"]["values"], [5])
+
+
+class RouteStatusControlReadyTests(unittest.TestCase):
+    def _status(self, **overrides):
+        base = {
+            "running": True,
+            "collector_connected": False,
+            "collector_protocol_ingress": False,
+            "route_protocol_activity": False,
+            "upstream_connected": False,
+            "ready": False,
+            "upstream_error": "",
+        }
+        base.update(overrides)
+        return base
+
+    def test_ready_without_upstream_once_collector_reconnects_and_speaks(self):
+        # Start readiness: the collector has reconnected to our proxy after the endpoint switch
+        # and is speaking our protocol, but the proxy->cloud socket is NOT up. This is enough for
+        # the start-time reconnect wait, but not enough for an actual ctrlDevice write.
+        self.assertTrue(
+            route_status_indicates_control_ready(
+                self._status(collector_connected=True, collector_protocol_ingress=True)
+            )
+        )
+        # Route protocol activity is an equally good signal of a live route.
+        self.assertTrue(
+            route_status_indicates_control_ready(
+                self._status(collector_connected=True, route_protocol_activity=True)
+            )
+        )
+
+    def test_not_ready_until_collector_is_actually_connected(self):
+        # No live collector socket -> never ready, regardless of stale protocol flags.
+        self.assertFalse(
+            route_status_indicates_control_ready(
+                self._status(collector_connected=False, collector_protocol_ingress=True)
+            )
+        )
+        # Bare TCP accept with no protocol seen yet is not ready either.
+        self.assertFalse(
+            route_status_indicates_control_ready(self._status(collector_connected=True))
+        )
+
+    def test_write_ready_requires_live_upstream_socket(self):
+        # Regression: a scan leaked one write right after the upstream path dropped. The collector
+        # was still marked connected, but SmartESS delivered ctrlDevice over the real-server route
+        # instead of through our proxy. Per-write readiness is stricter than start readiness.
+        primed = self._status(
+            collector_connected=True,
+            collector_protocol_ingress=True,
+            route_protocol_activity=True,
+            upstream_connected=False,
+            ready=False,
+        )
+        self.assertTrue(route_status_indicates_control_ready(primed))
+        self.assertFalse(route_status_indicates_control_write_ready(primed))
+
+        live_upstream = dict(primed, upstream_connected=True)
+        self.assertTrue(route_status_indicates_control_write_ready(live_upstream))
 
 
 if __name__ == "__main__":

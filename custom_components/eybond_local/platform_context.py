@@ -138,4 +138,29 @@ def entity_setup_context(entry: Any, coordinator: Any):
         or (inverter is not None and not getattr(inverter, "snapshot_backed", False))
         or persisted_inverter_identity(entry)
     )
+    inverter = _merge_active_device_overlay(coordinator, inverter)
     return driver, inverter, has_inverter_identity
+
+
+def _merge_active_device_overlay(coordinator: Any, inverter: Any):
+    """Ensure the inverter that platforms set up from carries the activated learned controls.
+
+    The runtime inverter is detected against built-in bindings (and the snapshot-backed
+    fallback can be built before the overlay resolves active), so its capabilities may not
+    include the activated device-scoped learned controls at the moment entities are created
+    -- and platforms set up entities only once. Merging here, at the single point every
+    platform reads, makes the learned controls materialize regardless of detection timing.
+    Idempotent and a no-op when no overlay is active; failures never block entity setup.
+    """
+
+    if inverter is None:
+        return inverter
+    applier = getattr(coordinator, "_apply_device_overlay_to_inverter", None)
+    if not callable(applier):
+        return inverter
+    collector = getattr(getattr(coordinator, "data", None), "collector", None)
+    try:
+        merged = applier(inverter, collector)
+    except Exception:  # pragma: no cover - defensive; never block entity setup
+        return inverter
+    return merged if merged is not None else inverter

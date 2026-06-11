@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib
 import importlib.util
 from pathlib import Path
 import sys
 import types
 import unittest
+
+
+@dataclasses.dataclass
+class _FakeInverter:
+    """Minimal inverter stand-in supporting dataclasses.replace for overlay-merge tests."""
+
+    capabilities: tuple = ()
+    capability_groups: tuple = ()
+    register_schema_name: str = ""
 from unittest.mock import PropertyMock, patch
 
 
@@ -108,6 +118,7 @@ def _install_coordinator_stubs() -> None:
     const.CONF_SMARTESS_PROTOCOL_ASSET_ID = "smartess_protocol_asset_id"
     const.CONF_TCP_PORT = "tcp_port"
     const.CONF_UDP_PORT = "udp_port"
+    const.BUILTIN_SCHEMA_PREFIX = "builtin:"
     const.DEFAULT_COLLECTOR_IP = ""
     const.DEFAULT_COLLECTOR_OPERATION_MODE = "smartess_cloud_home_assistant"
     const.DEFAULT_CONTROL_MODE = "limited"
@@ -194,7 +205,31 @@ def _install_coordinator_stubs() -> None:
 
     models = _ensure_module("custom_components.eybond_local.models")
 
+    class CapabilityChoice:
+        pass
+
+    class CapabilityCondition:
+        pass
+
+    class CapabilityGroup:
+        pass
+
     class CapabilityPreset:
+        pass
+
+    class CapabilityPresetItem:
+        pass
+
+    class CapabilityRecommendation:
+        pass
+
+    class BinarySensorDescription:
+        pass
+
+    class MeasurementDescription:
+        pass
+
+    class RegisterValueSpec:
         pass
 
     class WriteCapability:
@@ -207,9 +242,18 @@ def _install_coordinator_stubs() -> None:
             self.collector = collector
             self.connected = connected
 
+    models.CapabilityChoice = CapabilityChoice
+    models.CapabilityCondition = CapabilityCondition
+    models.CapabilityGroup = CapabilityGroup
     models.CapabilityPreset = CapabilityPreset
+    models.CapabilityPresetItem = CapabilityPresetItem
+    models.CapabilityRecommendation = CapabilityRecommendation
+    models.BinarySensorDescription = BinarySensorDescription
+    models.MeasurementDescription = MeasurementDescription
+    models.RegisterValueSpec = RegisterValueSpec
     models.RuntimeSnapshot = RuntimeSnapshot
     models.WriteCapability = WriteCapability
+    models.decimals_for_divisor = lambda _divisor: 0
 
     runtime_factory = _ensure_module("custom_components.eybond_local.runtime.factory")
     runtime_factory.create_runtime_manager = lambda *args, **kwargs: None
@@ -318,6 +362,18 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: Path("/tmp/shadow-learning.jsonl")
     )
 
+    support_shadow_proxy = _ensure_module(
+        "custom_components.eybond_local.support.shadow_learning_proxy"
+    )
+    support_shadow_proxy.route_status_indicates_control_ready = (
+        lambda status: bool(status.get("collector_connected"))
+        and (
+            bool(status.get("ready"))
+            or bool(status.get("route_protocol_activity"))
+            or bool(status.get("collector_protocol_ingress"))
+        )
+    )
+
     support_shadow_session = _ensure_module(
         "custom_components.eybond_local.support.shadow_learning_session"
     )
@@ -393,6 +449,7 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components.eybond_local.support.proxy_session",
     "custom_components.eybond_local.support.proxy_trace",
     "custom_components.eybond_local.support.shadow_learning_backend",
+    "custom_components.eybond_local.support.shadow_learning_proxy",
     "custom_components.eybond_local.support.shadow_learning_session",
     "custom_components.eybond_local.support.workflow",
     "custom_components.eybond_local.runtime.coordinator",
@@ -529,6 +586,161 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertIn("/config/eybond_local/proxy_traces/session_bundle.zip", message)
         self.assertIn("Збережений архів", message)
+
+    def test_capability_enabled_by_default_enables_exposed_learned_control(self) -> None:
+        # The overlay generator bakes enabled_default=False onto every learned capability
+        # so it stays inactive until activation. Once activated + selected (exposable), the
+        # entity must be enabled by default -- otherwise it is registered disabled and stays
+        # hidden under "disabled entities" on the device page. Built-ins keep their default.
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        learned = types.SimpleNamespace(
+            is_device_scoped_experimental=True, enabled_default=False
+        )
+        builtin = types.SimpleNamespace(
+            is_device_scoped_experimental=False, enabled_default=True
+        )
+
+        coordinator.can_expose_capability = lambda _cap: True
+        self.assertTrue(coordinator.capability_enabled_by_default(learned))
+        self.assertTrue(coordinator.capability_enabled_by_default(builtin))
+
+        coordinator.can_expose_capability = lambda _cap: False
+        self.assertFalse(coordinator.capability_enabled_by_default(learned))
+
+    def test_apply_device_overlay_merges_learned_capabilities(self) -> None:
+        # Regression: the runtime detects the inverter against built-in bindings, so its
+        # capabilities never include the activated learned overlay controls. Without
+        # merging them in, the learned control exists only in effective metadata and
+        # never becomes an entity (every entity/write path reads inverter.capabilities).
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+
+        builtin_cap = types.SimpleNamespace(key="battery_float_voltage")
+        inverter = _FakeInverter(
+            capabilities=(builtin_cap,),
+            capability_groups=(types.SimpleNamespace(key="battery"),),
+            register_schema_name="modbus_smg/models/smg_6200.json",
+        )
+
+        learned_cap = types.SimpleNamespace(
+            key="learned_x_304", is_device_scoped_experimental=True, group="config"
+        )
+        learned_schema_name = "learned/shadow_learning/dev/smg_6200_session.json"
+        stub_metadata = types.SimpleNamespace(
+            device_scoped_overlay_active=True,
+            register_schema_name=learned_schema_name,
+            profile_metadata=types.SimpleNamespace(
+                capabilities=(learned_cap,),
+                groups=(types.SimpleNamespace(key="config"),),
+            ),
+        )
+        original = self.coordinator_module.resolve_effective_metadata_selection
+        self.coordinator_module.resolve_effective_metadata_selection = (
+            lambda **_kwargs: stub_metadata
+        )
+        try:
+            result = coordinator._apply_device_overlay_to_inverter(inverter, None)
+        finally:
+            self.coordinator_module.resolve_effective_metadata_selection = original
+
+        self.assertIn("learned_x_304", {cap.key for cap in result.capabilities})
+        self.assertIn("battery_float_voltage", {cap.key for cap in result.capabilities})
+        self.assertIn("config", {group.key for group in result.capability_groups})
+        # CRITICAL: the overlay merge must NOT change register_schema_name. Pointing it at the
+        # learned overlay schema flips the metadata scope to external and fails the
+        # write-exposure proof for EVERY capability (builtin included) -- every control then
+        # disappears. The builtin schema stays; learned-register read-back is done in the driver.
+        self.assertEqual(result.register_schema_name, "modbus_smg/models/smg_6200.json")
+
+    def test_entity_setup_merges_active_overlay_into_inverter(self) -> None:
+        # The single place every platform reads at setup must apply the overlay merge,
+        # so activated learned controls materialize regardless of detection timing.
+        pc = self.platform_context_module
+        inverter = _FakeInverter(capabilities=(types.SimpleNamespace(key="builtin"),))
+        merged = _FakeInverter(
+            capabilities=(
+                types.SimpleNamespace(key="builtin"),
+                types.SimpleNamespace(key="learned_x"),
+            )
+        )
+        coordinator = types.SimpleNamespace(
+            _apply_device_overlay_to_inverter=lambda inv, collector: merged,
+            data=types.SimpleNamespace(collector=None),
+        )
+
+        self.assertIs(pc._merge_active_device_overlay(coordinator, inverter), merged)
+        # No applier / no inverter -> unchanged, never raises.
+        self.assertIs(
+            pc._merge_active_device_overlay(types.SimpleNamespace(), inverter), inverter
+        )
+        self.assertIsNone(pc._merge_active_device_overlay(coordinator, None))
+
+    def test_apply_device_overlay_returns_inverter_unchanged_when_inactive(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        inverter = _FakeInverter()
+
+        stub_metadata = types.SimpleNamespace(device_scoped_overlay_active=False)
+        original = self.coordinator_module.resolve_effective_metadata_selection
+        self.coordinator_module.resolve_effective_metadata_selection = (
+            lambda **_kwargs: stub_metadata
+        )
+        try:
+            result = coordinator._apply_device_overlay_to_inverter(inverter, None)
+        finally:
+            self.coordinator_module.resolve_effective_metadata_selection = original
+
+        self.assertIs(result, inverter)
+
+    def test_shadow_learning_main_redirect_uses_real_server_not_additive_callback(self) -> None:
+        # SAFETY regression: in "SmartESS + HA" the HA callback is additive and the live
+        # endpoint can already look like HA. The scan must still rewrite the collector's main
+        # param-21 endpoint to the proxy (driven off the REAL upstream/rollback target) and
+        # restore to the real server -- otherwise the collector keeps a live link to the real
+        # cloud and a mid-scan reconnect can push a real command to the inverter.
+        resolve = self.coordinator_module._resolve_shadow_learning_main_redirect
+        real = "dtu_ess.eybond.com,18899,TCP"
+        ha = "192.168.1.50,18899,TCP"
+
+        # Live endpoint already looks like HA (additive callback), but rollback target is real.
+        restore_endpoint, redirect_required = resolve(
+            home_assistant_primary=False,
+            current_endpoint=ha, rollback_target=real, upstream_endpoint=real, callback_endpoint=ha
+        )
+        self.assertEqual(restore_endpoint, real)
+        self.assertTrue(redirect_required)
+
+        # No remembered rollback -> falls back to the upstream the proxy forwards to (real).
+        restore_endpoint, redirect_required = resolve(
+            home_assistant_primary=False,
+            current_endpoint=ha, rollback_target="", upstream_endpoint=real, callback_endpoint=ha
+        )
+        self.assertEqual(restore_endpoint, real)
+        self.assertTrue(redirect_required)
+
+        # Nothing real known anywhere -> no redirect (can't move to proxy), restore stays put.
+        restore_endpoint, redirect_required = resolve(
+            home_assistant_primary=False,
+            current_endpoint=ha, rollback_target="", upstream_endpoint="", callback_endpoint=ha
+        )
+        self.assertEqual(restore_endpoint, ha)
+        self.assertFalse(redirect_required)
+
+    def test_shadow_learning_main_redirect_noops_when_already_ha_only(self) -> None:
+        # Regression: starting a scan already in HA-only must NOT switch or restore -- the
+        # collector is already isolated on HA. Restoring to the real-server rollback target
+        # would move an already-isolated collector ONTO the real server after the scan and
+        # leave its control entities unavailable (mirrors proxy capture's no-op).
+        resolve = self.coordinator_module._resolve_shadow_learning_main_redirect
+        restore_endpoint, redirect_required = resolve(
+            home_assistant_primary=True,
+            current_endpoint="192.168.1.50,18899,TCP",
+            rollback_target="dtu_ess.eybond.com,18899,TCP",
+            upstream_endpoint="dtu_ess.eybond.com,18899,TCP",
+            callback_endpoint="192.168.1.50,18899,TCP",
+        )
+        self.assertEqual(restore_endpoint, "")
+        self.assertFalse(redirect_required)
 
     def test_sync_device_registry_sets_inverter_parent_to_collector(self) -> None:
         registry = FakeRegistry()
@@ -994,6 +1206,73 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             self.assertEqual(coordinator._collector_operation_pending_target_endpoint, "")
             self.assertEqual(listener_ports, [502, 502])
+
+        asyncio.run(_run())
+
+    def test_shadow_learning_blocks_cloud_mode_endpoint_restore_reconcile(self) -> None:
+        async def _run() -> None:
+            set_endpoint_calls: list[tuple[str, bool]] = []
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                set_endpoint_calls.append((endpoint, apply_changes))
+                return {"readback_endpoint": endpoint, "status": "applied"}
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return types.SimpleNamespace(status="learning")
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                effective_advertised_tcp_port=8899,
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                collector_server_endpoint_rollback_target="dtu_ess.eybond.com,18899,TCP",
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+            )
+            coordinator._collector_operation_pending_target_endpoint = ""
+            coordinator._remembered_collector_server_endpoint = (
+                "dtu_ess.eybond.com,18899,TCP"
+            )
+            coordinator._shadow_learning_process_running = lambda: False
+            coordinator._async_active_shadow_learning_state = (
+                _async_active_shadow_learning_state
+            )
+            coordinator.config_entry = types.SimpleNamespace(
+                data={
+                    "collector_ip": "192.168.1.55",
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                },
+                options={
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                    "collector_original_server_endpoint": "dtu_ess.eybond.com,18899,TCP",
+                },
+            )
+            snapshot = self.RuntimeSnapshot(
+                connected=True,
+                values={
+                    "collector_server_endpoint": "192.168.1.50,18899,TCP",
+                    "collector_cloud_family": "smartess_at",
+                },
+            )
+            coordinator.data = snapshot
+
+            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+
+            self.assertEqual(set_endpoint_calls, [])
+            self.assertEqual(
+                snapshot.values["collector_operation_endpoint_sync_status"],
+                "shadow_learning_active",
+            )
+            self.assertEqual(
+                snapshot.values["collector_server_endpoint"],
+                "192.168.1.50,18899,TCP",
+            )
+
+        import asyncio
 
         asyncio.run(_run())
 
@@ -2701,6 +2980,379 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertEqual(saved_states[-1].last_restore_error, "restore_write_timeout")
             self.assertTrue(saved_states[-1].route_owner_id.startswith("shadow_learning:"))
             self.assertEqual(published[-1]["shadow_learning_session_status"], "restore_failed")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_start_shadow_learning_requires_post_redirect_shadow_connection(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            wait_kwargs: list[dict[str, object]] = []
+            set_endpoint_calls: list[tuple[str, bool]] = []
+            route_status = {
+                "running": True,
+                "collector_connected": True,
+                "collector_connection_sequence": 7,
+                "collector_protocol_ingress": True,
+                "route_protocol_activity": True,
+                "upstream_connected": False,
+                "ready": False,
+                "upstream_error": "",
+            }
+
+            async def _async_start_shadow_learning_route(**kwargs):
+                del kwargs
+                return None
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                set_endpoint_calls.append((endpoint, apply_changes))
+                return {"readback_endpoint": endpoint, "status": "applied"}
+
+            async def _async_stop_shadow_learning_route(**kwargs) -> None:
+                raise AssertionError(f"route should not stop: {kwargs!r}")
+
+            async def _async_preflight_proxy_capture_network(**kwargs) -> None:
+                del kwargs
+                return None
+
+            async def _async_save_shadow_learning_session_state(_state) -> None:
+                return None
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return None
+
+            async def _async_wait_for_shadow_learning_ready(**kwargs) -> None:
+                wait_kwargs.append(dict(kwargs))
+
+            async def _async_request_refresh() -> None:
+                return None
+
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-id",
+                data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+                options={"proxy_capture_duration_minutes": 10},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=False,
+                values={"collector_server_endpoint": "eu.smartess.io,18899,TCP"},
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                proxy_capture_route_running=lambda: False,
+                shadow_learning_route_status=lambda: dict(route_status),
+                async_start_shadow_learning_route=_async_start_shadow_learning_route,
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+                async_stop_shadow_learning_route=_async_stop_shadow_learning_route,
+            )
+            coordinator._shadow_learning_process_running = lambda: False
+            coordinator._proxy_capture_collector_ip = lambda: "192.168.1.55"
+            coordinator._async_preflight_proxy_capture_network = _async_preflight_proxy_capture_network
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator._async_save_shadow_learning_session_state = (
+                _async_save_shadow_learning_session_state
+            )
+            coordinator._async_wait_for_shadow_learning_ready = (
+                _async_wait_for_shadow_learning_ready
+            )
+            coordinator.async_request_refresh = _async_request_refresh
+            coordinator._publish_tooling_values = lambda **_kwargs: None
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "smartess_collector_pn",
+                new_callable=PropertyMock,
+                return_value="E5000025388419",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_callback_target_endpoint",
+                new_callable=PropertyMock,
+                return_value="192.168.1.50,18899,TCP",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_upstream_endpoint",
+                new_callable=PropertyMock,
+                return_value="eu.smartess.io,18899,TCP",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_key",
+                new_callable=PropertyMock,
+                return_value="smartess-default",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_label",
+                new_callable=PropertyMock,
+                return_value="SmartESS Default",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_source",
+                new_callable=PropertyMock,
+                return_value="runtime",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_confidence",
+                new_callable=PropertyMock,
+                return_value="high",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "effective_metadata_snapshot",
+                new_callable=PropertyMock,
+                return_value={},
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_family",
+                new_callable=PropertyMock,
+                return_value="smartess",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "_effective_callback_server_host",
+                new_callable=PropertyMock,
+                return_value="192.168.1.50",
+            ), patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_seed",
+                return_value=(
+                    types.SimpleNamespace(write_response_mode="exception"),
+                    [],
+                ),
+            ), patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_preflight",
+                return_value=types.SimpleNamespace(can_start=True, blockers=[]),
+            ):
+                await coordinator.async_start_shadow_learning(
+                    output_path=Path("/tmp/shadow-start-ready.jsonl"),
+                    raw_capture={},
+                )
+
+            self.assertEqual(set_endpoint_calls, [("192.168.1.50,18899,TCP", True)])
+            self.assertEqual(len(wait_kwargs), 1)
+            self.assertEqual(
+                wait_kwargs[0]["min_collector_connection_sequence"],
+                7,
+            )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_wait_for_shadow_learning_ready_rejects_stale_collector_connection(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            statuses = [
+                {
+                    "running": True,
+                    "collector_connected": True,
+                    "collector_connection_sequence": 7,
+                    "collector_protocol_ingress": True,
+                    "route_protocol_activity": True,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                },
+                {
+                    "running": True,
+                    "collector_connected": True,
+                    "collector_connection_sequence": 8,
+                    "collector_protocol_ingress": True,
+                    "route_protocol_activity": True,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                },
+            ]
+            sleeps: list[float] = []
+
+            coordinator._shadow_learning_process_running = lambda: True
+            coordinator._shadow_learning_route_status = lambda: statuses.pop(0)
+
+            original_sleep = self.coordinator_module.asyncio.sleep
+
+            async def _sleep(duration: float) -> None:
+                sleeps.append(duration)
+
+            self.coordinator_module.asyncio.sleep = _sleep
+            try:
+                await coordinator._async_wait_for_shadow_learning_ready(
+                    trace_path=Path("/tmp/shadow-stale-connection.jsonl"),
+                    timeout_seconds=5.0,
+                    min_collector_connection_sequence=7,
+                )
+            finally:
+                self.coordinator_module.asyncio.sleep = original_sleep
+
+            self.assertEqual(sleeps, [1.0])
+            self.assertEqual(statuses, [])
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_start_shadow_learning_fails_when_redirect_readback_mismatches(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            route_stop_calls: list[bool] = []
+            restore_calls: list[str] = []
+            refresh_calls: list[bool] = []
+
+            async def _async_start_shadow_learning_route(**kwargs):
+                del kwargs
+                return None
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                del endpoint, apply_changes
+                return {"readback_endpoint": "eu.smartess.io,18899,TCP"}
+
+            async def _async_stop_shadow_learning_route(**kwargs) -> None:
+                self.assertTrue(str(kwargs.get("owner_id") or "").startswith("shadow_learning:"))
+                route_stop_calls.append(True)
+
+            async def _async_preflight_proxy_capture_network(**kwargs) -> None:
+                del kwargs
+                return None
+
+            async def _async_save_shadow_learning_session_state(_state) -> None:
+                return None
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return None
+
+            async def _async_wait_for_shadow_learning_ready(**kwargs) -> None:
+                raise AssertionError(f"must not wait after bad readback: {kwargs!r}")
+
+            async def _async_best_effort_restore_after_start_failure(endpoint: str):
+                restore_calls.append(endpoint)
+                return True, ""
+
+            async def _async_clear_shadow_learning_session_state() -> None:
+                return None
+
+            async def _async_request_refresh() -> None:
+                refresh_calls.append(True)
+
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-id",
+                data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+                options={"proxy_capture_duration_minutes": 10},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=False,
+                values={"collector_server_endpoint": "eu.smartess.io,18899,TCP"},
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                proxy_capture_route_running=lambda: False,
+                shadow_learning_route_status=lambda: {
+                    "running": True,
+                    "collector_connected": False,
+                    "collector_connection_sequence": 0,
+                    "collector_protocol_ingress": False,
+                    "route_protocol_activity": False,
+                    "upstream_connected": False,
+                    "ready": False,
+                    "upstream_error": "",
+                },
+                async_start_shadow_learning_route=_async_start_shadow_learning_route,
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+                async_stop_shadow_learning_route=_async_stop_shadow_learning_route,
+            )
+            coordinator._shadow_learning_process_running = lambda: False
+            coordinator._proxy_capture_collector_ip = lambda: "192.168.1.55"
+            coordinator._async_preflight_proxy_capture_network = _async_preflight_proxy_capture_network
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator._async_save_shadow_learning_session_state = (
+                _async_save_shadow_learning_session_state
+            )
+            coordinator._async_wait_for_shadow_learning_ready = (
+                _async_wait_for_shadow_learning_ready
+            )
+            coordinator._async_best_effort_restore_after_start_failure = (
+                _async_best_effort_restore_after_start_failure
+            )
+            coordinator._async_clear_shadow_learning_session_state = (
+                _async_clear_shadow_learning_session_state
+            )
+            coordinator.async_request_refresh = _async_request_refresh
+            coordinator._publish_tooling_values = lambda **_kwargs: None
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "smartess_collector_pn",
+                new_callable=PropertyMock,
+                return_value="E5000025388419",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_callback_target_endpoint",
+                new_callable=PropertyMock,
+                return_value="192.168.1.50,18899,TCP",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_upstream_endpoint",
+                new_callable=PropertyMock,
+                return_value="eu.smartess.io,18899,TCP",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_key",
+                new_callable=PropertyMock,
+                return_value="smartess-default",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_label",
+                new_callable=PropertyMock,
+                return_value="SmartESS Default",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_source",
+                new_callable=PropertyMock,
+                return_value="runtime",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_confidence",
+                new_callable=PropertyMock,
+                return_value="high",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "effective_metadata_snapshot",
+                new_callable=PropertyMock,
+                return_value={},
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_family",
+                new_callable=PropertyMock,
+                return_value="smartess",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "_effective_callback_server_host",
+                new_callable=PropertyMock,
+                return_value="192.168.1.50",
+            ), patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_seed",
+                return_value=(
+                    types.SimpleNamespace(write_response_mode="exception"),
+                    [],
+                ),
+            ), patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_preflight",
+                return_value=types.SimpleNamespace(can_start=True, blockers=[]),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "shadow_learning_endpoint_redirect_not_confirmed",
+                ):
+                    await coordinator.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow-bad-readback.jsonl"),
+                        raw_capture={},
+                    )
+
+            self.assertEqual(route_stop_calls, [True])
+            self.assertEqual(restore_calls, ["eu.smartess.io,18899,TCP"])
+            self.assertEqual(refresh_calls, [True])
 
         import asyncio
 

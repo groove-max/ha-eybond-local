@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 
 from ..canonical_telemetry import (
     apply_canonical_measurements,
@@ -398,6 +398,9 @@ class EybondHub:
         )
         self._driver: InverterDriver | None = None
         self._inverter: DetectedInverter | None = None
+        self._inverter_overlay_applier: (
+            Callable[[DetectedInverter, Any], DetectedInverter] | None
+        ) = None
         self._last_snapshot = RuntimeSnapshot()
         self._runtime_read_state: dict[str, Any] = {}
         self._collector_runtime_values: dict[str, object] = {}
@@ -427,6 +430,18 @@ class EybondHub:
         """Re-resolve listener network state after HA/network readiness changes."""
 
         return await self._link_manager.async_reconcile_network(reason=reason)
+
+    def set_inverter_overlay_applier(
+        self, applier: Callable[[DetectedInverter, Any], DetectedInverter] | None
+    ) -> None:
+        """Install a hook that post-processes the detected inverter.
+
+        The coordinator uses this to merge activated device-scoped learned controls into
+        the detected inverter (whose capabilities otherwise reflect only built-in
+        detection), so the learned controls become entities and are writable.
+        """
+
+        self._inverter_overlay_applier = applier
 
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:
         """Pass reverse-discovery policy changes through to the runtime link layer."""
@@ -1246,6 +1261,9 @@ class EybondHub:
 
         self._driver = context.driver
         self._inverter = context.inverter
+        # The overlay merge is applied in _build_snapshot (every refresh, once the
+        # collector identity is populated), not here -- at detection the collector is
+        # not yet identified, so the device-scope match would fail and never retry.
         self._runtime_read_state.clear()
         self._write_blockers.clear()
         logger.info(
@@ -1522,6 +1540,15 @@ class EybondHub:
             values["last_error"] = last_error
         else:
             values.pop("last_error", None)
+
+        if self._inverter_overlay_applier is not None and self._inverter is not None:
+            # Merge activated device-scoped learned controls into the inverter on every
+            # snapshot. This is idempotent (it only appends not-yet-present learned
+            # capabilities). It must run here, not only at detection: detection completes
+            # before the collector identity is fully populated, so a detection-time scope
+            # match can fail and never retry; here the collector is ready and the merge
+            # converges, so the learned controls reliably become entities and are writable.
+            self._inverter = self._inverter_overlay_applier(self._inverter, collector)
 
         return RuntimeSnapshot(
             connected=self._link_manager.connected if connected is None else connected,
