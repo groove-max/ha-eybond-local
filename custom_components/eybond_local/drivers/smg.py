@@ -22,6 +22,12 @@ from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.smg_identity_anchor_catalog_loader import load_smg_identity_anchor_catalog
 from ..metadata.smg_identity_rules import SmgIdentityEvidence, score_smg_identity_candidates
 from .base import InverterDriver
+from .catalog_identity import (
+    InverterIdentityNoDataError,
+    async_probe_catalog_identity,
+    probe_indicates_link_down,
+    record_catalog_shadow_result,
+)
 
 
 _SMG_VARIANT_MODEL_NAMES = {
@@ -117,6 +123,17 @@ class SmgModbusDriver(InverterDriver):
         session = self._session(transport, target)
         attempted_variant_keys: set[str] = set()
 
+        # Shadow-mode catalog identity: rules below stay authoritative, but an
+        # identity region that READS as zeros means the collector has no
+        # inverter link right now — probing deeper would only misreport an
+        # unsupported device (the 2026-06-08 false negative class).
+        try:
+            catalog_probe = await async_probe_catalog_identity(session)
+        except Exception:
+            catalog_probe = None
+        if probe_indicates_link_down(catalog_probe):
+            raise InverterIdentityNoDataError()
+
         try:
             identity_binding = await _resolve_smg_identity_binding(session)
         except Exception:
@@ -125,6 +142,7 @@ class SmgModbusDriver(InverterDriver):
             attempted_variant_keys.add(identity_binding.variant_key)
             detected = await self._async_probe_binding(session, target, identity_binding)
             if detected is not None:
+                record_catalog_shadow_result(detected, catalog_probe)
                 return detected
 
         fallback_bindings = _compatibility_fallback_bindings(attempted_variant_keys)
@@ -135,6 +153,7 @@ class SmgModbusDriver(InverterDriver):
         for binding in fallback_bindings:
             detected = await self._async_probe_binding(session, target, binding)
             if detected is not None:
+                record_catalog_shadow_result(detected, catalog_probe)
                 return detected
 
         return None

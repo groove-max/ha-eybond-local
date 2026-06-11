@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..drivers.base import InverterDriver
+from ..drivers.catalog_identity import (
+    ERROR_INVERTER_LINK_DOWN,
+    InverterIdentityNoDataError,
+)
 from ..drivers.registry import iter_drivers
 from ..models import DetectedInverter, DriverMatch, ProbeTarget
 
@@ -40,6 +44,7 @@ async def async_detect_inverter(
     """Probe all drivers against one active transport and return the first match."""
 
     errors: list[str] = []
+    inverter_link_down = False
     driver_targets = tuple(
         (driver, _ordered_probe_targets(driver, transport))
         for driver in iter_drivers(driver_hint)
@@ -60,6 +65,15 @@ async def async_detect_inverter(
             errors.append(f"{driver.key}:probe_timeout")
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
             continue
+        except InverterIdentityNoDataError:
+            # The identity registers read as zeros: the collector currently has
+            # no inverter link. Remaining drivers still get their chance, but a
+            # fully failed detection must surface the link problem instead of
+            # the misleading "no supported driver" verdict.
+            errors.append(f"{driver.key}:{ERROR_INVERTER_LINK_DOWN}")
+            inverter_link_down = True
+            logger.debug("Identity region read as zeros driver=%s", driver.key)
+            continue
         except Exception as exc:
             errors.append(f"{driver.key}:{exc}")
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
@@ -72,6 +86,8 @@ async def async_detect_inverter(
                 match=_build_driver_match(driver, inverter),
             )
 
+    if inverter_link_down:
+        raise RuntimeError(ERROR_INVERTER_LINK_DOWN)
     raise RuntimeError(errors[-1] if errors else "no_supported_driver_matched")
 
 
@@ -150,6 +166,8 @@ async def _async_probe_driver_targets(
     for target in targets:
         try:
             inverter = await driver.async_probe(transport, target)
+        except InverterIdentityNoDataError:
+            raise
         except Exception as exc:
             logger.debug("Probe failed driver=%s target=%s error=%s", driver.key, target, exc)
             continue

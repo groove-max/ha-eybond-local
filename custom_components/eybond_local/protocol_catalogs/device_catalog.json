@@ -5,7 +5,7 @@
   "transports": {
     "eybond_modbus": {
       "identity_probe": {
-        "read_blocks": [[171, 14], [643, 2]],
+        "read_blocks": [[171, 14], [186, 12], [643, 2]],
         "fields": {
           "layout_code": {"register": 184},
           "model_code": {"register": 171},
