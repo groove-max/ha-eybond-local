@@ -132,12 +132,11 @@ def probe_indicates_link_down(probe: CatalogIdentityProbe | None) -> bool:
     return probe is not None and probe.match.kind == MATCH_NO_DATA
 
 
-def record_catalog_shadow_result(detected: Any, probe: CatalogIdentityProbe | None) -> None:
-    """Attach the catalog opinion to a rules-decided probe result and log deltas.
+def attach_catalog_match_details(detected: Any, probe: CatalogIdentityProbe | None) -> None:
+    """Attach the catalog decision to a probe result for diagnostics.
 
-    Shadow mode: the rules-based binding stays authoritative; this only makes the
-    catalog's opinion visible (log + ``details["device_catalog"]`` so it lands in
-    support packages) ahead of the authority flip.
+    The dict lands in runtime values and therefore in support packages, so a
+    user report always shows WHY the device got its tier/binding.
     """
 
     if probe is None:
@@ -145,22 +144,12 @@ def record_catalog_shadow_result(detected: Any, probe: CatalogIdentityProbe | No
     details = getattr(detected, "details", None)
     if isinstance(details, dict):
         details["device_catalog"] = probe.as_details()
-
-    entry = probe.match.entry
-    rules_variant = str(getattr(detected, "variant_key", ""))
-    if entry is not None and entry.binding.variant_key == rules_variant:
-        logger.debug(
-            "Device catalog agrees with identity rules: entry=%s variant=%s",
-            entry.entry_key,
-            rules_variant,
-        )
-        return
-    logger.info(
-        "Device catalog shadow disagreement: catalog_kind=%s catalog_entry=%s "
-        "rules_variant=%s layout_code=%s model_code=%s rated_power=%s",
+    logger.debug(
+        "Device catalog decision: kind=%s entry=%s variant=%s layout_code=%s "
+        "model_code=%s rated_power=%s",
         probe.match.kind,
-        entry.entry_key if entry is not None else None,
-        rules_variant,
+        probe.match.entry.entry_key if probe.match.entry is not None else None,
+        str(getattr(detected, "variant_key", "")),
         probe.layout_code,
         probe.model_code,
         probe.rated_power,

@@ -104,13 +104,14 @@ class SmgIdentityRuleCatalogTests(unittest.TestCase):
         catalog = load_smg_identity_rule_catalog()
 
         self.assertEqual(catalog.protocol_family, "modbus_smg")
+        # The always-match family_fallback rule was removed: the family tier
+        # now lives behind a positive layout gate in the device catalog.
         self.assertEqual(
             tuple(rule.variant_key for rule in catalog.rules),
             (
                 "default",
                 "anenji_4200_protocol_1",
                 "anenji_anj_11kw_48v_wifi_p",
-                "family_fallback",
             ),
         )
 
@@ -128,11 +129,6 @@ class SmgIdentityRuleCatalogTests(unittest.TestCase):
         )
         self.assertEqual(default_rule.confidence, "high")
 
-        fallback_rule = catalog.rules[-1]
-        self.assertTrue(fallback_rule.family_only)
-        self.assertTrue(fallback_rule.read_only)
-        self.assertTrue(fallback_rule.provisional)
-
 
 class SmgIdentityRuleScoringTests(unittest.TestCase):
     def tearDown(self) -> None:
@@ -141,13 +137,15 @@ class SmgIdentityRuleScoringTests(unittest.TestCase):
     def test_scores_default_6200_as_high_confidence_first_candidate(self) -> None:
         candidates = score_smg_identity_candidates(_default_smg_evidence())
 
-        self.assertGreaterEqual(len(candidates), 2)
+        self.assertGreaterEqual(len(candidates), 1)
         self.assertEqual(candidates[0].variant_key, "default")
         self.assertEqual(candidates[0].confidence, "high")
         self.assertIn("confirmed_variant", candidates[0].reasons)
         self.assertIn("required_anchor:rated_power=6200", candidates[0].reasons)
-        self.assertEqual(candidates[-1].variant_key, "family_fallback")
-        self.assertTrue(candidates[-1].read_only)
+        self.assertNotIn(
+            "family_fallback",
+            tuple(candidate.variant_key for candidate in candidates),
+        )
 
     def test_scores_anenji_4200_protocol_1_as_medium_confidence(self) -> None:
         candidates = score_smg_identity_candidates(_anenji_4200_evidence())
@@ -172,16 +170,12 @@ class SmgIdentityRuleScoringTests(unittest.TestCase):
         self.assertEqual(candidates[0].confidence, "high")
         self.assertIn("required_anchor:protocol_number=6", candidates[0].reasons)
 
-    def test_scores_unknown_smg_like_evidence_as_read_only_family_fallback(self) -> None:
+    def test_unknown_smg_like_evidence_yields_no_rule_candidates(self) -> None:
+        # The rules layer no longer always-matches: unknown models are the
+        # device catalog's family tier, not a rules candidate.
         candidates = score_smg_identity_candidates(_family_fallback_evidence())
 
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0].variant_key, "family_fallback")
-        self.assertEqual(candidates[0].confidence, "medium")
-        self.assertTrue(candidates[0].read_only)
-        self.assertTrue(candidates[0].provisional)
-        self.assertIn("family_fallback_variant", candidates[0].reasons)
-        self.assertIn("read_only_variant", candidates[0].reasons)
+        self.assertEqual(len(candidates), 0)
 
     def test_unknown_enum_values_do_not_promote_to_specific_variant(self) -> None:
         candidates = score_smg_identity_candidates(
@@ -196,9 +190,7 @@ class SmgIdentityRuleScoringTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(candidates[0].variant_key, "family_fallback")
-        self.assertEqual(candidates[0].confidence, "medium")
-        self.assertNotIn("confirmed_variant", candidates[0].reasons)
+        self.assertEqual(len(candidates), 0)
 
     def test_anenji_11kw_unknown_turn_on_mode_falls_back(self) -> None:
         evidence = _anenji_11kw_evidence()
@@ -212,8 +204,7 @@ class SmgIdentityRuleScoringTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(candidates[0].variant_key, "family_fallback")
-        self.assertNotIn("confirmed_variant", candidates[0].reasons)
+        self.assertEqual(len(candidates), 0)
 
     def test_anenji_11kw_missing_pv_grid_connected_max_power_falls_back(self) -> None:
         evidence = _anenji_11kw_evidence()
@@ -226,8 +217,7 @@ class SmgIdentityRuleScoringTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(candidates[0].variant_key, "family_fallback")
-        self.assertNotIn("confirmed_variant", candidates[0].reasons)
+        self.assertEqual(len(candidates), 0)
 
     def test_anenji_4200_unknown_remote_switch_falls_back(self) -> None:
         evidence = _anenji_4200_evidence()
@@ -241,8 +231,7 @@ class SmgIdentityRuleScoringTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(candidates[0].variant_key, "family_fallback")
-        self.assertNotIn("unverified_variant", candidates[0].reasons)
+        self.assertEqual(len(candidates), 0)
 
     def test_non_smg_family_does_not_receive_fallback(self) -> None:
         candidates = score_smg_identity_candidates(

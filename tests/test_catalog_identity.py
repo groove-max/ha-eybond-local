@@ -116,8 +116,8 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("rated_power", details["confidence_signals"])
 
 
-class SmgProbeShadowModeTest(unittest.IsolatedAsyncioTestCase):
-    """Driver-level behavior: shadow details attach, zeros stop the probe."""
+class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
+    """Driver-level behavior: catalog decides, details attach, zeros stop the probe."""
 
     def _smg_family_registers(self, *, rated_power: int = 6200) -> dict[int, int]:
         registers: dict[int, int] = {
@@ -172,7 +172,7 @@ class SmgProbeShadowModeTest(unittest.IsolatedAsyncioTestCase):
         )
         return registers
 
-    async def test_probe_attaches_catalog_shadow_details(self) -> None:
+    async def test_probe_attaches_catalog_match_details(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
         transport = FixtureTransport(
@@ -187,8 +187,10 @@ class SmgProbeShadowModeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(shadow, dict)
         self.assertEqual(shadow["kind"], MATCH_DEVICE)
         self.assertEqual(shadow["entry_key"], "smg_6200")
-        # Shadow mode: the rules-based decision is untouched.
+        # The binding now comes FROM the catalog entry itself.
         self.assertEqual(inverter.variant_key, "default")
+        self.assertEqual(inverter.register_schema_name, "modbus_smg/models/smg_6200.json")
+        self.assertEqual(inverter.profile_name, "smg_modbus.json")
 
     async def test_probe_raises_link_down_on_zero_identity(self) -> None:
         driver = SmgModbusDriver()

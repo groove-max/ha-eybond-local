@@ -244,6 +244,20 @@ def match_device_identity(
     return DeviceCatalogMatch(kind=MATCH_UNIDENTIFIED, layout=layout)
 
 
+def resolve_family_default(
+    layout_code: int,
+    *,
+    catalog: DeviceCatalog | None = None,
+) -> FamilyDefault | None:
+    """Resolve the reads-only family default for one layout code, if any."""
+
+    resolved = catalog if catalog is not None else load_device_catalog()
+    for default in resolved.family_defaults:
+        if layout_code in default.when_layout_codes:
+            return default
+    return None
+
+
 def _confidence_signals(
     *,
     entry: DeviceCatalogEntry,

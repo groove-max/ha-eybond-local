@@ -8,7 +8,9 @@
       "required": [
         {
           "anchor_key": "rated_power",
-          "one_of": [6200]
+          "one_of": [
+            6200
+          ]
         },
         {
           "anchor_key": "output_rating_voltage",
@@ -62,7 +64,12 @@
       "required": [
         {
           "anchor_key": "protocol_number",
-          "one_of": [3, 4, 5, 6]
+          "one_of": [
+            3,
+            4,
+            5,
+            6
+          ]
         },
         {
           "anchor_key": "turn_on_mode",
@@ -80,20 +87,6 @@
       ],
       "preferred": [
         "serial",
-        "device_type",
-        "rated_power"
-      ]
-    },
-    {
-      "variant_key": "family_fallback",
-      "confidence": "medium",
-      "read_only": true,
-      "provisional": true,
-      "family_only": true,
-      "required": [],
-      "preferred": [
-        "serial",
-        "protocol_number",
         "device_type",
         "rated_power"
       ]

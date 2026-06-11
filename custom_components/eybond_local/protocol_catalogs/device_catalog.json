@@ -114,7 +114,7 @@
       "tier": "partial",
       "binding": {
         "driver_key": "modbus_smg",
-        "variant_key": "default",
+        "variant_key": "family_fallback",
         "register_schema_name": "modbus_smg/base.json",
         "profile_name": ""
       },

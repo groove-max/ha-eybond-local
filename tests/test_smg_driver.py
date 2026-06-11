@@ -432,8 +432,9 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 driver._session(transport_without_variant_route, target)
             )
 
-        assert binding_without_variant_route is not None
-        self.assertEqual(binding_without_variant_route.variant_key, "family_fallback")
+        # No always-match anymore: without a variant layout route the legacy
+        # rules yield no binding (the family tier is the device catalog's job).
+        self.assertIsNone(binding_without_variant_route)
 
         transport_with_variant_route = FixtureTransport(
             registers=self._anenji_registers(),
@@ -946,13 +947,13 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "default")
-        self.assertIn((201, 1), transport.read_requests)
-        self.assertIn((320, 2), transport.read_requests)
-        self.assertIn((171, 1), transport.read_requests)
-        self.assertIn((184, 1), transport.read_requests)
+        # Identification = the catalog identity window, read before anything else.
+        self.assertEqual(transport.read_requests[0], (171, 14))
+        self.assertIn((186, 12), transport.read_requests[:3])
+        self.assertIn((643, 2), transport.read_requests[:3])
+        # Full-schema probing happens once, for the catalog-selected binding.
         self.assertIn((406, 1), transport.read_requests)
         self.assertIn((420, 1), transport.read_requests)
-        self.assertIn((643, 1), transport.read_requests)
         self.assertNotIn((186, 46), transport.read_requests)
         self.assertNotIn((600, 57), transport.read_requests)
         self.assertNotIn((677, 18), transport.read_requests)
@@ -971,7 +972,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
                 address = int.from_bytes(payload[2:4], "big")
                 count = int.from_bytes(payload[4:6], "big")
                 self.read_requests.append((address, count))
-                if not self.failed_identity_read and address == 201 and count == 1:
+                if not self.failed_identity_read and address == 171 and count == 14:
                     self.failed_identity_read = True
                     raise RuntimeError("identity read failed")
                 return super()._handle_read_holding(payload)
@@ -1235,12 +1236,16 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "family_fallback")
         self.assertEqual(inverter.model_name, "SMG Family (Unverified Variant)")
-        self.assertEqual(inverter.profile_name, "modbus_smg/family_fallback.json")
+        # Family tier is structurally read-only: NO profile attaches at all.
+        self.assertEqual(inverter.profile_name, "")
         self.assertEqual(inverter.register_schema_name, "modbus_smg/base.json")
         self.assertEqual(len(inverter.capabilities), 0)
         self.assertEqual(len(inverter.capability_presets), 0)
-        self.assertEqual(len(inverter.capability_groups), 4)
+        self.assertEqual(len(inverter.capability_groups), 0)
         self.assertEqual(inverter.details["rated_power"], 11000)
+        catalog_details = inverter.details["device_catalog"]
+        self.assertEqual(catalog_details["kind"], "family")
+        self.assertEqual(catalog_details["tier"], "partial")
 
 
 if __name__ == "__main__":

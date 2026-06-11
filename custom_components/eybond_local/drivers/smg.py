@@ -21,12 +21,18 @@ from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.smg_identity_anchor_catalog_loader import load_smg_identity_anchor_catalog
 from ..metadata.smg_identity_rules import SmgIdentityEvidence, score_smg_identity_candidates
+from ..metadata.device_catalog_loader import (
+    MATCH_DEVICE,
+    MATCH_FAMILY,
+    resolve_family_default,
+)
 from .base import InverterDriver
 from .catalog_identity import (
+    CatalogIdentityProbe,
     InverterIdentityNoDataError,
     async_probe_catalog_identity,
+    attach_catalog_match_details,
     probe_indicates_link_down,
-    record_catalog_shadow_result,
 )
 
 
@@ -48,10 +54,11 @@ _SMG_PROTOCOL_1_BASE_VARIANTS = frozenset(
     }
 )
 _SMG_COMPATIBILITY_FALLBACK_VARIANTS: tuple[str, ...] = (
+    # family_fallback was removed from this chain: the always-match tier now
+    # exists ONLY behind a positive catalog layout gate (family_defaults).
     "default",
     _SMG_ANENJI_4200_PROTOCOL_1_VARIANT,
     _SMG_ANENJI_11KW_VARIANT,
-    _SMG_FAMILY_FALLBACK_VARIANT,
 )
 _SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
     RegisterValueSpec(key="device_type", register=171),
@@ -121,9 +128,8 @@ class SmgModbusDriver(InverterDriver):
         target: ProbeTarget,
     ) -> DetectedInverter | None:
         session = self._session(transport, target)
-        attempted_variant_keys: set[str] = set()
 
-        # Shadow-mode catalog identity: rules below stay authoritative, but an
+        # The offline device catalog is the identification authority. An
         # identity region that READS as zeros means the collector has no
         # inverter link right now — probing deeper would only misreport an
         # unsupported device (the 2026-06-08 false negative class).
@@ -134,6 +140,51 @@ class SmgModbusDriver(InverterDriver):
         if probe_indicates_link_down(catalog_probe):
             raise InverterIdentityNoDataError()
 
+        if catalog_probe is not None:
+            return await self._async_probe_with_catalog(session, target, catalog_probe)
+
+        # No catalog opinion (identity window unreadable on this unit): bounded
+        # legacy rules compatibility, WITHOUT the always-match family fallback.
+        return await self._async_probe_with_legacy_rules(session, target)
+
+    async def _async_probe_with_catalog(
+        self,
+        session: ModbusSession,
+        target: ProbeTarget,
+        catalog_probe: CatalogIdentityProbe,
+    ) -> DetectedInverter | None:
+        match = catalog_probe.match
+
+        if match.kind == MATCH_DEVICE and match.entry is not None:
+            detected = await self._async_probe_binding(session, target, match.entry.binding)
+            if detected is not None:
+                attach_catalog_match_details(detected, catalog_probe)
+                return detected
+            # The cataloged payload failed structural validation on this unit:
+            # fall through to the reads-only family tier instead of guessing.
+
+        if match.kind in (MATCH_DEVICE, MATCH_FAMILY) and catalog_probe.layout_code is not None:
+            family_default = match.family_default or resolve_family_default(
+                catalog_probe.layout_code
+            )
+            if family_default is not None:
+                detected = await self._async_probe_binding(
+                    session, target, family_default.binding
+                )
+                if detected is not None:
+                    attach_catalog_match_details(detected, catalog_probe)
+                    return detected
+
+        # Unidentified layout: not an SMG-family device we can serve.
+        return None
+
+    async def _async_probe_with_legacy_rules(
+        self,
+        session: ModbusSession,
+        target: ProbeTarget,
+    ) -> DetectedInverter | None:
+        attempted_variant_keys: set[str] = set()
+
         try:
             identity_binding = await _resolve_smg_identity_binding(session)
         except Exception:
@@ -142,7 +193,6 @@ class SmgModbusDriver(InverterDriver):
             attempted_variant_keys.add(identity_binding.variant_key)
             detected = await self._async_probe_binding(session, target, identity_binding)
             if detected is not None:
-                record_catalog_shadow_result(detected, catalog_probe)
                 return detected
 
         fallback_bindings = _compatibility_fallback_bindings(attempted_variant_keys)
@@ -153,7 +203,6 @@ class SmgModbusDriver(InverterDriver):
         for binding in fallback_bindings:
             detected = await self._async_probe_binding(session, target, binding)
             if detected is not None:
-                record_catalog_shadow_result(detected, catalog_probe)
                 return detected
 
         return None
