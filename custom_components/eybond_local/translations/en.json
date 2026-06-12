@@ -16,16 +16,10 @@
       },
       "collector_network": {
         "title": "Collector Network Setup",
-        "description": "At this stage the collector should already be connected to the same network as Home Assistant. If it is, simply choose the first option below.\n\nIf not, you have several paths: use the original SmartESS app, connect the collector manually, or, for compatible models, send Wi-Fi settings over Bluetooth.\n\nThe SmartESS path is usually the simplest. The manual path, however, does not validate the collector's SmartESS server binding and does not require access to the SmartESS account that already owns the collector.\n\nTwo practical manual options are available right now:\n- **Over Wi-Fi.** This is the broader compatibility path and can still be used while the collector is operating as an access point.\n- **Over Bluetooth.** This is simpler because it usually completes in one pass and does not require switching Home Assistant onto the collector's Wi-Fi first. However, it works only on newer collectors and requires Bluetooth hardware on the Home Assistant side. Home Assistant Bluetooth Proxy, for example via ESPHome, is also supported.\n\nFor the Wi-Fi path, connect Home Assistant itself to the access point broadcast by the collector. The SSID usually includes the collector PN, and the default password is often `12345678`.\n\nAfter that connection is established, return to this screen and choose **\"Yes, the collector is already on my network\"**.\n\nAfter the device is added to the integration, you can open the device settings and enter your normal Wi-Fi SSID and password to move the collector into client mode.\n\nAfter changing network parameters or switching the access point, it is recommended to remove the device from the integration and add it again.",
+        "description": "Is the collector already on the same network as Home Assistant? If yes, choose the first option.\n\nIf not, two ways to get it online:\n- **Bluetooth** (second option) — the easiest path on newer collectors. Needs Bluetooth on the Home Assistant side: a local adapter or an ESPHome Bluetooth Proxy near the collector.\n- **The collector's own Wi-Fi** — connect the Home Assistant host to the access point the collector broadcasts (the SSID contains the collector PN, the password is usually `12345678`), then choose the first option.\n\nAfter the device is added, you can move the collector onto your normal Wi-Fi from the integration settings.",
         "menu_options": {
           "auto": "Yes, the collector is already on my network",
           "bluetooth_setup": "No, connect the collector to Wi-Fi using Bluetooth first"
-        },
-        "data": {
-          "collector_network_status": "Collector network status"
-        },
-        "data_description": {
-          "collector_network_status": "Choose Bluetooth Wi-Fi setup only when the collector still needs to join your network. This path is still in test mode and works only for collectors with Bluetooth support. It can use either a local Bluetooth adapter or a Home Assistant Bluetooth proxy, such as ESPHome, near the collector."
         }
       },
       "auto": {
@@ -138,7 +132,7 @@
       },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
-        "description": "The integration will authenticate against SmartESS cloud, resolve the device identity for collector `{collector_pn}`, and store reusable onboarding cloud evidence.\n\n{smartess_cloud_offer_summary}\n\n**Last cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "description": "Sign in with your SmartESS account to confirm the device identity for collector `{collector_pn}`. The login is used once for this step; the result is saved as reusable onboarding evidence.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
         "data": {
           "username": "SmartESS username",
           "password": "SmartESS password"
@@ -158,7 +152,7 @@
       },
       "manual": {
         "title": "Manual Setup",
-        "description": "Use this if auto-detection cannot find your device, if the collector is remote, or if callback traffic must go through VPN / NAT.\n\nWhen you continue, the integration will probe these settings before creating the entry. If the probe does not confirm the device, you can edit the values and try again from the next screen.",
+        "description": "For setups the auto-scan cannot reach: a remote collector, VPN/NAT, or a known fixed address. The settings are probed first — if the device is not confirmed, you can adjust them and retry on the next screen.",
         "data": {
           "server_ip": "Local listener IP",
           "collector_ip": "Collector IP",
@@ -228,7 +222,7 @@
       "ble_address_invalid": "Enter the collector Bluetooth address.",
       "ble_wifi_ssid_invalid": "Enter the Wi-Fi network name to send over Bluetooth.",
       "ble_wifi_password_invalid": "Enter the Wi-Fi password to send over Bluetooth.",
-      "ble_wifi_scan_failed": "The collector was found over Bluetooth, but Home Assistant could not read its Wi-Fi network list. The Bluetooth link is likely unstable; move the collector or Bluetooth adapter closer, or place an ESPHome Bluetooth Proxy near the collector, and try again.",
+      "ble_wifi_scan_failed": "Found the collector over Bluetooth, but could not read its Wi-Fi list — the Bluetooth link is probably weak. Move the collector or the adapter closer (or place an ESPHome Bluetooth Proxy nearby) and try again.",
       "ble_provision_failed": "Bluetooth provisioning did not complete successfully. Check the collector, adapter permissions, and Wi-Fi credentials, then try again.",
       "collector_endpoint_write_failed": "Could not write the Home Assistant callback endpoint to the collector.",
       "invalid_selection": "The selected detection result is no longer available.",
@@ -325,7 +319,7 @@
       },
       "diagnostics": {
         "title": "Diagnostics And Experimental Metadata",
-        "description": "**Need to share diagnostics?** Choose **{support_archive_action_label}** below. It creates one ZIP with runtime data, raw capture evidence, an anonymized replay fixture, and matching SmartESS cloud evidence when available.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Primary action for the current state:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Recommended next:** {support_workflow_next_action}\n\n{smartess_cloud_diagnostics_hint}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}\n**Last cloud evidence:** {cloud_evidence_path}",
+        "description": "**{support_archive_action_label}** builds one ZIP with everything needed to help: runtime data, capture evidence, an anonymized replay fixture, and saved SmartESS cloud evidence.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}",
         "menu_options": {
           "create_support_package": "Create support archive",
           "reload_local_metadata": "Reload local metadata",
@@ -387,7 +381,7 @@
       },
       "create_support_package": {
         "title": "Create Support Archive",
-        "description": "This step builds the support archive in one flow. If matching SmartESS cloud evidence is already saved, it will be included automatically. If you need a fresh SmartESS cloud bundle, choose **{refresh_mode_label}** below and enter the credentials here instead of leaving this screen first.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
+        "description": "Builds the support archive in one step. Saved SmartESS cloud evidence is included automatically; choose **{refresh_mode_label}** to fetch a fresh copy with your SmartESS login.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
         "data": {
           "smartess_cloud_mode": "SmartESS cloud evidence",
           "username": "SmartESS username",
@@ -401,7 +395,7 @@
       },
       "rollback_local_metadata": {
         "title": "Rollback Local Metadata",
-        "description": "The active managed local metadata override files below will be removed and the entry will be reloaded onto the built-in metadata again.\n\n| Detail | Value |\n|---|---|\n| Active override files | {rollback_target_count} |\n| Profile override | {rollback_profile_path} |\n| Schema override | {rollback_schema_path} |\n\nOnly the currently active overrides inside `/config/eybond_local/` are touched. Inactive drafts and cloud evidence are left unchanged."
+        "description": "Removes the active local override files below and reloads the device on built-in metadata. Inactive drafts and saved evidence are not touched.\n\n| Detail | Value |\n|---|---|\n| Active override files | {rollback_target_count} |\n| Profile override | {rollback_profile_path} |\n| Schema override | {rollback_schema_path} |"
       },
       "diagnostics_result": {
         "title": "Diagnostics Result",

@@ -105,7 +105,7 @@
       "proxy_capture_saved_result_section": "**Saved result:** {download}",
       "proxy_capture_live_log_waiting": "Capture is running. No traffic has reached the log yet. Use Refresh live log after the collector reconnects.",
       "proxy_capture_live_log_not_started": "The live log is empty. Start capture, then use Refresh live log to show new events here.",
-      "smartess_cloud_diagnostics_hint": "**SmartESS cloud:** {detail} **Create support archive** can already include saved SmartESS cloud evidence and can fetch a fresh copy inline in the same step. Open **Advanced metadata tools** when you need to export the cloud evidence separately or generate drafts from it. The visible entity count may stay the same when existing entities are upgraded instead of creating new IDs.",
+      "smartess_cloud_diagnostics_hint": "**SmartESS cloud:** {detail} The support archive already includes saved SmartESS cloud evidence and can fetch a fresh copy in the same step.",
       "smartess_cloud_diagnostics_detail_bridge": "Current SmartESS cloud evidence is ready to generate a SmartESS SMG bridge for this runtime.",
       "smartess_cloud_diagnostics_detail_draft": "Current SmartESS cloud evidence is ready to generate a SmartESS draft for this runtime.",
       "smartess_cloud_diagnostics_detail_refresh": "SmartESS cloud evidence is already saved for this entry and can be refreshed after app-side changes.",
