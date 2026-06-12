@@ -147,6 +147,36 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_4200")
 
+    def test_anenji_op2_6200_user_dump(self) -> None:
+        # aninerel.zip 2026-06-12: dual-output (OP2) 6.2 kW unit, fw 7903_A6260126v1
+        # (reg626 hex string == model_code), cloud devcode 6514, range_failures [].
+        match = match_device_identity(
+            layout_code=11, model_code=30979, rated_power=6200,
+            serial_ascii="99632601111397",
+        )
+        self.assertEqual(match.kind, MATCH_DEVICE)
+        self.assertEqual(match.entry.entry_key, "anenji_op2_6200")
+        self.assertEqual(match.tier, TIER_PARTIAL)
+        self.assertEqual(
+            match.entry.binding.register_schema_name,
+            "modbus_smg/models/anenji_op2_6200.json",
+        )
+        # Writes stay locked: OP2 enable (reg 354) is NOT exposed until verified.
+        self.assertEqual(match.entry.binding.profile_name, "")
+
+    def test_anenji_6200_2025_user_dump(self) -> None:
+        # Anenji2025.zip 2026-06-12: same family, single output, fw 3700_A6250424v1.
+        # Same rated power (6200) as smg_6200 but a DIFFERENT model_code — rated
+        # power never identifies a model on its own.
+        match = match_device_identity(
+            layout_code=1, model_code=14080, rated_power=6200,
+            serial_ascii="92632507102827",
+        )
+        self.assertEqual(match.kind, MATCH_DEVICE)
+        self.assertEqual(match.entry.entry_key, "anenji_6200")
+        self.assertEqual(match.tier, TIER_PARTIAL)
+        self.assertEqual(match.entry.binding.profile_name, "")
+
     def test_force_unsupported_downgrades_known_model_to_family(self) -> None:
         # Debug toggle: a fully-supported device (SMG 6200) must drop to the
         # family/partial tier so the learning flow can be validated on it.

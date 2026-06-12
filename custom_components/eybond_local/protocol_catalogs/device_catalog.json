@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026.06.0",
+  "catalog_version": "2026.06.1",
   "description": "Offline device identification catalog: deterministic fingerprint lookup over immutable identity registers. Entries are capture-derived; see provenance per entry.",
   "transports": {
     "eybond_modbus": {
@@ -103,6 +103,57 @@
         "sources": [
           "corpus:E5000025374544 (3 captures)",
           "legacy:smg_identity_rules anenji_anj_11kw_48v_wifi_p"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "anenji_op2_6200",
+      "fingerprint": {
+        "layout_code": 11,
+        "model_code": 30979,
+        "rated_power_one_of": [6200]
+      },
+      "structural": ["serial_ascii_plausible"],
+      "model_name": "Anenji 6200 (dual output)",
+      "tier": "partial",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "default",
+        "register_schema_name": "modbus_smg/models/anenji_op2_6200.json",
+        "profile_name": ""
+      },
+      "cloud_hints": {"devcodes": [6514]},
+      "provenance": {
+        "sources": [
+          "corpus:I20000251172562875 aninerel.zip (2026-06-12)",
+          "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write)",
+          "fw 7903_A6260126v1 (reg626 hex == model_code 30979)"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "anenji_6200",
+      "fingerprint": {
+        "layout_code": 1,
+        "model_code": 14080,
+        "rated_power_one_of": [6200]
+      },
+      "structural": ["serial_ascii_plausible"],
+      "model_name": "Anenji 6200",
+      "tier": "partial",
+      "binding": {
+        "driver_key": "modbus_smg",
+        "variant_key": "default",
+        "register_schema_name": "modbus_smg/base.json",
+        "profile_name": ""
+      },
+      "cloud_hints": {"devcodes": []},
+      "provenance": {
+        "sources": [
+          "corpus:E50000252371235481 Anenji2025.zip (2026-06-12)",
+          "fw 3700_A6250424v1 (reg626 hex == model_code 14080)"
         ],
         "confidence": "capture-derived"
       }

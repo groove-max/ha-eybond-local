@@ -111,6 +111,39 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
             "Battery Connected",
         )
 
+    def test_loads_anenji_op2_model_overlay_schema(self) -> None:
+        # Dual-output (OP2) model: the overlay widens the polled live block to
+        # cover output-2 telemetry (239-244) and the config block to cover the
+        # OP2 settings (344, 353). The donor unit answered every widened block
+        # read (raw_capture range_failures was empty).
+        schema = load_register_schema("modbus_smg/models/anenji_op2_6200.json")
+
+        self.assertEqual(schema.key, "modbus_smg_anenji_op2_6200")
+        self.assertEqual(schema.driver_key, "modbus_smg")
+        # Widened blocks (base: live 201+34, config 300+44).
+        self.assertEqual(schema.block("live").start, 201)
+        self.assertEqual(schema.block("live").count, 44)
+        self.assertEqual(schema.block("config").start, 300)
+        self.assertEqual(schema.block("config").count, 54)
+        # Base blocks survive the merge untouched.
+        self.assertEqual(schema.block("status").start, 100)
+        self.assertEqual(schema.block("serial").start, 186)
+        # OP2 specs merged on top of the base sets.
+        live_registers = {spec.register: spec.key for spec in schema.spec_set("live")}
+        self.assertEqual(live_registers[239], "output2_va")
+        self.assertEqual(live_registers[240], "output2_power")
+        self.assertEqual(live_registers[243], "output2_load_percent")
+        self.assertEqual(live_registers[244], "output2_voltage")
+        config_registers = {spec.register: spec.key for spec in schema.spec_set("config")}
+        self.assertEqual(config_registers[344], "output2_cutoff_soc")
+        self.assertEqual(config_registers[353], "output2_overload_warning_percent")
+        # Base live telemetry still present alongside the OP2 additions.
+        self.assertEqual(live_registers[202], "grid_voltage")
+        self.assertEqual(
+            schema.measurement_description("output2_power").name, "Output 2 Power"
+        )
+        self.assertEqual(schema.measurement_description("output2_voltage").unit, "V")
+
     def test_loads_pi30_base_register_schema(self) -> None:
         schema = load_register_schema("pi30_ascii/base.json")
 
