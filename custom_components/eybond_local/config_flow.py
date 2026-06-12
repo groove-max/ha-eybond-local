@@ -2038,8 +2038,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "common.dynamic.detection_tier_partial_details",
                 "The inverter family is recognized, but this exact model is not in "
                 "the catalog yet. Base read sensors will be added; controls stay "
-                "locked for safety. You can add more sensors and controls later by "
-                "running learning from the integration options.",
+                "locked for safety.\n\n"
+                "Next step: after you finish here, open this integration and choose "
+                "**Configure → Add controls (device learning)** to discover its "
+                "controls and extra sensors.",
             )
         elif match is not None:
             headline = self._tr(
@@ -2059,10 +2061,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             details = self._tr(
                 "common.dynamic.detection_tier_unidentified_details",
                 "The collector responds, but the inverter model is not in the "
-                "catalog. You can still add it and run learning from the "
-                "integration options to discover its sensors and controls — for "
-                "labeled results this needs one session with the SmartESS "
-                "app/cloud reachable.",
+                "catalog. You can still add it and discover its sensors and "
+                "controls afterward.\n\n"
+                "Next step: after you finish here, open this integration and choose "
+                "**Configure → Add controls (device learning)**. For labeled "
+                "results this needs one session with the SmartESS app/cloud "
+                "reachable.",
             )
 
         model = ""

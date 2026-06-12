@@ -38,9 +38,6 @@ from .const import (
     CONF_COLLECTOR_PN,
     CONF_CONTROL_MODE,
     CONF_CONNECTION_TYPE,
-    CONF_DETECTED_MODEL,
-    CONF_DEVICE_CATALOG_KIND,
-    CONF_DEVICE_CATALOG_TIER,
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_SERVER_IP,
     CONNECTION_TYPE_EYBOND,
@@ -1011,92 +1008,6 @@ def _cleanup_obsolete_entities_allowed(coordinator) -> tuple[bool, str]:
     return True, "snapshot_metadata_consistent"
 
 
-_LEARNING_OFFER_MESSAGES = {
-    "en": (
-        "EyeBond Local: learning available",
-        "**{model}** was added with partial support — base read sensors only, "
-        "no controls out of the box.\n\nTo discover its controls and extra "
-        "sensors, open the integration, choose **Configure → Add controls "
-        "(device learning)**, and follow the guided steps.\n\n"
-        "[Open the integration](/config/integrations/integration/eybond_local)",
-    ),
-    "ru": (
-        "EyeBond Local: доступно обучение",
-        "**{model}** добавлен с частичной поддержкой — только базовые сенсоры "
-        "чтения, без управления из коробки.\n\nЧтобы обнаружить управление и "
-        "дополнительные сенсоры, откройте интеграцию, выберите **Настроить → "
-        "Добавить управление (обучение устройства)** и пройдите шаги мастера.\n\n"
-        "[Открыть интеграцию](/config/integrations/integration/eybond_local)",
-    ),
-    "uk": (
-        "EyeBond Local: доступне навчання",
-        "**{model}** додано з частковою підтримкою — лише базові сенсори "
-        "читання, без керування з коробки.\n\nЩоб виявити керування та "
-        "додаткові сенсори, відкрийте інтеграцію, виберіть **Налаштувати → "
-        "Додати керування (навчання пристрою)** і пройдіть кроки майстра.\n\n"
-        "[Відкрити інтеграцію](/config/integrations/integration/eybond_local)",
-    ),
-}
-
-
-def _learning_offer_notification_id(entry: ConfigEntry) -> str:
-    return f"eybond_local_learning_offer_{entry.entry_id}"
-
-
-def _async_offer_learning_for_partial_tier(
-    hass: HomeAssistant, entry: ConfigEntry, coordinator
-) -> None:
-    """Nudge the user to run learning when the device is only partially supported.
-
-    Partial / unidentified devices get base read sensors but no controls out of
-    the box; the discovery wizard fills the gap. The notification is dismissed
-    automatically once a learned overlay is active (learning has been run) or
-    the device later resolves to full support.
-    """
-
-    notification_id = _learning_offer_notification_id(entry)
-    tier = str(entry.data.get(CONF_DEVICE_CATALOG_TIER) or "")
-    kind = str(entry.data.get(CONF_DEVICE_CATALOG_KIND) or "")
-    overlay_active = bool(
-        getattr(
-            getattr(coordinator, "effective_profile_metadata", None),
-            "device_scoped_overlay_active",
-            False,
-        )
-    )
-    wants_offer = (tier == "partial" or kind == "unidentified") and not overlay_active
-    # A learning nudge must never fail entry setup, so any notification error is
-    # swallowed (it is a hint, not a functional dependency). The import lives
-    # inside the guard too: a missing/unloadable persistent_notification component
-    # must degrade to "no nudge", never to a broken setup.
-    try:
-        import homeassistant.components.persistent_notification as persistent_notification
-
-        if not wants_offer:
-            persistent_notification.async_dismiss(hass, notification_id)
-            return
-
-        language = str(getattr(hass.config, "language", "") or "en").split("-")[0]
-        title, body = _LEARNING_OFFER_MESSAGES.get(
-            language, _LEARNING_OFFER_MESSAGES["en"]
-        )
-        model = str(entry.data.get(CONF_DETECTED_MODEL) or "").strip() or {
-            "ru": "Ваш инвертор",
-            "uk": "Ваш інвертор",
-        }.get(language, "Your inverter")
-        persistent_notification.async_create(
-            hass,
-            body.format(model=model),
-            title=title,
-            notification_id=notification_id,
-        )
-        entry.async_on_unload(
-            lambda: persistent_notification.async_dismiss(hass, notification_id)
-        )
-    except Exception:  # noqa: BLE001 - a UI hint must not break setup
-        logger.debug("Learning-offer notification skipped", exc_info=True)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EyeBond Local from a config entry."""
 
@@ -1136,7 +1047,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         entry.async_on_unload(partial(_cancel_task_callback, expert_migration_task))
         coordinator.async_sync_device_registry()
-        _async_offer_learning_for_partial_tier(hass, entry, coordinator)
         entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     except CollectorListenerBindError as exc:
         if coordinator is not None:
