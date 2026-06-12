@@ -19,6 +19,7 @@ from custom_components.eybond_local.smartess_cloud import (
 )
 from custom_components.eybond_local.support.shadow_learning import ShadowWriteObservation
 from custom_components.eybond_local.support.shadow_learning_orchestrator import (
+    _safe_read_map,
     async_orchestrate_shadow_learning_settings,
     correlate_cloud_attempts_with_shadow_writes,
     orchestrate_shadow_learning_settings,
@@ -672,3 +673,23 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             result["correlation"]["degraded_attempts"][0]["reason"],
             {"session_not_ready", "session_degraded_during_run"},
         )
+
+class SafeReadMapTests(unittest.TestCase):
+    def test_none_snapshot_yields_empty(self) -> None:
+        self.assertEqual(_safe_read_map(None), {})
+
+    def test_raising_snapshot_yields_empty(self) -> None:
+        def _boom() -> dict:
+            raise RuntimeError("backend gone")
+
+        self.assertEqual(_safe_read_map(_boom), {})
+
+    def test_non_dict_snapshot_yields_empty(self) -> None:
+        self.assertEqual(_safe_read_map(lambda: "nope"), {})
+
+    def test_valid_snapshot_passes_through(self) -> None:
+        payload = {"read_blocks": [[200, 22, 1]], "registers": {"205": [2305]}}
+        self.assertEqual(_safe_read_map(lambda: payload), payload)
+
+
+

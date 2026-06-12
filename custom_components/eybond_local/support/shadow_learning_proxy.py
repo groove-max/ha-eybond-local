@@ -166,6 +166,12 @@ class InProcessFailClosedShadowProxyHandler:
 
         return self._backend.observations_since(cursor)
 
+    @property
+    def read_map(self) -> dict:
+        """Return the aggregated cloud read map from the backend."""
+
+        return self._backend.read_map
+
     async def wait_for_observations_since(self, cursor: int, *, timeout_seconds: float):
         """Wait for observations at or after one cursor."""
 

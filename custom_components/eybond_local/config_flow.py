@@ -5972,6 +5972,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 else None
             ),
             is_session_ready=lambda: self._shadow_learning_route_accepts_control(coordinator),
+            read_map_snapshot=(
+                (lambda: observation_source.read_map)
+                if observation_source is not None
+                and hasattr(observation_source, "read_map")
+                else None
+            ),
             on_progress=_on_test_progress,
         )
         self._shadow_learning_state["orchestration"] = result
@@ -6026,11 +6032,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         self._set_control_discovery_progress(0.88, "building")
         correlation = result.get("correlation")
+        read_map = result.get("read_map")
         if isinstance(correlation, dict):
             await self._async_generate_control_discovery_overlay(
                 coordinator,
                 identity=identity,
                 correlation=correlation,
+                read_map=read_map if isinstance(read_map, dict) else None,
             )
 
         # Success path: stop the session and restore the endpoint, then publish
@@ -6078,6 +6086,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         *,
         identity: dict[str, Any],
         correlation: dict[str, Any],
+        read_map: dict[str, Any] | None = None,
     ) -> None:
         """Generate the inactive device-scoped overlay draft from correlation evidence."""
 
@@ -6101,6 +6110,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 source_schema_name=str(coordinator.effective_register_schema_name or ""),
                 session_manifest=session_manifest,
                 correlation=correlation,
+                read_map=read_map,
                 overwrite=False,
             )
         )

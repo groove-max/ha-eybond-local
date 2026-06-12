@@ -25,6 +25,9 @@ _SHADOW_TRACE_DIR = "shadow_learning_traces"
 # cannot redirect the DTU away from the local proxy.
 _CLOUD_REDIRECT_AT_COMMAND_PREFIX = "CLDSRVHOST"
 
+# Bounded distinct value samples kept per register in the in-memory read map.
+_READ_SAMPLE_LIMIT = 8
+
 
 def utc_now_iso() -> str:
     """Return one UTC ISO-8601 timestamp."""
@@ -204,6 +207,9 @@ class InProcessShadowLearningHandler:
         self._register_bank = dict(seed.register_bank)
         self._write_observations: list[ShadowWriteObservation] = []
         self._observation_condition = asyncio.Condition()
+        self._read_block_counts: dict[tuple[int, int], int] = {}
+        self._read_register_samples: dict[int, list[int]] = {}
+        self._read_event_count = 0
 
     @property
     def running(self) -> bool:
@@ -222,6 +228,38 @@ class InProcessShadowLearningHandler:
         """Return the captured write observations."""
 
         return tuple(self._write_observations)
+
+    @property
+    def read_map(self) -> dict[str, Any]:
+        """Return the aggregated cloud read map observed during this session.
+
+        Addresses are authoritative (exactly what the official cloud polls for
+        this device). Values come from the synthetic SEED register bank, not a
+        live inverter — a single snapshot, flagged via ``value_source`` so
+        downstream labeling never mistakes them for multi-snapshot evidence.
+        """
+
+        return {
+            "read_blocks": [
+                [address, count, occurrences]
+                for (address, count), occurrences in sorted(self._read_block_counts.items())
+            ],
+            "registers": {
+                str(register): list(samples)
+                for register, samples in sorted(self._read_register_samples.items())
+            },
+            "read_event_count": self._read_event_count,
+            "value_source": "seed_bank",
+        }
+
+    def _record_read_observation(self, address: int, count: int, values: list[int]) -> None:
+        self._read_event_count += 1
+        block_key = (int(address), int(count))
+        self._read_block_counts[block_key] = self._read_block_counts.get(block_key, 0) + 1
+        for offset, value in enumerate(values):
+            samples = self._read_register_samples.setdefault(int(address) + offset, [])
+            if value not in samples and len(samples) < _READ_SAMPLE_LIMIT:
+                samples.append(int(value))
 
     def observation_cursor(self) -> int:
         """Return one cursor that points to the current end of observations."""
@@ -451,6 +489,7 @@ class InProcessShadowLearningHandler:
         read_request = decode_read_request(payload)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
+            self._record_read_observation(read_request.address, read_request.count, values)
             response_payload = self._build_modbus_read_response(read_request, values)
             await self._append_event(
                 "shadow_modbus_read_request",
@@ -576,6 +615,7 @@ class InProcessShadowLearningHandler:
         read_request = decode_read_request(frame)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
+            self._record_read_observation(read_request.address, read_request.count, values)
             await self._append_event(
                 "shadow_modbus_read_request",
                 "cloud_to_shadow",

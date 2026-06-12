@@ -19,7 +19,10 @@ from custom_components.eybond_local.collector.protocol import build_collector_re
 from custom_components.eybond_local.metadata.effective_metadata_snapshot import (
     EffectiveMetadataSnapshot,
 )
-from custom_components.eybond_local.payload.modbus import build_write_multiple_request
+from custom_components.eybond_local.payload.modbus import (
+    build_read_holding_request,
+    build_write_multiple_request,
+)
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
 from custom_components.eybond_local.support.shadow_learning_backend import (
     InProcessShadowLearningHandler,
@@ -165,6 +168,55 @@ class ShadowLearningBackendTests(unittest.TestCase):
             log_text = (Path(temp_dir) / "shadow.jsonl").read_text(encoding="utf-8")
             self.assertIn("shadow_modbus_write_observation", log_text)
             self.assertIn("shadow_modbus_write_response", log_text)
+
+    def test_read_requests_accumulate_into_session_read_map(self) -> None:
+        seed = ShadowLearningSeed(
+            session_id="entry-1_20260605T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000025388419",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=_sample_snapshot().as_dict(),
+            command_responses={"CLDSRVHOST1": "192.168.1.50,18899,TCP"},
+            register_bank={300: 1, 301: 2, 302: 560},
+            latest_support_evidence=_sample_raw_capture(),
+            write_response_mode="exception",
+            allow_ack_writes=False,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler = InProcessShadowLearningHandler(
+                seed=seed,
+                output_path=Path(temp_dir) / "shadow.jsonl",
+            )
+
+            async def _run() -> None:
+                await handler.start()
+                frame = build_collector_request(
+                    1,
+                    build_read_holding_request(1, 300, 3),
+                    devcode=2376,
+                    collector_addr=1,
+                    fcode=4,
+                )
+                # The same block polled twice: occurrences accumulate, distinct
+                # samples do not duplicate.
+                await handler._handle_frame(frame, remote="192.168.1.15:50000")
+                await handler._handle_frame(frame, remote="192.168.1.15:50000")
+                await handler.stop()
+
+            asyncio.run(_run())
+
+            read_map = handler.read_map
+            self.assertEqual(read_map["read_blocks"], [[300, 3, 2]])
+            self.assertEqual(read_map["registers"]["300"], [1])
+            self.assertEqual(read_map["registers"]["301"], [2])
+            self.assertEqual(read_map["registers"]["302"], [560])
+            self.assertEqual(read_map["read_event_count"], 2)
+            self.assertEqual(read_map["value_source"], "seed_bank")
 
     def test_ack_mode_mutates_register_bank_and_returns_ack(self) -> None:
         seed = ShadowLearningSeed(

@@ -76,6 +76,7 @@ def generate_shadow_learning_overlay_drafts(
     source_schema_name: str,
     session_manifest: dict[str, Any],
     correlation: dict[str, Any],
+    read_map: dict[str, Any] | None = None,
     output_profile_name: str | None = None,
     output_schema_name: str | None = None,
     overwrite: bool = False,
@@ -126,6 +127,10 @@ def generate_shadow_learning_overlay_drafts(
             "unmatched_attempt_count": int(correlation.get("unmatched_attempt_count", 0)),
             "unmatched_write_count": int(correlation.get("unmatched_write_count", 0)),
         },
+        # The cloud's observed read map (authoritative poll addresses; values are
+        # the session seed snapshot). Evidence for read-sensor learning and for
+        # catalog contributions; not consumed by write capabilities.
+        "read_map": _normalize_read_map(read_map),
         "learned_capabilities": list(learned_summary["generated"]),
         "skipped_duplicates": list(learned_summary["skipped"]),
         "review_model": review_model,
@@ -580,6 +585,41 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
             classification["unit"] = unit
             break
     return classification
+
+
+def _normalize_read_map(read_map: dict[str, Any] | None) -> dict[str, Any]:
+    """Bound and sanitize one session read map for manifest embedding."""
+
+    if not isinstance(read_map, dict):
+        return {}
+    blocks = []
+    for item in read_map.get("read_blocks", []) or []:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            try:
+                address, count = int(item[0]), int(item[1])
+            except (TypeError, ValueError):
+                continue
+            occurrences = int(item[2]) if len(item) > 2 else 0
+            blocks.append([address, count, occurrences])
+    registers: dict[str, list[int]] = {}
+    raw_registers = read_map.get("registers")
+    if isinstance(raw_registers, dict):
+        for key, samples in raw_registers.items():
+            if not isinstance(samples, (list, tuple)):
+                continue
+            try:
+                register = int(key)
+            except (TypeError, ValueError):
+                continue
+            registers[str(register)] = [int(value) for value in samples][:8]
+    if not blocks and not registers:
+        return {}
+    return {
+        "read_blocks": blocks,
+        "registers": registers,
+        "read_event_count": int(read_map.get("read_event_count", 0) or 0),
+        "value_source": str(read_map.get("value_source") or ""),
+    }
 
 
 def _safe_matched_count(correlation: dict[str, Any]) -> int:

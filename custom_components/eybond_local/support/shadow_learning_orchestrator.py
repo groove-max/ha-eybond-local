@@ -183,6 +183,7 @@ async def async_orchestrate_shadow_learning_settings(
     wait_for_observations_since: Callable[[int, float], Awaitable[tuple[ShadowWriteObservation, ...]]] | None = None,
     current_observations_since: Callable[[int], tuple[ShadowWriteObservation, ...]] | None = None,
     is_session_ready: Callable[[], bool] | None = None,
+    read_map_snapshot: Callable[[], dict[str, Any]] | None = None,
     base_url: str = DEFAULT_BASE_URL,
     language: str = DEFAULT_LANGUAGE,
     app_id: str = DEFAULT_APP_ID,
@@ -348,7 +349,20 @@ async def async_orchestrate_shadow_learning_settings(
         "unknown_field_count": sum(1 for item in attempts if bool(item.get("unknown_field"))),
         "results": attempts,
         "correlation": correlation,
+        "read_map": _safe_read_map(read_map_snapshot),
     }
+
+
+def _safe_read_map(read_map_snapshot: Callable[[], dict[str, Any]] | None) -> dict[str, Any]:
+    """Snapshot the session read map without letting it fail the run."""
+
+    if read_map_snapshot is None:
+        return {}
+    try:
+        read_map = read_map_snapshot()
+    except Exception:
+        return {}
+    return read_map if isinstance(read_map, dict) else {}
 
 
 def summarize_shadow_learning_attempts(

@@ -160,6 +160,41 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_manifest_embeds_normalized_session_read_map(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="smg_modbus.json",
+                source_schema_name="modbus_smg/models/smg_6200.json",
+                session_manifest=_sample_session_manifest(),
+                correlation=_sample_correlation_payload(),
+                read_map={
+                    "read_blocks": [[200, 22, 79], [641, 5, 79]],
+                    "registers": {"205": [2305], "643": [6200]},
+                    "read_event_count": 158,
+                    "value_source": "seed_bank",
+                },
+            )
+
+        read_map = result.manifest["read_map"]
+        self.assertEqual(read_map["read_blocks"], [[200, 22, 79], [641, 5, 79]])
+        self.assertEqual(read_map["registers"]["205"], [2305])
+        self.assertEqual(read_map["read_event_count"], 158)
+        self.assertEqual(read_map["value_source"], "seed_bank")
+
+    def test_manifest_read_map_empty_when_session_had_no_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="smg_modbus.json",
+                source_schema_name="modbus_smg/models/smg_6200.json",
+                session_manifest=_sample_session_manifest(),
+                correlation=_sample_correlation_payload(),
+                read_map=None,
+            )
+
+        self.assertEqual(result.manifest["read_map"], {})
+
     def test_generates_inactive_profile_and_schema_drafts_with_manifest_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = generate_shadow_learning_overlay_drafts(
