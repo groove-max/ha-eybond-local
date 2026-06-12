@@ -115,9 +115,25 @@ def _register_entry_network_reconcile(hass: HomeAssistant, entry: ConfigEntry, c
                 reason,
             )
 
-    entry.async_on_unload(
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _async_reconcile_on_event)
+    # A one-time listener auto-removes itself when it fires. Registering its
+    # unsub on async_on_unload then double-removes it on unload (HA logs
+    # "Unable to remove unknown job listener ... list.remove(x): x not in
+    # list"). Track the fired state and skip the redundant removal.
+    started = {"fired": False}
+
+    async def _async_reconcile_on_started(event) -> None:
+        started["fired"] = True
+        await _async_reconcile_on_event(event)
+
+    _unsub_started = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STARTED, _async_reconcile_on_started
     )
+
+    def _unsub_started_if_pending() -> None:
+        if not started["fired"]:
+            _unsub_started()
+
+    entry.async_on_unload(_unsub_started_if_pending)
     async_listen = getattr(hass.bus, "async_listen", None)
     if async_listen is not None:
         entry.async_on_unload(
@@ -138,23 +154,33 @@ def _is_transient_listener_bind_error(exc: CollectorListenerBindError) -> bool:
     return "could not bind" in message or "cannot assign requested address" in message
 
 
+def _eybond_config_data_root(hass: HomeAssistant) -> Path:
+    """Return the integration's external data dir under the HA config directory."""
+
+    return Path(hass.config.path("eybond_local")).resolve()
+
+
 def _configure_local_metadata_roots(hass: HomeAssistant) -> None:
     """Configure external profile/schema roots under the HA config directory."""
 
     from .metadata.profile_loader import set_external_profile_roots
     from .metadata.register_schema_loader import set_external_register_schema_roots
 
-    custom_root = Path(hass.config.path("eybond_local")).resolve()
+    custom_root = _eybond_config_data_root(hass)
     set_external_profile_roots((custom_root / "profiles",))
     set_external_register_schema_roots((custom_root / "register_schemas",))
 
 
-def _prime_metadata_caches() -> None:
+def _prime_metadata_caches(config_data_root: Path | None = None) -> None:
     """Warm metadata loaders so async startup paths do not hit disk directly."""
 
     from .drivers.registry import prime_metadata_caches
+    from .metadata.device_catalog_loader import refresh_force_unsupported_override
 
     prime_metadata_caches()
+    # Read the on-device force-unsupported sentinel here (executor) so the
+    # detection path never stats it inside the event loop.
+    refresh_force_unsupported_override(config_data_root)
 
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
@@ -164,7 +190,9 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 
     try:
         _configure_local_metadata_roots(hass)
-        await hass.async_add_executor_job(_prime_metadata_caches)
+        await hass.async_add_executor_job(
+            _prime_metadata_caches, _eybond_config_data_root(hass)
+        )
         await async_setup_services(hass)
     except Exception:
         logger.exception("Failed to initialize EyeBond Local integration bootstrap")

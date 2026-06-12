@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,7 +12,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+from custom_components.eybond_local.metadata import device_catalog_loader  # noqa: E402
 from custom_components.eybond_local.metadata.device_catalog_loader import (  # noqa: E402
+    FORCE_UNSUPPORTED_SENTINEL_NAME,
     MATCH_DEVICE,
     MATCH_FAMILY,
     MATCH_NO_DATA,
@@ -19,8 +22,10 @@ from custom_components.eybond_local.metadata.device_catalog_loader import (  # n
     TIER_FULL,
     TIER_PARTIAL,
     clear_device_catalog_cache,
+    force_unsupported_models,
     load_device_catalog,
     match_device_identity,
+    refresh_force_unsupported_override,
     serial_ascii_plausible,
 )
 
@@ -227,6 +232,42 @@ class DeviceCatalogMatchSemanticsTest(unittest.TestCase):
         self.assertFalse(serial_ascii_plausible(""))
         self.assertFalse(serial_ascii_plausible("\x00\x00\x00"))
         self.assertFalse(serial_ascii_plausible("ab"))
+
+
+class ForceUnsupportedSentinelTest(unittest.TestCase):
+    """On-device sentinel toggles force-unsupported without an env var or code edit."""
+
+    def setUp(self) -> None:
+        # Isolate from any ambient env-derived value and restore the module flag.
+        self._const_patch = patch.object(
+            device_catalog_loader, "FORCE_UNSUPPORTED_MODELS", False
+        )
+        self._const_patch.start()
+        self.addCleanup(self._const_patch.stop)
+        self.addCleanup(refresh_force_unsupported_override, None)
+
+    def test_sentinel_present_enables_and_absent_disables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            refresh_force_unsupported_override(root)
+            self.assertFalse(force_unsupported_models())
+
+            (root / FORCE_UNSUPPORTED_SENTINEL_NAME).write_text("", encoding="ascii")
+            refresh_force_unsupported_override(root)
+            self.assertTrue(force_unsupported_models())
+
+            (root / FORCE_UNSUPPORTED_SENTINEL_NAME).unlink()
+            refresh_force_unsupported_override(root)
+            self.assertFalse(force_unsupported_models())
+
+    def test_none_root_clears_override(self) -> None:
+        refresh_force_unsupported_override(None)
+        self.assertFalse(force_unsupported_models())
+
+    def test_env_constant_wins_regardless_of_sentinel(self) -> None:
+        with patch.object(device_catalog_loader, "FORCE_UNSUPPORTED_MODELS", True):
+            refresh_force_unsupported_override(None)
+            self.assertTrue(force_unsupported_models())
 
 
 if __name__ == "__main__":

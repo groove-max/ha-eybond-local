@@ -221,6 +221,25 @@ SHADOW_LEARNING_ACTION_RUN_LEARNING = "run_learning"
 SHADOW_LEARNING_ACTION_GENERATE_OVERLAY = "generate_overlay"
 SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY = "activate_overlay"
 SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY = "export_support_only"
+# Refuse to start a learning scan when the host has less than this much memory
+# free: the scan's cloud sign-in + proxy capture + correlation spike can OOM a
+# tight box (and trip a hardware watchdog reset). Heuristic floor, not exact.
+_SHADOW_LEARNING_MIN_AVAILABLE_MIB = 400
+
+
+def _read_available_memory_mib() -> int | None:
+    """Return MemAvailable (MiB) from /proc/meminfo, or None when not knowable."""
+
+    try:
+        with open("/proc/meminfo", "r", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 SHADOW_LEARNING_MODE_MANUAL = "manual_selected_fields"
 SHADOW_LEARNING_MODE_ENUM_SWEEP = "enum_sweep"
 SHADOW_LEARNING_MODE_NUMERIC_OPT_IN = "numeric_opt_in"
@@ -6839,6 +6858,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
         preflight = build_shadow_learning_preflight(seed)
         effective_blockers = list(blockers or preflight.blockers)
+        can_start = bool(preflight.can_start)
         if not connected:
             # The register seed can only be captured from a LIVE collector. When it is offline
             # the seed is empty and the only blocker is the cryptic "missing_register_seed";
@@ -6847,9 +6867,18 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             effective_blockers = ["collector_not_connected"] + [
                 blocker for blocker in effective_blockers if blocker != "missing_register_seed"
             ]
+        # Memory guard: the scan spins up a cloud sign-in + proxy capture +
+        # correlation pass. On a memory-tight host that spike can push the box
+        # into the OOM killer (and a watchdog reset). Refuse up front rather than
+        # risk taking the whole appliance down. Unknown memory (non-Linux) skips
+        # the guard.
+        available_mib = await self.hass.async_add_executor_job(_read_available_memory_mib)
+        if available_mib is not None and available_mib < _SHADOW_LEARNING_MIN_AVAILABLE_MIB:
+            effective_blockers = [f"insufficient_memory:{available_mib}MiB"] + effective_blockers
+            can_start = False
         route_status = self._shadow_learning_route_status(coordinator)
         return {
-            "can_start": bool(preflight.can_start),
+            "can_start": can_start,
             "blockers": effective_blockers,
             "collector_pn": coordinator.smartess_collector_pn,
             "profile_name": str(coordinator.effective_profile_name or ""),

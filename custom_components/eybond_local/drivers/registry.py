@@ -12,6 +12,10 @@ from ..entity_descriptions import (
     BASE_SENSOR_DESCRIPTIONS,
     merge_descriptions,
 )
+from ..metadata.collector_cloud_profile_catalog_loader import (
+    load_collector_cloud_profile_catalog,
+)
+from ..metadata.device_catalog_loader import load_device_catalog
 from ..metadata.model_binding_catalog_loader import load_driver_model_binding_catalog
 from ..metadata.pi_family_catalog_loader import load_pi_family_catalog
 from ..metadata.profile_loader import load_driver_profile
@@ -285,6 +289,12 @@ def prime_metadata_caches() -> None:
 
 def _prime_catalog_driven_metadata() -> None:
     """Warm JSON-backed metadata that is only reached through runtime catalogs."""
+
+    # Warm the identity/cloud-profile catalogs too: their first read otherwise
+    # lands in the event loop during driver detection (HA's blocking-call
+    # warning), which needlessly prolongs startup on slow/throttled hosts.
+    load_device_catalog()
+    load_collector_cloud_profile_catalog()
 
     for binding in load_driver_model_binding_catalog().bindings.values():
         if binding.profile_name:

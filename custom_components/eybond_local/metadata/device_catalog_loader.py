@@ -51,11 +51,33 @@ def _env_force_unsupported() -> bool:
 # Resolved once at import from the environment only (never a tracked literal).
 FORCE_UNSUPPORTED_MODELS = _env_force_unsupported()
 
+# On-device override: enabled by an opt-in sentinel file in the HA config data
+# dir (NOT in the source tree, so it never travels with an rsync deploy). The
+# integration reads the sentinel once at setup — see refresh_force_unsupported
+# _override — so it can be toggled on a running appliance without editing code:
+#   touch /config/eybond_local/force_unsupported.flag   (then restart HA)
+FORCE_UNSUPPORTED_SENTINEL_NAME = "force_unsupported.flag"
+_force_unsupported_override = False
+
+
+def refresh_force_unsupported_override(config_data_root) -> None:
+    """Re-read the on-device force-unsupported sentinel. Call from an executor."""
+
+    global _force_unsupported_override
+    if config_data_root is None:
+        _force_unsupported_override = False
+        return
+    try:
+        sentinel = Path(config_data_root) / FORCE_UNSUPPORTED_SENTINEL_NAME
+        _force_unsupported_override = sentinel.exists()
+    except OSError:
+        _force_unsupported_override = False
+
 
 def force_unsupported_models() -> bool:
     """Return whether detection must treat every device as an unsupported model."""
 
-    return FORCE_UNSUPPORTED_MODELS
+    return FORCE_UNSUPPORTED_MODELS or _force_unsupported_override
 
 MATCH_NO_DATA = "no_data"
 MATCH_DEVICE = "device"
