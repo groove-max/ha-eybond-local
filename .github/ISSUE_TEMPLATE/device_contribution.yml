@@ -1,0 +1,54 @@
+name: Device Contribution
+description: Share a learned device so it can be added to the built-in catalog.
+title: "device: "
+labels:
+  - device-contribution
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping support more inverters! This is for devices that the
+        integration identified as **partial** or **did not recognize**, where you
+        ran **learning** to discover the sensors and controls.
+
+        Before submitting:
+
+        1. In the integration options, run **Learning**, then **Share to improve support**.
+        2. Download the generated **contribution record** (a small JSON file).
+        3. Attach it to this issue.
+
+        The record contains only the device fingerprint, the register map, and the
+        label correlations. It carries **no** part number, serial number, IP, or
+        account — those are stripped on your device before the file is written.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I generated the contribution record from a learning session.
+          required: true
+        - label: I will attach the record JSON to this issue.
+          required: true
+        - label: I searched existing issues first.
+          required: true
+  - type: input
+    id: model
+    attributes:
+      label: Inverter model (as printed on the unit)
+      placeholder: e.g. SMG II 4200 / Anenji ANJ-11KW-48V
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything unusual about the device, or sensors/controls you expected but did not get.
+    validations:
+      required: false
