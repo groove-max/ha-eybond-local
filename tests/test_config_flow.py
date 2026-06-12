@@ -3499,6 +3499,102 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["control_mode"], "auto")
         self.assertEqual(result["data"]["detection_confidence"], "high")
 
+    async def test_manual_high_confidence_routes_via_detection_summary(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        probe_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="manual",
+                ip="192.168.1.55",
+                connected=True,
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                confidence="high",
+                details={
+                    "device_catalog": {
+                        "kind": "device",
+                        "tier": "full",
+                        "entry_key": "smg_6200",
+                    }
+                },
+            ),
+            connection_mode="manual",
+        )
+
+        async def _fake_probe(values):
+            return probe_result
+
+        with patch.object(flow, "_async_probe_manual_target", side_effect=_fake_probe):
+            result = await flow.async_step_manual_probe_again()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "detection_summary")
+        placeholders = result["description_placeholders"]
+        self.assertEqual(placeholders["model"], "SMG 6200")
+        self.assertIn("Full support", placeholders["tier_headline"])
+
+        created = await flow.async_step_detection_summary({})
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["device_catalog_kind"], "device")
+        self.assertEqual(created["data"]["device_catalog_tier"], "full")
+        self.assertEqual(created["data"]["device_catalog_entry_key"], "smg_6200")
+
+    async def test_auto_entry_persists_device_catalog_metadata(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {
+            "server_ip": "192.168.1.104",
+            "collector_ip": "",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG family 4200 variant",
+                serial_number="15573418948999",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                confidence="medium",
+                details={
+                    "device_catalog": {
+                        "kind": "family",
+                        "tier": "partial",
+                    }
+                },
+            ),
+            connection_mode="known_ip",
+        )
+
+        result = await flow._async_create_entry_from_result({"poll_interval": 30})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["device_catalog_kind"], "family")
+        self.assertEqual(result["data"]["device_catalog_tier"], "partial")
+        self.assertEqual(result["data"]["device_catalog_entry_key"], "")
+
     async def test_smartess_cloud_assist_persists_inferred_metadata_on_pending_entry(self) -> None:
         flow = self._make_flow()
         with tempfile.TemporaryDirectory() as tempdir:

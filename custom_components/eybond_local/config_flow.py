@@ -63,6 +63,9 @@ from .const import (
     CONF_CONNECTION_MODE,
     CONF_CONTROL_MODE,
     CONF_DETECTED_MODEL,
+    CONF_DEVICE_CATALOG_ENTRY,
+    CONF_DEVICE_CATALOG_KIND,
+    CONF_DEVICE_CATALOG_TIER,
     CONF_DETECTED_SERIAL,
     CONF_DETECTION_CONFIDENCE,
     CONF_SMARTESS_COLLECTOR_VERSION,
@@ -474,6 +477,22 @@ def _result_indicates_inverter_link_down(result: OnboardingResult | None) -> boo
         and result.match is None
         and str(result.last_error or "") == ERROR_INVERTER_LINK_DOWN
     )
+
+
+def _apply_device_catalog_metadata(
+    data: dict[str, Any],
+    result: OnboardingResult | None,
+) -> None:
+    """Persist the catalog identification verdict into the config entry."""
+
+    if result is None or result.match is None:
+        return
+    catalog = result.match.details.get("device_catalog")
+    if not isinstance(catalog, dict):
+        return
+    data[CONF_DEVICE_CATALOG_KIND] = str(catalog.get("kind") or "")
+    data[CONF_DEVICE_CATALOG_TIER] = str(catalog.get("tier") or "")
+    data[CONF_DEVICE_CATALOG_ENTRY] = str(catalog.get("entry_key") or "")
 
 
 def _apply_smartess_detection_metadata(
@@ -1376,6 +1395,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._smartess_cloud_assist_mode = ""
         self._smartess_cloud_assist_last_error = ""
         self._smartess_cloud_assist_last_error_code = ""
+        self._detection_summary_context = "auto"
 
     @staticmethod
     @callback
@@ -1906,6 +1926,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 errors["base"] = "inverter_link_down"
             else:
                 self._set_selected_result(candidate)
+                self._detection_summary_context = "auto"
                 return await self.async_step_detection_summary()
 
         if user_input is not None:
@@ -1919,6 +1940,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 errors["base"] = "inverter_link_down"
             else:
                 self._set_selected_result(result)
+                self._detection_summary_context = "auto"
                 return await self.async_step_detection_summary()
 
         options = {
@@ -1946,9 +1968,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Tell the user WHAT was identified and WHICH support tier applies."""
 
-        if self._selected_result is None:
+        if self._detection_summary_result() is None:
+            if self._detection_summary_context == "manual":
+                return await self.async_step_manual()
             return await self.async_step_auto()
         if user_input is not None:
+            if self._detection_summary_context == "manual":
+                if not self._manual_config:
+                    return await self.async_step_manual()
+                return await self._async_create_manual_entry(
+                    self._manual_config, self._manual_result
+                )
             return await self.async_step_confirm()
         return self.async_show_form(
             step_id="detection_summary",
@@ -1956,8 +1986,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             description_placeholders=self._detection_summary_placeholders(),
         )
 
+    def _detection_summary_result(self) -> OnboardingResult | None:
+        if self._detection_summary_context == "manual":
+            return self._manual_result
+        return self._selected_result
+
     def _detection_summary_placeholders(self) -> dict[str, str]:
-        result = self._selected_result
+        result = self._detection_summary_result()
         if result is None:
             return {"model": "", "tier_headline": "", "tier_details": ""}
 
@@ -2288,7 +2323,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 self._manual_config = dict(flat_input)
                 self._manual_result = await self._async_probe_manual_target(flat_input)
                 if self._manual_result.match is not None and self._manual_result.confidence == "high":
-                    return await self._async_create_manual_entry(flat_input, self._manual_result)
+                    self._detection_summary_context = "manual"
+                    return await self.async_step_detection_summary()
                 return await self.async_step_manual_confirm()
 
         defaults = self._build_manual_defaults(user_input, self._selected_result)
@@ -2367,7 +2403,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._manual_result = await self._async_probe_manual_target(self._manual_config)
         if self._manual_result.match is not None and self._manual_result.confidence == "high":
-            return await self._async_create_manual_entry(self._manual_config, self._manual_result)
+            self._detection_summary_context = "manual"
+            return await self.async_step_detection_summary()
         return await self.async_step_manual_confirm()
 
     async def async_step_manual_edit_settings(
@@ -2449,6 +2486,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             CONF_DETECTED_SERIAL: result.match.serial_number if result.match is not None else "",
         }
         _apply_smartess_detection_metadata(data, result)
+        _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         poll_interval = int((user_input or {}).get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
         options = {
@@ -2551,6 +2589,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         data[CONF_DETECTED_MODEL] = detected_model
         data[CONF_DETECTED_SERIAL] = detected_serial
         _apply_smartess_detection_metadata(data, result)
+        _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         options = {
             CONF_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
