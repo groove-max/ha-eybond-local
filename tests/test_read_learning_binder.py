@@ -16,7 +16,12 @@ from custom_components.eybond_local.support.read_learning_binder import (  # noq
     BIND_STATUS_NO_MATCH,
     BIND_STATUS_SKIPPED_ZERO,
     BIND_STATUS_UNIQUE,
+    ENUM_STATUS_AMBIGUOUS,
+    ENUM_STATUS_NO_TABLE_MATCH,
+    ENUM_STATUS_UNIQUE,
     bind_cloud_labels_to_registers,
+    match_enum_bindings,
+    normalize_enum_label,
 )
 
 
@@ -144,6 +149,89 @@ class ReadLearningBinderTests(unittest.TestCase):
         )
 
         self.assertEqual(report.bindings[0].register, 215)
+
+
+
+class ReadEnumMatcherTests(unittest.TestCase):
+    def _enum_label_report(self, title: str, value: str) -> dict:
+        return {
+            "bindings": [
+                {
+                    "cloud_id": "sy_eybond_read_14",
+                    "title": title,
+                    "cloud_value": value,
+                    "status": BIND_STATUS_ENUM_LABEL,
+                }
+            ]
+        }
+
+    def test_inverts_known_table_to_unique_register(self) -> None:
+        # SMG seed: register 201 holds 3, mode_names maps 3 -> "Off-Grid".
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report("Operating mode", "Off-Grid Mode"),
+            registers={"201": [3], "215": [531]},
+            enum_tables={"mode_names": {"0": "Power On", "2": "Line", "3": "Off-Grid"}},
+        )
+
+        binding = result["bindings"][0]
+        self.assertEqual(binding["status"], ENUM_STATUS_UNIQUE)
+        self.assertEqual(binding["candidates"][0]["register"], 201)
+        self.assertEqual(binding["candidates"][0]["raw_value"], 3)
+        self.assertEqual(binding["candidates"][0]["enum_table"], "mode_names")
+        self.assertEqual(result["unique_count"], 1)
+
+    def test_exact_label_match_beats_containment(self) -> None:
+        # "Line" must not also hit "Line Saving" containment when an exact hit exists.
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report("Operating mode", "Line"),
+            registers={"201": [2], "300": [5]},
+            enum_tables={
+                "mode_names": {"2": "Line"},
+                "output_mode": {"5": "Line Saving"},
+            },
+        )
+
+        binding = result["bindings"][0]
+        self.assertEqual(binding["status"], ENUM_STATUS_UNIQUE)
+        self.assertEqual(binding["candidates"][0]["register"], 201)
+        self.assertTrue(
+            all(candidate["match_kind"] == "exact" for candidate in binding["candidates"])
+        )
+
+    def test_value_in_many_registers_is_ambiguous(self) -> None:
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report("Operating mode", "Off-Grid"),
+            registers={"201": [3], "303": [3]},
+            enum_tables={"mode_names": {"3": "Off-Grid"}},
+        )
+
+        self.assertEqual(result["bindings"][0]["status"], ENUM_STATUS_AMBIGUOUS)
+
+    def test_unknown_label_is_no_table_match(self) -> None:
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report("Operating mode", "Quantum Mode"),
+            registers={"201": [3]},
+            enum_tables={"mode_names": {"3": "Off-Grid"}},
+        )
+
+        self.assertEqual(result["bindings"][0]["status"], ENUM_STATUS_NO_TABLE_MATCH)
+
+    def test_numeric_bindings_are_ignored_by_enum_matcher(self) -> None:
+        result = match_enum_bindings(
+            read_bindings={
+                "bindings": [
+                    {"title": "Battery Voltage", "status": BIND_STATUS_UNIQUE, "cloud_value": "53.1"}
+                ]
+            },
+            registers={"215": [531]},
+            enum_tables={"mode_names": {"3": "Off-Grid"}},
+        )
+
+        self.assertEqual(result["bindings"], [])
+
+    def test_label_normalization(self) -> None:
+        self.assertEqual(normalize_enum_label("Off-Grid Mode"), "offgridmode")
+        self.assertEqual(normalize_enum_label("  UTI "), "uti")
 
 
 if __name__ == "__main__":

@@ -259,3 +259,114 @@ def _decimals_from_text(value: str) -> int:
     if "." not in text:
         return 0
     return len(text.rsplit(".", 1)[1].strip())
+
+
+# ---------------------------------------------------------------------------
+# Read-enum matching (PR 3.3)
+#
+# The cloud sends RESOLVED enum strings ("Off-Grid Mode"), never the raw int,
+# and a single session holds one frozen snapshot — so an enum table cannot be
+# learned from one session alone. What CAN be done soundly now:
+#  * invert the KNOWN enum tables of the source schema: find tables containing
+#    a label that matches the cloud string, then registers currently holding
+#    the mapped int — same unique/ambiguous discipline as numeric binding;
+#  * record every (cloud_id, title, label) observation into the manifest so
+#    repeated sessions in different device states accumulate table evidence.
+# ---------------------------------------------------------------------------
+
+ENUM_STATUS_UNIQUE = "unique"
+ENUM_STATUS_AMBIGUOUS = "ambiguous"
+ENUM_STATUS_NO_TABLE_MATCH = "no_table_match"
+
+
+def normalize_enum_label(text: str) -> str:
+    """Normalize one enum label for cross-vocabulary comparison."""
+
+    return "".join(char for char in str(text or "").lower() if char.isalnum())
+
+
+def _labels_match(cloud_label: str, table_label: str) -> str:
+    """Return the match kind ("exact"/"contains"/"") for two normalized labels."""
+
+    if not cloud_label or not table_label:
+        return ""
+    if cloud_label == table_label:
+        return "exact"
+    if cloud_label in table_label or table_label in cloud_label:
+        return "contains"
+    return ""
+
+
+def match_enum_bindings(
+    *,
+    read_bindings: dict[str, Any] | None,
+    registers: dict[Any, Any],
+    enum_tables: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Match enum-label binding verdicts against known schema enum tables."""
+
+    register_values = _normalize_registers(registers)
+    bindings = []
+    if isinstance(read_bindings, dict):
+        bindings = [
+            item
+            for item in read_bindings.get("bindings", [])
+            if isinstance(item, dict) and item.get("status") == BIND_STATUS_ENUM_LABEL
+        ]
+    if not bindings or not register_values or not isinstance(enum_tables, dict):
+        return {"bindings": [], "unique_count": 0}
+
+    results: list[dict[str, Any]] = []
+    for item in bindings:
+        cloud_label = normalize_enum_label(str(item.get("cloud_value") or ""))
+        candidates: list[dict[str, Any]] = []
+        for table_name, table in enum_tables.items():
+            if not isinstance(table, dict):
+                continue
+            for raw_key, table_label in table.items():
+                match_kind = _labels_match(cloud_label, normalize_enum_label(str(table_label)))
+                if not match_kind:
+                    continue
+                try:
+                    expected = int(raw_key)
+                except (TypeError, ValueError):
+                    continue
+                for register, samples in register_values.items():
+                    if expected in samples:
+                        candidates.append(
+                            {
+                                "register": register,
+                                "raw_value": expected,
+                                "enum_table": str(table_name),
+                                "table_label": str(table_label),
+                                "match_kind": match_kind,
+                            }
+                        )
+        # Prefer exact label matches; containment only fills in when nothing
+        # exact exists (keeps "Off-Grid Mode" from also matching "Grid Mode").
+        exact = [candidate for candidate in candidates if candidate["match_kind"] == "exact"]
+        effective = exact if exact else candidates
+        distinct_registers = sorted({candidate["register"] for candidate in effective})
+        if len(distinct_registers) == 1:
+            status = ENUM_STATUS_UNIQUE
+        elif distinct_registers:
+            status = ENUM_STATUS_AMBIGUOUS
+        else:
+            status = ENUM_STATUS_NO_TABLE_MATCH
+        results.append(
+            {
+                "cloud_id": str(item.get("cloud_id") or ""),
+                "title": str(item.get("title") or ""),
+                "cloud_value": str(item.get("cloud_value") or ""),
+                "status": status,
+                "candidates": effective,
+                "method": "enum_table_inversion",
+                "value_source": "seed_bank",
+            }
+        )
+
+    return {
+        "bindings": results,
+        "unique_count": sum(1 for item in results if item["status"] == ENUM_STATUS_UNIQUE),
+    }
+

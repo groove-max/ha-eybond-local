@@ -19,6 +19,7 @@ from ..metadata.local_metadata import (
 )
 from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
 from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
+from .read_learning_binder import match_enum_bindings
 from .shadow_learning import deterministic_evidence_hash
 from .shadow_learning_review_model import build_learned_control_review_model
 
@@ -135,6 +136,14 @@ def generate_shadow_learning_overlay_drafts(
         # Cloud label ↔ register correlation verdicts (read-sensor evidence for
         # the schema generator and for catalog contributions).
         "read_bindings": read_bindings if isinstance(read_bindings, dict) else {},
+        # Enum-string sensors matched by inverting the source schema's known
+        # enum tables against the seed snapshot (single-session evidence; the
+        # raw observations accumulate across sessions for table learning).
+        "read_enum_bindings": match_enum_bindings(
+            read_bindings=read_bindings,
+            registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
+            enum_tables=dict(schema.enum_tables) if schema.enum_tables else {},
+        ),
         "learned_capabilities": list(learned_summary["generated"]),
         "skipped_duplicates": list(learned_summary["skipped"]),
         "review_model": review_model,
