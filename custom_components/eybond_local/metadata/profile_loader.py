@@ -268,6 +268,11 @@ def _parse_capability(
         note=str(resolved_raw.get("note", "")),
         word_count=int(resolved_raw.get("word_count", 1)),
         combine=str(resolved_raw.get("combine", "u16")),
+        bitmask=_optional_bitmask(
+            resolved_raw.get("bitmask"),
+            capability_key=str(resolved_raw["key"]),
+            word_count=int(resolved_raw.get("word_count", 1)),
+        ),
         tested=tested,
         provenance=provenance,
         support_tier=str(resolved_raw.get("support_tier", "")),
@@ -448,6 +453,19 @@ def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _optional_bitmask(value: Any, *, capability_key: str, word_count: int) -> int | None:
+    """Parse one capability bitmask (int, or hex string like "0x0001")."""
+
+    if value is None or value == "":
+        return None
+    mask = int(value.strip(), 0) if isinstance(value, str) else int(value)
+    if not 1 <= mask <= 0xFFFF:
+        raise ValueError(f"invalid_capability_bitmask:{capability_key}:{value}")
+    if word_count != 1:
+        raise ValueError(f"bitmask_requires_single_word:{capability_key}")
+    return mask
 
 
 def _optional_float(value: Any) -> float | None:

@@ -414,7 +414,22 @@ class SmgModbusDriver(InverterDriver):
         raw_words = _encode_capability_words(capability, value)
 
         session = self._session(transport, inverter.probe_target)
-        await session.write_holding(capability.register, raw_words)
+        if capability.bitmask:
+            # The capability owns only some bits of a shared register: read the
+            # current word first and rewrite it with ONLY the masked field
+            # changed. A blind write would clobber the other bits, whose
+            # meanings may be unknown (e.g. OP2 enable is bit 0 of reg 354).
+            shift = capability.bitmask_shift
+            field = (int(raw_words[0]) << shift) & 0xFFFF
+            if field & ~capability.bitmask:
+                raise ValueError(f"value_exceeds_bitmask:{capability.key}:{raw_words[0]}")
+            current = await session.read_holding(capability.register, 1)
+            if not current:
+                raise ModbusError(f"bitmask_read_back_empty:{capability.key}")
+            merged = (int(current[0]) & 0xFFFF & ~capability.bitmask) | field
+            await session.write_holding(capability.register, [merged])
+        else:
+            await session.write_holding(capability.register, raw_words)
 
         native_value = _decode_capability_value(capability, raw_words)
         inverter.details[capability.key] = native_value
@@ -592,6 +607,12 @@ def _apply_capability_read_back(
                 raw_value = (low << 16) | high
         else:
             raw_value = register_map[register]
+        bitmask = int(getattr(capability, "bitmask", 0) or 0)
+        if bitmask:
+            # Masked capability: only its own bits carry the value (the rest of
+            # the register belongs to other settings).
+            shift = (bitmask & -bitmask).bit_length() - 1
+            raw_value = (raw_value & bitmask) >> shift
         value_kind = str(getattr(capability, "value_kind", "") or "")
         divisor = int(getattr(capability, "divisor", 0) or 0)
         if value_kind == "enum":

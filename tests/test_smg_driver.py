@@ -659,6 +659,58 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         values = await driver.async_read_values(transport, inverter)
         self.assertEqual(values["warning_mask_i"], 0x12345678)
 
+    def _op2_inverter(self, target: ProbeTarget) -> DetectedInverter:
+        from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+
+        profile = load_driver_profile("modbus_smg/models/anenji_op2_6200.json")
+        return DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="Anenji 6200 (dual output)",
+            serial_number="99632601111397",
+            probe_target=target,
+            variant_key="default",
+            profile_name="modbus_smg/models/anenji_op2_6200.json",
+            register_schema_name="modbus_smg/models/anenji_op2_6200.json",
+            capabilities=profile.capabilities,
+        )
+
+    async def test_write_bitmask_capability_preserves_other_register_bits(self) -> None:
+        # OP2 enable is bit 0 of register 354; the other 15 bits belong to
+        # unknown settings and MUST survive a write (read-modify-write).
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = self._op2_inverter(target)
+        transport = FixtureTransport(
+            registers={354: 0xABCE},
+            command_responses=None,
+            probe_target=target,
+        )
+
+        written = await driver.async_write_capability(transport, inverter, "output2_enable", True)
+        self.assertEqual(written, "On")
+        self.assertEqual(transport._registers[354], 0xABCF)
+
+        written = await driver.async_write_capability(transport, inverter, "output2_enable", False)
+        self.assertEqual(written, "Off")
+        self.assertEqual(transport._registers[354], 0xABCE)
+
+    def test_capability_read_back_extracts_bitmask_field(self) -> None:
+        from custom_components.eybond_local.drivers.smg import _apply_capability_read_back
+        from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+
+        capability = load_driver_profile(
+            "modbus_smg/models/anenji_op2_6200.json"
+        ).get_capability("output2_enable")
+
+        values: dict[str, object] = {}
+        _apply_capability_read_back(values, (capability,), ((354, [0xABCF]),))
+        self.assertEqual(values["output2_enable"], 1)
+
+        values = {}
+        _apply_capability_read_back(values, (capability,), ((354, [0xABCE]),))
+        self.assertEqual(values["output2_enable"], 0)
+
     async def test_write_inverter_clock_capabilities_updates_date_and_time_words(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)

@@ -177,6 +177,11 @@ class WriteCapability:
     note: str
     word_count: int = 1
     combine: str = "u16"
+    # When set, the capability owns ONLY these bits of a single shared 16-bit
+    # register: writes read-modify-write the register (other bits preserved),
+    # reads extract the masked field shifted down to bit 0. Example: OP2
+    # output enable = register 354, bitmask 0x0001.
+    bitmask: int | None = None
     tested: bool = False
     provenance: str = "inferred"
     support_tier: str = ""
@@ -215,6 +220,14 @@ class WriteCapability:
         """Runtime value key used to read the current native value."""
 
         return self.read_key or self.key
+
+    @property
+    def bitmask_shift(self) -> int:
+        """Bit offset of the masked field (position of the mask's lowest set bit)."""
+
+        if not self.bitmask:
+            return 0
+        return (self.bitmask & -self.bitmask).bit_length() - 1
 
     @property
     def display_name(self) -> str:

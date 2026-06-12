@@ -108,6 +108,40 @@ class ProfileLoaderTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             profile.get_capability("low_dc_cutoff_soc")
 
+    def test_loads_anenji_op2_profile_overlay_with_bitmask_capability(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/anenji_op2_6200.json")
+
+        self.assertEqual(profile.key, "modbus_smg_anenji_op2_6200")
+        self.assertEqual(profile.title, "Anenji 6200 Dual Output")
+        # The full SMG control set rides along from the default profile...
+        self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
+        self.assertGreaterEqual(len(profile.capabilities), 28)
+        # ...plus the OP2 switch as a masked single-bit field of register 354.
+        capability = profile.get_capability("output2_enable")
+        self.assertEqual(capability.register, 354)
+        self.assertEqual(capability.bitmask, 0x0001)
+        self.assertEqual(capability.bitmask_shift, 0)
+        self.assertEqual(capability.value_kind, "bool")
+        self.assertTrue(capability.requires_confirm)
+        self.assertFalse(capability.tested)
+
+    def test_capability_bitmask_parsing_and_validation(self) -> None:
+        parse = profile_loader._optional_bitmask
+        self.assertEqual(parse("0x0001", capability_key="x", word_count=1), 1)
+        self.assertEqual(parse("0x0008", capability_key="x", word_count=1), 8)
+        self.assertEqual(parse(4, capability_key="x", word_count=1), 4)
+        self.assertIsNone(parse(None, capability_key="x", word_count=1))
+        self.assertIsNone(parse("", capability_key="x", word_count=1))
+        with self.assertRaises(ValueError):
+            parse(0, capability_key="x", word_count=1)
+        with self.assertRaises(ValueError):
+            parse("0x10000", capability_key="x", word_count=1)
+        with self.assertRaises(ValueError):
+            # A bitmask only makes sense inside one 16-bit word.
+            parse(1, capability_key="x", word_count=2)
+
     def test_loads_pi30_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 

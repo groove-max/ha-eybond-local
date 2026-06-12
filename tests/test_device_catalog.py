@@ -162,10 +162,13 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
             "modbus_smg/models/anenji_op2_6200.json",
         )
         # The donor ran this unit with the full SMG control set bound and every
-        # control read back correct values (developer-witnessed), so the SMG
-        # profile attaches. The OP2 enable write (reg 354 bit0) stays deferred:
-        # the capability model has no bit-level writes yet.
-        self.assertEqual(match.entry.binding.profile_name, "smg_modbus.json")
+        # control read back correct values (developer-witnessed), so a model
+        # profile attaches: the SMG set plus the OP2 enable switch (reg 354
+        # bit 0, donor-verified write) as a bitmask read-modify-write control.
+        self.assertEqual(
+            match.entry.binding.profile_name,
+            "modbus_smg/models/anenji_op2_6200.json",
+        )
 
     def test_anenji_6200_2025_user_dump(self) -> None:
         # Anenji2025.zip 2026-06-12: same family, single output, fw 3700_A6250424v1.
