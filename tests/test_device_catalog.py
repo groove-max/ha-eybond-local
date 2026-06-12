@@ -156,26 +156,31 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_op2_6200")
-        self.assertEqual(match.tier, TIER_PARTIAL)
+        self.assertEqual(match.tier, TIER_FULL)
         self.assertEqual(
             match.entry.binding.register_schema_name,
             "modbus_smg/models/anenji_op2_6200.json",
         )
-        # Writes stay locked: OP2 enable (reg 354) is NOT exposed until verified.
-        self.assertEqual(match.entry.binding.profile_name, "")
+        # The donor ran this unit with the full SMG control set bound and every
+        # control read back correct values (developer-witnessed), so the SMG
+        # profile attaches. The OP2 enable write (reg 354 bit0) stays deferred:
+        # the capability model has no bit-level writes yet.
+        self.assertEqual(match.entry.binding.profile_name, "smg_modbus.json")
 
     def test_anenji_6200_2025_user_dump(self) -> None:
         # Anenji2025.zip 2026-06-12: same family, single output, fw 3700_A6250424v1.
         # Same rated power (6200) as smg_6200 but a DIFFERENT model_code — rated
-        # power never identifies a model on its own.
+        # power never identifies a model on its own. Layout 1 is the verified SMG
+        # layout and the donor ran the SMG control set with correct read-back, so
+        # the profile attaches (full tier).
         match = match_device_identity(
             layout_code=1, model_code=14080, rated_power=6200,
             serial_ascii="92632507102827",
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_6200")
-        self.assertEqual(match.tier, TIER_PARTIAL)
-        self.assertEqual(match.entry.binding.profile_name, "")
+        self.assertEqual(match.tier, TIER_FULL)
+        self.assertEqual(match.entry.binding.profile_name, "smg_modbus.json")
 
     def test_force_unsupported_downgrades_known_model_to_family(self) -> None:
         # Debug toggle: a fully-supported device (SMG 6200) must drop to the

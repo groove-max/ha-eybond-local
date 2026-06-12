@@ -116,19 +116,20 @@
       },
       "structural": ["serial_ascii_plausible"],
       "model_name": "Anenji 6200 (dual output)",
-      "tier": "partial",
+      "tier": "full",
       "binding": {
         "driver_key": "modbus_smg",
         "variant_key": "default",
         "register_schema_name": "modbus_smg/models/anenji_op2_6200.json",
-        "profile_name": ""
+        "profile_name": "smg_modbus.json"
       },
       "cloud_hints": {"devcodes": [6514]},
       "provenance": {
         "sources": [
           "corpus:I20000251172562875 aninerel.zip (2026-06-12)",
           "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write)",
-          "fw 7903_A6260126v1 (reg626 hex == model_code 30979)"
+          "fw 7903_A6260126v1 (reg626 hex == model_code 30979)",
+          "donor ran smg_modbus.json profile bound as SMG 6200: full SMG control set read back correct values (developer-witnessed 2026-06-12); OP2 enable @354 bit0 deferred (capability model lacks bit writes)"
         ],
         "confidence": "capture-derived"
       }
@@ -142,18 +143,19 @@
       },
       "structural": ["serial_ascii_plausible"],
       "model_name": "Anenji 6200",
-      "tier": "partial",
+      "tier": "full",
       "binding": {
         "driver_key": "modbus_smg",
         "variant_key": "default",
         "register_schema_name": "modbus_smg/base.json",
-        "profile_name": ""
+        "profile_name": "smg_modbus.json"
       },
       "cloud_hints": {"devcodes": []},
       "provenance": {
         "sources": [
           "corpus:E50000252371235481 Anenji2025.zip (2026-06-12)",
-          "fw 3700_A6250424v1 (reg626 hex == model_code 14080)"
+          "fw 3700_A6250424v1 (reg626 hex == model_code 14080)",
+          "donor ran smg_modbus.json profile bound as SMG 6200 (same layout 1 as the verified smg_6200): full SMG control set read back correct values (developer-witnessed 2026-06-12)"
         ],
         "confidence": "capture-derived"
       }
