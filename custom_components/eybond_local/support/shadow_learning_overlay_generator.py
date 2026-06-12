@@ -68,6 +68,7 @@ class ShadowLearningOverlayDraftResult:
     generated_capability_count: int
     skipped_duplicate_count: int
     manifest: dict[str, Any]
+    generated_read_count: int = 0
 
 
 def generate_shadow_learning_overlay_drafts(
@@ -115,6 +116,17 @@ def generate_shadow_learning_overlay_drafts(
         session_manifest=normalized_manifest,
     )
     review_model = build_learned_control_review_model(capabilities)
+
+    read_enum_bindings = match_enum_bindings(
+        read_bindings=read_bindings,
+        registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
+        enum_tables=dict(schema.enum_tables) if schema.enum_tables else {},
+    )
+    learned_read = _build_learned_read_overlay(
+        schema=schema,
+        read_bindings=read_bindings,
+        read_enum_bindings=read_enum_bindings,
+    )
     generated_at = datetime.now(timezone.utc).isoformat()
     manifest = {
         "kind": "shadow_learning_device_overlay",
@@ -139,13 +151,12 @@ def generate_shadow_learning_overlay_drafts(
         # Enum-string sensors matched by inverting the source schema's known
         # enum tables against the seed snapshot (single-session evidence; the
         # raw observations accumulate across sessions for table learning).
-        "read_enum_bindings": match_enum_bindings(
-            read_bindings=read_bindings,
-            registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
-            enum_tables=dict(schema.enum_tables) if schema.enum_tables else {},
-        ),
+        "read_enum_bindings": read_enum_bindings,
         "learned_capabilities": list(learned_summary["generated"]),
         "skipped_duplicates": list(learned_summary["skipped"]),
+        # Read sensors materialized from unique value/enum correlations.
+        "learned_read_sensors": list(learned_read["generated"]),
+        "skipped_read_sensors": list(learned_read["skipped"]),
         "review_model": review_model,
         "output": {
             "profile_name": profile_output_name,
@@ -192,6 +203,7 @@ def generate_shadow_learning_overlay_drafts(
                 if int(item.get("register", 0)) > 0
             }
         ),
+        **learned_read["schema_fragment"],
     }
 
     profile_destination.parent.mkdir(parents=True, exist_ok=True)
@@ -204,8 +216,233 @@ def generate_shadow_learning_overlay_drafts(
         schema_path=schema_destination,
         generated_capability_count=len(capabilities),
         skipped_duplicate_count=len(learned_summary["skipped"]),
+        generated_read_count=len(learned_read["generated"]),
         manifest=manifest,
     )
+
+
+# Polled spec-set per builtin block key; registers outside all polled blocks are
+# read one-by-one via the aux_config optional-spec path (same as learned controls).
+_READ_BLOCK_SPEC_SETS = ("status", "live", "config")
+_READ_OUT_OF_BLOCK_SPEC_SET = "aux_config"
+_READ_UNIT_DEVICE_CLASS = {
+    "v": "voltage",
+    "a": "current",
+    "hz": "frequency",
+    "w": "power",
+    "va": "apparent_power",
+    "var": "reactive_power",
+    "°c": "temperature",
+    "c": "temperature",
+    "wh": "energy",
+    "kwh": "energy",
+    "%": None,
+}
+
+
+def _build_learned_read_overlay(
+    *,
+    schema,
+    read_bindings: dict[str, Any] | None,
+    read_enum_bindings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Turn unique read correlations into schema sensor definitions.
+
+    Numeric and enum sensors whose register/title is already decoded by the
+    builtin schema are skipped. Surviving ones are emitted into the right
+    polled spec-set (or aux_config for out-of-block registers) plus a
+    measurement description, so they materialize as HA sensors through the
+    existing decode + read-back path — no driver change required.
+    """
+
+    existing_registers = {
+        int(spec.register)
+        for specs in schema.spec_sets.values()
+        for spec in specs
+    }
+    existing_titles = {
+        _normalize_title(measurement.name or measurement.key)
+        for measurement in schema.measurement_descriptions
+    }
+    block_for_register = _polled_block_lookup(schema)
+
+    spec_set_additions: dict[str, list[dict[str, Any]]] = {}
+    measurements: list[dict[str, Any]] = []
+    generated: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    used_keys: set[str] = set()
+
+    def _accept(
+        *,
+        register: int,
+        title: str,
+        spec: dict[str, Any],
+        measurement: dict[str, Any],
+        kind: str,
+    ) -> None:
+        set_name = block_for_register(register) or _READ_OUT_OF_BLOCK_SPEC_SET
+        spec_set_additions.setdefault(set_name, []).append(spec)
+        measurements.append(measurement)
+        generated.append(
+            {"key": spec["key"], "register": register, "title": title, "kind": kind, "spec_set": set_name}
+        )
+
+    for binding in _unique_read_bindings(read_bindings):
+        register = binding["register"]
+        title = binding["title"]
+        title_key = _normalize_title(title)
+        skip_reason = _read_skip_reason(register, title_key, existing_registers, existing_titles)
+        if skip_reason is not None:
+            skipped.append({"register": register, "title": title, "kind": "numeric", "reason": skip_reason})
+            continue
+        key = _unique_read_key(f"learned_read_{register}", used_keys)
+        existing_registers.add(register)
+        existing_titles.add(title_key)
+        spec: dict[str, Any] = {"key": key, "register": register}
+        if binding["signed"]:
+            spec["signed"] = True
+        if binding["divisor"] > 1:
+            spec["divisor"] = binding["divisor"]
+            spec["decimals"] = binding["decimals"]
+        measurement = _read_measurement(
+            key=key, title=title, unit=binding["unit"], decimals=binding["decimals"], divisor=binding["divisor"]
+        )
+        _accept(register=register, title=title, spec=spec, measurement=measurement, kind="numeric")
+
+    for binding in _unique_enum_bindings(read_enum_bindings):
+        register = binding["register"]
+        title = binding["title"]
+        title_key = _normalize_title(title)
+        skip_reason = _read_skip_reason(register, title_key, existing_registers, existing_titles)
+        if skip_reason is not None:
+            skipped.append({"register": register, "title": title, "kind": "enum", "reason": skip_reason})
+            continue
+        key = _unique_read_key(f"learned_read_{register}", used_keys)
+        existing_registers.add(register)
+        existing_titles.add(title_key)
+        spec = {"key": key, "register": register, "enum_table": binding["enum_table"]}
+        measurement = {"key": key, "name": title, "enabled_default": True, "learned": True}
+        _accept(register=register, title=title, spec=spec, measurement=measurement, kind="enum")
+
+    fragment: dict[str, Any] = {}
+    if spec_set_additions:
+        fragment["spec_sets"] = {
+            set_name: specs for set_name, specs in spec_set_additions.items()
+        }
+    if measurements:
+        fragment["measurement_descriptions"] = measurements
+        fragment["learned_read_registers"] = sorted({int(item["register"]) for item in generated})
+
+    return {"schema_fragment": fragment, "generated": generated, "skipped": skipped}
+
+
+def _polled_block_lookup(schema):
+    ranges: list[tuple[int, int, str]] = []
+    for block in schema.blocks:
+        if block.key in _READ_BLOCK_SPEC_SETS:
+            ranges.append((int(block.start), int(block.start) + int(block.count), block.key))
+
+    def _lookup(register: int) -> str | None:
+        for start, stop, set_name in ranges:
+            if start <= register < stop:
+                return set_name
+        return None
+
+    return _lookup
+
+
+def _read_skip_reason(
+    register: int,
+    title_key: str,
+    existing_registers: set[int],
+    existing_titles: set[str],
+) -> str | None:
+    if register in existing_registers:
+        return "register_already_decoded"
+    if title_key and title_key in existing_titles:
+        return "title_already_mapped"
+    return None
+
+
+def _read_measurement(
+    *,
+    key: str,
+    title: str,
+    unit: str,
+    decimals: int,
+    divisor: int,
+) -> dict[str, Any]:
+    measurement: dict[str, Any] = {
+        "key": key,
+        "name": title,
+        "state_class": "measurement",
+        "enabled_default": True,
+        "learned": True,
+    }
+    normalized_unit = str(unit or "").strip()
+    if normalized_unit:
+        measurement["unit"] = normalized_unit
+        device_class = _READ_UNIT_DEVICE_CLASS.get(normalized_unit.lower())
+        if device_class:
+            measurement["device_class"] = device_class
+    if divisor > 1 and decimals > 0:
+        measurement["suggested_display_precision"] = decimals
+    return measurement
+
+
+def _unique_read_bindings(read_bindings: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(read_bindings, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in read_bindings.get("bindings", []):
+        if not isinstance(item, dict) or item.get("status") != "unique":
+            continue
+        candidates = item.get("candidates") or []
+        if not candidates:
+            continue
+        candidate = candidates[0]
+        rows.append(
+            {
+                "register": int(candidate.get("register", 0)),
+                "title": str(item.get("title") or ""),
+                "unit": str(item.get("unit") or ""),
+                "divisor": int(candidate.get("divisor", 1) or 1),
+                "decimals": int(item.get("decimals", 0) or 0),
+                "signed": bool(candidate.get("signed")),
+            }
+        )
+    return rows
+
+
+def _unique_enum_bindings(read_enum_bindings: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(read_enum_bindings, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in read_enum_bindings.get("bindings", []):
+        if not isinstance(item, dict) or item.get("status") != "unique":
+            continue
+        candidates = item.get("candidates") or []
+        if not candidates:
+            continue
+        candidate = candidates[0]
+        rows.append(
+            {
+                "register": int(candidate.get("register", 0)),
+                "title": str(item.get("title") or ""),
+                "enum_table": str(candidate.get("enum_table") or ""),
+            }
+        )
+    return rows
+
+
+def _unique_read_key(base_key: str, used_keys: set[str]) -> str:
+    key = base_key
+    suffix = 2
+    while key in used_keys:
+        key = f"{base_key}_{suffix}"
+        suffix += 1
+    used_keys.add(key)
+    return key
 
 
 def _build_learned_capabilities(

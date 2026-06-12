@@ -5875,6 +5875,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     schema_path=schema_path,
                     generated_capability_count=1,
                     skipped_duplicate_count=0,
+                    generated_read_count=0,
                     manifest=overlay_manifest,
                 ),
             ):
@@ -6764,6 +6765,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     schema_path=Path("/config/eybond_local/register_schemas/learned/s.json"),
                     generated_capability_count=2,
                     skipped_duplicate_count=0,
+                    generated_read_count=3,
                     manifest={
                         "output": {
                             "profile_name": "learned/p.json",

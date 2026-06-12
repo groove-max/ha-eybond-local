@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -28,6 +29,7 @@ from custom_components.eybond_local.metadata.register_schema_loader import (
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.support.shadow_learning_overlay_generator import (
+    _build_learned_read_overlay,
     _classify_learned_control,
     generate_shadow_learning_overlay_drafts,
 )
@@ -804,6 +806,145 @@ class LearnedControlReviewModelTests(unittest.TestCase):
             self.assertEqual(reset["default_label"], "Reset user parameters")
             self.assertTrue(reset["exclusion_reasons"])
             self.assertIn("destructive_action", reset["exclusion_reasons"])
+
+
+
+
+def _fake_schema(*, specs=None, measurements=None, enum_tables=None):
+    spec_sets = {}
+    for set_name, registers in (specs or {}).items():
+        spec_sets[set_name] = tuple(
+            SimpleNamespace(register=reg, key=f"{set_name}_{reg}") for reg in registers
+        )
+    return SimpleNamespace(
+        blocks=(
+            SimpleNamespace(key="status", start=100, count=10),
+            SimpleNamespace(key="live", start=201, count=34),
+            SimpleNamespace(key="config", start=300, count=44),
+        ),
+        spec_sets=spec_sets,
+        measurement_descriptions=tuple(
+            SimpleNamespace(key=key, name=name) for key, name in (measurements or {}).items()
+        ),
+        enum_tables=enum_tables or {},
+    )
+
+
+def _numeric_binding(register, title, *, unit="V", divisor=10, decimals=1, signed=False):
+    return {
+        "title": title,
+        "unit": unit,
+        "status": "unique",
+        "decimals": decimals,
+        "candidates": [{"register": register, "divisor": divisor, "signed": signed}],
+    }
+
+
+class LearnedReadOverlayTests(unittest.TestCase):
+    def test_out_of_block_register_routes_to_aux_config_with_metadata(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": [201]}),
+            read_bindings={"bindings": [_numeric_binding(404, "Some Aux Voltage")]},
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["generated"][0]["register"], 404)
+        self.assertEqual(result["generated"][0]["spec_set"], "aux_config")
+        fragment = result["schema_fragment"]
+        spec = fragment["spec_sets"]["aux_config"][0]
+        self.assertEqual(spec, {"key": "learned_read_404", "register": 404, "divisor": 10, "decimals": 1})
+        measurement = fragment["measurement_descriptions"][0]
+        self.assertEqual(measurement["unit"], "V")
+        self.assertEqual(measurement["device_class"], "voltage")
+        self.assertEqual(measurement["suggested_display_precision"], 1)
+        self.assertEqual(measurement["state_class"], "measurement")
+        self.assertEqual(fragment["learned_read_registers"], [404])
+
+    def test_in_block_register_routes_to_its_polled_spec_set(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={"bindings": [_numeric_binding(214, "Aux Live Reading")]},
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["generated"][0]["spec_set"], "live")
+        self.assertIn("live", result["schema_fragment"]["spec_sets"])
+
+    def test_already_decoded_register_is_skipped(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": [215]}),
+            read_bindings={"bindings": [_numeric_binding(215, "Battery Voltage")]},
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["generated"], [])
+        self.assertEqual(result["skipped"][0]["reason"], "register_already_decoded")
+
+    def test_already_titled_measurement_is_skipped(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}, measurements={"pv_voltage": "PV Voltage"}),
+            read_bindings={"bindings": [_numeric_binding(404, "PV Voltage")]},
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["skipped"][0]["reason"], "title_already_mapped")
+
+    def test_signed_and_unscaled_specs_render_minimally(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={
+                "bindings": [
+                    _numeric_binding(404, "Battery Current", unit="A", divisor=10, decimals=1, signed=True),
+                    _numeric_binding(405, "Load Percent", unit="%", divisor=1, decimals=0),
+                ]
+            },
+            read_enum_bindings={"bindings": []},
+        )
+
+        specs = {spec["register"]: spec for spec in result["schema_fragment"]["spec_sets"]["aux_config"]}
+        self.assertTrue(specs[404]["signed"])
+        self.assertEqual(specs[404]["divisor"], 10)
+        self.assertNotIn("divisor", specs[405])  # divisor 1 omitted
+        measurements = {m["key"]: m for m in result["schema_fragment"]["measurement_descriptions"]}
+        self.assertEqual(measurements["learned_read_405"]["unit"], "%")
+        self.assertNotIn("device_class", measurements["learned_read_405"])  # % has no device class
+
+    def test_unique_enum_binding_emits_enum_spec_and_text_measurement(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={"bindings": []},
+            read_enum_bindings={
+                "bindings": [
+                    {
+                        "title": "Working State",
+                        "status": "unique",
+                        "candidates": [{"register": 460, "enum_table": "mode_names"}],
+                    }
+                ]
+            },
+        )
+
+        spec = result["schema_fragment"]["spec_sets"]["aux_config"][0]
+        self.assertEqual(spec, {"key": "learned_read_460", "register": 460, "enum_table": "mode_names"})
+        measurement = result["schema_fragment"]["measurement_descriptions"][0]
+        self.assertEqual(measurement["name"], "Working State")
+        self.assertNotIn("unit", measurement)
+
+    def test_non_unique_bindings_are_not_emitted(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={
+                "bindings": [
+                    {"title": "X", "status": "ambiguous", "candidates": [{"register": 404, "divisor": 1}]},
+                    {"title": "Y", "status": "no_match", "candidates": []},
+                    {"title": "Z", "status": "skipped_zero", "candidates": []},
+                ]
+            },
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["generated"], [])
+        self.assertEqual(result["schema_fragment"], {})
 
 
 if __name__ == "__main__":
