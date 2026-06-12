@@ -930,6 +930,51 @@ class LearnedReadOverlayTests(unittest.TestCase):
         self.assertEqual(measurement["name"], "Working State")
         self.assertNotIn("unit", measurement)
 
+    def test_known_title_gets_canonical_presentation_even_without_cloud_unit(self) -> None:
+        # An out-of-block register labeled "Battery Voltage" but with NO cloud unit:
+        # the semantic catalog still supplies device_class/unit/translation_key.
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={
+                "bindings": [
+                    {
+                        "title": "Battery Voltage",
+                        "unit": "",
+                        "status": "unique",
+                        "decimals": 1,
+                        "candidates": [{"register": 460, "divisor": 10, "signed": False}],
+                    }
+                ]
+            },
+            read_enum_bindings={"bindings": []},
+        )
+
+        measurement = result["schema_fragment"]["measurement_descriptions"][0]
+        self.assertEqual(measurement["device_class"], "voltage")
+        self.assertEqual(measurement["unit"], "V")
+        self.assertEqual(measurement["translation_key"], "battery_voltage")
+
+    def test_unknown_title_falls_back_to_unit_device_class(self) -> None:
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={
+                "bindings": [
+                    {
+                        "title": "Mystery Reading",
+                        "unit": "A",
+                        "status": "unique",
+                        "decimals": 1,
+                        "candidates": [{"register": 460, "divisor": 10, "signed": False}],
+                    }
+                ]
+            },
+            read_enum_bindings={"bindings": []},
+        )
+
+        measurement = result["schema_fragment"]["measurement_descriptions"][0]
+        self.assertEqual(measurement["device_class"], "current")
+        self.assertNotIn("translation_key", measurement)
+
     def test_non_unique_bindings_are_not_emitted(self) -> None:
         result = _build_learned_read_overlay(
             schema=_fake_schema(specs={"live": []}),

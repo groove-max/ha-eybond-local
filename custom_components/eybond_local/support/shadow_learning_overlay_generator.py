@@ -18,6 +18,7 @@ from ..metadata.local_metadata import (
     local_register_schemas_root,
 )
 from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
+from ..metadata.semantic_titles_loader import resolve_semantic_title
 from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
 from .read_learning_binder import match_enum_bindings
 from .shadow_learning import deterministic_evidence_hash
@@ -322,6 +323,9 @@ def _build_learned_read_overlay(
         existing_titles.add(title_key)
         spec = {"key": key, "register": register, "enum_table": binding["enum_table"]}
         measurement = {"key": key, "name": title, "enabled_default": True, "learned": True}
+        semantic = resolve_semantic_title(title)
+        if semantic is not None:
+            measurement["translation_key"] = semantic.semantic_key
         _accept(register=register, title=title, spec=spec, measurement=measurement, kind="enum")
 
     fragment: dict[str, Any] = {}
@@ -379,12 +383,25 @@ def _read_measurement(
         "enabled_default": True,
         "learned": True,
     }
+    # The cross-vendor semantic catalog is the authority for presentation when
+    # it knows this title; the cloud unit and a unit→class guess are fallbacks.
+    semantic = resolve_semantic_title(title)
     normalized_unit = str(unit or "").strip()
+    if semantic is not None:
+        measurement["translation_key"] = semantic.semantic_key
+        if semantic.unit:
+            normalized_unit = semantic.unit
+        if semantic.state_class:
+            measurement["state_class"] = semantic.state_class
+        if semantic.device_class:
+            measurement["device_class"] = semantic.device_class
     if normalized_unit:
         measurement["unit"] = normalized_unit
-        device_class = _READ_UNIT_DEVICE_CLASS.get(normalized_unit.lower())
-        if device_class:
-            measurement["device_class"] = device_class
+        measurement.setdefault(
+            "device_class", _READ_UNIT_DEVICE_CLASS.get(normalized_unit.lower())
+        )
+        if measurement.get("device_class") is None:
+            measurement.pop("device_class")
     if divisor > 1 and decimals > 0:
         measurement["suggested_display_precision"] = decimals
     return measurement
