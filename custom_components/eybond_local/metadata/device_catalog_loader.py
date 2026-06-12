@@ -28,24 +28,34 @@ DEVICE_CATALOG_PATH = (
 # ignored so every device drops to the family (partial) tier — i.e. it behaves
 # as an unsupported model and the learning flow is offered. Use it to exercise
 # read + control learning end to end on a device that is otherwise fully
-# supported (e.g. an SMG 6200). Flip this constant, or set the environment
-# variable EYBOND_FORCE_UNSUPPORTED=1 without editing code. Keep False for
-# normal use.
-FORCE_UNSUPPORTED_MODELS = False
+# supported (e.g. an SMG 6200).
+#
+# It is ENABLED ONLY via the EYBOND_FORCE_UNSUPPORTED environment variable, and
+# is deliberately NOT a hard-coded constant: a hard-coded `True` once reached a
+# production device through an rsync of the working tree, forced every model to
+# the partial tier, and the resulting entity + recorder-write explosion
+# OOM-looped the host. An env var never travels with the source tree, so it
+# cannot ship by accident. To test locally: `EYBOND_FORCE_UNSUPPORTED=1`.
 _FORCE_UNSUPPORTED_ENV = "EYBOND_FORCE_UNSUPPORTED"
 
 
-def force_unsupported_models() -> bool:
-    """Return whether detection must treat every device as an unsupported model."""
-
-    if FORCE_UNSUPPORTED_MODELS:
-        return True
+def _env_force_unsupported() -> bool:
     return str(os.environ.get(_FORCE_UNSUPPORTED_ENV, "")).strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+
+
+# Resolved once at import from the environment only (never a tracked literal).
+FORCE_UNSUPPORTED_MODELS = _env_force_unsupported()
+
+
+def force_unsupported_models() -> bool:
+    """Return whether detection must treat every device as an unsupported model."""
+
+    return FORCE_UNSUPPORTED_MODELS
 
 MATCH_NO_DATA = "no_data"
 MATCH_DEVICE = "device"
