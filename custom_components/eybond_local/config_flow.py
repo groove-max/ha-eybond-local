@@ -128,6 +128,7 @@ from .collector.smartess_ble import (
     parse_wifi_scan_response,
 )
 from .collector.transport import SharedEybondTransport
+from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
 from .drivers.registry import driver_options
 from .metadata.local_metadata import (
     draft_activates_automatically,
@@ -463,6 +464,16 @@ def _with_translation_bundle(step):
         return await step(self, *args, **kwargs)
 
     return _wrapped
+
+
+def _result_indicates_inverter_link_down(result: OnboardingResult | None) -> bool:
+    """True when the collector answered but the inverter link was down."""
+
+    return (
+        result is not None
+        and result.match is None
+        and str(result.last_error or "") == ERROR_INVERTER_LINK_DOWN
+    )
 
 
 def _apply_smartess_detection_metadata(
@@ -1885,11 +1896,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         available_results = self._available_autodetect_results()
         if not available_results:
             return await self.async_step_scan_results()
-        if user_input is None and len(available_results) == 1:
-            self._set_selected_result(next(iter(available_results.values())))
-            return await self.async_step_confirm()
 
         errors: dict[str, str] = {}
+        if user_input is None and len(available_results) == 1:
+            candidate = next(iter(available_results.values()))
+            if _result_indicates_inverter_link_down(candidate):
+                # Collector answered but the inverter link is down: never
+                # classify, let the user fix cabling/power and rescan.
+                errors["base"] = "inverter_link_down"
+            else:
+                self._set_selected_result(candidate)
+                return await self.async_step_detection_summary()
+
         if user_input is not None:
             selected_key = user_input[CONF_RESULT_KEY]
             result = available_results.get(selected_key)
@@ -1897,9 +1915,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_selection"
             elif self._existing_entry_for_result(result) is not None:
                 errors["base"] = "already_added_candidate"
+            elif _result_indicates_inverter_link_down(result):
+                errors["base"] = "inverter_link_down"
             else:
                 self._set_selected_result(result)
-                return await self.async_step_confirm()
+                return await self.async_step_detection_summary()
 
         options = {
             key: self._result_label(result)
@@ -1916,6 +1936,90 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=self._choose_placeholders(),
         )
+
+    # ---- step: detection_summary ----
+
+    @_with_translation_bundle
+    async def async_step_detection_summary(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Tell the user WHAT was identified and WHICH support tier applies."""
+
+        if self._selected_result is None:
+            return await self.async_step_auto()
+        if user_input is not None:
+            return await self.async_step_confirm()
+        return self.async_show_form(
+            step_id="detection_summary",
+            data_schema=vol.Schema({}),
+            description_placeholders=self._detection_summary_placeholders(),
+        )
+
+    def _detection_summary_placeholders(self) -> dict[str, str]:
+        result = self._selected_result
+        if result is None:
+            return {"model": "", "tier_headline": "", "tier_details": ""}
+
+        match = result.match
+        catalog: dict[str, Any] = {}
+        if match is not None and isinstance(match.details.get("device_catalog"), dict):
+            catalog = match.details["device_catalog"]
+        kind = str(catalog.get("kind") or "")
+        tier = str(catalog.get("tier") or "")
+
+        if kind == "device" and tier == "full":
+            headline = self._tr(
+                "common.dynamic.detection_tier_full_headline",
+                "Full support",
+            )
+            details = self._tr(
+                "common.dynamic.detection_tier_full_details",
+                "This model is in the built-in device catalog. Read sensors and "
+                "controls will be added out of the box.",
+            )
+        elif kind in ("device", "family") and tier == "partial":
+            headline = self._tr(
+                "common.dynamic.detection_tier_partial_headline",
+                "Partial support (family match)",
+            )
+            details = self._tr(
+                "common.dynamic.detection_tier_partial_details",
+                "The inverter family is recognized, but this exact model is not in "
+                "the catalog yet. Base read sensors will be added; controls stay "
+                "locked for safety. You can add more sensors and controls later by "
+                "running learning from the integration options.",
+            )
+        elif match is not None:
+            headline = self._tr(
+                "common.dynamic.detection_tier_driver_headline",
+                "Detected by protocol driver",
+            )
+            details = self._tr(
+                "common.dynamic.detection_tier_driver_details",
+                "The device was identified by its protocol driver. The standard "
+                "sensor set for this driver will be added.",
+            )
+        else:
+            headline = self._tr(
+                "common.dynamic.detection_tier_unidentified_headline",
+                "Device not recognized",
+            )
+            details = self._tr(
+                "common.dynamic.detection_tier_unidentified_details",
+                "The collector responds, but the inverter model is not in the "
+                "catalog. You can still add it and run learning from the "
+                "integration options to discover its sensors and controls — for "
+                "labeled results this needs one session with the SmartESS "
+                "app/cloud reachable.",
+            )
+
+        model = ""
+        if match is not None and match.model_name:
+            model = match.model_name
+        else:
+            model = self._result_label(result)
+        return {"model": model, "tier_headline": headline, "tier_details": details}
 
     # ---- step: collector_operation ----
 

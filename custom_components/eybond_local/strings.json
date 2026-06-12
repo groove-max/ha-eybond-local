@@ -100,6 +100,10 @@
           "result_key": "Choose the inverter you want to add to Home Assistant."
         }
       },
+      "detection_summary": {
+        "title": "Detection result",
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}"
+      },
       "collector_operation": {
         "title": "Collector Operating Mode",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
@@ -241,7 +245,8 @@
       "collector_endpoint_risk_not_confirmed": "Confirm that you recorded the current endpoint before continuing.",
       "invalid_selection": "The selected detection result is no longer available.",
       "already_added_candidate": "This detected device is already configured and cannot be added again.",
-      "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again."
+      "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again.",
+      "inverter_link_down": "The collector responded, but the inverter link is down (identity registers read as zeros). Check the inverter power and the collector cable, then rescan."
     },
     "abort": {
       "already_configured": "This collector or inverter is already configured."

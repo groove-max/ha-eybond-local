@@ -100,6 +100,10 @@
           "result_key": "Выберите инвертор, который хотите добавить в Home Assistant."
         }
       },
+      "detection_summary": {
+        "title": "Результат определения",
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}"
+      },
       "collector_operation": {
         "title": "Режим работы коллектора",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
@@ -241,7 +245,8 @@
       "collector_endpoint_risk_not_confirmed": "Подтвердите, что вы записали текущий endpoint, прежде чем продолжить.",
       "invalid_selection": "Выбранный результат обнаружения больше недоступен.",
       "already_added_candidate": "Это обнаруженное устройство уже настроено и не может быть добавлено повторно.",
-      "smartess_cloud_assist_failed": "SmartESS cloud assist не завершился. Смотрите объяснение выше и попробуйте ещё раз."
+      "smartess_cloud_assist_failed": "SmartESS cloud assist не завершился. Смотрите объяснение выше и попробуйте ещё раз.",
+      "inverter_link_down": "Коллектор отвечает, но связь с инвертором отсутствует (identity-регистры читаются нулями). Проверьте питание инвертора и кабель коллектора, затем повторите сканирование."
     },
     "abort": {
       "already_configured": "Этот коллектор или инвертор уже настроен."

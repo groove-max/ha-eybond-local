@@ -100,6 +100,10 @@
           "result_key": "Виберіть інвертор, який хочете додати до Home Assistant."
         }
       },
+      "detection_summary": {
+        "title": "Результат визначення",
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}"
+      },
       "collector_operation": {
         "title": "Режим роботи колектора",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
@@ -241,7 +245,8 @@
       "collector_endpoint_write_failed": "Не вдалося записати callback endpoint Home Assistant у колектор.",
       "collector_endpoint_risk_not_confirmed": "Підтвердьте, що ви записали поточний endpoint, перш ніж продовжити.",
       "already_added_candidate": "Цей виявлений пристрій уже налаштовано і його не можна додати повторно.",
-      "smartess_cloud_assist_failed": "SmartESS cloud assist не завершився. Дивіться пояснення вище та спробуйте ще раз."
+      "smartess_cloud_assist_failed": "SmartESS cloud assist не завершився. Дивіться пояснення вище та спробуйте ще раз.",
+      "inverter_link_down": "Колектор відповідає, але зв'язок з інвертором відсутній (identity-регістри читаються нулями). Перевірте живлення інвертора та кабель колектора, потім повторіть сканування."
     },
     "abort": {
       "already_configured": "Цей колектор або інвертор уже налаштований."

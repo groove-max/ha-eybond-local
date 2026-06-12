@@ -2571,9 +2571,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_choose({CONF_RESULT_KEY: "1"})
 
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "confirm")
+        self.assertEqual(result["step_id"], "detection_summary")
         self.assertIsNotNone(flow._selected_result)
         self.assertEqual(flow._selected_result.match.model_name, "SMG 6200")
+
+        result = await flow.async_step_detection_summary({})
+        self.assertEqual(result["step_id"], "confirm")
 
     async def test_choose_step_udp_only_candidate_can_create_pending_entry(self) -> None:
         flow = self._make_flow()
@@ -2609,6 +2612,113 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["title"], "Collector 192.168.1.14")
         self.assertEqual(result["data"]["collector_ip"], "192.168.1.14")
         self.assertEqual(result["data"]["connection_mode"], "known_ip")
+
+    async def test_choose_step_link_down_result_shows_retryable_error(self) -> None:
+        flow = self._make_flow()
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.55",
+                    source="udp",
+                    ip="192.168.1.55",
+                    connected=True,
+                ),
+                connection_mode="known_ip",
+                next_action="manual_driver_selection",
+                last_error="inverter_link_down",
+            )
+        }
+
+        result = await flow.async_step_choose({CONF_RESULT_KEY: "0"})
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "choose")
+        self.assertEqual(result["errors"], {"base": "inverter_link_down"})
+        self.assertIsNone(flow._selected_result)
+
+    async def test_choose_step_single_link_down_result_does_not_auto_advance(self) -> None:
+        flow = self._make_flow()
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.55",
+                    source="udp",
+                    ip="192.168.1.55",
+                    connected=True,
+                ),
+                connection_mode="known_ip",
+                last_error="inverter_link_down",
+            )
+        }
+
+        result = await flow.async_step_choose()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "choose")
+        self.assertEqual(result["errors"], {"base": "inverter_link_down"})
+
+    def _result_with_catalog_details(self, catalog: dict | None) -> OnboardingResult:
+        details = {}
+        if catalog is not None:
+            details["device_catalog"] = catalog
+        return OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632511100118",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                details=details,
+            ),
+            connection_mode="known_ip",
+        )
+
+    async def test_detection_summary_full_tier_placeholders(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._result_with_catalog_details(
+            {"kind": "device", "tier": "full", "entry_key": "smg_6200"}
+        )
+
+        result = await flow.async_step_detection_summary()
+
+        self.assertEqual(result["step_id"], "detection_summary")
+        placeholders = result["description_placeholders"]
+        self.assertEqual(placeholders["model"], "SMG 6200")
+        self.assertIn("Full support", placeholders["tier_headline"])
+
+    async def test_detection_summary_partial_tier_mentions_learning(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._result_with_catalog_details(
+            {"kind": "family", "tier": "partial"}
+        )
+
+        result = await flow.async_step_detection_summary()
+
+        placeholders = result["description_placeholders"]
+        self.assertIn("Partial support", placeholders["tier_headline"])
+        self.assertIn("learning", placeholders["tier_details"])
+
+    async def test_detection_summary_without_catalog_details_uses_driver_text(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._result_with_catalog_details(None)
+
+        result = await flow.async_step_detection_summary()
+
+        placeholders = result["description_placeholders"]
+        self.assertIn("driver", placeholders["tier_headline"].lower())
+
+    async def test_detection_summary_submit_continues_to_confirm(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._result_with_catalog_details(
+            {"kind": "device", "tier": "full"}
+        )
+
+        result = await flow.async_step_detection_summary({})
+
+        self.assertEqual(result["step_id"], "confirm")
 
     async def test_collector_operation_smartess_and_ha_routes_to_confirm(self) -> None:
         flow = self._make_flow()
