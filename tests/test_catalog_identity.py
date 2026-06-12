@@ -64,6 +64,13 @@ def _smg_6200_identity_registers() -> dict[int, int]:
 
 class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
         clear_device_catalog_cache()
         self.addCleanup(clear_device_catalog_cache)
 
@@ -118,6 +125,15 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
 
 class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
     """Driver-level behavior: catalog decides, details attach, zeros stop the probe."""
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
 
     def _smg_family_registers(self, *, rated_power: int = 6200) -> dict[int, int]:
         registers: dict[int, int] = {

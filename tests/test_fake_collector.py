@@ -4,6 +4,7 @@ import socket
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -169,6 +170,15 @@ class FakeCollectorLibTests(unittest.TestCase):
 
 
 class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
     async def _detect_with_scenario(
         self,
         scenario,

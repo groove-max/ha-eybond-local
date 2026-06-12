@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 from unittest import mock
 
@@ -841,6 +842,15 @@ def _numeric_binding(register, title, *, unit="V", divisor=10, decimals=1, signe
 
 
 class LearnedReadOverlayTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
     def test_out_of_block_register_routes_to_aux_config_with_metadata(self) -> None:
         result = _build_learned_read_overlay(
             schema=_fake_schema(specs={"live": [201]}),

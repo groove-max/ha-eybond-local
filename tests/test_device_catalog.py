@@ -91,6 +91,15 @@ class DeviceCatalogLoadTest(unittest.TestCase):
 
 class DeviceCatalogMatchCorpusTest(unittest.TestCase):
     """Replay the literal fingerprints from the user-dump corpus."""
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
 
     def test_smg_6200_own_device(self) -> None:
         match = match_device_identity(
@@ -171,6 +180,15 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
 
 
 class DeviceCatalogMatchSemanticsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
     def test_unknown_model_in_known_layout_falls_to_family_partial(self) -> None:
         match = match_device_identity(layout_code=1, model_code=9999, rated_power=5500)
         self.assertEqual(match.kind, MATCH_FAMILY)

@@ -5208,6 +5208,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             values=values,
         )
 
+    @_with_translation_bundle
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,
@@ -5429,6 +5430,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders=placeholders,
         )
 
+    @_with_translation_bundle
     async def async_step_shadow_learning(
         self,
         user_input: dict[str, Any] | None = None,
@@ -7639,6 +7641,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             },
         )
 
+    @_with_translation_bundle
     async def async_step_diagnostics_result(
         self,
         user_input: dict[str, Any] | None = None,

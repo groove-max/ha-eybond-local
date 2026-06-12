@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +21,7 @@ from custom_components.eybond_local import (
     _async_remove_legacy_runtime_select_entities,
     _async_self_heal_entry_title,
     _async_self_heal_expert_defaults,
+    _async_offer_learning_for_partial_tier,
     _async_self_heal_enabled_defaults,
     _default_enabled_unique_ids,
     _default_enabled_unique_ids_for_current_runtime,
@@ -56,6 +57,78 @@ def _runtime_entity_key_module_stubs() -> dict[str, types.ModuleType]:
         "custom_components.eybond_local.text": text_module,
         "custom_components.eybond_local.tooling": tooling_module,
     }
+
+
+class LearningOfferTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # The HA test env shares a `homeassistant.components` stub without a real
+        # package __path__, so the helper's runtime `import ...persistent_notification`
+        # can't resolve the real submodule. Inject a fake leaf into sys.modules
+        # (and onto the parent) so the import binds to our mocks deterministically,
+        # independent of suite ordering.
+        self.create = Mock()
+        self.dismiss = Mock()
+        pn = types.ModuleType("homeassistant.components.persistent_notification")
+        pn.async_create = self.create
+        pn.async_dismiss = self.dismiss
+        components = sys.modules.get("homeassistant.components")
+        if components is None:
+            components = types.ModuleType("homeassistant.components")
+        _patch_attr = patch.object(components, "persistent_notification", pn, create=True)
+        _patch_attr.start()
+        self.addCleanup(_patch_attr.stop)
+        _patch_mods = patch.dict(
+            sys.modules,
+            {
+                "homeassistant.components": components,
+                "homeassistant.components.persistent_notification": pn,
+            },
+        )
+        _patch_mods.start()
+        self.addCleanup(_patch_mods.stop)
+
+    def _ctx(self, *, tier="partial", kind="", overlay_active=False, model="SMG family 4200 variant", language="ru"):
+        hass = types.SimpleNamespace(config=types.SimpleNamespace(language=language))
+        entry = types.SimpleNamespace(
+            entry_id="e1",
+            data={"device_catalog_tier": tier, "device_catalog_kind": kind, "detected_model": model},
+            async_on_unload=lambda cb: None,
+        )
+        coordinator = types.SimpleNamespace(
+            effective_profile_metadata=types.SimpleNamespace(
+                device_scoped_overlay_active=overlay_active
+            )
+        )
+        return hass, entry, coordinator
+
+    def test_partial_tier_creates_localized_notification(self):
+        hass, entry, coordinator = self._ctx(tier="partial", language="ru")
+        _async_offer_learning_for_partial_tier(hass, entry, coordinator)
+        self.create.assert_called_once()
+        kwargs = self.create.call_args.kwargs
+        self.assertEqual(kwargs["notification_id"], "eybond_local_learning_offer_e1")
+        self.assertIn("обучение", kwargs["title"])
+        self.assertIn("SMG family 4200 variant", self.create.call_args.args[1])
+        self.dismiss.assert_not_called()
+
+    def test_unidentified_kind_creates_notification(self):
+        hass, entry, coordinator = self._ctx(tier="", kind="unidentified", model="", language="en")
+        _async_offer_learning_for_partial_tier(hass, entry, coordinator)
+        self.create.assert_called_once()
+        self.assertIn("Your inverter", self.create.call_args.args[1])
+
+    def test_full_tier_dismisses(self):
+        hass, entry, coordinator = self._ctx(tier="full")
+        _async_offer_learning_for_partial_tier(hass, entry, coordinator)
+        self.create.assert_not_called()
+        self.dismiss.assert_called_once_with(hass, "eybond_local_learning_offer_e1")
+
+    def test_overlay_active_dismisses_even_when_partial(self):
+        # Learning already run -> overlay active -> stop nagging.
+        hass, entry, coordinator = self._ctx(tier="partial", overlay_active=True)
+        _async_offer_learning_for_partial_tier(hass, entry, coordinator)
+        self.create.assert_not_called()
+        self.dismiss.assert_called_once()
 
 
 class InitModuleTests(unittest.TestCase):

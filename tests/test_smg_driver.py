@@ -714,6 +714,15 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
     def _smg_family_registers(
         self,
         *,
