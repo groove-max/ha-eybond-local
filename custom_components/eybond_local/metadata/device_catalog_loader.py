@@ -16,12 +16,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 
 
 DEVICE_CATALOG_PATH = (
     Path(__file__).resolve().parents[1] / "protocol_catalogs" / "device_catalog.json"
 )
+
+# DEBUG / VALIDATION toggle. When enabled, exact catalog model matches are
+# ignored so every device drops to the family (partial) tier — i.e. it behaves
+# as an unsupported model and the learning flow is offered. Use it to exercise
+# read + control learning end to end on a device that is otherwise fully
+# supported (e.g. an SMG 6200). Flip this constant, or set the environment
+# variable EYBOND_FORCE_UNSUPPORTED=1 without editing code. Keep False for
+# normal use.
+FORCE_UNSUPPORTED_MODELS = False
+_FORCE_UNSUPPORTED_ENV = "EYBOND_FORCE_UNSUPPORTED"
+
+
+def force_unsupported_models() -> bool:
+    """Return whether detection must treat every device as an unsupported model."""
+
+    if FORCE_UNSUPPORTED_MODELS:
+        return True
+    return str(os.environ.get(_FORCE_UNSUPPORTED_ENV, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 MATCH_NO_DATA = "no_data"
 MATCH_DEVICE = "device"
@@ -205,30 +229,33 @@ def match_device_identity(
 
     layout = _resolve_layout(resolved, layout_code)
 
-    for entry in resolved.devices:
-        fingerprint = entry.fingerprint
-        if fingerprint.layout_code != layout_code:
-            continue
-        if fingerprint.model_code != model_code:
-            continue
-        if (
-            fingerprint.rated_power_one_of
-            and rated_power is not None
-            and rated_power not in fingerprint.rated_power_one_of
-        ):
-            continue
-        signals = _confidence_signals(
-            entry=entry,
-            rated_power=rated_power,
-            serial_ascii=serial_ascii,
-        )
-        return DeviceCatalogMatch(
-            kind=MATCH_DEVICE,
-            tier=entry.tier,
-            entry=entry,
-            layout=layout,
-            confidence_signals=signals,
-        )
+    # Debug toggle: skip exact model matching so a supported device drops to the
+    # family/partial tier and the learning flow can be validated on it.
+    if not force_unsupported_models():
+        for entry in resolved.devices:
+            fingerprint = entry.fingerprint
+            if fingerprint.layout_code != layout_code:
+                continue
+            if fingerprint.model_code != model_code:
+                continue
+            if (
+                fingerprint.rated_power_one_of
+                and rated_power is not None
+                and rated_power not in fingerprint.rated_power_one_of
+            ):
+                continue
+            signals = _confidence_signals(
+                entry=entry,
+                rated_power=rated_power,
+                serial_ascii=serial_ascii,
+            )
+            return DeviceCatalogMatch(
+                kind=MATCH_DEVICE,
+                tier=entry.tier,
+                entry=entry,
+                layout=layout,
+                confidence_signals=signals,
+            )
 
     if layout is not None:
         for default in resolved.family_defaults:

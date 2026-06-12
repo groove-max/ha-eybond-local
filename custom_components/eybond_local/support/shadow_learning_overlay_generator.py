@@ -17,6 +17,7 @@ from ..metadata.local_metadata import (
     local_register_schema_path,
     local_register_schemas_root,
 )
+from ..metadata.device_catalog_loader import force_unsupported_models
 from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
 from ..metadata.semantic_titles_loader import resolve_semantic_title
 from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
@@ -256,15 +257,22 @@ def _build_learned_read_overlay(
     existing decode + read-back path — no driver change required.
     """
 
-    existing_registers = {
-        int(spec.register)
-        for specs in schema.spec_sets.values()
-        for spec in specs
-    }
-    existing_titles = {
-        _normalize_title(measurement.name or measurement.key)
-        for measurement in schema.measurement_descriptions
-    }
+    if force_unsupported_models():
+        # Validation mode: don't deduplicate against the builtin schema so every
+        # correlated read sensor materializes (mirrors the duplicate-controls
+        # toggle). Activating then adds learned reads alongside any builtin ones.
+        existing_registers: set[int] = set()
+        existing_titles: set[str] = set()
+    else:
+        existing_registers = {
+            int(spec.register)
+            for specs in schema.spec_sets.values()
+            for spec in specs
+        }
+        existing_titles = {
+            _normalize_title(measurement.name or measurement.key)
+            for measurement in schema.measurement_descriptions
+        }
     block_for_register = _polled_block_lookup(schema)
 
     spec_set_additions: dict[str, list[dict[str, Any]]] = {}

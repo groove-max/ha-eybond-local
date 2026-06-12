@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +132,32 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         match = match_device_identity(layout_code=1, model_code=13569, rated_power=4200)
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_4200")
+
+    def test_force_unsupported_downgrades_known_model_to_family(self) -> None:
+        # Debug toggle: a fully-supported device (SMG 6200) must drop to the
+        # family/partial tier so the learning flow can be validated on it.
+        with patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "force_unsupported_models",
+            return_value=True,
+        ):
+            match = match_device_identity(
+                layout_code=1, model_code=7680, rated_power=6200,
+                serial_ascii="92632511100118",
+            )
+        self.assertEqual(match.kind, MATCH_FAMILY)
+        self.assertEqual(match.tier, TIER_PARTIAL)
+        self.assertIsNone(match.entry)
+        self.assertEqual(match.family_default.binding.profile_name, "")
+
+    def test_force_unsupported_unknown_layout_stays_unidentified(self) -> None:
+        with patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "force_unsupported_models",
+            return_value=True,
+        ):
+            match = match_device_identity(layout_code=99, model_code=1234)
+        self.assertEqual(match.kind, MATCH_UNIDENTIFIED)
 
     def test_all_zero_identity_is_no_data_never_unknown(self) -> None:
         # The 2026-06-08 incident: comm-down captures read @171=0 @184=0 and

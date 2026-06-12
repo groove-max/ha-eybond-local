@@ -975,6 +975,39 @@ class LearnedReadOverlayTests(unittest.TestCase):
         self.assertEqual(measurement["device_class"], "current")
         self.assertNotIn("translation_key", measurement)
 
+    def test_force_unsupported_disables_read_dedup(self) -> None:
+        # With the validation toggle on, a read whose register is already decoded
+        # by the builtin schema is still materialized (no dedup), so the learning
+        # flow can be exercised end to end on a supported device.
+        binding = {
+            "title": "Battery Voltage",
+            "unit": "V",
+            "status": "unique",
+            "decimals": 1,
+            "candidates": [{"register": 215, "divisor": 10, "signed": False}],
+        }
+        schema = _fake_schema(specs={"live": [215]})  # 215 already decoded
+
+        deduped = _build_learned_read_overlay(
+            schema=schema,
+            read_bindings={"bindings": [binding]},
+            read_enum_bindings={"bindings": []},
+        )
+        self.assertEqual(deduped["generated"], [])  # normally skipped
+
+        with mock.patch(
+            "custom_components.eybond_local.support.shadow_learning_overlay_generator."
+            "force_unsupported_models",
+            return_value=True,
+        ):
+            forced = _build_learned_read_overlay(
+                schema=schema,
+                read_bindings={"bindings": [binding]},
+                read_enum_bindings={"bindings": []},
+            )
+        self.assertEqual(len(forced["generated"]), 1)
+        self.assertEqual(forced["generated"][0]["register"], 215)
+
     def test_non_unique_bindings_are_not_emitted(self) -> None:
         result = _build_learned_read_overlay(
             schema=_fake_schema(specs={"live": []}),
