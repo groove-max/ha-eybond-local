@@ -965,7 +965,7 @@ class InitModuleTests(unittest.TestCase):
             )
             runtime_select_entry = types.SimpleNamespace(
                 unique_id="entry123_select_collector_operation_mode",
-                entity_id="select.collector_pn_e50000253884199645_collector_operation_mode",
+                entity_id="select.collector_pn_e50000200000000001_collector_operation_mode",
             )
 
             class _Registry:
@@ -1004,19 +1004,19 @@ class InitModuleTests(unittest.TestCase):
             hass = types.SimpleNamespace(config_entries=_ConfigEntries())
             entry = types.SimpleNamespace(
                 entry_id="entry123",
-                title="SMG 6200 (92632511100118)",
+                title="SMG 6200 (92632500000001)",
                 data={
-                    "collector_pn": "E5000025388419",
+                    "collector_pn": "E5000020000000",
                     "collector_ip": "192.168.1.55",
                     "server_ip": "192.168.1.50",
                     "detected_model": "SMG 6200",
-                    "detected_serial": "92632511100118",
+                    "detected_serial": "92632500000001",
                 },
             )
 
             await _async_self_heal_entry_title(hass, entry)
 
-            self.assertEqual(updated, [(entry, "Collector PN E5000025388419")])
+            self.assertEqual(updated, [(entry, "Collector PN E5000020000000")])
 
         asyncio.run(_run())
 

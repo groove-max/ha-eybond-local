@@ -37,11 +37,11 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={
                     "driver_key": "modbus_smg",
                     "model_name": "SMG 6200",
-                    "serial_number": "92632511100118",
+                    "serial_number": "92632500000001",
                 },
                 values={
                     "shadow_learning_trace_path": str(trace_path),
@@ -66,7 +66,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                         "register_schema_name": "learned/shadow_learning/device/overlay_schema.json",
                         "scope": "device",
                         "activation_scope": {
-                            "collector_pn": "E5000025388419",
+                            "collector_pn": "E5000020000000",
                             "secret_token": "must_not_be_archived",
                         },
                     }
@@ -144,14 +144,14 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
             activation={
                 "scope": "device",
                 "activation_scope": {
-                    "collector_pn": "E5000025388419",
+                    "collector_pn": "E5000020000000",
                     "api_secret": "hidden",
                 },
             },
             session_id="entry-shadow-session",
             device_scope={
-                "collector_pn": "E5000025388419",
-                "cloud_sn": "E50000253884199645094801",
+                "collector_pn": "E5000020000000",
+                "cloud_sn": "E50000200000000001000001",
             },
         )
 
@@ -162,7 +162,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
         self.assertNotIn("authorization", serialized)
         self.assertEqual(
             values["shadow_learning_device_scope"]["cloud_sn"],
-            "E50000253884199645094801",
+            "E50000200000000001000001",
         )
 
     def test_exports_runtime_activation_manifest_when_entry_option_is_not_saved(self) -> None:
@@ -173,8 +173,8 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                     "status": "draft_generated",
                     "scope": "device",
                     "activation_scope": {
-                        "collector_pn": "E5000025388419",
-                        "cloud_sn": "E50000253884199645094801",
+                        "collector_pn": "E5000020000000",
+                        "cloud_sn": "E50000200000000001000001",
                     },
                 },
                 session_id="entry-shadow-session",
@@ -183,7 +183,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg"},
                 values=runtime_values,
                 data={},
@@ -212,7 +212,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
             self.assertEqual(activation["status"], "draft_generated")
             self.assertEqual(
                 activation["activation_scope"]["cloud_sn"],
-                "E50000253884199645094801",
+                "E50000200000000001000001",
             )
 
     def test_keeps_support_archive_compatible_when_shadow_artifacts_absent(self) -> None:
@@ -222,7 +222,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-no-shadow",
                 entry_title="No Shadow",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg", "model_name": "SMG", "serial_number": "123"},
                 values={"operating_mode": "Line"},
                 data={"server_ip": "192.168.1.50"},
@@ -267,7 +267,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg"},
                 values={
                     "shadow_learning_trace_path": str(outside_trace),
@@ -310,7 +310,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg"},
                 values={
                     "local_profile_draft_path": str(overlay.profile_path),
@@ -394,7 +394,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 "status": "activated",
                 "scope": "device",
                 "activation_scope": {
-                    "collector_pn": "E5000025388419",
+                    "collector_pn": "E5000020000000",
                     "secret_token": "must_not_be_archived",
                 },
                 **selection,
@@ -404,7 +404,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg"},
                 values={
                     "local_profile_draft_path": str(overlay.profile_path),
@@ -516,7 +516,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg"},
                 values=runtime_values,
                 data={},
@@ -569,7 +569,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 entry_id="entry-shadow",
                 entry_title="Shadow Device",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={"driver_key": "modbus_smg"},
                 values={
                     "local_profile_draft_path": str(overlay.profile_path),
@@ -628,9 +628,9 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 "timestamp": "2026-06-05T10:00:00+00:00",
                 "session_id": "entry-shadow_20260605T100000000000Z",
                 "entry_id": "entry-shadow",
-                "collector_pn": "E5000025388419",
-                "cloud_pn": "E50000253884199645",
-                "cloud_sn": "E50000253884199645094801",
+                "collector_pn": "E5000020000000",
+                "cloud_pn": "E50000200000000001",
+                "cloud_sn": "E50000200000000001000001",
             },
             {
                 "kind": "shadow_connect",
@@ -715,9 +715,9 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
 def _review_session_manifest() -> dict[str, object]:
     return {
         "session_id": "smg-shadow-session-review",
-        "collector_pn": "E5000025388419",
-        "cloud_pn": "E50000253884199645",
-        "cloud_sn": "E50000253884199645094801",
+        "collector_pn": "E5000020000000",
+        "cloud_pn": "E50000200000000001",
+        "cloud_sn": "E50000200000000001000001",
         "devcode": 2376,
         "devaddr": 1,
         "write_response_mode": "exception",

@@ -51,7 +51,7 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     serial_number="SN-001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                     smartess_protocol_profile_key="smartess_0925",
                 ),
@@ -83,7 +83,7 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     serial_number="SN-001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                     smartess_protocol_profile_key="smartess_0925",
                 ),
@@ -119,10 +119,10 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",  # Modbus serial != session.cloud_sn
+                    serial_number="92632500000001",  # Modbus serial != session.cloud_sn
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -149,10 +149,10 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=None,
                 ),
                 entry_options={
@@ -183,10 +183,10 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -217,10 +217,10 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -242,8 +242,8 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
 
     def test_collector_pn_prefix_form_still_matches(self) -> None:
         # Regression: the datalogger PN is reported as a short physical prefix early in
-        # the handshake ("E5000025388419") and upgraded to the full PN later
-        # ("E50000253884199645"). The overlay manifest captured the short form; an exact
+        # the handshake ("E5000020000000") and upgraded to the full PN later
+        # ("E50000200000000001"). The overlay manifest captured the short form; an exact
         # compare against the upgraded runtime PN intermittently suppressed the overlay
         # during the early refreshes that gate entity setup, so the learned controls never
         # appeared. A prefix relationship is the same datalogger and must still match.
@@ -254,11 +254,11 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                 ),
                 collector=CollectorInfo(
-                    # Manifest session recorded "E5000025388419"; runtime upgraded to full.
-                    collector_pn="E50000253884199645",
+                    # Manifest session recorded "E5000020000000"; runtime upgraded to full.
+                    collector_pn="E50000200000000001",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -281,7 +281,7 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                 ),
                 collector=CollectorInfo(
                     collector_pn="Z9999999999999",
@@ -325,10 +325,10 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     driver_key="modbus_smg",
                     profile_name="smg_modbus.json",
                     register_schema_name="modbus_smg/models/smg_6200.json",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419", smartess_device_address=1
+                    collector_pn="E5000020000000", smartess_device_address=1
                 ),
                 entry_options={
                     "device_scoped_overlay_activation": {
@@ -371,7 +371,7 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     variant_key="",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -403,7 +403,7 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                     model_name="SMG-6200",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                     smartess_protocol_profile_key="smartess_0925",
                 ),
@@ -445,7 +445,7 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
                 serial_number="SN-001",
             ),
             collector=CollectorInfo(
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 smartess_device_address=1,
             ),
             entry_options={"device_scoped_overlay_activation": activation},
@@ -659,7 +659,7 @@ def _write_local_overlay_files(root: Path) -> tuple[str, str]:
                     "source_profile_name": "smg_modbus.json",
                     "source_schema_name": "modbus_smg/models/smg_6200.json",
                     "session": {
-                        "collector_pn": "E5000025388419",
+                        "collector_pn": "E5000020000000",
                         "cloud_sn": "SN-001",
                         "devaddr": 1,
                     },

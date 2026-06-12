@@ -192,14 +192,14 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         transport = _FakeTransport(connected=True)
         transport.collector_info = CollectorInfo(
             remote_ip="192.168.1.14",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_pn_prefix="E",
-            collector_pn_digits="5000025388419",
+            collector_pn_digits="5000020000000",
         )
         at_transport = _FakeTransport(connected=True)
         at_transport.collector_info = CollectorInfo(
             remote_ip="192.168.1.14",
-            collector_pn="E50000253884199645",
+            collector_pn="E50000200000000001",
         )
         manager._transport = transport  # type: ignore[assignment]
         manager._at_transport = at_transport  # type: ignore[assignment]
@@ -207,9 +207,9 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         collector = manager.collector_info
 
-        self.assertEqual(collector.collector_pn, "E50000253884199645")
+        self.assertEqual(collector.collector_pn, "E50000200000000001")
         self.assertEqual(collector.collector_pn_prefix, "E")
-        self.assertEqual(collector.collector_pn_digits, "50000253884199645")
+        self.assertEqual(collector.collector_pn_digits, "50000200000000001")
 
     def test_async_try_connect_uses_discovery_then_stops_it(self) -> None:
         manager = self._build_manager()

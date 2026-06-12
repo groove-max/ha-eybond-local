@@ -85,7 +85,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed, blockers = build_shadow_learning_seed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
@@ -98,7 +98,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
 
         self.assertEqual(blockers, ())
         self.assertEqual(seed.command_responses["CLDSRVHOST1"], "192.168.1.50,18899,TCP")
-        self.assertEqual(seed.command_responses["QID"], "E5000025388419")
+        self.assertEqual(seed.command_responses["QID"], "E5000020000000")
         self.assertEqual(seed.command_responses["WFSS"], "1")
         self.assertEqual(seed.register_bank[300], 1)
         self.assertEqual(seed.register_bank[301], 2)
@@ -108,7 +108,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed, blockers = build_shadow_learning_seed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
@@ -140,7 +140,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed, blockers = build_shadow_learning_seed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
@@ -159,14 +159,14 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
             collector_cloud_profile_confidence="high",
             collector_callback_endpoint="192.168.1.50,18899,TCP",
             effective_metadata_snapshot=_sample_snapshot().as_dict(),
-            command_responses={"CLDSRVHOST1": "192.168.1.50,18899,TCP", "QID": "E5000025388419"},
+            command_responses={"CLDSRVHOST1": "192.168.1.50,18899,TCP", "QID": "E5000020000000"},
             register_bank={300: 1, 301: 2},
             latest_support_evidence=_sample_raw_capture(),
             write_response_mode="exception",
@@ -205,7 +205,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
@@ -254,14 +254,14 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
             collector_cloud_profile_confidence="high",
             collector_callback_endpoint="192.168.1.50,18899,TCP",
             effective_metadata_snapshot=_sample_snapshot().as_dict(),
-            command_responses={"CLDSRVHOST1": "192.168.1.50,18899,TCP", "QID": "E5000025388419"},
+            command_responses={"CLDSRVHOST1": "192.168.1.50,18899,TCP", "QID": "E5000020000000"},
             register_bank={300: 1, 301: 2},
             latest_support_evidence=_sample_raw_capture(),
             write_response_mode="ack",
@@ -343,7 +343,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed, blockers = build_shadow_learning_seed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",
@@ -410,7 +410,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
         seed, blockers = build_shadow_learning_seed(
             session_id="entry-1_20260605T120000Z",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             collector_cloud_profile_key="smartess_at",
             collector_cloud_profile_label="SmartESS AT",
             collector_cloud_profile_source="runtime_observed",

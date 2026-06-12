@@ -47,7 +47,7 @@ def _seed() -> ShadowLearningSeed:
     return ShadowLearningSeed(
         session_id="entry-1_20260605T120000Z",
         entry_id="entry-1",
-        collector_pn="E5000025388419",
+        collector_pn="E5000020000000",
         collector_cloud_profile_key="smartess_at",
         collector_cloud_profile_label="SmartESS AT",
         collector_cloud_profile_source="runtime_observed",
@@ -58,7 +58,7 @@ def _seed() -> ShadowLearningSeed:
             "register_schema_name": "modbus_smg/default.json",
         },
         command_responses={
-            "QID": "E5000025388419",
+            "QID": "E5000020000000",
             "CLDSRVHOST1": "192.168.1.50,18899,TCP",
         },
         register_bank={300: 10, 301: 11, 305: 12},
@@ -475,7 +475,7 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
 
         at_response = parse_at_response(observed_responses[1])
         self.assertEqual(at_response.command, "QID")
-        self.assertEqual(at_response.value, "E5000025388419")
+        self.assertEqual(at_response.value, "E5000020000000")
 
     async def test_unknown_cloud_command_is_blocked_and_answered_locally(self) -> None:
         upstream_responses: list[bytes] = []
@@ -735,7 +735,7 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
             collector_reader, collector_writer = await asyncio.open_connection("127.0.0.1", proxy_port)
             forwarded = await asyncio.wait_for(collector_reader.readuntil(b"\n"), timeout=1.0)
             self.assertEqual(forwarded, b"AT+DTUPN?\r\n")
-            collector_writer.write(b"AT+DTUPN:E5000025388419\r\n")
+            collector_writer.write(b"AT+DTUPN:E5000020000000\r\n")
             await collector_writer.drain()
 
             await asyncio.wait_for(cloud_done.wait(), timeout=1.0)
@@ -752,7 +752,7 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
 
         dtupn = parse_at_response(upstream_at_responses[0])
         self.assertEqual(dtupn.command, "DTUPN")
-        self.assertEqual(dtupn.value, "E5000025388419")
+        self.assertEqual(dtupn.value, "E5000020000000")
         cldsrv = parse_at_response(upstream_at_responses[1])
         self.assertEqual(cldsrv.command, "CLDSRVHOST1")
         self.assertEqual(cldsrv.value, "192.168.1.50,18899,TCP")
@@ -805,7 +805,7 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
             collector_reader, collector_writer = await asyncio.open_connection("127.0.0.1", proxy_port)
             forwarded_at = await asyncio.wait_for(collector_reader.readuntil(b"\n"), timeout=1.0)
             self.assertEqual(forwarded_at, b"AT+DTUPN?\r\n")
-            collector_writer.write(b"AT+DTUPN:E5000025388419\r\n")
+            collector_writer.write(b"AT+DTUPN:E5000020000000\r\n")
             await collector_writer.drain()
 
             await asyncio.wait_for(cloud_done.wait(), timeout=1.0)

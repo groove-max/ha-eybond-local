@@ -111,7 +111,7 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
             layout_code=1,
             model_code=7680,
             rated_power=6200,
-            serial_ascii="92632511100118",
+            serial_ascii="92632500000001",
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "smg_6200")
@@ -124,7 +124,7 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
     def test_smg_variant_4200_user_dump(self) -> None:
         match = match_device_identity(
             layout_code=11, model_code=30721, rated_power=4200,
-            serial_ascii="15573418948999",
+            serial_ascii="15573400000004",
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "smg_variant_4200")
@@ -136,7 +136,7 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         # match without rated narrowing and the layout must mark @643 invalid.
         match = match_device_identity(
             layout_code=4, model_code=32768, rated_power=505,
-            serial_ascii="70S10348568005Q",
+            serial_ascii="70S10300000005Q",
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_anj_11kw")
@@ -148,11 +148,11 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         self.assertEqual(match.entry.entry_key, "anenji_4200")
 
     def test_anenji_op2_6200_user_dump(self) -> None:
-        # aninerel.zip 2026-06-12: dual-output (OP2) 6.2 kW unit, fw 7903_A6260126v1
+        # Donor dual-output (OP2) capture 2026-06-12: 6.2 kW unit, fw 7903_A6260126v1
         # (reg626 hex string == model_code), cloud devcode 6514, range_failures [].
         match = match_device_identity(
             layout_code=11, model_code=30979, rated_power=6200,
-            serial_ascii="99632601111397",
+            serial_ascii="99632600000002",
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_op2_6200")
@@ -171,14 +171,14 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         )
 
     def test_anenji_6200_2025_user_dump(self) -> None:
-        # Anenji2025.zip 2026-06-12: same family, single output, fw 3700_A6250424v1.
+        # Donor single-output capture 2026-06-12: same family, fw 3700_A6250424v1.
         # Same rated power (6200) as smg_6200 but a DIFFERENT model_code — rated
         # power never identifies a model on its own. Layout 1 is the verified SMG
         # layout and the donor ran the SMG control set with correct read-back, so
         # the profile attaches (full tier).
         match = match_device_identity(
             layout_code=1, model_code=14080, rated_power=6200,
-            serial_ascii="92632507102827",
+            serial_ascii="92632500000003",
         )
         self.assertEqual(match.kind, MATCH_DEVICE)
         self.assertEqual(match.entry.entry_key, "anenji_6200")
@@ -195,7 +195,7 @@ class DeviceCatalogMatchCorpusTest(unittest.TestCase):
         ):
             match = match_device_identity(
                 layout_code=1, model_code=7680, rated_power=6200,
-                serial_ascii="92632511100118",
+                serial_ascii="92632500000001",
             )
         self.assertEqual(match.kind, MATCH_FAMILY)
         self.assertEqual(match.tier, TIER_PARTIAL)
@@ -265,8 +265,8 @@ class DeviceCatalogMatchSemanticsTest(unittest.TestCase):
         self.assertNotIn("serial_ascii", match.confidence_signals)
 
     def test_serial_plausibility_helper(self) -> None:
-        self.assertTrue(serial_ascii_plausible("92632511100118"))
-        self.assertTrue(serial_ascii_plausible("70S10348568005Q"))
+        self.assertTrue(serial_ascii_plausible("92632500000001"))
+        self.assertTrue(serial_ascii_plausible("70S10300000005Q"))
         self.assertFalse(serial_ascii_plausible(""))
         self.assertFalse(serial_ascii_plausible("\x00\x00\x00"))
         self.assertFalse(serial_ascii_plausible("ab"))

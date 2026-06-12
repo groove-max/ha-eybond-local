@@ -57,7 +57,7 @@ class _FailingSession:
 
 def _smg_6200_identity_registers() -> dict[int, int]:
     registers = {171: 7680, 184: 1, 643: 6200, 644: 4}
-    for offset, value in _ascii_words("92632511100118", word_count=12).items():
+    for offset, value in _ascii_words("92632500000001", word_count=12).items():
         registers[186 + offset] = value
     return registers
 
@@ -83,7 +83,7 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(probe.layout_code, 1)
         self.assertEqual(probe.model_code, 7680)
         self.assertEqual(probe.rated_power, 6200)
-        self.assertEqual(probe.serial_ascii, "92632511100118")
+        self.assertEqual(probe.serial_ascii, "92632500000001")
         self.assertFalse(probe_indicates_link_down(probe))
         # The probe must stay within the declared identity window.
         self.assertEqual(session.reads, [(171, 14), (186, 12), (643, 2)])

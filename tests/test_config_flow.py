@@ -765,8 +765,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             return_value=(
                 types.SimpleNamespace(
                     address="E8:88:6C:43:C2:47",
-                    name="E50000253884199645\u200b",
-                    manufacturer_data={0x3545: b"0000253884199645"},
+                    name="E50000200000000001\u200b",
+                    manufacturer_data={0x3545: b"0000200000000001"},
                     service_uuids=(),
                     device=object(),
                 ),
@@ -798,7 +798,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [option["value"] for option in options],
             ["E8:88:6C:43:C2:47"],
         )
-        self.assertIn("E50000253884199645", options[0]["label"])
+        self.assertIn("E50000200000000001", options[0]["label"])
 
     async def test_bluetooth_setup_uses_home_assistant_bluetooth_advertisement_callback(self) -> None:
         flow = self._make_flow()
@@ -810,8 +810,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         bluetooth_module.BluetoothScanningMode = types.SimpleNamespace(ACTIVE=sentinel.active_scan)
         service_info = types.SimpleNamespace(
             address="E8:88:6C:43:C2:47",
-            name="E50000253884199645\u200b",
-            manufacturer_data={0x3545: b"0000253884199645"},
+            name="E50000200000000001\u200b",
+            manufacturer_data={0x3545: b"0000200000000001"},
             service_uuids=(),
             device=object(),
         )
@@ -854,7 +854,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [option["value"] for option in options],
             ["E8:88:6C:43:C2:47"],
         )
-        self.assertIn("E50000253884199645", options[0]["label"])
+        self.assertIn("E50000200000000001", options[0]["label"])
 
     async def test_bluetooth_setup_skips_raw_bleak_fallback_when_only_ha_proxy_scanners_exist(self) -> None:
         flow = self._make_flow()
@@ -888,13 +888,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector PN",
             ),
         )
         wifi_networks = (
             SmartEssBleWifiNetwork(ssid="Neighbor", signal=-75),
-            SmartEssBleWifiNetwork(ssid="GRooVE", signal=-44),
+            SmartEssBleWifiNetwork(ssid="HomeNet", signal=-44),
             SmartEssBleWifiNetwork(ssid="Office", signal=-58),
         )
 
@@ -926,11 +926,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [option["value"] for option in options],
-            ["Neighbor", "GRooVE", "Office"],
+            ["Neighbor", "HomeNet", "Office"],
         )
         self.assertEqual(
             [option["label"] for option in options],
-            ["Neighbor (-75 dBm)", "GRooVE (-44 dBm)", "Office (-58 dBm)"],
+            ["Neighbor (-75 dBm)", "HomeNet (-44 dBm)", "Office (-58 dBm)"],
         )
         self.assertEqual(result["errors"], {})
 
@@ -939,7 +939,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector PN",
             ),
         )
@@ -954,15 +954,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             flow,
             "_async_scan_smartess_ble_wifi_networks",
-            new=AsyncMock(return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)),
+            new=AsyncMock(return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)),
         ) as wifi_scan:
             result = await flow.async_step_bluetooth_setup()
 
         wifi_scan.assert_awaited_once_with("AA:BB:CC:DD:EE:FF", ble_device=None)
         wifi_selector = result["data_schema"].schema["wifi_ssid"]
         options = wifi_selector.config.kwargs["options"]
-        self.assertEqual(options[0]["value"], "GRooVE")
-        self.assertEqual(options[0]["label"], "GRooVE (98%)")
+        self.assertEqual(options[0]["value"], "HomeNet")
+        self.assertEqual(options[0]["label"], "HomeNet (98%)")
         self.assertTrue(wifi_selector.config.kwargs["custom_value"])
         self.assertEqual(
             set(result["data_schema"].schema),
@@ -975,12 +975,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Alpha Collector",
             ),
             SmartEssBleCandidate(
                 address="11:22:33:44:55:66",
-                local_pn="E50000253884199777",
+                local_pn="E50000200000009777",
                 local_name="Bravo Collector",
             ),
         )
@@ -1023,12 +1023,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Alpha Collector",
             ),
             SmartEssBleCandidate(
                 address="11:22:33:44:55:66",
-                local_pn="E50000253884199777",
+                local_pn="E50000200000009777",
                 local_name="Bravo Collector",
             ),
         )
@@ -1077,8 +1077,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_bluetooth_setup_marks_and_rejects_already_added_ble_candidate(self) -> None:
         existing_entry = types.SimpleNamespace(
             entry_id="existing",
-            unique_id="collector:E50000253884199645",
-            data={"collector_pn": "E50000253884199645"},
+            unique_id="collector:E50000200000000001",
+            data={"collector_pn": "E50000200000000001"},
             options={},
         )
         flow = self._make_flow(entries=[existing_entry])
@@ -1086,7 +1086,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector PN",
             ),
         )
@@ -1119,7 +1119,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector PN",
             ),
         )
@@ -1160,7 +1160,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector PN",
             ),
         )
@@ -1278,7 +1278,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.scan_wifi_networks = AsyncMock(
             side_effect=(
                 SmartEssBleError("ble_not_connected"),
-                (SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),),
+                (SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),),
             )
         )
 
@@ -1298,7 +1298,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow._async_scan_smartess_ble_wifi_networks("AA:BB:CC:DD:EE:FF")
 
-        self.assertEqual(result, (SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),))
+        self.assertEqual(result, (SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),))
         self.assertEqual(session.connect.await_count, 2)
         self.assertEqual(provisioner.scan_wifi_networks.await_count, 2)
         self.assertEqual(session.disconnect.await_count, 2)
@@ -1321,11 +1321,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         second_session.connect = AsyncMock(return_value=None)
         second_session.disconnect = AsyncMock(return_value=None)
         second_provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
         refreshed_candidate = SmartEssBleCandidate(
             address="AA:BB:CC:DD:EE:FF",
-            local_pn="E50000253884199645",
+            local_pn="E50000200000000001",
             local_name="Collector",
             device=sentinel.refreshed_ble_device,
         )
@@ -1347,7 +1347,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow._async_scan_smartess_ble_wifi_networks("AA:BB:CC:DD:EE:FF")
 
-        self.assertEqual(result, (SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),))
+        self.assertEqual(result, (SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),))
         self.assertEqual(link_cls.call_count, 2)
         self.assertIsNone(link_cls.call_args_list[0].kwargs["device"])
         self.assertIs(link_cls.call_args_list[1].kwargs["device"], sentinel.refreshed_ble_device)
@@ -1367,7 +1367,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.connect = AsyncMock(return_value=None)
         session.disconnect = AsyncMock(return_value=None)
         provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
 
         with patch.dict(
@@ -1388,7 +1388,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow._async_scan_smartess_ble_wifi_networks("AA:BB:CC:DD:EE:FF")
 
         link_cls.assert_called_once_with("AA:BB:CC:DD:EE:FF", device=resolved_device)
-        self.assertEqual(result[0].ssid, "GRooVE")
+        self.assertEqual(result[0].ssid, "HomeNet")
 
     async def test_smartess_ble_wifi_scan_prefers_home_assistant_device_lookup_over_candidate_device(self) -> None:
         flow = self._make_flow()
@@ -1403,7 +1403,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.connect = AsyncMock(return_value=None)
         session.disconnect = AsyncMock(return_value=None)
         provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
 
         with patch.dict(
@@ -1443,7 +1443,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.connect = AsyncMock(return_value=None)
         session.disconnect = AsyncMock(return_value=None)
         provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
 
         with patch.dict(
@@ -1480,7 +1480,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.connect = AsyncMock(return_value=None)
         session.disconnect = AsyncMock(return_value=None)
         provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
 
         with patch.dict(
@@ -1519,7 +1519,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.connect = AsyncMock(return_value=None)
         session.disconnect = AsyncMock(return_value=None)
         provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
 
         with patch.object(
@@ -1615,7 +1615,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.connect = AsyncMock(return_value=None)
         session.disconnect = AsyncMock(return_value=None)
         provisioner.scan_wifi_networks = AsyncMock(
-            return_value=(SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),)
+            return_value=(SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),)
         )
         provisioner.last_firmware_version = "8.50.8.18"
 
@@ -1631,7 +1631,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow._async_scan_smartess_ble_wifi_networks("AA:BB:CC:DD:EE:FF")
 
-        self.assertEqual(result, (SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),))
+        self.assertEqual(result, (SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),))
         self.assertEqual(flow._ble_fw_version_by_address["AA:BB:CC:DD:EE:FF"], "8.50.8.18")
 
     async def test_smartess_ble_bootstrap_reuses_cached_firmware_version_for_branch_probe(self) -> None:
@@ -1787,7 +1787,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "_async_scan_smartess_ble_wifi_networks",
             new=AsyncMock(
                 return_value=(
-                    SmartEssBleWifiNetwork(ssid="GRooVE", signal=-42),
+                    SmartEssBleWifiNetwork(ssid="HomeNet", signal=-42),
                 )
             ),
         ) as wifi_scan, patch.object(
@@ -1810,7 +1810,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = ble_selector.config.kwargs["options"]
         self.assertEqual([option["value"] for option in options], ["11:22:33:44:55:66"])
         wifi_selector = result["data_schema"].schema["wifi_ssid"]
-        self.assertEqual(wifi_selector.config.kwargs["options"][0]["value"], "GRooVE")
+        self.assertEqual(wifi_selector.config.kwargs["options"][0]["value"], "HomeNet")
 
     async def test_bluetooth_setup_rescan_action_refreshes_collectors_without_wifi_scan(self) -> None:
         flow = self._make_flow()
@@ -1861,12 +1861,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Alpha Collector",
             ),
             SmartEssBleCandidate(
                 address="11:22:33:44:55:66",
-                local_pn="E50000253884199777",
+                local_pn="E50000200000009777",
                 local_name="Bravo Collector",
             ),
         )
@@ -1919,12 +1919,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         candidates = (
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector PN",
             ),
         )
         cached_networks = (
-            SmartEssBleWifiNetwork(ssid="GRooVE", signal=92),
+            SmartEssBleWifiNetwork(ssid="HomeNet", signal=92),
             SmartEssBleWifiNetwork(ssid="Office", signal=58),
         )
 
@@ -1959,7 +1959,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(refreshed_result["errors"], {})
         refreshed_wifi_selector = refreshed_result["data_schema"].schema["wifi_ssid"]
         refreshed_options = refreshed_wifi_selector.config.kwargs["options"]
-        self.assertEqual([option["value"] for option in refreshed_options], ["GRooVE", "Office"])
+        self.assertEqual([option["value"] for option in refreshed_options], ["HomeNet", "Office"])
         self.assertEqual(refreshed_result["description_placeholders"]["ble_last_error"], "ble_wifi_scan_failed:timeout")
 
     async def test_bluetooth_setup_keeps_detailed_provision_failure_code(self) -> None:
@@ -1976,7 +1976,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return_value=(
                     SmartEssBleCandidate(
                         address="AA:BB:CC:DD:EE:FF",
-                        local_pn="E50000253884199645",
+                        local_pn="E50000200000000001",
                         local_name="Collector PN",
                     ),
                 )
@@ -1993,7 +1993,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_bluetooth_setup(
                 {
                     "ble_address": "AA:BB:CC:DD:EE:FF",
-                    "wifi_ssid": "GRooVE",
+                    "wifi_ssid": "HomeNet",
                     "wifi_password": "55555555",
                     CONF_BLE_ACTION: BLE_ACTION_APPLY,
                 }
@@ -2088,7 +2088,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "_async_scan_smartess_ble_wifi_networks",
             new=AsyncMock(
                 return_value=(
-                    SmartEssBleWifiNetwork(ssid="GRooVE", signal=-42),
+                    SmartEssBleWifiNetwork(ssid="HomeNet", signal=-42),
                     SmartEssBleWifiNetwork(ssid="Office", signal=-58),
                 )
             ),
@@ -2267,7 +2267,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     driver_key="modbus_smg",
                     protocol_family="modbus_smg",
                     model_name="SMG 6200",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                     probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 ),
                 connection_mode="known_ip",
@@ -2287,7 +2287,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
             ),
             connection_mode="known_ip",
@@ -2314,7 +2314,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 details={
                     "rated_power": 6200,
@@ -2338,7 +2338,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("| Model | SMG 6200 |", placeholders["inverter_confirm_table"])
         self.assertIn("| Rated Power | 6200 W |", placeholders["inverter_confirm_table"])
         self.assertIn(
-            "| Serial Number | 92632511100118 |",
+            "| Serial Number | 92632500000001 |",
             placeholders["inverter_confirm_table"],
         )
         self.assertIn(
@@ -2366,7 +2366,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
             ),
             connection_mode="known_ip",
@@ -2398,7 +2398,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 details={
                     "collector_pn": "PN999",
@@ -2427,7 +2427,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
             ),
             connection_mode="broadcast",
@@ -2456,7 +2456,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="udp",
                 ip="192.168.1.55",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E5000025388419"),
+                collector=CollectorInfo(collector_pn="E5000020000000"),
             ),
             match=DriverMatch(
                 driver_key="pi30",
@@ -2482,7 +2482,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="udp",
                 ip="192.168.1.55",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E5000025388419"),
+                collector=CollectorInfo(collector_pn="E5000020000000"),
             ),
             connection_mode="known_ip",
         )
@@ -2512,7 +2512,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     driver_key="modbus_smg",
                     protocol_family="modbus_smg",
                     model_name="SMG 6200",
-                    serial_number="92632511100118",
+                    serial_number="92632500000001",
                     probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 ),
                 connection_mode="known_ip",
@@ -2620,7 +2620,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 details=details,
             ),
@@ -2721,7 +2721,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 details={
                     "smartess_collector_version": "1.2.3",
@@ -2765,7 +2765,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
             ),
             connection_mode="known_ip",
@@ -2904,11 +2904,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         existing.data.update(
             {
                 "collector_ip": "192.168.1.55",
-                "collector_pn": "E5000025388419",
-                "detected_serial": "92632511100118",
+                "collector_pn": "E5000020000000",
+                "detected_serial": "92632500000001",
             }
         )
-        existing.unique_id = "collector:E5000025388419"
+        existing.unique_id = "collector:E5000020000000"
         flow = self._make_flow(entries=[existing])
 
         matched_result = OnboardingResult(
@@ -2917,13 +2917,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="broadcast",
                 ip="192.168.1.55",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E5000025388419"),
+                collector=CollectorInfo(collector_pn="E5000020000000"),
             ),
             match=DriverMatch(
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=1),
             ),
             connection_mode="broadcast",
@@ -3141,7 +3141,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="manual",
                 ip="192.168.1.55",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E5000025388419"),
+                collector=CollectorInfo(collector_pn="E5000020000000"),
             ),
         )
 
@@ -3163,7 +3163,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="manual",
                 ip="192.168.1.55",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E5000025388419"),
+                collector=CollectorInfo(collector_pn="E5000020000000"),
             ),
             match=DriverMatch(
                 driver_key="pi30",
@@ -3363,7 +3363,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 confidence="high",
             ),
@@ -3399,7 +3399,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 confidence="high",
                 details={
@@ -3452,7 +3452,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG family 4200 variant",
-                serial_number="15573418948999",
+                serial_number="15573400000004",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
                 confidence="medium",
                 details={
@@ -3483,7 +3483,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     ip="192.168.1.55",
                     connected=True,
                     collector=CollectorInfo(
-                        collector_pn="E5000025388419",
+                        collector_pn="E5000020000000",
                         smartess_protocol_asset_id="0000",
                     ),
                 ),
@@ -3498,8 +3498,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                             "device_count": 1,
                             "devices": [
                                 {
-                                    "pn": "E50000253884199645",
-                                    "sn": "E50000253884199645094801",
+                                    "pn": "E50000200000000001",
+                                    "sn": "E50000200000000001000001",
                                     "devcode": 2376,
                                     "devaddr": 5,
                                     "devName": "SD-HYM-4862HWP",
@@ -3555,9 +3555,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                         }
                     }
                 },
-                collector_pn="E5000025388419",
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                collector_pn="E5000020000000",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=2376,
                 devaddr=5,
                 summary={
@@ -3580,7 +3580,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 assist_result = await flow.async_step_smartess_cloud_assist(
-                    {"username": "groove", "password": "secret"}
+                    {"username": "test-user", "password": "secret"}
                 )
 
             self.assertEqual(assist_result["type"], "menu")
@@ -3589,7 +3589,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
             placeholders = assist_result["description_placeholders"]
             self.assertIn("SmartESS 0925", placeholders["smartess_cloud_mapping_table"])
-            self.assertIn("E50000253884199645", placeholders["smartess_cloud_identity_table"])
+            self.assertIn("E50000200000000001", placeholders["smartess_cloud_identity_table"])
             self.assertIn("Garage inverter", placeholders["smartess_cloud_identity_table"])
             self.assertIn("bc_ (1)", placeholders["smartess_cloud_detail_summary"])
             self.assertIn("39", placeholders["smartess_cloud_settings_table"])
@@ -3704,10 +3704,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._make_options_flow()
 
         async def refresh_status() -> None:
-            options._collector_wifi_current_ssid = "GRooVE"
+            options._collector_wifi_current_ssid = "HomeNet"
             options._collector_wifi_network_diagnostics = "1,0,0"
             options._collector_wifi_networks = (
-                SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),
+                SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),
                 SmartEssBleWifiNetwork(ssid="Other", signal=42),
             )
 
@@ -3717,7 +3717,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "collector_wifi")
-        self.assertEqual(result["description_placeholders"]["current_ssid"], "GRooVE")
+        self.assertEqual(result["description_placeholders"]["current_ssid"], "HomeNet")
         self.assertEqual(result["description_placeholders"]["status_updates"], "")
         self.assertNotIn("network_diagnostics", result["description_placeholders"])
         self.assertIn(CONF_WIFI_SSID, result["data_schema"].schema)
@@ -3727,7 +3727,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_options_collector_wifi_step_shows_only_non_empty_status_updates(self) -> None:
         options = self._make_options_flow()
-        options._collector_wifi_current_ssid = "GRooVE"
+        options._collector_wifi_current_ssid = "HomeNet"
         options._collector_wifi_last_result = "Saved."
         options._collector_wifi_last_error = "collector_timeout"
 
@@ -3755,7 +3755,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         apply_mock = AsyncMock()
 
         async def refresh_status() -> None:
-            options._collector_wifi_current_ssid = "GRooVE"
+            options._collector_wifi_current_ssid = "HomeNet"
 
         options._async_refresh_collector_wifi_status = refresh_status
         options._async_apply_collector_wifi_settings = apply_mock
@@ -4179,7 +4179,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                         "proxy_capture_summary": "Collector proxy capture is ready.",
                         "proxy_capture_status": "ready",
                         "proxy_trace_saved_result_path": "/config/eybond_local/proxy_traces/session.zip",
-                        "proxy_trace_saved_result_download_url": "http://195.191.72.37:8123/local/eybond_local/proxy_traces/session.zip",
+                        "proxy_trace_saved_result_download_url": "http://203.0.113.7:8123/local/eybond_local/proxy_traces/session.zip",
                     }
                 ),
             )
@@ -4187,7 +4187,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await options.async_step_proxy_capture()
 
         self.assertIn(
-            "](http://195.191.72.37:8123/local/eybond_local/proxy_traces/session.zip)",
+            "](http://203.0.113.7:8123/local/eybond_local/proxy_traces/session.zip)",
             result["description_placeholders"]["proxy_capture_saved_result_section"],
         )
         self.assertIn(
@@ -4311,7 +4311,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._config_entry.runtime_data = types.SimpleNamespace(
             async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
             smartess_cloud_export_available=True,
-            smartess_collector_pn="E5000025388419",
+            smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(
                 values={
                     "support_package_download_url": "http://192.168.1.50:8123/local/eybond_local/support/support_archive.zip",
@@ -4323,8 +4323,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_create_support_package(
             {
                 CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE: SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
-                "username": "groove",
-                "password": "usa2000",
+                "username": "test-user",
+                "password": "pw-test-0000",
             }
         )
 
@@ -4476,7 +4476,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._config_entry.runtime_data = types.SimpleNamespace(
             smartess_cloud_export_available=True,
             smartess_cloud_evidence_path="/config/eybond_local/cloud_evidence/entry123.json",
-            smartess_collector_pn="E5000025388419",
+            smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(values={}),
         )
 
@@ -4510,7 +4510,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             smartess_cloud_export_available=True,
-            smartess_collector_pn="E5000025388419",
+            smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(values={}),
         )
 
@@ -4547,7 +4547,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._config_entry.runtime_data = types.SimpleNamespace(
             async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
             smartess_cloud_export_available=True,
-            smartess_collector_pn="E5000025388419",
+            smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(
                 values={
                     "support_package_download_url": "/api/diagnostics/support_archive.zip",
@@ -4558,13 +4558,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_create_support_package(
             {
                 CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE: SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
-                "username": "groove",
-                "password": "usa2000",
+                "username": "test-user",
+                "password": "pw-test-0000",
             }
         )
 
-        self.assertEqual(captured["username"], "groove")
-        self.assertEqual(captured["password"], "usa2000")
+        self.assertEqual(captured["username"], "test-user")
+        self.assertEqual(captured["password"], "pw-test-0000")
         self.assertEqual(result["step_id"], "diagnostics_result")
         self.assertEqual(
             result["description_placeholders"]["path"],
@@ -5448,7 +5448,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     # ---- Automatic control-discovery runner (EYB-REF-041) ----
 
     class _RunnerCoordinator:
-        smartess_collector_pn = "E5000025388419"
+        smartess_collector_pn = "E5000020000000"
         effective_profile_name = "smg_modbus.json"
         effective_register_schema_name = "modbus_smg/models/smg_6200.json"
 
@@ -5500,8 +5500,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         options._build_shadow_learning_preflight_snapshot = _fake_preflight
         options._shadow_learning_cloud_identity = lambda _coordinator: {
-            "pn": "E50000253884199645",
-            "sn": "E50000253884199645094801",
+            "pn": "E50000200000000001",
+            "sn": "E50000200000000001000001",
             "devcode": 2376,
             "devaddr": 1,
         }
@@ -5522,8 +5522,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         bundle = {
             "request": {
                 "params": {
-                    "pn": "E50000253884199645",
-                    "sn": "E50000253884199645094801",
+                    "pn": "E50000200000000001",
+                    "sn": "E50000200000000001000001",
                     "devcode": 2376,
                     "devaddr": 1,
                 }
@@ -5669,16 +5669,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         bundle_mock.assert_called_once_with(
             username="demo@example.com",
             password="cloud-secret",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
         )
         orchestrate_mock.assert_called_once()
-        self.assertEqual(captured["pn"], "E50000253884199645")
-        self.assertEqual(captured["sn"], "E50000253884199645094801")
+        self.assertEqual(captured["pn"], "E50000200000000001")
+        self.assertEqual(captured["sn"], "E50000200000000001000001")
         self.assertEqual(captured["devcode"], 2376)
         self.assertEqual(captured["devaddr"], 1)
         self.assertEqual(
             options._shadow_learning_state["identity"]["sn"],
-            "E50000253884199645094801",
+            "E50000200000000001000001",
         )
 
     async def test_control_discovery_runner_surfaces_trace_path(self) -> None:

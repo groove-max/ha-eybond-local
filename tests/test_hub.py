@@ -550,16 +550,16 @@ class HubSnapshotTests(unittest.TestCase):
             ),
         )
         hub._link_manager = _FakeLinkManager()
-        hub._link_manager.collector_info.collector_pn = "E5000025388419"
+        hub._link_manager.collector_info.collector_pn = "E5000020000000"
 
         snapshot = hub._build_snapshot(
-            extra_values={"collector_pn": "E50000253884199645"}
+            extra_values={"collector_pn": "E50000200000000001"}
         )
 
-        self.assertEqual(snapshot.collector.collector_pn, "E50000253884199645")
+        self.assertEqual(snapshot.collector.collector_pn, "E50000200000000001")
         self.assertEqual(snapshot.collector.collector_pn_prefix, "E")
-        self.assertEqual(snapshot.collector.collector_pn_digits, "50000253884199645")
-        self.assertEqual(snapshot.values["collector_pn"], "E50000253884199645")
+        self.assertEqual(snapshot.collector.collector_pn_digits, "50000200000000001")
+        self.assertEqual(snapshot.values["collector_pn"], "E50000200000000001")
 
     def test_build_snapshot_recomputes_smg_canonical_battery_power(self) -> None:
         hub = EybondHub(
@@ -579,7 +579,7 @@ class HubSnapshotTests(unittest.TestCase):
             driver_key="modbus_smg",
             protocol_family="modbus_smg",
             model_name="SMG 6200",
-            serial_number="92632511100118",
+            serial_number="92632500000001",
             probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
         )
         hub._last_snapshot = hub._build_snapshot(
@@ -617,7 +617,7 @@ class HubSnapshotTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
             )
             hub._last_snapshot = hub._build_snapshot(
@@ -1165,7 +1165,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
                 capabilities=profile.capabilities,
                 capability_groups=profile.groups,
@@ -1204,7 +1204,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
                 capabilities=profile.capabilities,
                 capability_groups=profile.groups,
@@ -1240,7 +1240,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
                 capabilities=profile.capabilities,
                 capability_groups=profile.groups,
@@ -1279,7 +1279,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
                 capabilities=profile.capabilities,
                 capability_groups=profile.groups,
@@ -1314,7 +1314,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
             )
 
@@ -1351,7 +1351,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
             )
 
@@ -1410,7 +1410,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
             )
 
@@ -1444,7 +1444,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 driver_key="modbus_smg",
                 protocol_family="modbus_smg",
                 model_name="SMG 6200",
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
             )
 

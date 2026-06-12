@@ -280,7 +280,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
                             "source_profile_name": "smg_modbus.json",
                             "source_schema_name": "modbus_smg/models/smg_6200.json",
                             "session": {
-                                "collector_pn": "E5000025388419",
+                                "collector_pn": "E5000020000000",
                                 "cloud_sn": "SN-001",
                                 "devaddr": 1,
                             },
@@ -332,7 +332,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
                     serial_number="SN-001",
                 ),
                 collector=CollectorInfo(
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     smartess_device_address=1,
                 ),
                 entry_options={
@@ -375,7 +375,7 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
                             "source_profile_name": "smg_modbus.json",
                             "source_schema_name": "modbus_smg/models/smg_6200.json",
                             "session": {
-                                "collector_pn": "E5000025388419",
+                                "collector_pn": "E5000020000000",
                                 "cloud_sn": "SN-EXPECTED",
                                 "devaddr": 1,
                             },
@@ -453,8 +453,8 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
                 "source_profile_name": "smg_modbus.json",
                 "source_schema_name": "modbus_smg/models/smg_6200.json",
                 "session": {
-                    "collector_pn": "E50000253884199645",
-                    "cloud_sn": "E50000253884199645094801",
+                    "collector_pn": "E50000200000000001",
+                    "cloud_sn": "E50000200000000001000001",
                     "devcode": 2376,
                     "devaddr": 1,
                 },
@@ -467,24 +467,24 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
                     "variant_key": "default",
                     "smartess_protocol_asset_id": "0000",
                     "inverter_model": "SMG 6200",
-                    "inverter_serial": "92632511100118",
+                    "inverter_serial": "92632500000001",
                     "smartess_device_address": None,
                 }
             },
             inverter=types.SimpleNamespace(
-                serial_number="92632511100118",
+                serial_number="92632500000001",
                 model_name="SMG 6200",
                 variant_key="default",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="E50000253884199645",
+                collector_pn="E50000200000000001",
                 last_devcode=1,
                 heartbeat_devcode=None,
                 smartess_device_address=None,
                 smartess_protocol_asset_id="0000",
                 smartess_protocol_profile_key="",
             ),
-            entry_data={"collector_pn": "E50000253884199645"},
+            entry_data={"collector_pn": "E50000200000000001"},
             effective_owner_key="modbus_smg",
             base_profile_name="smg_modbus.json",
             base_register_schema_name="modbus_smg/models/smg_6200.json",

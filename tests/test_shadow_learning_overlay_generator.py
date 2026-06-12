@@ -47,9 +47,9 @@ from custom_components.eybond_local.support.shadow_learning_review_model import 
 def _sample_session_manifest() -> dict[str, object]:
     return {
         "session_id": "smg-shadow-session-01",
-        "collector_pn": "E5000025388419",
-        "cloud_pn": "E50000253884199645",
-        "cloud_sn": "E50000253884199645094801",
+        "collector_pn": "E5000020000000",
+        "cloud_pn": "E50000200000000001",
+        "cloud_sn": "E50000200000000001000001",
         "devcode": 2376,
         "devaddr": 1,
         "write_response_mode": "exception",
@@ -250,7 +250,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
             session = overlay.get("session")
             self.assertIsInstance(session, dict)
             assert isinstance(session, dict)
-            self.assertEqual(str(session.get("cloud_sn") or ""), "E50000253884199645094801")
+            self.assertEqual(str(session.get("cloud_sn") or ""), "E50000200000000001000001")
             self.assertEqual(int(session.get("devcode", 0)), 2376)
             self.assertEqual(int(session.get("devaddr", 0)), 1)
 

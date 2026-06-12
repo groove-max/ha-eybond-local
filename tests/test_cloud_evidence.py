@@ -28,9 +28,9 @@ class CloudEvidenceTests(unittest.TestCase):
                 source="smartess_cloud_probe",
                 payload={"request": {"command": "device-bundle", "older": True}},
                 entry_id="entry123",
-                collector_pn="E5000025388419",
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                collector_pn="E5000020000000",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=2376,
                 devaddr=1,
             )
@@ -38,9 +38,9 @@ class CloudEvidenceTests(unittest.TestCase):
                 source="smartess_cloud_probe",
                 payload={"request": {"command": "device-bundle", "older": False}},
                 entry_id="entry123",
-                collector_pn="E5000025388419",
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                collector_pn="E5000020000000",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=2376,
                 devaddr=1,
             )
@@ -51,7 +51,7 @@ class CloudEvidenceTests(unittest.TestCase):
             record = load_latest_cloud_evidence(
                 config_dir,
                 entry_id="entry123",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
             )
 
             self.assertIsNotNone(record)
@@ -77,7 +77,7 @@ class CloudEvidenceTests(unittest.TestCase):
             record = load_latest_cloud_evidence(
                 config_dir,
                 entry_id="entry123",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
             )
 
             self.assertIsNone(record)
@@ -89,9 +89,9 @@ class CloudEvidenceTests(unittest.TestCase):
                 source="smartess_cloud_probe",
                 payload={"request": {"command": "device-bundle"}},
                 entry_id="legacy-entry",
-                collector_pn="E5000025388419",
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                collector_pn="E5000020000000",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=2376,
                 devaddr=1,
             )
@@ -100,7 +100,7 @@ class CloudEvidenceTests(unittest.TestCase):
             record = load_latest_cloud_evidence(
                 config_dir,
                 entry_id="current-entry",
-                collector_pn="E50000253884199645",
+                collector_pn="E50000200000000001",
             )
 
             self.assertIsNotNone(record)
@@ -118,9 +118,9 @@ class CloudEvidenceTests(unittest.TestCase):
                 source="smartess_cloud_probe",
                 payload={"request": {"command": "device-bundle"}},
                 entry_id="entry123",
-                collector_pn="E5000025388419",
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                collector_pn="E5000020000000",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=2376,
                 devaddr=1,
             )
@@ -129,7 +129,7 @@ class CloudEvidenceTests(unittest.TestCase):
             record = load_latest_cloud_evidence(
                 config_dir,
                 entry_id="entry123",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
             )
 
             self.assertIsNotNone(record)
@@ -143,8 +143,8 @@ class CloudEvidenceTests(unittest.TestCase):
                 "request": {
                     "command": "device-bundle",
                     "params": {
-                        "pn": "E50000253884199645",
-                        "sn": "E50000253884199645094801",
+                        "pn": "E50000200000000001",
+                        "sn": "E50000200000000001000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     },
@@ -176,14 +176,14 @@ class CloudEvidenceTests(unittest.TestCase):
             ):
                 record = fetch_and_export_smartess_device_bundle_cloud_evidence(
                     config_dir=config_dir,
-                    username="groove",
+                    username="test-user",
                     password="secret",
-                    collector_pn="E5000025388419",
+                    collector_pn="E5000020000000",
                     source="smartess_cloud_onboarding",
                 )
 
             self.assertTrue(record.path.exists())
-            self.assertEqual(record.payload["match"]["collector_pn"], "E5000025388419")
+            self.assertEqual(record.payload["match"]["collector_pn"], "E5000020000000")
             self.assertEqual(record.payload["summary"]["settings_write_action"], "ctrlDevice")
 
 

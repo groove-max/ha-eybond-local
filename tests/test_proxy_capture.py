@@ -64,7 +64,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
     def test_running_state_blocks_start_and_can_stop(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="/config/eybond_local/proxy_traces/current_session.jsonl",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -95,7 +95,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
     def test_running_state_hides_previous_manifest_and_prefers_active_trace(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="/config/eybond_local/proxy_traces/current_session.jsonl",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -125,7 +125,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
     def test_critical_phase_disables_stop(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
             restore_required=True,

@@ -34,9 +34,9 @@ def _manifest() -> dict:
     return {
         "session": {
             "session_id": "01ABC_20260612",
-            "collector_pn": "E5000025335865",
+            "collector_pn": "E5000025000005",
             "cloud_pn": "E50000PRIVATE",
-            "cloud_sn": "E50000PRIVATE094801",
+            "cloud_sn": "E50000PRIVATE000001",
         },
         "read_map": {
             "read_blocks": [[201, 34, 79], [186, 12, 79], [404, 4, 79]],
@@ -128,7 +128,7 @@ class ContributionRecordTests(unittest.TestCase):
 
     def test_identifier_audit_detects_a_planted_pn(self) -> None:
         record = build_contribution_record(fingerprint=_fingerprint(), manifest=_manifest())
-        record["proposed_schema"] = {"collector_pn": "E5000025335865"}
+        record["proposed_schema"] = {"collector_pn": "E5000025000005"}
         self.assertTrue(record_contains_identifier(record))
 
     def test_empty_inputs_produce_a_valid_skeleton(self) -> None:

@@ -26,7 +26,7 @@ class SupportPackageTests(unittest.TestCase):
                 entry_title="SMG 6200",
                 connected=True,
                 collector={
-                    "collector_pn": "E5000025388419",
+                    "collector_pn": "E5000020000000",
                     "collector_cloud_profile_key": "smartess_at",
                     "collector_cloud_profile_label": "SmartESS AT",
                     "collector_cloud_profile_source": "smartess_cloud_diagnostics",
@@ -35,7 +35,7 @@ class SupportPackageTests(unittest.TestCase):
                 inverter={
                     "driver_key": "modbus_smg",
                     "model_name": "SMG 6200",
-                    "serial_number": "92632511100118",
+                    "serial_number": "92632500000001",
                 },
                 values={"operating_mode": "Off-Grid"},
                 data={"server_ip": "192.168.1.50"},
@@ -45,8 +45,8 @@ class SupportPackageTests(unittest.TestCase):
                 cloud_evidence={
                     "evidence_version": 1,
                     "source": "smartess_cloud_probe",
-                    "match": {"entry_id": "entry123", "collector_pn": "E5000025388419"},
-                    "device_identity": {"pn": "E50000253884199645", "sn": "E500...094801"},
+                    "match": {"entry_id": "entry123", "collector_pn": "E5000020000000"},
+                    "device_identity": {"pn": "E50000200000000001", "sn": "E500...000001"},
                     "summary": {"actions": ["device_list", "device_detail"]},
                     "payload": {"request": {"command": "device-bundle"}},
                 },
@@ -223,11 +223,11 @@ class SupportPackageTests(unittest.TestCase):
                 entry_id="entry-fallback",
                 entry_title="SMG Family",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={
                     "driver_key": "modbus_smg",
                     "model_name": "SMG Family",
-                    "serial_number": "92632511100118",
+                    "serial_number": "92632500000001",
                     "variant_key": "family_fallback",
                 },
                 values={"operating_mode": "Off-Grid"},
@@ -284,7 +284,7 @@ class SupportPackageTests(unittest.TestCase):
                 entry_id="entry-anenji-4200",
                 entry_title="Anenji 4200",
                 connected=True,
-                collector={"collector_pn": "E5000025388419"},
+                collector={"collector_pn": "E5000020000000"},
                 inverter={
                     "driver_key": "modbus_smg",
                     "model_name": "Anenji 4200 (Protocol 1)",

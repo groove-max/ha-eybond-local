@@ -1606,16 +1606,16 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-1",
             data={
-                "collector_pn": "E50000253884199645",
+                "collector_pn": "E50000200000000001",
                 "collector_ip": "192.168.1.55",
             },
             options={},
-            title="Collector PN E50000253884199645",
+            title="Collector PN E50000200000000001",
         )
         coordinator.data = self.RuntimeSnapshot(
             values={},
             collector=types.SimpleNamespace(
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -1625,8 +1625,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         info = coordinator.collector_device_info()
 
-        self.assertEqual(info["name"], "Collector PN E50000253884199645")
-        self.assertEqual(info["serial_number"], "E50000253884199645")
+        self.assertEqual(info["name"], "Collector PN E50000200000000001")
+        self.assertEqual(info["serial_number"], "E50000200000000001")
 
     def test_remember_runtime_identity_strengthens_pending_entry_metadata(self) -> None:
         updated_entries: list[dict[str, object]] = []
@@ -2705,7 +2705,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             published: list[dict[str, object]] = []
             state = types.SimpleNamespace(
                 entry_id="entry-id",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 trace_path="/tmp/shadow.jsonl",
                 original_endpoint="eu.smartess.io,18899,TCP",
                 proxy_endpoint="192.168.1.50,18899,TCP",
@@ -2767,7 +2767,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             clear_calls: list[bool] = []
             state = types.SimpleNamespace(
                 entry_id="entry-id",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 trace_path="/tmp/shadow.jsonl",
                 original_endpoint="eu.smartess.io,18899,TCP",
                 proxy_endpoint="192.168.1.50,18899,TCP",
@@ -2905,7 +2905,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 self.coordinator_module.EybondLocalCoordinator,
                 "smartess_collector_pn",
                 new_callable=PropertyMock,
-                return_value="E5000025388419",
+                return_value="E5000020000000",
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_callback_target_endpoint",
@@ -3064,7 +3064,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 self.coordinator_module.EybondLocalCoordinator,
                 "smartess_collector_pn",
                 new_callable=PropertyMock,
-                return_value="E5000025388419",
+                return_value="E5000020000000",
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_callback_target_endpoint",
@@ -3283,7 +3283,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 self.coordinator_module.EybondLocalCoordinator,
                 "smartess_collector_pn",
                 new_callable=PropertyMock,
-                return_value="E5000025388419",
+                return_value="E5000020000000",
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_callback_target_endpoint",

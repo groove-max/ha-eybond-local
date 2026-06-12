@@ -39,9 +39,9 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 "--secret",
                 "secret123456789",
                 "--pn",
-                "E50000253884199645",
+                "E50000200000000001",
                 "--sn",
-                "E50000253884199645094801",
+                "E50000200000000001000001",
                 "--devcode",
                 "0x0948",
                 "--devaddr",
@@ -64,9 +64,9 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 "--secret",
                 "secret123456789",
                 "--pn",
-                "E50000253884199645",
+                "E50000200000000001",
                 "--sn",
-                "E50000253884199645094801",
+                "E50000200000000001000001",
                 "--devcode",
                 "2376",
                 "--devaddr",
@@ -83,8 +83,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
 
     def test_build_device_control_action_uses_ctrl_device_fields(self) -> None:
         action = smartess_cloud_probe.build_device_control_action(
-            pn="E50000253884199645",
-            sn="E50000253884199645094801",
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
             devcode=2376,
             devaddr=1,
             field_id="sys_eybond_ctrl_53",
@@ -95,8 +95,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
             action,
             (
                 "&action=ctrlDevice"
-                "&pn=E50000253884199645"
-                "&sn=E50000253884199645094801"
+                "&pn=E50000200000000001"
+                "&sn=E50000200000000001000001"
                 "&devcode=2376"
                 "&devaddr=1"
                 "&id=sys_eybond_ctrl_53"
@@ -116,8 +116,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
             app_version=smartess_cloud_probe.DEFAULT_APP_VERSION,
             company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
             timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
-            pn="E50000253884199645",
-            sn="E50000253884199645094801",
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
             devcode=2376,
             devaddr=1,
             field_id=[],
@@ -175,8 +175,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
             password="",
             token="token123456789",
             secret="secret123456789",
-            pn="E50000253884199645",
-            sn="E50000253884199645094801",
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
             devcode=2376,
             devaddr=1,
             dry_run=False,
@@ -202,8 +202,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
             company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
             timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
             device_type=smartess_cloud_probe.DEFAULT_DEVICE_TYPE,
-            pn="E50000253884199645",
-            sn="E50000253884199645094801",
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
             devcode=0x0948,
             devaddr=0x01,
             search="",
@@ -592,8 +592,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
                 timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
                 device_type=smartess_cloud_probe.DEFAULT_DEVICE_TYPE,
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=0x0948,
                 devaddr=0x01,
                 search="",
@@ -602,7 +602,7 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 order_by="",
                 page=0,
                 pagesize=50,
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 cloud_evidence_config_dir=temp_dir,
                 cloud_evidence_entry_id="entry123",
             )
@@ -641,7 +641,7 @@ class SmartEssCloudProbeTests(unittest.TestCase):
 
             raw = json.loads(evidence_path.read_text(encoding="utf-8"))
             self.assertEqual(raw["match"]["entry_id"], "entry123")
-            self.assertEqual(raw["match"]["collector_pn"], "E5000025388419")
+            self.assertEqual(raw["match"]["collector_pn"], "E5000020000000")
             self.assertEqual(raw["device_identity"]["devcode"], 2376)
             self.assertEqual(raw["summary"]["actions"], ["device_list", "device_detail", "device_settings", "energy_flow"])
             self.assertEqual(raw["summary"]["settings_field_count"], 0)

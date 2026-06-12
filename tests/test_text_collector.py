@@ -135,7 +135,7 @@ class _CoordinatorStub:
             },
         )
         self.control_mode = "full"
-        self.collector_callback_target_endpoint = "195.191.72.37,2223,TCP"
+        self.collector_callback_target_endpoint = "203.0.113.7,2223,TCP"
         self.calls: list[dict[str, object]] = []
 
     def collector_device_info(self):

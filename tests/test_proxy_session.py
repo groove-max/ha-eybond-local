@@ -27,7 +27,7 @@ class ProxySessionTests(unittest.TestCase):
             path = build_proxy_capture_trace_path(
                 config_dir=Path(tmpdir),
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 timestamp="20260428T120000000000Z",
             )
 

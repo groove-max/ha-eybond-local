@@ -62,7 +62,7 @@ class ContributionVettingTests(unittest.TestCase):
 
     def test_planted_identifier_fails(self) -> None:
         record = _good_record()
-        record["proposed_schema"]["collector_pn"] = "E5000025335865"
+        record["proposed_schema"]["collector_pn"] = "E5000025000005"
         report = vet_contribution_record(record)
         self.assertEqual(_checks(report)["no_identifiers"], RESULT_FAIL)
         self.assertEqual(report.verdict, RESULT_FAIL)

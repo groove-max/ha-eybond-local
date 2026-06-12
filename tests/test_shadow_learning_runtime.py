@@ -31,7 +31,7 @@ def _seed() -> ShadowLearningSeed:
     return ShadowLearningSeed(
         session_id="entry-1_20260605T120000Z",
         entry_id="entry-1",
-        collector_pn="E5000025388419",
+        collector_pn="E5000020000000",
         collector_cloud_profile_key="smartess_at",
         collector_cloud_profile_label="SmartESS AT",
         collector_cloud_profile_source="runtime_observed",
@@ -42,7 +42,7 @@ def _seed() -> ShadowLearningSeed:
             "register_schema_name": "modbus_smg/default.json",
         },
         command_responses={
-            "QID": "E5000025388419",
+            "QID": "E5000020000000",
             "CLDSRVHOST1": "192.168.1.50,18899,TCP",
         },
         register_bank={300: 10, 301: 11, 305: 12},
@@ -320,7 +320,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             state = build_shadow_learning_session_state(
                 entry_id="entry-1",
                 route_owner_id="shadow-learning-entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 trace_path=str(config_dir / "trace.jsonl"),
                 original_endpoint="eu.smartess.io,18899,TCP",
                 proxy_endpoint="192.168.1.50,18899,TCP",
@@ -353,7 +353,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             config_dir = Path(tmp)
             state = build_shadow_learning_session_state(
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 trace_path=str(config_dir / "trace.jsonl"),
                 original_endpoint="eu.smartess.io,18899,TCP",
                 proxy_endpoint="192.168.1.50,18899,TCP",
@@ -380,7 +380,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def test_shadow_session_expiry_uses_expires_at_deadline(self) -> None:
         state = build_shadow_learning_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="/tmp/trace.jsonl",
             original_endpoint="eu.smartess.io,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -417,7 +417,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             config_dir = Path(tmp)
             state = build_shadow_learning_session_state(
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 trace_path=str(config_dir / "trace.jsonl"),
                 original_endpoint="eu.smartess.io,18899,TCP",
                 proxy_endpoint="192.168.1.50,18899,TCP",

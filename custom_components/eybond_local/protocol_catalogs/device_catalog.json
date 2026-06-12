@@ -46,7 +46,7 @@
       },
       "cloud_hints": {"devcodes": [2376]},
       "provenance": {
-        "sources": ["corpus:E50000253884199645 (16 captures, 2026-04..06)"],
+        "sources": ["corpus:own-device …9645 (16 captures, 2026-04..06)"],
         "confidence": "verified-on-hardware"
       }
     },
@@ -82,7 +82,7 @@
       },
       "cloud_hints": {"devcodes": [6514]},
       "provenance": {
-        "sources": ["corpus:E5000025335865 (5 captures)"],
+        "sources": ["corpus:donor …5865 (5 captures)"],
         "confidence": "capture-derived"
       }
     },
@@ -101,7 +101,7 @@
       "cloud_hints": {"devcodes": [6544]},
       "provenance": {
         "sources": [
-          "corpus:E5000025374544 (3 captures)",
+          "corpus:donor …4544 (3 captures)",
           "legacy:smg_identity_rules anenji_anj_11kw_48v_wifi_p"
         ],
         "confidence": "capture-derived"
@@ -126,7 +126,7 @@
       "cloud_hints": {"devcodes": [6514]},
       "provenance": {
         "sources": [
-          "corpus:I20000251172562875 aninerel.zip (2026-06-12)",
+          "corpus:donor …2875 (dual-output capture, 2026-06-12)",
           "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write)",
           "fw 7903_A6260126v1 (reg626 hex == model_code 30979)",
           "donor ran smg_modbus.json profile bound as SMG 6200: full SMG control set read back correct values (developer-witnessed 2026-06-12)",
@@ -154,7 +154,7 @@
       "cloud_hints": {"devcodes": []},
       "provenance": {
         "sources": [
-          "corpus:E50000252371235481 Anenji2025.zip (2026-06-12)",
+          "corpus:donor …5481 (single-output capture, 2026-06-12)",
           "fw 3700_A6250424v1 (reg626 hex == model_code 14080)",
           "donor ran smg_modbus.json profile bound as SMG 6200 (same layout 1 as the verified smg_6200): full SMG control set read back correct values (developer-witnessed 2026-06-12)"
         ],

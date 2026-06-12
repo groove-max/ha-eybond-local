@@ -319,8 +319,8 @@ def _device_scope_matches_runtime(
             or (entry_data or {}).get(CONF_COLLECTOR_PN, "")
         )
         # Prefix-tolerant compare: the datalogger PN is reported as a short physical
-        # prefix (e.g. "E5000025388419") early in the handshake and upgraded to the
-        # full PN (e.g. "E50000253884199645") once more frames arrive
+        # prefix (e.g. "E5000020000000") early in the handshake and upgraded to the
+        # full PN (e.g. "E50000200000000001") once more frames arrive
         # (``_prefer_more_complete_collector_pn``). An exact compare here intermittently
         # failed the device-scope match during the early refreshes that gate entity
         # setup, so the activated overlay was suppressed and its learned controls never
@@ -340,7 +340,7 @@ def _device_scope_matches_runtime(
         # The following SmartESS fields are intentionally NOT compared, because
         # the runtime does not carry a matching value and gating on them silently
         # suppressed every activated overlay so the learned control never appeared:
-        #   - ``cloud_sn``  : SmartESS device serial (e.g. "…094801"), never equal
+        #   - ``cloud_sn``  : SmartESS device serial (e.g. "…000001"), never equal
         #                     to inverter.serial_number (the Modbus serial).
         #   - ``devcode``   : SmartESS device type (e.g. 2376); the runtime
         #                     collector reports an unrelated ``last_devcode`` (1).

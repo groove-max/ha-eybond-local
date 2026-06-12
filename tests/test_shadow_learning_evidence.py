@@ -35,9 +35,9 @@ class ShadowLearningEvidenceTests(unittest.TestCase):
     def test_models_round_trip_to_stable_json(self) -> None:
         manifest = ShadowSessionManifest(
             session_id="smg6200-session-1",
-            collector_pn="E50000253884199645",
-            cloud_pn="E50000253884199645",
-            cloud_sn="E50000253884199645094801",
+            collector_pn="E50000200000000001",
+            cloud_pn="E50000200000000001",
+            cloud_sn="E50000200000000001000001",
             devcode=2376,
             devaddr=1,
             write_response_mode="exception",

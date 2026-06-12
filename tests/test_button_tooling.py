@@ -129,8 +129,8 @@ class _CoordinatorStub:
         self.control_mode = "full"
         self.controls_enabled = True
         self.controls_reason = "manual_full_override"
-        self.collector_callback_target_endpoint = "195.191.72.37,2223,TCP"
-        self.proxy_capture_target_endpoint = "195.191.72.37,18899,TCP"
+        self.collector_callback_target_endpoint = "203.0.113.7,2223,TCP"
+        self.proxy_capture_target_endpoint = "203.0.113.7,18899,TCP"
         self.collector_server_endpoint_rollback_target = "47.91.67.66,18899,TCP"
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.proxy_capture_overview = types.SimpleNamespace(
@@ -322,7 +322,7 @@ class ToolingButtonTests(unittest.TestCase):
 
     def test_bind_collector_button_reports_when_home_assistant_is_already_active_target(self) -> None:
         coordinator = _CoordinatorStub()
-        coordinator.data.values["collector_server_endpoint"] = "195.191.72.37,2223,TCP"
+        coordinator.data.values["collector_server_endpoint"] = "203.0.113.7,2223,TCP"
         entity = EybondToolingButton(
             coordinator,
             _ToolingButtonSpec(
@@ -383,7 +383,7 @@ class ToolingButtonTests(unittest.TestCase):
 
     def test_bind_collector_button_stays_available_when_proxy_target_is_active(self) -> None:
         coordinator = _CoordinatorStub()
-        coordinator.data.values["collector_server_endpoint"] = "195.191.72.37,18899,TCP"
+        coordinator.data.values["collector_server_endpoint"] = "203.0.113.7,18899,TCP"
         entity = EybondToolingButton(
             coordinator,
             _ToolingButtonSpec(

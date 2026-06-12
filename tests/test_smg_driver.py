@@ -149,7 +149,7 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
             driver_key="modbus_smg",
             protocol_family="modbus_smg",
             model_name="SMG 11000",
-            serial_number="92632511100118",
+            serial_number="92632500000001",
             probe_target=target,
             register_schema_name="modbus_smg/models/smg_6200.json",
         )
@@ -667,7 +667,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             driver_key="modbus_smg",
             protocol_family="modbus_smg",
             model_name="Anenji 6200 (dual output)",
-            serial_number="99632601111397",
+            serial_number="99632600000002",
             probe_target=target,
             variant_key="default",
             profile_name="modbus_smg/models/anenji_op2_6200.json",

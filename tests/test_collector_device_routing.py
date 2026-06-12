@@ -129,7 +129,7 @@ class RuntimeSensorRoutingTests(unittest.TestCase):
     def test_runtime_sensor_uses_key_based_device_routing(self) -> None:
         coordinator = types.SimpleNamespace(
             config_entry=types.SimpleNamespace(entry_id="entry-1"),
-            data=RuntimeSnapshot(values={"collector_pn": "E5000025388419"}),
+            data=RuntimeSnapshot(values={"collector_pn": "E5000020000000"}),
             device_info_for_key=lambda key: {"scope": key},
         )
         description = MeasurementDescription(key="collector_pn", name="Collector PN", live=False)
