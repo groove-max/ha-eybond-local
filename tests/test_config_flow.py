@@ -2663,6 +2663,36 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(placeholders["model"], "SMG 6200")
         self.assertIn("Full support", placeholders["tier_headline"])
 
+    async def test_detection_summary_offers_cloud_assist_only_as_optional_menu(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._result_with_catalog_details(
+            {"kind": "family", "tier": "partial"}
+        )
+        flow._detection_summary_context = "auto"
+
+        # Default: cloud assist is not offered -> plain info form, no auto-pop.
+        plain = await flow.async_step_detection_summary()
+        self.assertEqual(plain["type"], "form")
+
+        # When it can be offered, it appears as an explicit choice, not before confirm.
+        flow._can_offer_smartess_cloud_assist = lambda _result: True
+        menu = await flow.async_step_detection_summary()
+        self.assertEqual(menu["type"], "menu")
+        self.assertEqual(menu["menu_options"], ["confirm", "smartess_cloud_assist"])
+
+    async def test_confirm_does_not_auto_pop_cloud_assist(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._result_with_catalog_details(
+            {"kind": "device", "tier": "full"}
+        )
+        flow._can_offer_smartess_cloud_assist = lambda _result: True
+
+        result = await flow.async_step_confirm()
+
+        # confirm shows its own form directly; cloud assist never interrupts it.
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "confirm")
+
     async def test_detection_summary_partial_tier_mentions_learning(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._result_with_catalog_details(

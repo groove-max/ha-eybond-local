@@ -1974,6 +1974,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     self._manual_config, self._manual_result
                 )
             return await self.async_step_confirm()
+
+        # Auto path: when SmartESS cloud assist can refine the identification,
+        # offer it here as an optional choice instead of forcing it on the user.
+        if self._detection_summary_context == "auto" and self._can_offer_smartess_cloud_assist(
+            self._detection_summary_result()
+        ):
+            self._smartess_cloud_assist_mode = "auto"
+            return self.async_show_menu(
+                step_id="detection_summary",
+                menu_options=["confirm", "smartess_cloud_assist"],
+                description_placeholders=self._detection_summary_placeholders(),
+            )
+
         return self.async_show_form(
             step_id="detection_summary",
             data_schema=vol.Schema({}),
@@ -2153,8 +2166,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        if user_input is None and self._selected_result is not None and self._can_offer_smartess_cloud_assist(self._selected_result):
-            return await self.async_step_smartess_cloud_assist_choice()
+        # Cloud assist is no longer an interstitial that auto-pops before the
+        # confirm form; it is an explicit choice on the detection summary.
         return await self._async_show_confirm_form(step_id="confirm", user_input=user_input)
 
     @_with_translation_bundle

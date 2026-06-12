@@ -98,7 +98,11 @@
       },
       "detection_summary": {
         "title": "Результат визначення",
-        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}"
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}",
+        "menu_options": {
+          "confirm": "Додати цей пристрій",
+          "smartess_cloud_assist": "Уточнити визначення через хмару SmartESS"
+        }
       },
       "collector_operation": {
         "title": "Режим роботи колектора",

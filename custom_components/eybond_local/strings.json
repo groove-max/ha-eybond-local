@@ -98,7 +98,11 @@
       },
       "detection_summary": {
         "title": "Detection result",
-        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}"
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}",
+        "menu_options": {
+          "confirm": "Add this device",
+          "smartess_cloud_assist": "Refine identification via SmartESS cloud"
+        }
       },
       "collector_operation": {
         "title": "Collector Operating Mode",

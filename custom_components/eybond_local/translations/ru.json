@@ -98,7 +98,11 @@
       },
       "detection_summary": {
         "title": "Результат определения",
-        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}"
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}",
+        "menu_options": {
+          "confirm": "Добавить это устройство",
+          "smartess_cloud_assist": "Уточнить определение через облако SmartESS"
+        }
       },
       "collector_operation": {
         "title": "Режим работы коллектора",
