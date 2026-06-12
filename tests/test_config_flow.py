@@ -5244,6 +5244,42 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("password", options._config_entry.data)
         self.assertNotIn("wizard_credentials", options._shadow_learning_state)
 
+    async def test_control_discovery_result_offers_apply_for_learned_reads_only(self) -> None:
+        # Read-learning closes the loop: when the session learned read sensors
+        # but no controls were selected, the result screen must still offer
+        # Apply (the schema overlay carrying the reads activates regardless).
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["overlay"] = {
+            "manifest": {"review_model": build_learned_control_review_model([])},
+            "profile_name": "learned/p.json",
+            "schema_name": "learned/s.json",
+            "generated_read_count": 4,
+        }
+
+        recorded: dict[str, Any] = {}
+
+        async def _fake_activate(*, profile_name, register_schema_name, selection=None):
+            recorded["called"] = True
+            recorded["selection"] = selection
+            return {"scope": "device", "profile_name": profile_name}
+
+        options._config_entry.runtime_data.async_activate_device_scoped_overlay = (
+            _fake_activate
+        )
+
+        shown = await options.async_step_shadow_learning_result()
+        self.assertEqual(shown["type"], "form")
+        # The reads-only body reports the learned read count.
+        self.assertIn("4", shown["description_placeholders"]["control_discovery_hint"])
+
+        done = await options.async_step_shadow_learning_result(
+            {"result_action": "activate_selected"}
+        )
+        # Activate is reachable with zero controls: the overlay schema (reads)
+        # was activated, and the confirmation mentions the read sensors.
+        self.assertTrue(recorded.get("called"))
+        self.assertIn("4", done["description_placeholders"]["control_discovery_hint"])
+
     async def test_control_discovery_result_activates_selected_controls(self) -> None:
         # EYB-REF-047 (closes F1): the guided result step must actually activate
         # exactly the controls the user selected on the review screen — not just

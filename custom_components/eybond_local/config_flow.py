@@ -6470,7 +6470,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         error_detail = self._control_discovery_error_detail()
         failed = self._control_discovery_failed() or bool(error_detail)
         selected_count = self._control_discovery_enabled_selection_count()
-        can_activate = bool(controls) and selected_count > 0
+        read_count = int(
+            dict(self._shadow_learning_state.get("overlay") or {}).get(
+                "generated_read_count"
+            )
+            or 0
+        )
+        # Learned read sensors are applied with the schema overlay regardless of
+        # control selection, so they make activation worthwhile on their own.
+        can_activate = (bool(controls) and selected_count > 0) or read_count > 0
 
         errors: dict[str, str] = {}
         notice = ""
@@ -6497,10 +6505,24 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 if error is None:
                     # Confirm and STAY on this screen -- applying must not bounce
                     # the user straight back to the menu.
-                    notice = self._tr(
-                        "common.dynamic.control_discovery_result_notice_applied",
-                        "✓ The selected control(s) were added to Home Assistant.",
-                    )
+                    if read_count > 0 and selected_count > 0:
+                        notice = self._tr(
+                            "common.dynamic.control_discovery_result_notice_applied_both",
+                            "✓ The selected controls and {read_count} read "
+                            "sensor(s) were added to Home Assistant.",
+                            {"read_count": str(read_count)},
+                        )
+                    elif read_count > 0:
+                        notice = self._tr(
+                            "common.dynamic.control_discovery_result_notice_applied_reads",
+                            "✓ {read_count} read sensor(s) were added to Home Assistant.",
+                            {"read_count": str(read_count)},
+                        )
+                    else:
+                        notice = self._tr(
+                            "common.dynamic.control_discovery_result_notice_applied",
+                            "✓ The selected control(s) were added to Home Assistant.",
+                        )
                 else:
                     errors["base"] = error
             elif action == CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT:
@@ -6583,6 +6605,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     "return to the menu."
                 )
             hint_placeholders = {"control_discovery_selected_count": str(selected_count)}
+        elif read_count > 0:
+            # No controls to review, but read sensors were learned: activation is
+            # still worthwhile, so offer Apply instead of a dead-end.
+            body_key = "common.dynamic.control_discovery_result_reads_only"
+            body_default = (
+                "Discovery finished and the temporary SmartESS connection is "
+                "closed. {control_discovery_read_count} read sensor(s) were "
+                "discovered. Apply them, download the support package, or return "
+                "to the menu."
+            )
+            hint_placeholders = {"control_discovery_read_count": str(read_count)}
         elif failed:
             body_key = "common.dynamic.control_discovery_result_failed"
             body_default = (
@@ -6608,6 +6641,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             hint_placeholders=hint_placeholders,
             extra=hint_placeholders,
         )
+        if controls and read_count > 0:
+            # Controls path already has its intro; note the learned reads too.
+            read_line = self._tr(
+                "common.dynamic.control_discovery_result_reads_note",
+                "Plus {control_discovery_read_count} read sensor(s) were "
+                "discovered and will be added on Apply.",
+                {"control_discovery_read_count": str(read_count)},
+            )
+            placeholders["control_discovery_hint"] = (
+                f"{placeholders.get('control_discovery_hint', '')}\n\n{read_line}"
+            )
         if notice:
             placeholders["control_discovery_hint"] = (
                 f"{notice}\n\n{placeholders.get('control_discovery_hint', '')}"
