@@ -1390,16 +1390,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         await self._async_ensure_network_defaults()
 
-        if user_input is not None:
-            connection_type = str(
-                user_input.get(
-                    CONF_CONNECTION_TYPE,
-                    self._auto_config.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND),
-                )
-            )
+        def _select_connection_type(connection_type: str) -> None:
             self._auto_config = {CONF_CONNECTION_TYPE: connection_type}
             if len(self._interface_options) == 1:
                 self._auto_config[CONF_SERVER_IP] = self._local_ip
+
+        if user_input is not None:
+            _select_connection_type(
+                str(
+                    user_input.get(
+                        CONF_CONNECTION_TYPE,
+                        self._auto_config.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND),
+                    )
+                )
+            )
+            return await self.async_step_collector_network()
+
+        supported = supported_connection_types()
+        if len(supported) == 1:
+            # One connection type: a welcome screen with a single-option
+            # dropdown asks nothing — go straight to network readiness.
+            _select_connection_type(str(supported[0]))
             return await self.async_step_collector_network()
 
         data_schema = vol.Schema(

@@ -172,7 +172,7 @@
         "sections": {
           "advanced_connection": {
             "name": "Advanced connection settings",
-            "description": "Port numbers, discovery, heartbeat tuning, and optional remote callback overrides. Leave the advertised callback fields empty for normal local setups.",
+            "description": "Only needed for remote, VPN, or NAT setups. For a normal home network the defaults are correct — you can leave everything here untouched.",
             "data": {
               "tcp_port": "Local TCP port",
               "advertised_server_ip": "Advertised callback IP",
@@ -184,12 +184,12 @@
             },
             "data_description": {
               "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
-              "advertised_server_ip": "IPv4 address announced inside set>server=. Leave empty to advertise the local listener IP above. Override this only for VPN, NAT, or public callback routing.",
-              "advertised_tcp_port": "TCP port announced inside set>server=. Leave empty to advertise the local TCP port above. Override this only when the forwarded external port differs from the local listener port.",
-              "udp_port": "UDP port used by collector discovery redirects. Default: 58899.",
+              "advertised_server_ip": "Public or forwarded IP the collector should call back to. Leave empty for normal home networks (the local address above is used).",
+              "advertised_tcp_port": "Forwarded external port for the callback. Leave empty unless your router forwards a different external port.",
+              "udp_port": "Port used to discover the collector on the network. Default: 58899 — change only if instructed.",
               "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
               "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
-              "heartbeat_interval": "How often to send keep-alive packets after the collector connects."
+              "heartbeat_interval": "How often Home Assistant pings the collector to keep the connection alive."
             }
           }
         }
@@ -295,7 +295,7 @@
         "sections": {
           "connection": {
             "name": "Connection settings",
-            "description": "Network transport settings, including optional remote callback overrides. Leave advertised callback fields empty for normal local setups.",
+            "description": "Only needed for remote, VPN, or NAT setups. For a normal home network the defaults are correct — you can leave everything here untouched.",
             "data": {
               "server_ip": "Local listener IP",
               "collector_ip": "Collector IP",
@@ -312,12 +312,12 @@
               "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener.",
               "collector_ip": "Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
               "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
-              "advertised_server_ip": "IPv4 address announced inside set>server=. Leave empty to advertise the local listener IP above.",
-              "advertised_tcp_port": "TCP port announced inside set>server=. Leave empty to advertise the local TCP port above.",
-              "udp_port": "UDP port used by collector discovery redirects. Default: 58899.",
+              "advertised_server_ip": "Public or forwarded IP the collector should call back to. Leave empty for normal home networks (the local address above is used).",
+              "advertised_tcp_port": "Forwarded external port for the callback. Leave empty unless your router forwards a different external port.",
+              "udp_port": "Port used to discover the collector on the network. Default: 58899 — change only if instructed.",
               "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
               "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
-              "heartbeat_interval": "Keep-alive interval after the collector connects.",
+              "heartbeat_interval": "How often Home Assistant pings the collector to keep the connection alive.",
               "driver_hint": "Auto-detect works for most inverters."
             }
           }

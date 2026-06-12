@@ -515,16 +515,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._scan_discovery_targets()[0].ip, "192.168.255.255")
         self.assertEqual(flow._deep_scan_plan()["network_cidr"], "192.168.0.0/16")
 
-    async def test_user_step_shows_connection_type_selector_only(self) -> None:
+    async def test_user_step_skips_welcome_for_single_connection_type(self) -> None:
         flow = self._make_flow()
 
         result = await flow.async_step_user()
 
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "user")
-        self.assertIn("connection_type", result["data_schema"].schema)
-        self.assertNotIn("server_ip", result["data_schema"].schema)
-        self.assertNotIn("setup_mode", result["data_schema"].schema)
+        # One supported connection type: no welcome form, straight to readiness.
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "collector_network")
+        self.assertEqual(flow._auto_config["connection_type"], "eybond")
 
     async def test_user_step_preloads_translation_bundle_via_executor(self) -> None:
         flow = self._make_flow()
@@ -535,27 +534,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "_load_translation_bundle",
             [getattr(func, "__name__", "") for func, _args in flow.hass.executor_job_calls],
         )
-
-    async def test_user_step_single_interface_welcome_hint_does_not_mention_interface(self) -> None:
-        flow = self._make_flow()
-
-        result = await flow.async_step_user()
-
-        self.assertNotIn("192.168.1.50", result["description_placeholders"]["welcome_hint"])
-        self.assertNotIn("wlan0", result["description_placeholders"]["welcome_hint"])
-
-    async def test_user_step_multi_interface_welcome_hint_does_not_mention_specific_interface(self) -> None:
-        flow = self._make_flow()
-        flow._interface_options = [
-            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
-            {"name": "wlan0", "ip": "192.168.2.50", "label": "wlan0 - 192.168.2.50"},
-        ]
-
-        result = await flow.async_step_user()
-
-        self.assertNotIn("192.168.1.50", result["description_placeholders"]["welcome_hint"])
-        self.assertNotIn("192.168.2.50", result["description_placeholders"]["welcome_hint"])
-        self.assertNotIn("wlan0", result["description_placeholders"]["welcome_hint"])
 
     async def test_user_step_routes_to_interface_selection_when_multiple_interfaces(self) -> None:
         flow = self._make_flow()
