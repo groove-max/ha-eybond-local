@@ -2,14 +2,8 @@
   "common": {
     "dynamic": {
       "action_create_support_package": "Create support archive",
-      "action_export_smartess_cloud_evidence": "Export SmartESS cloud evidence",
-      "action_create_smartess_smg_bridge": "Create SmartESS SMG bridge",
-      "action_create_smartess_draft": "Create SmartESS draft",
       "action_reload_local_metadata": "Reload local metadata",
       "action_rollback_local_metadata": "Rollback local metadata",
-      "action_create_profile_draft": "Create local profile draft",
-      "action_create_schema_draft": "Create local register schema draft",
-      "action_advanced_metadata": "Advanced metadata tools",
       "action_proxy_capture": "Collector traffic capture",
       "shadow_learning_action_refresh": "Refresh status",
       "shadow_learning_action_preflight": "Check readiness",

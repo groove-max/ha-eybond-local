@@ -2,14 +2,8 @@
   "common": {
     "dynamic": {
       "action_create_support_package": "Створити архів підтримки",
-      "action_export_smartess_cloud_evidence": "Експортувати хмарні дані SmartESS",
-      "action_create_smartess_smg_bridge": "Створити SmartESS bridge для SMG",
-      "action_create_smartess_draft": "Створити чернетку SmartESS",
       "action_reload_local_metadata": "Перезавантажити локальні метадані",
       "action_rollback_local_metadata": "Відкотити локальні метадані",
-      "action_create_profile_draft": "Створити локальну чернетку профілю",
-      "action_create_schema_draft": "Створити локальну чернетку схеми регістрів",
-      "action_advanced_metadata": "Розширені інструменти метаданих",
       "action_proxy_capture": "Захоплення трафіку колектора",
       "shadow_learning_action_refresh": "Оновити стан",
       "shadow_learning_action_preflight": "Перевірка готовності",

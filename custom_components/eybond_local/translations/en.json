@@ -272,6 +272,7 @@
         "description": "Choose what you want to manage for this entry.",
         "menu_options": {
           "runtime": "Connection and polling",
+          "shadow_learning": "Add controls (device learning)",
           "collector_wifi": "Change collector Wi-Fi",
           "diagnostics": "Diagnostics and service tools"
         }
@@ -341,23 +342,7 @@
           "create_support_package": "Create support archive",
           "reload_local_metadata": "Reload local metadata",
           "rollback_local_metadata": "Rollback local metadata",
-          "advanced_metadata": "Advanced metadata tools"
-        }
-      },
-      "advanced_metadata": {
-        "title": "Advanced Metadata Tools",
-        "description": "**Use this screen for draft generation and raw JSON export.**\n\n**Support status:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Internal runtime path:** {effective_owner_name} (`{effective_owner_key}`){smartess_family_line}\n\n| Metadata | Built-in | Source | Override |\n|---|---|---|---|\n| Profile | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Schema | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Suggested draft names:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Last cloud evidence:** {cloud_evidence_path}\n**Last profile draft:** {local_profile_draft_path}\n**Last schema draft:** {local_schema_draft_path}\n**Status:** {local_metadata_status}",
-        "menu_options": {
-          "export_smartess_cloud_evidence": "Export SmartESS cloud evidence",
-          "proxy_capture": "Collector traffic capture",
-          "create_smartess_smg_bridge": "Create SmartESS SMG bridge",
-          "create_smartess_draft": "Create SmartESS draft",
-          "create_profile_draft": "Create local profile draft",
-          "create_schema_draft": "Create local register schema draft",
-          "shadow_learning": "Add controls for this device",
-          "reload_local_metadata": "Reload local metadata",
-          "rollback_local_metadata": "Rollback local metadata",
-          "create_support_package": "Create support archive"
+          "proxy_capture": "Collector traffic capture"
         }
       },
       "shadow_learning": {
@@ -399,34 +384,6 @@
           "result_action": "What would you like to do?"
         }
       },
-      "shadow_learning_advanced": {
-        "title": "Add controls for this device",
-        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Readiness:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Evidence:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
-        "data": {
-          "shadow_learning_action": "Action",
-          "shadow_learning_mode": "Discovery mode",
-          "shadow_learning_field_ids": "Selected settings",
-          "shadow_learning_numeric_value": "Numeric test value",
-          "shadow_learning_max_fields": "Maximum settings",
-          "shadow_learning_include_numeric": "Include numeric settings",
-          "shadow_learning_enum_sweep": "Try all option values",
-          "username": "SmartESS username",
-          "password": "SmartESS password",
-          "shadow_learning_confirm_cloud_write": "Yes, briefly send test commands to this device to find its controls",
-          "shadow_learning_confirm_broad_sweep": "I reviewed the preview and confirm testing all option values and numeric settings"
-        },
-        "data_description": {
-          "shadow_learning_field_ids": "Comma-separated SmartESS setting IDs for the selected-settings mode. Leave empty to use all available settings for the selected mode.",
-          "shadow_learning_numeric_value": "Fallback numeric value for the numeric mode when no explicit hint is available.",
-          "shadow_learning_max_fields": "Hard cap on how many settings are included in preview/run.",
-          "shadow_learning_include_numeric": "Allows numeric settings in preview/run when supported by mode.",
-          "shadow_learning_enum_sweep": "Allows testing every option value instead of only one value per setting.",
-          "username": "Used only for the current control discovery action.",
-          "password": "Used only for the current control discovery action.",
-          "shadow_learning_confirm_cloud_write": "To find the controls, Home Assistant briefly sends test commands to this device through SmartESS. The device's settings are not changed.",
-          "shadow_learning_confirm_broad_sweep": "Required before testing all option values or numeric settings. Always preview first."
-        }
-      },
       "proxy_capture": {
         "title": "Collector Traffic Capture",
         "description": "**Status:** {proxy_capture_status_label}\n\n**Timer**\n{proxy_capture_timer_summary}\n\n**Next step**\n{proxy_capture_user_plan}\n\n**Last action**\n{proxy_capture_action_result}\n\n{proxy_capture_saved_result_section}",
@@ -457,70 +414,6 @@
       "rollback_local_metadata": {
         "title": "Rollback Local Metadata",
         "description": "The active managed local metadata override files below will be removed and the entry will be reloaded onto the built-in metadata again.\n\n| Detail | Value |\n|---|---|\n| Active override files | {rollback_target_count} |\n| Profile override | {rollback_profile_path} |\n| Schema override | {rollback_schema_path} |\n\nOnly the currently active overrides inside `/config/eybond_local/` are touched. Inactive drafts and cloud evidence are left unchanged."
-      },
-      "export_smartess_cloud_evidence": {
-        "title": "Export SmartESS Cloud Evidence",
-        "description": "The integration will authenticate against SmartESS cloud, resolve the device identity for collector `{collector_pn}`, and store a reusable cloud evidence bundle under `/config/eybond_local/cloud_evidence/`. Use this standalone step when you need the cloud evidence itself for Advanced metadata tools or for review without creating a support archive yet.\n\n**Last cloud evidence:** {cloud_evidence_path}",
-        "data": {
-          "username": "SmartESS username",
-          "password": "SmartESS password"
-        },
-        "data_description": {
-          "username": "The SmartESS account name used by the mobile app.",
-          "password": "The SmartESS account password. It is used only for this live export step."
-        }
-      },
-      "create_smartess_smg_bridge": {
-        "title": "Create SmartESS SMG Bridge",
-        "description": "A local SmartESS-backed SMG bridge draft will be generated from the latest matching cloud evidence without changing the active runtime owner.\n\n| Detail | Value |\n|---|---|\n| Bridge | {bridge_label} |\n| Reason | {reason} |\n| Matched controls | {matched_controls} |\n| Matched readbacks | {matched_readbacks} |\n| Blocked fields left unchanged | {blocked_fields} |\n| Unmapped cloud fields | {skipped_fields} |\n| Source profile | {source_profile} |\n| Source schema | {source_schema} |\n| Cloud evidence | {cloud_evidence_path} |\n| Profile override | {profile_override} |\n| Schema override | {schema_override} |",
-        "data": {
-          "output_profile": "Output profile file name",
-          "output_schema": "Output schema file path",
-          "overwrite": "Overwrite existing files"
-        },
-        "data_description": {
-          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
-          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
-          "overwrite": "Replace the files if they already exist."
-        }
-      },
-      "create_smartess_draft": {
-        "title": "Create SmartESS Draft",
-        "description": "A local SmartESS draft will be generated from the latest matching cloud evidence.\n\n| Detail | Value |\n|---|---|\n| Recognized family | {driver_label} |\n| Reason | {reason} |\n| Source profile | {source_profile} |\n| Source schema | {source_schema} |\n| Cloud evidence | {cloud_evidence_path} |\n| Profile override | {profile_override} |\n| Schema override | {schema_override} |",
-        "data": {
-          "output_profile": "Output profile file name",
-          "output_schema": "Output schema file path",
-          "overwrite": "Overwrite existing files"
-        },
-        "data_description": {
-          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
-          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
-          "overwrite": "Replace the files if they already exist."
-        }
-      },
-      "create_profile_draft": {
-        "title": "Create Local Profile Draft",
-        "description": "A local experimental profile will be created under `/config/eybond_local/profiles/`.\n\n| Detail | Value |\n|---|---|\n| Source profile | {source_profile} |\n| Suggested name | {suggested_output} |\n| Current override | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_profile": "Output profile file name",
-          "overwrite": "Overwrite existing file"
-        },
-        "data_description": {
-          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
-          "overwrite": "Replace the file if it already exists."
-        }
-      },
-      "create_schema_draft": {
-        "title": "Create Local Register Schema Draft",
-        "description": "A local experimental register schema will be created under `/config/eybond_local/register_schemas/`.\n\n| Detail | Value |\n|---|---|\n| Source schema | {source_schema} |\n| Suggested name | {suggested_output} |\n| Current override | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_schema": "Output schema file path",
-          "overwrite": "Overwrite existing file"
-        },
-        "data_description": {
-          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
-          "overwrite": "Replace the file if it already exists."
-        }
       },
       "diagnostics_result": {
         "title": "Diagnostics Result",

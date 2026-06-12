@@ -40,7 +40,7 @@ _LEARNED_CAPABILITY_GROUP_KEY = "config"
 # then set it back to False and re-scan. WARNING while it is True: activating the overlay
 # creates duplicate entities -- a learned control alongside the built-in one for the same
 # register -- so it is for validation only, not normal use.
-_EMIT_BUILTIN_DUPLICATE_CONTROLS = True
+_EMIT_BUILTIN_DUPLICATE_CONTROLS = False
 
 _ACTION_KEYWORDS = (
     "reset",

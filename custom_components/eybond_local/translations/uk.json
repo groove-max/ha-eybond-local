@@ -272,6 +272,7 @@
         "description": "Виберіть, чим саме ви хочете керувати для цього запису.",
         "menu_options": {
           "runtime": "Підключення та опитування",
+          "shadow_learning": "Додати керування (навчання пристрою)",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "diagnostics": "Діагностика та сервісні інструменти"
         }
@@ -341,23 +342,7 @@
           "create_support_package": "Створити архів підтримки",
           "reload_local_metadata": "Перезавантажити локальні метадані",
           "rollback_local_metadata": "Відкотити локальні метадані",
-          "advanced_metadata": "Розширені інструменти метаданих"
-        }
-      },
-      "advanced_metadata": {
-        "title": "Розширені інструменти метаданих",
-        "description": "**Цей екран призначений для створення чернеток і сирого JSON-експорту.**\n\n**Статус підтримки:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Внутрішній runtime-шлях:** {effective_owner_name} (`{effective_owner_key}`){smartess_family_line}\n\n| Метадані | Вбудовані | Джерело | Перевизначення |\n|---|---|---|---|\n| Профіль | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Схема | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Запропоновані назви чернеток:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Останні хмарні дані:** {cloud_evidence_path}\n**Остання чернетка профілю:** {local_profile_draft_path}\n**Остання чернетка схеми:** {local_schema_draft_path}\n**Статус:** {local_metadata_status}",
-        "menu_options": {
-          "export_smartess_cloud_evidence": "Експортувати хмарні дані SmartESS",
-          "proxy_capture": "Захоплення трафіку колектора",
-          "create_smartess_smg_bridge": "Створити SmartESS bridge для SMG",
-          "create_smartess_draft": "Створити чернетку SmartESS",
-          "create_profile_draft": "Створити локальну чернетку профілю",
-          "create_schema_draft": "Створити локальну чернетку схеми регістрів",
-          "shadow_learning": "Додати елементи керування для цього пристрою",
-          "reload_local_metadata": "Перезавантажити локальні метадані",
-          "rollback_local_metadata": "Відкотити локальні метадані",
-          "create_support_package": "Створити архів підтримки"
+          "proxy_capture": "Захоплення трафіку колектора"
         }
       },
       "shadow_learning": {
@@ -399,34 +384,6 @@
           "result_action": "Що ви хочете зробити?"
         }
       },
-      "shadow_learning_advanced": {
-        "title": "Додати елементи керування для цього пристрою",
-        "description": "{shadow_learning_warning}\n\n**Status:** {shadow_learning_status}\n**Readiness:** {shadow_learning_preflight}\n**Session:** {shadow_learning_session_state}\n**Evidence:** {shadow_learning_trace_path}\n\n| Result | Value |\n|---|---|\n| Planned actions | {shadow_learning_plan_count} |\n| Controls found | {shadow_learning_found_controls} |\n| Actions found | {shadow_learning_found_actions} |\n| Destructive controls | {shadow_learning_found_destructive} |\n| Unmatched fields | {shadow_learning_unmatched_fields} |\n| Overlay profile | {shadow_learning_overlay_profile_path} |\n| Overlay schema | {shadow_learning_overlay_schema_path} |\n| Support package | {shadow_learning_support_package_path} |\n| Overlay active | {shadow_learning_activation_status} |\n| Activation scope | {shadow_learning_activation_scope} |",
-        "data": {
-          "shadow_learning_action": "Дія",
-          "shadow_learning_mode": "Режим виявлення",
-          "shadow_learning_field_ids": "Вибрані налаштування",
-          "shadow_learning_numeric_value": "Числове тестове значення",
-          "shadow_learning_max_fields": "Максимум налаштувань",
-          "shadow_learning_include_numeric": "Включити числові налаштування",
-          "shadow_learning_enum_sweep": "Пробувати всі значення параметрів",
-          "username": "Ім'я користувача SmartESS",
-          "password": "Пароль SmartESS",
-          "shadow_learning_confirm_cloud_write": "Так, ненадовго надсилати на цей пристрій тестові команди, щоб знайти його елементи керування",
-          "shadow_learning_confirm_broad_sweep": "Я переглянув план і підтверджую перевірку всіх значень параметрів і числових налаштувань"
-        },
-        "data_description": {
-          "shadow_learning_field_ids": "Список ідентифікаторів налаштувань SmartESS через кому для режиму вибраних налаштувань.",
-          "shadow_learning_numeric_value": "Резервне число для числового режиму, якщо немає явної підказки.",
-          "shadow_learning_max_fields": "Жорсткий ліміт кількості налаштувань для попереднього перегляду/запуску.",
-          "shadow_learning_include_numeric": "Дозволяє числові налаштування у попередньому перегляді/запуску.",
-          "shadow_learning_enum_sweep": "Пробує всі значення параметрів, а не одне значення на налаштування.",
-          "username": "Використовується лише для поточного виявлення елементів керування.",
-          "password": "Використовується лише для поточного виявлення елементів керування.",
-          "shadow_learning_confirm_cloud_write": "Щоб знайти елементи керування, Home Assistant ненадовго надсилає на цей пристрій тестові команди через SmartESS. Налаштування пристрою не змінюються.",
-          "shadow_learning_confirm_broad_sweep": "Обов'язково перед перевіркою всіх значень параметрів або числових налаштувань. Спочатку зробіть попередній перегляд."
-        }
-      },
       "proxy_capture": {
         "title": "Захоплення трафіку колектора",
         "description": "**Статус:** {proxy_capture_status_label}\n\n**Таймер**\n{proxy_capture_timer_summary}\n\n**Що буде далі**\n{proxy_capture_user_plan}\n\n**Остання дія**\n{proxy_capture_action_result}\n\n{proxy_capture_saved_result_section}",
@@ -457,70 +414,6 @@
       "rollback_local_metadata": {
         "title": "Відкат локальних метаданих",
         "description": "Наведені нижче активні керовані файли локального перевизначення буде видалено, після чого запис знову завантажиться на вбудованих метаданих.\n\n| Деталь | Значення |\n|---|---|\n| Активних файлів перевизначення | {rollback_target_count} |\n| Перевизначення профілю | {rollback_profile_path} |\n| Перевизначення схеми | {rollback_schema_path} |\n\nБуде змінено лише поточні активні перевизначення всередині `/config/eybond_local/`. Неактивні чернетки та cloud evidence залишаться без змін."
-      },
-      "export_smartess_cloud_evidence": {
-        "title": "Експортувати хмарні дані SmartESS",
-        "description": "Інтеграція виконає вхід у хмару SmartESS, визначить ідентичність пристрою для колектора `{collector_pn}` і збереже повторно використовуваний пакет cloud evidence у `/config/eybond_local/cloud_evidence/`. Використовуйте цей окремий крок, коли самі cloud evidence потрібні для розширених інструментів метаданих або для перегляду без створення архіву підтримки.\n\n**Останні хмарні дані:** {cloud_evidence_path}",
-        "data": {
-          "username": "Ім'я користувача SmartESS",
-          "password": "Пароль SmartESS"
-        },
-        "data_description": {
-          "username": "Назва облікового запису SmartESS, що використовується в мобільному застосунку.",
-          "password": "Пароль облікового запису SmartESS. Він використовується лише для цього кроку живого експорту."
-        }
-      },
-      "create_smartess_smg_bridge": {
-        "title": "Створити SmartESS Bridge Для SMG",
-        "description": "Буде згенеровано локальний SmartESS-backed SMG bridge draft на основі останніх відповідних хмарних даних без зміни активного runtime owner.\n\n| Деталь | Значення |\n|---|---|\n| Bridge | {bridge_label} |\n| Причина | {reason} |\n| Збіглі controls | {matched_controls} |\n| Збіглі readback | {matched_readbacks} |\n| Заблоковані поля без змін | {blocked_fields} |\n| Невідображені cloud fields | {skipped_fields} |\n| Вихідний профіль | {source_profile} |\n| Вихідна схема | {source_schema} |\n| Хмарні дані | {cloud_evidence_path} |\n| Перевизначення профілю | {profile_override} |\n| Перевизначення схеми | {schema_override} |",
-        "data": {
-          "output_profile": "Назва вихідного файла профілю",
-          "output_schema": "Шлях до вихідного файла схеми",
-          "overwrite": "Перезаписати наявні файли"
-        },
-        "data_description": {
-          "output_profile": "Залиште без змін, щоб автоматично перевизначити вбудований профіль після перезавантаження.",
-          "output_schema": "Залиште без змін, щоб автоматично перевизначити вбудовану схему після перезавантаження.",
-          "overwrite": "Замінити файли, якщо вони вже існують."
-        }
-      },
-      "create_smartess_draft": {
-        "title": "Створити чернетку SmartESS",
-        "description": "Локальну чернетку SmartESS буде згенеровано з останніх відповідних хмарних даних.\n\n| Деталь | Значення |\n|---|---|\n| Розпізнане сімейство | {driver_label} |\n| Причина | {reason} |\n| Вихідний профіль | {source_profile} |\n| Вихідна схема | {source_schema} |\n| Хмарні дані | {cloud_evidence_path} |\n| Перевизначення профілю | {profile_override} |\n| Перевизначення схеми | {schema_override} |",
-        "data": {
-          "output_profile": "Назва вихідного файла профілю",
-          "output_schema": "Шлях до вихідного файла схеми",
-          "overwrite": "Перезаписати наявні файли"
-        },
-        "data_description": {
-          "output_profile": "Залиште без змін, щоб автоматично перевизначити вбудований профіль після перезавантаження.",
-          "output_schema": "Залиште без змін, щоб автоматично перевизначити вбудовану схему після перезавантаження.",
-          "overwrite": "Замінити файли, якщо вони вже існують."
-        }
-      },
-      "create_profile_draft": {
-        "title": "Створити локальну чернетку профілю",
-        "description": "Локальний експериментальний профіль буде створено в `/config/eybond_local/profiles/`.\n\n| Деталь | Значення |\n|---|---|\n| Вихідний профіль | {source_profile} |\n| Запропонована назва | {suggested_output} |\n| Поточне перевизначення | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_profile": "Назва вихідного файла профілю",
-          "overwrite": "Перезаписати наявний файл"
-        },
-        "data_description": {
-          "output_profile": "Залиште без змін, щоб автоматично перевизначити вбудований профіль після перезавантаження.",
-          "overwrite": "Замінити файл, якщо він уже існує."
-        }
-      },
-      "create_schema_draft": {
-        "title": "Створити локальну чернетку схеми регістрів",
-        "description": "Локальна експериментальна схема регістрів буде створена в `/config/eybond_local/register_schemas/`.\n\n| Деталь | Значення |\n|---|---|\n| Вихідна схема | {source_schema} |\n| Запропонована назва | {suggested_output} |\n| Поточне перевизначення | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_schema": "Шлях до вихідного файла схеми",
-          "overwrite": "Перезаписати наявний файл"
-        },
-        "data_description": {
-          "output_schema": "Залиште без змін, щоб автоматично перевизначити вбудовану схему після перезавантаження.",
-          "overwrite": "Замінити файл, якщо він уже існує."
-        }
       },
       "diagnostics_result": {
         "title": "Результат діагностики",
