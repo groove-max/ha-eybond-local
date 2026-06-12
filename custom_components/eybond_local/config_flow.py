@@ -165,6 +165,7 @@ from .smartess_cloud import classify_smartess_cloud_error
 from .smartess_cloud import (
     DEFAULT_LEARN_NUMERIC_VALUE,
     SessionCredentials,
+    build_device_detail_action,
     build_device_settings_action,
     build_learn_settings_plan,
     fetch_device_bundle_for_collector,
@@ -174,6 +175,7 @@ from .smartess_cloud import (
 from .support.cloud_evidence import fetch_and_export_smartess_device_bundle_cloud_evidence
 from .support.cloud_evidence import load_latest_cloud_evidence
 from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
+from .support.read_learning_binder import bind_cloud_labels_to_registers
 from .support.shadow_learning_orchestrator import (
     async_orchestrate_shadow_learning_settings,
     orchestrate_shadow_learning_settings,
@@ -6033,12 +6035,25 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._set_control_discovery_progress(0.88, "building")
         correlation = result.get("correlation")
         read_map = result.get("read_map")
+        read_bindings: dict[str, Any] | None = None
+        if isinstance(read_map, dict) and read_map.get("registers"):
+            # The cloud rendered its labeled "last data" FROM our seed register
+            # bank during this session, so value correlation is structurally
+            # aligned. Failures here must never fail the discovery run.
+            read_bindings = await self._async_bind_session_read_labels(
+                cloud_session=cloud_session,
+                identity=identity,
+                read_map=read_map,
+            )
+            if read_bindings:
+                self._shadow_learning_state["read_bindings"] = read_bindings
         if isinstance(correlation, dict):
             await self._async_generate_control_discovery_overlay(
                 coordinator,
                 identity=identity,
                 correlation=correlation,
                 read_map=read_map if isinstance(read_map, dict) else None,
+                read_bindings=read_bindings,
             )
 
         # Success path: stop the session and restore the endpoint, then publish
@@ -6080,6 +6095,44 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             }
         return None
 
+    async def _async_bind_session_read_labels(
+        self,
+        *,
+        cloud_session: SessionCredentials,
+        identity: dict[str, Any],
+        read_map: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Correlate the cloud's labeled sensors against the session read map."""
+
+        registers = read_map.get("registers")
+        if not isinstance(registers, dict) or not registers:
+            return None
+        try:
+            envelope = await self.hass.async_add_executor_job(
+                lambda: fetch_signed_action(
+                    action=build_device_detail_action(
+                        pn=str(identity.get("pn") or ""),
+                        sn=str(identity.get("sn") or ""),
+                        devcode=int(identity.get("devcode") or 0),
+                        devaddr=int(identity.get("devaddr") or 1),
+                    ),
+                    session=cloud_session,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Read-label fetch failed during learning session: %s", exc)
+            return None
+        dat = envelope.dat if isinstance(envelope.dat, dict) else {}
+        pars = dat.get("pars") if isinstance(dat.get("pars"), dict) else {}
+        sensors: list[dict[str, Any]] = []
+        for items in pars.values():
+            if isinstance(items, list):
+                sensors.extend(item for item in items if isinstance(item, dict))
+        if not sensors:
+            return None
+        report = bind_cloud_labels_to_registers(sensors=sensors, registers=registers)
+        return report.to_json_dict()
+
     async def _async_generate_control_discovery_overlay(
         self,
         coordinator,
@@ -6087,6 +6140,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         identity: dict[str, Any],
         correlation: dict[str, Any],
         read_map: dict[str, Any] | None = None,
+        read_bindings: dict[str, Any] | None = None,
     ) -> None:
         """Generate the inactive device-scoped overlay draft from correlation evidence."""
 
@@ -6111,6 +6165,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 session_manifest=session_manifest,
                 correlation=correlation,
                 read_map=read_map,
+                read_bindings=read_bindings,
                 overwrite=False,
             )
         )

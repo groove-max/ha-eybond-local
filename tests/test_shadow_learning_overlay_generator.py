@@ -174,6 +174,17 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                     "read_event_count": 158,
                     "value_source": "seed_bank",
                 },
+                read_bindings={
+                    "bindings": [
+                        {
+                            "cloud_id": "bt_eybond_read_28",
+                            "title": "Battery Voltage",
+                            "status": "unique",
+                            "candidates": [{"register": 215, "divisor": 10}],
+                        }
+                    ],
+                    "unique_count": 1,
+                },
             )
 
         read_map = result.manifest["read_map"]
@@ -181,6 +192,10 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         self.assertEqual(read_map["registers"]["205"], [2305])
         self.assertEqual(read_map["read_event_count"], 158)
         self.assertEqual(read_map["value_source"], "seed_bank")
+
+        read_bindings = result.manifest["read_bindings"]
+        self.assertEqual(read_bindings["unique_count"], 1)
+        self.assertEqual(read_bindings["bindings"][0]["title"], "Battery Voltage")
 
     def test_manifest_read_map_empty_when_session_had_no_reads(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -194,6 +209,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
             )
 
         self.assertEqual(result.manifest["read_map"], {})
+        self.assertEqual(result.manifest["read_bindings"], {})
 
     def test_generates_inactive_profile_and_schema_drafts_with_manifest_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

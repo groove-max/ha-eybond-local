@@ -77,6 +77,7 @@ def generate_shadow_learning_overlay_drafts(
     session_manifest: dict[str, Any],
     correlation: dict[str, Any],
     read_map: dict[str, Any] | None = None,
+    read_bindings: dict[str, Any] | None = None,
     output_profile_name: str | None = None,
     output_schema_name: str | None = None,
     overwrite: bool = False,
@@ -131,6 +132,9 @@ def generate_shadow_learning_overlay_drafts(
         # the session seed snapshot). Evidence for read-sensor learning and for
         # catalog contributions; not consumed by write capabilities.
         "read_map": _normalize_read_map(read_map),
+        # Cloud label ↔ register correlation verdicts (read-sensor evidence for
+        # the schema generator and for catalog contributions).
+        "read_bindings": read_bindings if isinstance(read_bindings, dict) else {},
         "learned_capabilities": list(learned_summary["generated"]),
         "skipped_duplicates": list(learned_summary["skipped"]),
         "review_model": review_model,

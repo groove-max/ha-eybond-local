@@ -1,0 +1,261 @@
+"""Bind cloud-labeled sensor values to local modbus registers by value correlation.
+
+During a learning session the cloud polls the shadow proxy, which answers every
+read from the synthetic SEED register bank. The cloud's labeled "last data"
+(``querySPDeviceLastData``) is therefore rendered FROM the very register values
+we hold — alignment between a labeled cloud value and the raw registers is
+structural, not temporal. That makes exact value correlation sound for every
+numeric quantity, including otherwise-volatile ones (currents, power): both
+sides describe the same frozen snapshot.
+
+What correlation alone cannot resolve:
+- zero/degenerate values (too many registers read 0) — recorded as skipped;
+- several registers legitimately holding the same value (e.g. output voltage,
+  inverter voltage and the rating register all 230.0 V) — recorded as
+  ambiguous WITH the candidate list, never guessed;
+- enum labels (the cloud sends a resolved string, not an int) — deferred to
+  the read-enum learner, recorded as ``enum_label``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+_SCALES = (1, 10, 100, 1000)
+
+METHOD_VALUE_CORRELATION = "value_correlation"
+
+BIND_STATUS_UNIQUE = "unique"
+BIND_STATUS_AMBIGUOUS = "ambiguous"
+BIND_STATUS_NO_MATCH = "no_match"
+BIND_STATUS_SKIPPED_ZERO = "skipped_zero"
+BIND_STATUS_ENUM_LABEL = "enum_label"
+BIND_STATUS_NOT_NUMERIC = "not_numeric"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadBindingCandidate:
+    """One register that can render the labeled cloud value."""
+
+    register: int
+    divisor: int
+    raw_value: int
+    signed: bool
+
+    def to_json_dict(self) -> dict[str, Any]:
+        return {
+            "register": self.register,
+            "divisor": self.divisor,
+            "raw_value": self.raw_value,
+            "signed": self.signed,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReadLabelBinding:
+    """The correlation verdict for one labeled cloud sensor."""
+
+    cloud_id: str
+    title: str
+    unit: str
+    cloud_value: str
+    status: str
+    candidates: tuple[ReadBindingCandidate, ...] = ()
+    decimals: int = 0
+    method: str = METHOD_VALUE_CORRELATION
+    value_source: str = "seed_bank"
+
+    @property
+    def register(self) -> int | None:
+        if self.status == BIND_STATUS_UNIQUE and self.candidates:
+            return self.candidates[0].register
+        return None
+
+    def to_json_dict(self) -> dict[str, Any]:
+        return {
+            "cloud_id": self.cloud_id,
+            "title": self.title,
+            "unit": self.unit,
+            "cloud_value": self.cloud_value,
+            "status": self.status,
+            "candidates": [candidate.to_json_dict() for candidate in self.candidates],
+            "decimals": self.decimals,
+            "method": self.method,
+            "value_source": self.value_source,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReadBindingReport:
+    """All correlation verdicts for one labeled sensor list."""
+
+    bindings: tuple[ReadLabelBinding, ...] = ()
+    register_count: int = 0
+    sensor_count: int = 0
+    notes: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def unique_bindings(self) -> tuple[ReadLabelBinding, ...]:
+        return tuple(b for b in self.bindings if b.status == BIND_STATUS_UNIQUE)
+
+    def to_json_dict(self) -> dict[str, Any]:
+        return {
+            "bindings": [binding.to_json_dict() for binding in self.bindings],
+            "register_count": self.register_count,
+            "sensor_count": self.sensor_count,
+            "unique_count": len(self.unique_bindings),
+            "notes": list(self.notes),
+        }
+
+
+def bind_cloud_labels_to_registers(
+    *,
+    sensors: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    registers: dict[Any, Any],
+) -> ReadBindingReport:
+    """Correlate labeled cloud sensors against a register→samples map.
+
+    ``sensors``: items shaped like the cloud ``device_detail`` entries
+    (``{"id", "par", "val", "unit"}``). ``registers``: the session read-map
+    ``registers`` dict (``{"205": [2305], ...}`` — keys may be str or int).
+    """
+
+    register_values = _normalize_registers(registers)
+    bindings: list[ReadLabelBinding] = []
+
+    for sensor in sensors:
+        if not isinstance(sensor, dict):
+            continue
+        cloud_id = str(sensor.get("id") or "")
+        title = str(sensor.get("par") or sensor.get("name") or "").strip()
+        unit = str(sensor.get("unit") or "").strip()
+        raw_value = str(sensor.get("val") if sensor.get("val") is not None else "").strip()
+        if not title:
+            continue
+
+        try:
+            target = float(raw_value)
+        except (TypeError, ValueError):
+            status = (
+                BIND_STATUS_ENUM_LABEL
+                if raw_value and not unit
+                else BIND_STATUS_NOT_NUMERIC
+            )
+            bindings.append(
+                ReadLabelBinding(
+                    cloud_id=cloud_id,
+                    title=title,
+                    unit=unit,
+                    cloud_value=raw_value,
+                    status=status,
+                )
+            )
+            continue
+
+        if target == 0:
+            bindings.append(
+                ReadLabelBinding(
+                    cloud_id=cloud_id,
+                    title=title,
+                    unit=unit,
+                    cloud_value=raw_value,
+                    status=BIND_STATUS_SKIPPED_ZERO,
+                )
+            )
+            continue
+
+        candidates = _match_candidates(target, register_values)
+        decimals = _decimals_from_text(raw_value)
+        if len(candidates) == 1:
+            status = BIND_STATUS_UNIQUE
+        elif candidates:
+            status = BIND_STATUS_AMBIGUOUS
+        else:
+            status = BIND_STATUS_NO_MATCH
+        bindings.append(
+            ReadLabelBinding(
+                cloud_id=cloud_id,
+                title=title,
+                unit=unit,
+                cloud_value=raw_value,
+                status=status,
+                candidates=tuple(candidates),
+                decimals=decimals,
+            )
+        )
+
+    return ReadBindingReport(
+        bindings=tuple(bindings),
+        register_count=len(register_values),
+        sensor_count=len(bindings),
+    )
+
+
+def _normalize_registers(registers: dict[Any, Any]) -> dict[int, tuple[int, ...]]:
+    normalized: dict[int, tuple[int, ...]] = {}
+    if not isinstance(registers, dict):
+        return normalized
+    for key, samples in registers.items():
+        try:
+            register = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(samples, (list, tuple)):
+            values = tuple(int(value) for value in samples if isinstance(value, int))
+        elif isinstance(samples, int):
+            values = (samples,)
+        else:
+            continue
+        if values:
+            normalized[register] = values
+    return normalized
+
+
+def _match_candidates(
+    target: float,
+    register_values: dict[int, tuple[int, ...]],
+) -> list[ReadBindingCandidate]:
+    """Exact-match candidates, smallest divisor preferred per register."""
+
+    best_per_register: dict[int, ReadBindingCandidate] = {}
+    for divisor in _SCALES:
+        scaled = target * divisor
+        rounded = round(scaled)
+        # The cloud renders values from these exact raw words: only exact
+        # reconstructions count (a half-LSB tolerance covers float formatting).
+        if abs(scaled - rounded) > 1e-6:
+            continue
+        for register, samples in register_values.items():
+            if register in best_per_register:
+                continue
+            for raw in samples:
+                if raw == rounded and rounded >= 0:
+                    best_per_register[register] = ReadBindingCandidate(
+                        register=register,
+                        divisor=divisor,
+                        raw_value=raw,
+                        signed=False,
+                    )
+                    break
+                if _to_signed_16(raw) == rounded and rounded < 0:
+                    best_per_register[register] = ReadBindingCandidate(
+                        register=register,
+                        divisor=divisor,
+                        raw_value=raw,
+                        signed=True,
+                    )
+                    break
+    return sorted(best_per_register.values(), key=lambda item: (item.divisor, item.register))
+
+
+def _to_signed_16(value: int) -> int:
+    return value - 0x10000 if value >= 0x8000 else value
+
+
+def _decimals_from_text(value: str) -> int:
+    text = str(value or "")
+    if "." not in text:
+        return 0
+    return len(text.rsplit(".", 1)[1].strip())
