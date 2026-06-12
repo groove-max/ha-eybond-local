@@ -1668,7 +1668,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 serial_number="55355535553555",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -1683,7 +1683,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(
             coordinator.config_entry.data["collector_pn"],
-            "Q0033482254531",
+            "Q0000000000001",
         )
         self.assertEqual(
             coordinator.config_entry.data["detected_model"],
@@ -1707,7 +1707,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(
             coordinator.config_entry.title,
-            "Collector PN Q0033482254531",
+            "Collector PN Q0000000000001",
         )
         self.assertEqual(len(updated_entries), 1)
 
@@ -1761,7 +1761,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 serial_number="55355535553555",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -1834,7 +1834,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -1920,7 +1920,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -1970,7 +1970,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-7",
             data={
                 "collector_ip": "192.168.1.14",
-                "collector_pn": "Q0033482254531",
+                "collector_pn": "Q0000000000001",
                 "detected_model": "",
                 "detected_serial": "",
                 "driver_hint": "modbus_smg",
@@ -1978,7 +1978,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 "server_ip": "192.168.1.104",
             },
             options={"driver_hint": "modbus_smg"},
-            title="Collector PN Q0033482254531",
+            title="Collector PN Q0000000000001",
         )
         coordinator.data = self.RuntimeSnapshot()
         coordinator._entity_platforms_initialized = False
@@ -1996,7 +1996,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2035,13 +2035,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-5",
             data={
                 "collector_ip": "192.168.1.14",
-                "collector_pn": "Q0033482254531",
+                "collector_pn": "Q0000000000001",
                 "detected_model": "PowMr 4.2kW",
                 "detected_serial": "55355535553555",
                 "server_ip": "192.168.1.104",
             },
             options={},
-            title="Collector PN Q0033482254531",
+            title="Collector PN Q0000000000001",
         )
         coordinator.data = self.RuntimeSnapshot()
         coordinator._entity_platforms_initialized = True
@@ -2055,7 +2055,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 serial_number="55355535553555",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2129,7 +2129,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-drift",
             data={
                 "collector_ip": "192.168.1.14",
-                "collector_pn": "Q0033482254531",
+                "collector_pn": "Q0000000000001",
                 "detected_model": "SMG 6200",
                 "detected_serial": "SMG-123",
                 "detection_confidence": "high",
@@ -2148,7 +2148,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     "generated_at": "2026-06-01T00:00:00+00:00",
                 }
             },
-            title="Collector PN Q0033482254531",
+            title="Collector PN Q0000000000001",
         )
         coordinator.data = self.RuntimeSnapshot(
             inverter=types.SimpleNamespace(
@@ -2174,7 +2174,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2215,7 +2215,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-upgrade-first-runtime-signature",
             data={
                 "collector_ip": "192.168.1.14",
-                "collector_pn": "Q0033482254531",
+                "collector_pn": "Q0000000000001",
                 "detected_model": "SMG 6200",
                 "detected_serial": "SMG-123",
                 "detection_confidence": "high",
@@ -2223,7 +2223,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 "driver_hint": "modbus_smg",
             },
             options={},
-            title="Collector PN Q0033482254531",
+            title="Collector PN Q0000000000001",
         )
         coordinator.data = self.RuntimeSnapshot(
             inverter=types.SimpleNamespace(
@@ -2250,7 +2250,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2326,7 +2326,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-same",
             data={
                 "collector_ip": "192.168.1.14",
-                "collector_pn": "Q0033482254531",
+                "collector_pn": "Q0000000000001",
                 "detected_model": "SMG 6200",
                 "detected_serial": "SMG-123",
                 "detection_confidence": "high",
@@ -2345,7 +2345,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     "generated_at": "2026-06-01T00:00:00+00:00",
                 }
             },
-            title="Collector PN Q0033482254531",
+            title="Collector PN Q0000000000001",
         )
         coordinator.data = self.RuntimeSnapshot(
             inverter=types.SimpleNamespace(
@@ -2371,7 +2371,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
             ),
             collector=types.SimpleNamespace(
-                collector_pn="Q0033482254531",
+                collector_pn="Q0000000000001",
                 profile_name="EyeBond ASCII PN v1",
                 smartess_protocol_name="changed-hint-only",
                 smartess_protocol_asset_name="changed-hint-only",

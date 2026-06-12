@@ -45,7 +45,7 @@ class CollectorParameterRegistryTests(unittest.TestCase):
     def test_query_runtime_collector_values_decodes_safe_metadata_set(self) -> None:
         transport = _FakeCollectorTransport(
             {
-                (2, b"\x02"): b"\x00\x02Q0033482254531",
+                (2, b"\x02"): b"\x00\x02Q0000000000001",
                 (2, b"\x04"): b"\x00\x041.11",
                 (2, b"\x05"): b"\x00\x058.50.12.3",
                 (2, b"\x06"): b"\x00\x061.0",
@@ -63,7 +63,7 @@ class CollectorParameterRegistryTests(unittest.TestCase):
 
         values = asyncio.run(query_runtime_collector_values(SmartEssLocalSession(transport)))
 
-        self.assertEqual(values["collector_pn"], "Q0033482254531")
+        self.assertEqual(values["collector_pn"], "Q0000000000001")
         self.assertEqual(values["collector_protocol_version"], "1.11")
         self.assertEqual(values["smartess_collector_version"], "8.50.12.3")
         self.assertEqual(values["collector_hardware_version"], "1.0")

@@ -159,7 +159,7 @@ class SupportPackageTests(unittest.TestCase):
                 entry_id="entry456",
                 entry_title="PowMr 4.2kW",
                 connected=True,
-                collector={"collector_pn": "Q0033482254531"},
+                collector={"collector_pn": "Q0000000000001"},
                 inverter={
                     "driver_key": "pi30",
                     "model_name": "PowMr 4.2kW",

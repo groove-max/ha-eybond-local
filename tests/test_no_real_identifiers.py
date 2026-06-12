@@ -38,10 +38,11 @@ _ALLOWED_SYNTHETIC_TOKENS = {
     "A9999999999999",
     "A1234567890123",
     "Z9999999999999",
-    # Legacy fixture PN family, present since the initial public release and
-    # not tied to any device in the corpus.
-    "Q0033482254531",
-    "Q00334822545310001",
+    # Synthetic stand-in for the legacy Q-collector fixture family (the
+    # original fixture value turned out to be a REAL collector PN; scrubbed
+    # 2026-06-13).
+    "Q0000000000001",
+    "Q00000000000010001",
 }
 
 _PN_SHAPED = re.compile(r"\b[A-Za-z][0-9]{13,}\b")

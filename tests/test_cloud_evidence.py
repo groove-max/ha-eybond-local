@@ -66,9 +66,9 @@ class CloudEvidenceTests(unittest.TestCase):
                 source="smartess_cloud_probe",
                 payload={"request": {"command": "device-bundle"}},
                 entry_id="other-entry",
-                collector_pn="Q0033482254531",
-                pn="Q0033482254531",
-                sn="Q00334822545310001",
+                collector_pn="Q0000000000001",
+                pn="Q0000000000001",
+                sn="Q00000000000010001",
                 devcode=258,
                 devaddr=1,
             )
