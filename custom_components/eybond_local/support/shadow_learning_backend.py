@@ -826,7 +826,15 @@ def _snapshot_to_dict(snapshot: Any) -> dict[str, Any]:
 
 
 def _snapshot_is_valid(snapshot: dict[str, Any]) -> bool:
-    return bool(str(snapshot.get("profile_name") or "").strip() and str(snapshot.get("register_schema_name") or "").strip())
+    # Learning's whole purpose is the partial / unidentified tier, where the
+    # device binds a base register schema but NO controls profile by design
+    # (controls stay locked until learning discovers them — the
+    # family-default "writes locked" invariant). The snapshot is only a
+    # preflight sanity signal here (the live session consumes register_bank
+    # and command_responses, never this snapshot), so gate on the register
+    # schema alone: requiring profile_name would block exactly the devices
+    # learning exists to serve.
+    return bool(str(snapshot.get("register_schema_name") or "").strip())
 
 
 

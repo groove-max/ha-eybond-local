@@ -123,6 +123,38 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertIn("missing_register_seed", blockers)
         self.assertEqual(build_shadow_learning_preflight(seed).blockers, blockers)
 
+    def test_partial_tier_snapshot_without_profile_is_not_blocked(self) -> None:
+        # Partial / unidentified devices (the family-default tier learning
+        # targets) bind a base register schema but no controls profile. The
+        # preflight must NOT raise missing_effective_metadata_snapshot for them.
+        family_snapshot = EffectiveMetadataSnapshot(
+            effective_owner_key="modbus_smg",
+            effective_owner_name="Modbus SMG",
+            variant_key="default",
+            profile_name="",
+            register_schema_name="modbus_smg/base.json",
+            confidence="medium",
+            generation=1,
+            generated_at="2026-06-05T12:00:00+00:00",
+        )
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260605T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000025388419",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=family_snapshot,
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertNotIn("missing_effective_metadata_snapshot", blockers)
+        self.assertEqual(blockers, ())
+        self.assertTrue(build_shadow_learning_preflight(seed).can_start)
+
     def test_exception_mode_logs_write_without_mutating_register_bank(self) -> None:
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",
