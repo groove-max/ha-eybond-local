@@ -649,26 +649,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "bluetooth_setup")
 
-    async def test_collector_network_routes_to_scan_interface_when_collector_is_connected(self) -> None:
+    async def test_collector_network_auto_advances_to_scanning_with_one_interface(self) -> None:
         flow = self._make_flow()
+
+        async def _fake_scanning(user_input=None):
+            return {"type": "progress", "step_id": "scanning"}
+
+        flow.async_step_scanning = _fake_scanning
 
         menu_result = await flow.async_step_collector_network()
         result = await flow.async_step_auto()
 
         self.assertEqual(menu_result["type"], "menu")
         self.assertIn("auto", menu_result["menu_options"])
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "auto")
-
-    async def test_auto_step_routes_directly_to_manual_when_setup_mode_is_manual(self) -> None:
-        flow = self._make_flow()
-        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
-
-        result = await flow.async_step_auto({"server_ip": "192.168.1.50", CONF_SETUP_MODE: "manual"})
-
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(flow._auto_config["connection_type"], "eybond")
+        # One interface: the interface-picker form is skipped entirely.
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(result["step_id"], "scanning")
 
     async def test_user_step_routes_to_auto_when_one_interface(self) -> None:
         flow = self._make_flow()
@@ -680,41 +676,21 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._auto_config["connection_type"], "eybond")
         self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
 
-    async def test_auto_step_shows_setup_mode_selector(self) -> None:
-        flow = self._make_flow()
-        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
-
-        result = await flow.async_step_auto()
-
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "auto")
-        self.assertIn("setup_mode", result["data_schema"].schema)
-
-    async def test_auto_step_uses_localized_setup_mode_labels(self) -> None:
-        flow = self._make_flow()
-        flow.hass.config.language = "ru"
-        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
-
-        result = await flow.async_step_auto()
-
-        selector = result["data_schema"].schema["setup_mode"]
-        labels = [option["label"] for option in selector.config.kwargs["options"]]
-        self.assertIn("Запустить автопоиск", labels)
-        self.assertIn("Запустить глубокое сканирование", labels)
-        self.assertIn("Пропустить и перейти к ручной настройке", labels)
-        self.assertNotIn("Подключить коллектор к Wi-Fi через Bluetooth", labels)
-        self.assertNotIn("Auto scan first", labels)
-        self.assertNotIn("Manual setup now", labels)
-
     async def test_auto_step_uses_localized_interface_hint(self) -> None:
         flow = self._make_flow()
         flow.hass.config.language = "ru"
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
+        # Two interfaces => the picker form is shown (no auto-advance).
+        flow._interface_options = [
+            {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
+            {"name": "wlan0", "ip": "10.0.0.2", "label": "wlan0 - 10.0.0.2"},
+        ]
 
         result = await flow.async_step_auto()
 
+        self.assertEqual(result["type"], "form")
         hint = result["description_placeholders"]["interface_hint"]
-        self.assertIn("автоматически", hint)
+        self.assertIn("Выберите", hint)
         self.assertNotIn("Home Assistant will use", hint)
 
     async def test_auto_step_starts_scanning_when_setup_mode_is_auto(self) -> None:
@@ -744,22 +720,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "progress")
         self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
-
-    async def test_auto_step_routes_to_deep_scan_when_setup_mode_is_deep(self) -> None:
-        flow = self._make_flow()
-        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
-
-        result = await flow.async_step_auto(
-            {"server_ip": "192.168.1.50", CONF_SETUP_MODE: SETUP_MODE_DEEP_SCAN}
-        )
-
-        self.assertEqual(result["type"], "menu")
-        self.assertEqual(result["step_id"], "deep_scan")
-        self.assertIn("start_deep_scan", result["menu_options"])
-        self.assertEqual(result["description_placeholders"]["deep_scan_network"], "192.168.0.0/16")
-        self.assertEqual(result["description_placeholders"]["deep_scan_target_count"], "65533")
-        self.assertNotIn("deep_scan_duration", result["description_placeholders"])
-        self.assertIn("larger than /24", result["description_placeholders"]["deep_scan_warning"])
 
     async def test_bluetooth_setup_shows_capability_error_when_host_is_unavailable(self) -> None:
         flow = self._make_flow()
@@ -2068,6 +2028,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bluetooth_setup_runs_bootstrap_then_returns_to_scan_interface(self) -> None:
         flow = self._make_flow()
+        async def _fake_scanning(user_input=None):
+            return {"type": "progress", "step_id": "scanning"}
+
+        flow.async_step_scanning = _fake_scanning
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
 
         with patch(
@@ -2113,13 +2077,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             password="Secret123",
             ble_device=None,
         )
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "auto")
+        # One interface: provisioning returns to auto, which auto-advances to scan.
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(result["step_id"], "scanning")
 
     async def test_bluetooth_setup_accepts_hidden_wifi_name_with_single_custom_selector(
         self,
     ) -> None:
         flow = self._make_flow()
+        async def _fake_scanning(user_input=None):
+            return {"type": "progress", "step_id": "scanning"}
+
+        flow.async_step_scanning = _fake_scanning
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
 
         with patch(
@@ -2166,8 +2135,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             password="Secret123",
             ble_device=None,
         )
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "auto")
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(result["step_id"], "scanning")
 
     async def test_deep_scan_placeholders_do_not_expose_duration_estimates(self) -> None:
         flow = self._make_flow()
@@ -2204,7 +2173,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._auto_config["connection_type"], "eybond")
         self.assertEqual(flow._auto_config["server_ip"], "192.168.2.50")
 
-    async def test_scan_results_without_results_still_offers_manual(self) -> None:
+    async def test_scan_results_without_results_offers_advanced_setup(self) -> None:
         flow = self._make_flow()
         flow._autodetect_results = {}
         flow._scan_error = True
@@ -2213,31 +2182,38 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "scan_results")
-        self.assertEqual(result["menu_options"][:2], ["refresh_scan", "deep_scan"])
-        self.assertIn("deep_scan", result["menu_options"])
-        self.assertIn("refresh_scan", result["menu_options"])
-        self.assertIn("manual", result["menu_options"])
+        self.assertEqual(result["menu_options"], ["refresh_scan", "advanced_setup"])
         self.assertNotIn("choose", result["menu_options"])
 
-    async def test_scan_results_with_multiple_interfaces_offers_change_interface(self) -> None:
+    async def test_advanced_setup_submenu_exposes_deep_and_manual(self) -> None:
+        flow = self._make_flow()
+
+        result = await flow.async_step_advanced_setup()
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "advanced_setup")
+        self.assertIn("deep_scan", result["menu_options"])
+        self.assertIn("manual", result["menu_options"])
+        self.assertIn("refresh_scan", result["menu_options"])
+
+    async def test_advanced_setup_offers_change_interface_with_multiple(self) -> None:
         flow = self._make_flow()
         flow._interface_options = [
             {"name": "eth0", "ip": "192.168.1.50", "label": "eth0 - 192.168.1.50"},
             {"name": "wlan0", "ip": "192.168.2.50", "label": "wlan0 - 192.168.2.50"},
         ]
-        flow._autodetect_results = {}
 
-        result = await flow.async_step_scan_results()
+        result = await flow.async_step_advanced_setup()
 
         self.assertIn("change_scan_interface", result["menu_options"])
 
-    async def test_scan_results_after_deep_scan_hides_deep_scan_action(self) -> None:
+    async def test_scan_results_always_offers_advanced_setup(self) -> None:
         flow = self._make_flow()
         flow._scan_mode = SETUP_MODE_DEEP_SCAN
 
         result = await flow.async_step_scan_results()
 
-        self.assertIn("deep_scan", result["menu_options"])
+        self.assertIn("advanced_setup", result["menu_options"])
 
     async def test_scan_results_with_available_results_shows_menu(self) -> None:
         flow = self._make_flow()
@@ -2259,10 +2235,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "scan_results")
-        self.assertEqual(result["menu_options"][:2], ["choose", "refresh_scan"])
+        self.assertEqual(result["menu_options"], ["choose", "refresh_scan", "advanced_setup"])
         self.assertIn("scan_summary", result["description_placeholders"])
-        self.assertIn("choose", result["menu_options"])
-        self.assertIn("deep_scan", result["menu_options"])
 
     async def test_scan_results_udp_only_candidate_still_shows_choose(self) -> None:
         flow = self._make_flow()
@@ -3771,10 +3745,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         placeholders = flow._scan_results_placeholders()
 
         self.assertIn("Повторити сканування", placeholders["scan_next_hint"])
-        self.assertIn("Ручне налаштування", placeholders["scan_next_hint"])
+        self.assertIn("Ввести адресу вручну", placeholders["scan_next_hint"])
         self.assertNotIn("Запустити глибоке сканування", placeholders["scan_next_hint"])
         self.assertNotIn("Refresh scan", placeholders["scan_next_hint"])
-        self.assertNotIn("Manual setup", placeholders["scan_next_hint"])
+        self.assertNotIn("Enter address manually", placeholders["scan_next_hint"])
 
     async def test_scan_results_placeholders_surface_localized_smartess_pending_state(self) -> None:
         flow = self._make_flow()

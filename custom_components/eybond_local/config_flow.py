@@ -924,26 +924,6 @@ def _result_selector(result_options: dict[str, str]) -> SelectSelector:
     )
 
 
-def _setup_mode_selector(
-    auto_label: str,
-    deep_scan_label: str,
-    manual_label: str,
-) -> SelectSelector:
-    """Return a selector for choosing scan, deep scan, or manual setup."""
-
-    options = [
-        SelectOptionDict(value=SETUP_MODE_AUTO, label=auto_label),
-        SelectOptionDict(value=SETUP_MODE_DEEP_SCAN, label=deep_scan_label),
-        SelectOptionDict(value=SETUP_MODE_MANUAL, label=manual_label),
-    ]
-    return SelectSelector(
-        SelectSelectorConfig(
-            options=options,
-            mode=SelectSelectorMode.DROPDOWN,
-        )
-    )
-
-
 def _collector_network_status_selector(
     already_connected_label: str,
     needs_bluetooth_label: str,
@@ -1466,10 +1446,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             errors = {"base": "cannot_autodetect"}
             self._scan_error = False
 
+        single_interface = len(self._interface_options) == 1
+
+        def _start_auto_scan() -> ConfigFlowResult:
+            self._set_scan_mode(SETUP_MODE_AUTO)
+            self._reset_scan_progress()
+            return self.async_step_scanning()
+
         if user_input is not None:
-            setup_mode = str(user_input.get(CONF_SETUP_MODE, SETUP_MODE_AUTO) or SETUP_MODE_AUTO)
             effective = dict(user_input)
-            effective.pop(CONF_SETUP_MODE, None)
             effective.setdefault(CONF_SERVER_IP, self._local_ip)
             self._normalize_current_server_ip(effective)
             input_errors = self._validate_connection_inputs(
@@ -1480,36 +1465,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 errors.update(input_errors)
             else:
                 self._auto_config.update(effective)
-                if setup_mode == SETUP_MODE_MANUAL:
-                    self._manual_result = None
-                    self._set_selected_result(None)
-                    return await self.async_step_manual()
-                if setup_mode == SETUP_MODE_DEEP_SCAN:
-                    self._set_scan_mode(SETUP_MODE_DEEP_SCAN)
-                    return await self.async_step_deep_scan()
-                self._set_scan_mode(SETUP_MODE_AUTO)
-                self._reset_scan_progress()
-                return await self.async_step_scanning()
+                return await _start_auto_scan()
+        elif single_interface and not errors:
+            # One interface and nothing to ask: start scanning immediately so
+            # the happy path is Welcome -> (collector ready) -> results.
+            self._auto_config.setdefault(CONF_SERVER_IP, self._local_ip)
+            self._normalize_current_server_ip(self._auto_config)
+            return await _start_auto_scan()
 
         data_schema = vol.Schema(
-            {
-                **self._build_connection_fields_schema(
-                    self._current_connection_type(),
-                    fields=self._connection_branch().form_layout.auto_fields,
-                    values=self._auto_connection_defaults(),
-                ),
-                vol.Required(
-                    CONF_SETUP_MODE,
-                    default=SETUP_MODE_AUTO,
-                ): self._setup_mode_selector(),
-            }
+            self._build_connection_fields_schema(
+                self._current_connection_type(),
+                fields=self._connection_branch().form_layout.auto_fields,
+                values=self._auto_connection_defaults(),
+            )
         )
 
         return self.async_show_form(
             step_id="auto",
             data_schema=data_schema,
             errors=errors,
-            description_placeholders=self._auto_description_placeholders(len(self._interface_options) == 1),
+            description_placeholders=self._auto_description_placeholders(single_interface),
         )
 
     @_with_translation_bundle
@@ -1842,12 +1818,29 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if available_results:
             menu_options.append("choose")
         menu_options.append("refresh_scan")
-        menu_options.append("deep_scan")
+        menu_options.append("advanced_setup")
+        return self.async_show_menu(
+            step_id="scan_results",
+            menu_options=menu_options,
+            description_placeholders=self._scan_results_placeholders(),
+        )
+
+    # ---- step: advanced_setup (power-user fallbacks) ----
+
+    @_with_translation_bundle
+    async def async_step_advanced_setup(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Power-user fallbacks when auto-scan did not find the device."""
+
+        menu_options: list[str] = ["deep_scan"]
         if len(self._interface_options) > 1:
             menu_options.append("change_scan_interface")
         menu_options.append("manual")
+        menu_options.append("refresh_scan")
         return self.async_show_menu(
-            step_id="scan_results",
+            step_id="advanced_setup",
             menu_options=menu_options,
             description_placeholders=self._scan_results_placeholders(),
         )
@@ -2888,24 +2881,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 options=options,
                 mode=SelectSelectorMode.DROPDOWN,
             )
-        )
-
-    def _setup_mode_selector(self) -> SelectSelector:
-        """Return a selector for starting with scan, deep scan, or manual setup."""
-
-        return _setup_mode_selector(
-            self._tr(
-                "common.dynamic.setup_mode_auto",
-                "Start auto-scan",
-            ),
-            self._tr(
-                "common.dynamic.setup_mode_deep_scan",
-                "Run deep scan",
-            ),
-            self._tr(
-                "common.dynamic.setup_mode_manual",
-                "Skip to manual setup",
-            ),
         )
 
     def _collector_network_status_selector(self) -> SelectSelector:
@@ -4260,10 +4235,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return defaults
 
     def _scan_action_label(self, action: str, default: str) -> str:
-        return self._tr(
-            f"config.step.scan_results.menu_options.{action}",
-            default,
-        )
+        # deep_scan / change_scan_interface / manual moved under the
+        # advanced_setup submenu; resolve their labels from either step.
+        label = self._tr(f"config.step.scan_results.menu_options.{action}", "")
+        if not label:
+            label = self._tr(f"config.step.advanced_setup.menu_options.{action}", "")
+        return label or default
 
     def _manual_confirm_action_label(self, action: str, default: str) -> str:
         return self._tr(

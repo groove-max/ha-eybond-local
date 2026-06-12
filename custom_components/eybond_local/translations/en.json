@@ -30,14 +30,12 @@
       },
       "auto": {
         "title": "Choose Scan Interface",
-        "description": "Choose the Home Assistant interface below, then decide whether to start a quick auto-scan now, switch to a deeper full-network scan, or open manual setup.",
+        "description": "Choose the Home Assistant network interface (the one on the same subnet as your inverter), then start the scan.",
         "data": {
-          "server_ip": "Home Assistant interface",
-          "setup_mode": "Next step"
+          "server_ip": "Home Assistant interface"
         },
         "data_description": {
-          "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter.",
-          "setup_mode": "Start a quick auto-scan, switch to a deeper full-network scan, or skip straight to manual setup."
+          "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter."
         }
       },
       "bluetooth_setup": {
@@ -74,10 +72,8 @@
         "description": "**Scan interface:** {selected_scan_interface}\n\n{scan_summary}\n\n{candidate_list}\n\n{scan_next_hint}",
         "menu_options": {
           "choose": "Add detected device",
-          "deep_scan": "Run deep scan",
-          "change_scan_interface": "Change scan interface",
           "refresh_scan": "Refresh scan results",
-          "manual": "Manual setup"
+          "advanced_setup": "Device not found? Advanced setup"
         }
       },
       "change_scan_interface": {
@@ -222,6 +218,16 @@
           "manual_edit_settings": "Edit settings",
           "manual_smartess_cloud_assist": "Refine via SmartESS cloud",
           "manual_create_pending": "Save Pending Device"
+        }
+      },
+      "advanced_setup": {
+        "title": "Advanced setup",
+        "description": "Use these only if the automatic scan did not find your inverter.",
+        "menu_options": {
+          "deep_scan": "Deep scan (whole subnet)",
+          "change_scan_interface": "Change network interface",
+          "manual": "Enter address manually",
+          "refresh_scan": "Scan again"
         }
       }
     },
