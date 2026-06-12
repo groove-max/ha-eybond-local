@@ -104,26 +104,6 @@
           "smartess_cloud_assist": "Уточнити визначення через хмару SmartESS"
         }
       },
-      "collector_operation": {
-        "title": "Режим роботи колектора",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
-        "data": {
-          "collector_operation_mode": "Режим роботи колектора"
-        },
-        "data_description": {
-          "collector_operation_mode": "Хмарний застосунок + Home Assistant залишає поточну адресу сервера колектора без змін. Тільки Home Assistant змінює callback endpoint колектора на цей listener Home Assistant."
-        }
-      },
-      "collector_endpoint_confirm": {
-        "title": "Підтвердження зміни callback endpoint",
-        "description": "{collector_confirm_table}\n\n**Поточний сервер колектора:** `{current_collector_server_endpoint}`\n**Новий сервер Home Assistant:** `{target_collector_server_endpoint}`\n\n{collector_endpoint_originality_hint}\n\nПісля застосування зміни колектор буде відв'язаний від поточного callback-сервера. Поки немає 100% гарантії, що початковий endpoint однаковий для всіх моделей колекторів.\n\n**Остання помилка endpoint:** {collector_endpoint_last_error}",
-        "data": {
-          "confirm_collector_endpoint_risk": "Я записав поточний endpoint і приймаю ризик"
-        },
-        "data_description": {
-          "confirm_collector_endpoint_risk": "Обов'язково перед записом callback endpoint Home Assistant у колектор."
-        }
-      },
       "confirm": {
         "title": "Підтвердьте виявлення",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
@@ -251,9 +231,7 @@
       "ble_wifi_scan_failed": "Колектор знайдено через Bluetooth, але Home Assistant не зміг прочитати список Wi-Fi мереж. Найімовірніше, Bluetooth-зв'язок нестабільний: перемістіть колектор або Bluetooth-адаптер ближче чи розмістіть поруч із колектором ESPHome Bluetooth Proxy й спробуйте знову.",
       "ble_provision_failed": "Bluetooth-налаштування не завершилося успішно. Перевірте колектор, права доступу до адаптера та облікові дані Wi-Fi, потім спробуйте знову.",
       "invalid_selection": "Обраний результат виявлення більше недоступний.",
-      "collector_endpoint_read_failed": "Не вдалося прочитати поточний callback endpoint колектора.",
       "collector_endpoint_write_failed": "Не вдалося записати callback endpoint Home Assistant у колектор.",
-      "collector_endpoint_risk_not_confirmed": "Підтвердьте, що ви записали поточний endpoint, перш ніж продовжити.",
       "already_added_candidate": "Цей виявлений пристрій уже налаштовано і його не можна додати повторно.",
       "smartess_cloud_assist_failed": "SmartESS cloud assist не завершився. Дивіться пояснення вище та спробуйте ще раз.",
       "inverter_link_down": "Колектор відповідає, але зв'язок з інвертором відсутній (identity-регістри читаються нулями). Перевірте живлення інвертора та кабель колектора, потім повторіть сканування."

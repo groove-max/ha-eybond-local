@@ -104,26 +104,6 @@
           "smartess_cloud_assist": "Refine identification via SmartESS cloud"
         }
       },
-      "collector_operation": {
-        "title": "Collector Operating Mode",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
-        "data": {
-          "collector_operation_mode": "Collector operating mode"
-        },
-        "data_description": {
-          "collector_operation_mode": "Cloud app + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener."
-        }
-      },
-      "collector_endpoint_confirm": {
-        "title": "Confirm Collector Callback Change",
-        "description": "{collector_confirm_table}\n\n**Current collector server:** `{current_collector_server_endpoint}`\n**New Home Assistant server:** `{target_collector_server_endpoint}`\n\n{collector_endpoint_originality_hint}\n\nChanging this value detaches the collector from its current callback server after the collector applies the change. There is not yet a 100% guarantee that the original endpoint is identical for every collector model.\n\n**Last endpoint error:** {collector_endpoint_last_error}",
-        "data": {
-          "confirm_collector_endpoint_risk": "I recorded the current endpoint and accept the risk"
-        },
-        "data_description": {
-          "confirm_collector_endpoint_risk": "Required before EyeBond Local writes the Home Assistant callback endpoint to the collector."
-        }
-      },
       "confirm": {
         "title": "Confirm Detection",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
@@ -250,9 +230,7 @@
       "ble_wifi_password_invalid": "Enter the Wi-Fi password to send over Bluetooth.",
       "ble_wifi_scan_failed": "The collector was found over Bluetooth, but Home Assistant could not read its Wi-Fi network list. The Bluetooth link is likely unstable; move the collector or Bluetooth adapter closer, or place an ESPHome Bluetooth Proxy near the collector, and try again.",
       "ble_provision_failed": "Bluetooth provisioning did not complete successfully. Check the collector, adapter permissions, and Wi-Fi credentials, then try again.",
-      "collector_endpoint_read_failed": "Could not read the current collector callback endpoint.",
       "collector_endpoint_write_failed": "Could not write the Home Assistant callback endpoint to the collector.",
-      "collector_endpoint_risk_not_confirmed": "Confirm that you recorded the current endpoint before continuing.",
       "invalid_selection": "The selected detection result is no longer available.",
       "already_added_candidate": "This detected device is already configured and cannot be added again.",
       "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again.",

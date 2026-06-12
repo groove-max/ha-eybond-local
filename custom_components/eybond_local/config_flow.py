@@ -188,7 +188,6 @@ from .support.shadow_learning_review_model import (
 
 CONF_RESULT_KEY = "result_key"
 CONF_COLLECTOR_NETWORK_STATUS = "collector_network_status"
-CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK = "confirm_collector_endpoint_risk"
 CONF_COLLECTOR_WIFI_ACTION = "collector_wifi_action"
 CONF_CONFIRM_COLLECTOR_WIFI_APPLY = "confirm_collector_wifi_apply"
 CONF_SETUP_MODE = "setup_mode"
@@ -1371,7 +1370,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._collector_target_server_endpoint = ""
         self._collector_endpoint_error = ""
         self._collector_endpoint_bind_applied = False
-        self._pending_confirm_input: dict[str, Any] | None = None
         self._smartess_cloud_assist: _SmartEssCloudAssistState | None = None
         self._smartess_cloud_assist_mode = ""
         self._smartess_cloud_assist_last_error = ""
@@ -2062,102 +2060,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         else:
             model = self._result_label(result)
         return {"model": model, "tier_headline": headline, "tier_details": details}
-
-    # ---- step: collector_operation ----
-
-    @_with_translation_bundle
-    async def async_step_collector_operation(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        if self._selected_result is None:
-            return await self.async_step_auto()
-
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            mode = str(
-                user_input.get(CONF_COLLECTOR_OPERATION_MODE, DEFAULT_COLLECTOR_OPERATION_MODE)
-                or DEFAULT_COLLECTOR_OPERATION_MODE
-            )
-            if mode == COLLECTOR_OPERATION_SMARTESS_AND_HA:
-                self._collector_operation_mode = mode
-                return await self.async_step_confirm()
-            if mode == COLLECTOR_OPERATION_HA_ONLY:
-                self._collector_operation_mode = mode
-                self._reset_collector_endpoint_binding_state()
-                try:
-                    await self._async_bind_selected_collector_to_home_assistant()
-                except Exception as exc:
-                    self._collector_endpoint_error = _exception_detail(exc)
-                    errors["base"] = "collector_endpoint_write_failed"
-                else:
-                    self._collector_endpoint_bind_applied = True
-                    return await self.async_step_confirm()
-            if mode not in COLLECTOR_OPERATION_MODES:
-                errors[CONF_COLLECTOR_OPERATION_MODE] = "invalid_selection"
-
-        return self.async_show_form(
-            step_id="collector_operation",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_COLLECTOR_OPERATION_MODE,
-                        default=self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE,
-                    ): self._collector_operation_mode_selector(),
-                }
-            ),
-            errors=errors,
-            description_placeholders=self._collector_operation_placeholders(),
-        )
-
-    # ---- step: collector_endpoint_confirm ----
-
-    @_with_translation_bundle
-    async def async_step_collector_endpoint_confirm(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        if self._selected_result is None:
-            return await self.async_step_auto()
-
-        errors: dict[str, str] = {}
-        if not self._collector_current_server_endpoint and not self._collector_endpoint_error:
-            try:
-                self._collector_current_server_endpoint = await self._async_read_selected_collector_server_endpoint()
-            except Exception as exc:
-                self._collector_endpoint_error = _exception_detail(exc)
-                errors["base"] = "collector_endpoint_read_failed"
-
-        if user_input is not None and not errors:
-            if not bool(user_input.get(CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK)):
-                errors[CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK] = "collector_endpoint_risk_not_confirmed"
-            else:
-                try:
-                    await self._async_bind_selected_collector_to_home_assistant()
-                except Exception as exc:
-                    self._collector_endpoint_error = _exception_detail(exc)
-                    errors["base"] = "collector_endpoint_write_failed"
-                else:
-                    self._collector_endpoint_bind_applied = True
-                    if self._pending_confirm_input is not None:
-                        pending_confirm_input = self._pending_confirm_input
-                        self._pending_confirm_input = None
-                        return await self._async_create_entry_from_result(pending_confirm_input)
-                    return await self.async_step_confirm()
-
-        return self.async_show_form(
-            step_id="collector_endpoint_confirm",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK,
-                        default=False,
-                    ): BooleanSelector(),
-                }
-            ),
-            errors=errors,
-            description_placeholders=self._collector_endpoint_confirm_placeholders(),
-        )
 
     # ---- step: confirm ----
 
@@ -3169,7 +3071,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._collector_current_server_endpoint = ""
         self._collector_endpoint_error = ""
         self._collector_endpoint_bind_applied = False
-        self._pending_confirm_input = None
 
     def _bluetooth_setup_placeholders(self) -> dict[str, str]:
         return {
@@ -4436,23 +4337,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             "common.dynamic.collector_endpoint_custom_hint",
             "This endpoint does not look like the stock cloud address. Make sure you know how to restore it before continuing.",
         )
-
-    def _collector_endpoint_confirm_placeholders(self) -> dict[str, str]:
-        current_endpoint = self._collector_current_server_endpoint or self._tr(
-            "common.dynamic.unknown",
-            "Unknown",
-        )
-        target_endpoint = self._collector_target_server_endpoint or self._collector_callback_target_endpoint()
-        return {
-            **self._collector_operation_placeholders(),
-            "current_collector_server_endpoint": current_endpoint,
-            "target_collector_server_endpoint": target_endpoint,
-            "collector_endpoint_originality_hint": self._endpoint_originality_hint(
-                self._collector_current_server_endpoint
-            ),
-            "collector_endpoint_last_error": self._collector_endpoint_error
-            or self._tr("common.dynamic.none", "None"),
-        }
 
     def _auto_description_placeholders(self, single_interface: bool) -> dict[str, str]:
         if single_interface and self._interface_options:

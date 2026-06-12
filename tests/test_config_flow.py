@@ -228,7 +228,6 @@ from custom_components.eybond_local.config_flow import (
     CONF_COLLECTOR_NETWORK_STATUS,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_CONFIRM_COLLECTOR_WIFI_APPLY,
-    CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK,
     CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE,
     CONF_SETUP_MODE,
     CONF_WIFI_PASSWORD,
@@ -2723,110 +2722,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_detection_summary({})
 
         self.assertEqual(result["step_id"], "confirm")
-
-    async def test_collector_operation_smartess_and_ha_routes_to_confirm(self) -> None:
-        flow = self._make_flow()
-        flow._selected_result = OnboardingResult(
-            collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632511100118",
-                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
-            ),
-            connection_mode="known_ip",
-        )
-
-        result = await flow.async_step_collector_operation(
-            {CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_SMARTESS_AND_HA}
-        )
-
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "confirm")
-        self.assertEqual(flow._collector_operation_mode, COLLECTOR_OPERATION_SMARTESS_AND_HA)
-
-    async def test_collector_operation_ha_only_binds_silently_then_routes_to_confirm(self) -> None:
-        flow = self._make_flow()
-        flow._selected_result = OnboardingResult(
-            collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632511100118",
-                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
-            ),
-            connection_mode="known_ip",
-        )
-
-        with patch.object(
-            flow,
-            "_async_bind_selected_collector_to_home_assistant",
-            new=AsyncMock(),
-        ) as bind:
-            result = await flow.async_step_collector_operation(
-                {CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY}
-            )
-
-        bind.assert_awaited_once()
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "confirm")
-        self.assertEqual(flow._collector_operation_mode, COLLECTOR_OPERATION_HA_ONLY)
-        self.assertTrue(flow._collector_endpoint_bind_applied)
-
-    async def test_collector_endpoint_confirmation_requires_acknowledgement(self) -> None:
-        flow = self._make_flow()
-        flow._selected_result = OnboardingResult(
-            collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632511100118",
-                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
-            ),
-            connection_mode="known_ip",
-        )
-        flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-        flow._collector_original_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-
-        result = await flow.async_step_collector_endpoint_confirm(
-            {CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK: False}
-        )
-
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "collector_endpoint_confirm")
-        self.assertEqual(
-            result["errors"],
-            {CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK: "collector_endpoint_risk_not_confirmed"},
-        )
-
-    async def test_collector_endpoint_confirmation_binds_then_routes_to_confirm(self) -> None:
-        flow = self._make_flow()
-        flow._selected_result = OnboardingResult(
-            collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632511100118",
-                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
-            ),
-            connection_mode="known_ip",
-        )
-        flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-        flow._collector_original_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-
-        with patch.object(flow, "_async_bind_selected_collector_to_home_assistant", new=AsyncMock()) as bind:
-            result = await flow.async_step_collector_endpoint_confirm(
-                {CONF_CONFIRM_COLLECTOR_ENDPOINT_RISK: True}
-            )
-
-        bind.assert_awaited_once()
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "confirm")
-        self.assertTrue(flow._collector_endpoint_bind_applied)
 
     async def test_confirm_step_persists_poll_interval_in_entry_options(self) -> None:
         flow = self._make_flow()

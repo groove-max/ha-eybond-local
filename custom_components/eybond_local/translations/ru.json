@@ -104,26 +104,6 @@
           "smartess_cloud_assist": "Уточнить определение через облако SmartESS"
         }
       },
-      "collector_operation": {
-        "title": "Режим работы коллектора",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
-        "data": {
-          "collector_operation_mode": "Режим работы коллектора"
-        },
-        "data_description": {
-          "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant."
-        }
-      },
-      "collector_endpoint_confirm": {
-        "title": "Подтверждение смены callback endpoint",
-        "description": "{collector_confirm_table}\n\n**Текущий сервер коллектора:** `{current_collector_server_endpoint}`\n**Новый сервер Home Assistant:** `{target_collector_server_endpoint}`\n\n{collector_endpoint_originality_hint}\n\nПосле применения изменения коллектор будет отвязан от текущего callback-сервера. Пока нет 100% гарантии, что исходный endpoint одинаков для всех моделей коллекторов.\n\n**Последняя ошибка endpoint:** {collector_endpoint_last_error}",
-        "data": {
-          "confirm_collector_endpoint_risk": "Я записал текущий endpoint и принимаю риск"
-        },
-        "data_description": {
-          "confirm_collector_endpoint_risk": "Обязательно перед записью callback endpoint Home Assistant в коллектор."
-        }
-      },
       "confirm": {
         "title": "Подтвердите обнаружение",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
@@ -250,9 +230,7 @@
       "ble_wifi_password_invalid": "Укажите пароль Wi-Fi сети для передачи по Bluetooth.",
       "ble_wifi_scan_failed": "Коллектор найден по Bluetooth, но Home Assistant не смог прочитать список Wi-Fi сетей. Скорее всего, Bluetooth-связь нестабильна: переместите коллектор или Bluetooth-адаптер ближе либо разместите рядом с коллектором ESPHome Bluetooth Proxy и попробуйте снова.",
       "ble_provision_failed": "Bluetooth-настройка не завершилась успешно. Проверьте коллектор, права доступа к адаптеру и учётные данные Wi-Fi, затем попробуйте снова.",
-      "collector_endpoint_read_failed": "Не удалось прочитать текущий callback endpoint коллектора.",
       "collector_endpoint_write_failed": "Не удалось записать callback endpoint Home Assistant в коллектор.",
-      "collector_endpoint_risk_not_confirmed": "Подтвердите, что вы записали текущий endpoint, прежде чем продолжить.",
       "invalid_selection": "Выбранный результат обнаружения больше недоступен.",
       "already_added_candidate": "Это обнаруженное устройство уже настроено и не может быть добавлено повторно.",
       "smartess_cloud_assist_failed": "SmartESS cloud assist не завершился. Смотрите объяснение выше и попробуйте ещё раз.",
