@@ -1403,54 +1403,63 @@ class _SharedEybondListener:
 
 _LISTENERS: dict[tuple[str, int], _SharedEybondListener] = {}
 _LISTENERS_LOCK = asyncio.Lock()
+_WILDCARD_BIND_HOSTS = ("0.0.0.0", "")
+
+
+def _resolve_registered_listener(host: str, port: int) -> _SharedEybondListener | None:
+    """Return a registered listener that already serves ``host:port``.
+
+    A wildcard listener (bound on 0.0.0.0) accepts connections for every local
+    address, so a request for a specific host on the same port must REUSE it:
+    binding the specific address while the wildcard socket holds the port fails
+    with EADDRINUSE. The runtime binds its callback listener on 0.0.0.0 while
+    options-flow helpers historically ask for the entry's server IP — without
+    this fallback those helpers cannot run while the runtime is up (the
+    collector Wi-Fi change regression).
+    """
+
+    listener = _LISTENERS.get((host, int(port)))
+    if listener is not None:
+        return listener
+    if host not in _WILDCARD_BIND_HOSTS:
+        for wildcard in _WILDCARD_BIND_HOSTS:
+            listener = _LISTENERS.get((wildcard, int(port)))
+            if listener is not None:
+                return listener
+    return None
+
+
+async def _acquire_listener_locked(host: str, port: int) -> _SharedEybondListener:
+    """Get-or-create + acquire one shared listener. Caller holds _LISTENERS_LOCK."""
+
+    listener = _resolve_registered_listener(host, port)
+    if listener is None:
+        listener = _SharedEybondListener(host=host, port=port)
+        _LISTENERS[(host, int(port))] = listener
+    try:
+        await listener.acquire()
+    except Exception:
+        if listener._server is None and listener._ref_count == 0:
+            _LISTENERS.pop((listener._host, listener._port), None)
+        raise
+    return listener
 
 
 async def _acquire_shared_listener(host: str, port: int) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
-        key = (host, int(port))
-        listener = _LISTENERS.get(key)
-        if listener is None:
-            listener = _SharedEybondListener(host=host, port=port)
-            _LISTENERS[key] = listener
-        try:
-            await listener.acquire()
-        except Exception:
-            if listener._server is None and listener._ref_count == 0:
-                _LISTENERS.pop(key, None)
-            raise
-        return listener
+        return await _acquire_listener_locked(host, port)
 
 
 async def _acquire_shared_payload_listener(host: str, port: int, collector_ip: str) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
-        key = (host, int(port))
-        listener = _LISTENERS.get(key)
-        if listener is None:
-            listener = _SharedEybondListener(host=host, port=port)
-            _LISTENERS[key] = listener
-        try:
-            await listener.acquire()
-        except Exception:
-            if listener._server is None and listener._ref_count == 0:
-                _LISTENERS.pop(key, None)
-            raise
+        listener = await _acquire_listener_locked(host, port)
         listener.register_payload_owner(collector_ip)
         return listener
 
 
 async def _acquire_shared_at_listener(host: str, port: int, collector_ip: str) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
-        key = (host, int(port))
-        listener = _LISTENERS.get(key)
-        if listener is None:
-            listener = _SharedEybondListener(host=host, port=port)
-            _LISTENERS[key] = listener
-        try:
-            await listener.acquire()
-        except Exception:
-            if listener._server is None and listener._ref_count == 0:
-                _LISTENERS.pop(key, None)
-            raise
+        listener = await _acquire_listener_locked(host, port)
         listener.register_at_owner(collector_ip)
         return listener
 

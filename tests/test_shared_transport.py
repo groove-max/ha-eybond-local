@@ -154,6 +154,41 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await first.stop()
             await second.stop()
 
+    async def test_specific_host_request_reuses_wildcard_listener(self) -> None:
+        # The runtime binds its callback listener on 0.0.0.0; options-flow
+        # helpers (collector Wi-Fi change, restart) historically request the
+        # entry's server IP on the same port. The registry must hand back the
+        # wildcard listener instead of binding the specific address — that bind
+        # fails with EADDRINUSE while the wildcard socket holds the port
+        # (the "collector_listener_bind_failed ... address in use" regression).
+        port = _free_tcp_port()
+        runtime_like = SharedEybondTransport(
+            host="0.0.0.0",
+            port=port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="",
+        )
+        options_like = SharedEybondTransport(
+            host="127.0.0.1",
+            port=port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="",
+        )
+
+        await runtime_like.start()
+        try:
+            # Must NOT raise CollectorListenerBindError: the wildcard listener
+            # already serves this port.
+            await options_like.start()
+            self.assertIs(options_like._listener, runtime_like._listener)
+            self.assertEqual(len(_LISTENERS), 1)
+        finally:
+            await options_like.stop()
+            await runtime_like.stop()
+        self.assertEqual(len(_LISTENERS), 0)
+
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
         transport = SharedEybondTransport(
