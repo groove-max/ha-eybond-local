@@ -55,6 +55,12 @@ For deeper protocol notes and SMG-specific support details, see the [SMG Support
 
 Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support. Even unrecognized SMG-family models onboard with base sensors and can learn their controls.
 
+### No factory collector? Use the ESP EyeBond Collector bridge
+
+If your inverter has no factory SmartESS / EyeBond Wi-Fi collector, you can build a fully local one with the community **[ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector)** firmware. It turns an ESP8266/ESP32 wired to the inverter into a virtual EyeBond collector that is byte-for-byte compatible with this integration — discovery, sensors, controls, and the collector Wi-Fi settings all work the same way.
+
+The bridge is a purely local transparent link: it never talks to the SmartESS cloud. EyeBond Local detects it automatically and shows it as an **ESP EyeBond Collector** device, hiding the cloud-only actions (device learning / shadow learning, proxy capture, SmartESS cloud assist) that have nothing to talk to. Everything local — runtime settings, diagnostics, and changing the collector Wi-Fi — stays available.
+
 ---
 
 ## Installation

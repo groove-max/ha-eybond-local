@@ -80,6 +80,20 @@ Use it only when you are collecting extra evidence for diagnostics, support, or 
 
 For the full user guide, see [Collector Proxy Capture](PROXY_CAPTURE.md).
 
+## Virtual Bridge Collectors (ESP EyeBond Collector)
+
+EyeBond Local also works with the community **[ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector)** firmware — a local, transparent bridge that emulates an EyeBond collector on an ESP8266/ESP32 for inverters that have no factory collector.
+
+The integration recognizes such a bridge automatically. Detection is done with a single additive, read-only AT query, `AT+VDTU`: a bridge answers with a reply that starts with `esp-collector,` (plus its firmware version and capability flags), while a factory collector returns an error, an empty value, or a reply without that prefix. Detection never relies on the collector PN, devcode, or firmware-version string, and the query is safe to send to any collector.
+
+When a bridge is detected:
+
+- It is shown as an **ESP EyeBond Collector** device (honest manufacturer, model, and firmware version), instead of the generic `EyeBond Collector` / `Wi-Fi.DTU` identity.
+- **Cloud-only actions are hidden**, because the bridge has no SmartESS cloud side and nothing to talk to: device learning / shadow learning, proxy capture, and SmartESS cloud assist would all wait forever for cloud traffic that never comes.
+- **Local actions stay available**: runtime/connection settings, diagnostics, and **Change Collector Wi-Fi** all work normally — the bridge implements the real Wi-Fi parameter path.
+
+If `AT+VDTU` is never answered (older bridge firmware, a factory collector, or a missed query), the collector behaves exactly as before — nothing is hidden or restricted.
+
 ## When You Need Advanced Networking
 
 If Home Assistant and the collector are on the same LAN, you usually do not need any advanced networking options.

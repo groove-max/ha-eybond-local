@@ -251,7 +251,7 @@
     "step": {
       "init": {
         "title": "EyeBond Local Options",
-        "description": "Choose what you want to manage for this entry.",
+        "description": "Choose what you want to manage for this entry.{bridge_note}",
         "menu_options": {
           "runtime": "Connection and polling",
           "shadow_learning": "Add controls (device learning)",

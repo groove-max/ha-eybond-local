@@ -5252,14 +5252,50 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             values=values,
         )
 
+    def _collector_is_virtual_bridge(self) -> bool:
+        """Return True when the entry's collector is a detected virtual bridge.
+
+        Detection is positive-only: it reads the runtime snapshot's parsed
+        ``AT+VDTU`` verdict. When the coordinator/snapshot is unavailable (older
+        firmware, factory collector, or a missed query) this returns False, so
+        the menu behaves exactly as before — the gate only ever removes
+        cloud-only options, never adds restrictions to factory collectors.
+        """
+
+        coordinator = self._coordinator()
+        data = getattr(coordinator, "data", None)
+        collector = getattr(data, "collector", None)
+        if collector is not None and getattr(collector, "collector_virtual_bridge", False):
+            return True
+        values = getattr(data, "values", None)
+        if isinstance(values, dict):
+            return bool(values.get("collector_virtual_bridge"))
+        return False
+
     @_with_translation_bundle
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
+        is_bridge = self._collector_is_virtual_bridge()
+        menu_options = ["runtime", "shadow_learning", "collector_wifi", "diagnostics"]
+        bridge_note = ""
+        if is_bridge:
+            # A local bridge has no SmartESS cloud side, so cloud-only control
+            # discovery (shadow learning) is meaningless against it. Wi-Fi,
+            # runtime, and diagnostics stay — the bridge implements them.
+            menu_options = ["runtime", "collector_wifi", "diagnostics"]
+            bridge_note = self._tr(
+                "common.dynamic.collector_virtual_bridge_note",
+                "\n\nThis collector is a local ESP EyeBond Collector bridge with no "
+                "SmartESS cloud side. Cloud-only actions (control discovery / "
+                "shadow learning) are hidden; Wi-Fi and runtime settings remain "
+                "available.",
+            )
         return self.async_show_menu(
             step_id="init",
-            menu_options=["runtime", "shadow_learning", "collector_wifi", "diagnostics"],
+            menu_options=menu_options,
+            description_placeholders={"bridge_note": bridge_note},
         )
 
     @_with_translation_bundle

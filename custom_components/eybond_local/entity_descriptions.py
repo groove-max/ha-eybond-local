@@ -413,6 +413,22 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
         live=False,
     ),
     MeasurementDescription(
+        key="collector_bridge_version",
+        name="Collector Bridge Version",
+        icon="mdi:bridge",
+        diagnostic=True,
+        enabled_default=False,
+        live=False,
+    ),
+    MeasurementDescription(
+        key="collector_bridge_features",
+        name="Collector Bridge Features",
+        icon="mdi:format-list-bulleted",
+        diagnostic=True,
+        enabled_default=False,
+        live=False,
+    ),
+    MeasurementDescription(
         key="collector_operation_mode",
         name="Collector Operation Mode",
         translation_key="collector_operation_mode",

@@ -465,6 +465,10 @@ class CollectorInfo:
     smartess_protocol_profile_key: str = ""
     smartess_protocol_name: str = ""
     smartess_device_address: int | None = None
+    collector_virtual_bridge: bool = False
+    collector_bridge_kind: str = ""
+    collector_bridge_version: str = ""
+    collector_bridge_features: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

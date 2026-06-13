@@ -191,6 +191,7 @@
       "collector_wifi_action_apply": "Save Wi-Fi settings",
       "collector_wifi_refresh_done": "Collector Wi-Fi status has been refreshed.",
       "collector_wifi_apply_done": "The collector accepted the new Wi-Fi settings.",
+      "collector_virtual_bridge_note": "\n\nThis collector is a local ESP EyeBond Collector bridge with no SmartESS cloud side. Cloud-only actions (control discovery / shadow learning) are hidden; Wi-Fi and runtime settings remain available.",
       "collector_wifi_last_action_line": "**Last action:** {value}",
       "collector_wifi_last_error_line": "**Last error:** {value}",
       "collector_wifi_more_networks": "+ {count} more",

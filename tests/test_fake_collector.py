@@ -159,6 +159,32 @@ class FakeCollectorLibTests(unittest.TestCase):
         self.assertEqual(parsed.command, "CLDSRVHOST1")
         self.assertEqual(parsed.value, "192.168.1.50,18899,TCP")
 
+    def test_build_at_reply_vdtu_is_empty_for_default_factory_profile(self) -> None:
+        response = build_at_reply(
+            "VDTU",
+            profile=CollectorProfile(),
+            cloud_endpoint="",
+        )
+
+        parsed = parse_at_response(response)
+        self.assertEqual(parsed.command, "VDTU")
+        self.assertEqual(parsed.value, "")
+
+    def test_build_at_reply_vdtu_reflects_bridge_profile(self) -> None:
+        bridge_reply = (
+            "esp-collector,0.4.0;features=local_only,no_cloud,wifi_params;"
+            "uart=2400,8,1,NONE;spacing_ms=100;queue=4"
+        )
+        response = build_at_reply(
+            "VDTU",
+            profile=CollectorProfile(vdtu=bridge_reply),
+            cloud_endpoint="",
+        )
+
+        parsed = parse_at_response(response)
+        self.assertEqual(parsed.command, "VDTU")
+        self.assertEqual(parsed.value, bridge_reply)
+
     def test_modbus_smg_preset_uses_matching_transport_defaults(self) -> None:
         scenario = resolve_scenario(
             preset=PRESET_MODBUS_SMG_READONLY,

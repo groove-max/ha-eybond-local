@@ -5000,6 +5000,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         hw_version = str(values.get("collector_hardware_version") or "").strip()
         collector_type = str(values.get("collector_type") or "").strip()
 
+        manufacturer = "OEM / EyeBond"
+        configuration_url = ""
+        is_virtual_bridge = bool(getattr(collector, "collector_virtual_bridge", False))
+
         if collector is not None:
             if collector_type:
                 model = collector_type
@@ -5014,6 +5018,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         elif collector_type:
             model = collector_type
 
+        if is_virtual_bridge:
+            # A detected community bridge gets an honest identity instead of the
+            # generic factory "EyeBond Collector" / "Wi-Fi.DTU" model. It never
+            # talks to the SmartESS cloud, so its parsed semver is authoritative.
+            manufacturer = "ESP EyeBond Collector (community)"
+            model = "ESP EyeBond Collector"
+            bridge_version = str(getattr(collector, "collector_bridge_version", "") or "").strip()
+            if bridge_version:
+                sw_version = bridge_version
+            configuration_url = "https://github.com/groove-max/esp-eybond-collector"
+
         name = collector_display_name(
             collector_pn=serial_number,
             collector_ip=collector_ip,
@@ -5022,7 +5037,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         info: dict[str, object] = {
             "identifiers": {(DOMAIN, f"{self.config_entry.entry_id}:collector")},
             "name": name,
-            "manufacturer": "OEM / EyeBond",
+            "manufacturer": manufacturer,
             "model": model,
         }
         if serial_number:
@@ -5031,6 +5046,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             info["sw_version"] = sw_version
         if hw_version:
             info["hw_version"] = hw_version
+        if configuration_url:
+            info["configuration_url"] = configuration_url
         return DeviceInfo(**info)
 
     def inverter_device_info(self) -> DeviceInfo:

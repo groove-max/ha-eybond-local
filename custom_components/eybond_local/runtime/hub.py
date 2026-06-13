@@ -16,7 +16,7 @@ from ..const import (
     DRIVER_HINT_AUTO,
 )
 from ..connection.models import EybondConnectionSpec
-from ..collector.at_runtime import query_runtime_collector_at_values
+from ..collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
 from ..collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     inspect_collector_server_endpoint,
@@ -1353,6 +1353,12 @@ class EybondHub:
             )
             if collector_field_overrides.get("smartess_device_address") is not None:
                 collector.smartess_device_address = int(collector_field_overrides["smartess_device_address"])
+            if "collector_vdtu_raw" in collector_field_overrides:
+                bridge = parse_collector_vdtu(collector_field_overrides.get("collector_vdtu_raw"))
+                collector.collector_virtual_bridge = bridge.is_virtual_bridge
+                collector.collector_bridge_kind = bridge.kind
+                collector.collector_bridge_version = bridge.version
+                collector.collector_bridge_features = bridge.features
 
         if collector.remote_ip:
             values["collector_remote_ip"] = collector.remote_ip
@@ -1435,6 +1441,14 @@ class EybondHub:
             values["smartess_protocol_name"] = collector.smartess_protocol_name
         if collector.smartess_device_address is not None:
             values["smartess_device_address"] = collector.smartess_device_address
+        if collector.collector_virtual_bridge:
+            values["collector_virtual_bridge"] = True
+            if collector.collector_bridge_kind:
+                values["collector_bridge_kind"] = collector.collector_bridge_kind
+            if collector.collector_bridge_version:
+                values["collector_bridge_version"] = collector.collector_bridge_version
+            if collector.collector_bridge_features:
+                values["collector_bridge_features"] = ", ".join(collector.collector_bridge_features)
 
         if self._inverter is not None:
             values["driver_key"] = self._inverter.driver_key

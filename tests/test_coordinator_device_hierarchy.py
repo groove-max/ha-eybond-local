@@ -1628,6 +1628,43 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(info["name"], "Collector PN E50000200000000001")
         self.assertEqual(info["serial_number"], "E50000200000000001")
 
+    def test_collector_device_info_uses_honest_identity_for_virtual_bridge(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-bridge",
+            data={
+                "collector_pn": "E50000200000000001",
+                "collector_ip": "192.0.2.55",
+            },
+            options={},
+            title="Collector PN E50000200000000001",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"collector_virtual_bridge": True},
+            collector=types.SimpleNamespace(
+                collector_pn="E50000200000000001",
+                profile_name="",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="",
+                collector_virtual_bridge=True,
+                collector_bridge_kind="esp-collector",
+                collector_bridge_version="0.4.0",
+                collector_bridge_features=("local_only", "no_cloud", "wifi_params"),
+            ),
+        )
+
+        info = coordinator.collector_device_info()
+
+        self.assertEqual(info["manufacturer"], "ESP EyeBond Collector (community)")
+        self.assertEqual(info["model"], "ESP EyeBond Collector")
+        self.assertEqual(info["sw_version"], "0.4.0")
+        self.assertEqual(
+            info["configuration_url"],
+            "https://github.com/groove-max/esp-eybond-collector",
+        )
+        self.assertEqual(info["serial_number"], "E50000200000000001")
+
     def test_remember_runtime_identity_strengthens_pending_entry_metadata(self) -> None:
         updated_entries: list[dict[str, object]] = []
 

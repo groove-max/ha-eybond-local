@@ -9,6 +9,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Added first-class support for the community **ESP EyeBond Collector** virtual bridge
+  (firmware for inverters without a factory collector). The bridge is detected with a single
+  additive, read-only `AT+VDTU` query (reply prefixed `esp-collector,`); detection never uses
+  the collector PN, devcode, or firmware-version string, and the query is safe to send to any
+  collector. A detected bridge is shown as an honest **ESP EyeBond Collector** device
+  (manufacturer, model, firmware version, and project link) and its cloud-only actions —
+  device learning / shadow learning, proxy capture, and SmartESS cloud assist — are hidden,
+  since the bridge has no SmartESS cloud side. Local actions (runtime settings, diagnostics,
+  and Change Collector Wi-Fi) stay fully available. Factory collectors and bridges with older
+  firmware that never answer `AT+VDTU` behave exactly as before.
 - Added an offline device identification catalog: inverters are now identified by a
   deterministic register fingerprint (protocol layout + model code + rated power) with explicit
   support tiers, and the catalog — not heuristics — decides which schema and controls apply.

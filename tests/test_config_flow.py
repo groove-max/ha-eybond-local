@@ -3700,6 +3700,40 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ["runtime", "shadow_learning", "collector_wifi", "diagnostics"],
         )
 
+    async def test_options_init_menu_hides_shadow_learning_for_virtual_bridge(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        result = await options.async_step_init()
+
+        self.assertEqual(
+            result["menu_options"],
+            ["runtime", "collector_wifi", "diagnostics"],
+        )
+        self.assertNotIn("shadow_learning", result["menu_options"])
+        self.assertTrue(
+            result["description_placeholders"]["bridge_note"].strip()
+        )
+
+    async def test_options_init_menu_keeps_shadow_learning_for_factory_collector(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        result = await options.async_step_init()
+
+        self.assertIn("shadow_learning", result["menu_options"])
+        self.assertEqual(result["description_placeholders"]["bridge_note"], "")
+
     async def test_options_collector_wifi_step_renders_current_status(self) -> None:
         options = self._make_options_flow()
 

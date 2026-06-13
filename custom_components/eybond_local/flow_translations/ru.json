@@ -191,6 +191,7 @@
       "collector_wifi_action_apply": "Сохранить Wi-Fi настройки",
       "collector_wifi_refresh_done": "Состояние Wi-Fi коллектора обновлено.",
       "collector_wifi_apply_done": "Коллектор принял новые Wi-Fi настройки.",
+      "collector_virtual_bridge_note": "\n\nЭтот коллектор — локальный мост ESP EyeBond Collector без облачной стороны SmartESS. Облачные действия (обнаружение управления / теневое обучение) скрыты; настройки Wi-Fi и опроса остаются доступными.",
       "collector_wifi_last_action_line": "**Последнее действие:** {value}",
       "collector_wifi_last_error_line": "**Последняя ошибка:** {value}",
       "collector_wifi_more_networks": "+ ещё {count}",

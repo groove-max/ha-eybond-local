@@ -191,6 +191,7 @@
       "collector_wifi_action_apply": "Зберегти Wi-Fi параметри",
       "collector_wifi_refresh_done": "Стан Wi-Fi колектора оновлено.",
       "collector_wifi_apply_done": "Колектор прийняв нові Wi-Fi параметри.",
+      "collector_virtual_bridge_note": "\n\nЦей колектор — локальний міст ESP EyeBond Collector без хмарної сторони SmartESS. Хмарні дії (виявлення керування / тіньове навчання) приховані; параметри Wi-Fi та опитування залишаються доступними.",
       "collector_wifi_last_action_line": "**Остання дія:** {value}",
       "collector_wifi_last_error_line": "**Остання помилка:** {value}",
       "collector_wifi_more_networks": "+ ще {count}",

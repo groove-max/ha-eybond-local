@@ -8,6 +8,11 @@ from typing import Callable, Protocol
 from .at import CollectorAtResponse
 from .signal import merge_collector_signal_values, normalize_signal_strength
 
+# Literal prefix every virtual bridge (e.g. ESP EyeBond Collector) emits as the
+# first token of its ``AT+VDTU?`` reply. Factory collectors return an error,
+# empty value, or a reply without this prefix — absence means "factory/unknown".
+VIRTUAL_BRIDGE_PREFIX = "esp-collector,"
+
 
 class CollectorAtQueryTransport(Protocol):
     """Minimal read-only collector AT transport contract."""
@@ -100,7 +105,63 @@ RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
         "Nearby Wi-Fi scan list reported by the collector.",
         _decode_text_value("collector_wifi_scan_list"),
     ),
+    CollectorAtQueryDefinition(
+        "VDTU",
+        "Virtual-bridge identity probe (additive; factory collectors stay silent).",
+        _decode_text_value("collector_vdtu_raw"),
+    ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CollectorVirtualBridgeInfo:
+    """Parsed identity of a virtual collector bridge (e.g. ESP EyeBond Collector)."""
+
+    is_virtual_bridge: bool = False
+    kind: str = ""
+    version: str = ""
+    features: tuple[str, ...] = ()
+
+
+def parse_collector_vdtu(raw: object) -> CollectorVirtualBridgeInfo:
+    """Parse one raw ``AT+VDTU`` value into virtual-bridge identity fields.
+
+    The reply format is::
+
+        esp-collector,<semver>;features=<csv>;uart=<...>;spacing_ms=<n>;queue=<n>
+
+    Detection keys only on the leading ``esp-collector,`` token. This parser is
+    pure and defensive: empty, truncated, or future-version input (including
+    unknown ``features`` tokens) must never raise — it just returns whatever it
+    can resolve, defaulting to "not a bridge".
+    """
+
+    text = str(raw or "").strip()
+    if not text or not text.startswith(VIRTUAL_BRIDGE_PREFIX):
+        return CollectorVirtualBridgeInfo()
+
+    remainder = text[len(VIRTUAL_BRIDGE_PREFIX) :]
+    segments = [segment.strip() for segment in remainder.split(";")]
+
+    version = segments[0].strip() if segments else ""
+    features: tuple[str, ...] = ()
+    for segment in segments[1:]:
+        key, _, value = segment.partition("=")
+        if key.strip().lower() != "features":
+            continue
+        features = tuple(
+            token.strip()
+            for token in value.split(",")
+            if token.strip()
+        )
+        break
+
+    return CollectorVirtualBridgeInfo(
+        is_virtual_bridge=True,
+        kind="esp-collector",
+        version=version,
+        features=features,
+    )
 
 
 async def query_runtime_collector_at_values(
