@@ -20,7 +20,10 @@ What correlation alone cannot resolve:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any
+
+from ..payload.modbus import to_signed_16
 
 
 _SCALES = (1, 10, 100, 1000)
@@ -138,6 +141,13 @@ def bind_cloud_labels_to_registers(
         try:
             target = float(raw_value)
         except (TypeError, ValueError):
+            target = None
+        if target is not None and not math.isfinite(target):
+            # 'nan'/'inf'/'-inf' parse as floats but cannot reconstruct a raw
+            # register word and would crash round() in _match_candidates; treat
+            # them like a non-numeric value instead of failing the whole run.
+            target = None
+        if target is None:
             status = (
                 BIND_STATUS_ENUM_LABEL
                 if raw_value and not unit
@@ -239,7 +249,7 @@ def _match_candidates(
                         signed=False,
                     )
                     break
-                if _to_signed_16(raw) == rounded and rounded < 0:
+                if to_signed_16(raw) == rounded and rounded < 0:
                     best_per_register[register] = ReadBindingCandidate(
                         register=register,
                         divisor=divisor,
@@ -248,10 +258,6 @@ def _match_candidates(
                     )
                     break
     return sorted(best_per_register.values(), key=lambda item: (item.divisor, item.register))
-
-
-def _to_signed_16(value: int) -> int:
-    return value - 0x10000 if value >= 0x8000 else value
 
 
 def _decimals_from_text(value: str) -> int:

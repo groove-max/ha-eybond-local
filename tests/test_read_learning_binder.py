@@ -127,6 +127,27 @@ class ReadLearningBinderTests(unittest.TestCase):
 
         self.assertEqual(report.bindings[0].status, BIND_STATUS_NO_MATCH)
 
+    def test_non_finite_values_do_not_crash_the_run(self) -> None:
+        # 'nan'/'inf' parse as floats but round() on them raises; a single such
+        # cloud value must NOT take down the whole binding pass (the learning
+        # run treats read-label binding as best-effort and supplemental).
+        report = bind_cloud_labels_to_registers(
+            sensors=[
+                _sensor("a", "Broken NaN", "nan", "W"),
+                _sensor("b", "Broken Inf", "inf", "V"),
+                _sensor("c", "Broken NegInf", "-inf", "A"),
+                _sensor("d", "Output rating voltage", "230.0", "V"),
+            ],
+            registers=_corpus_registers(),
+        )
+
+        statuses = {b.title: b.status for b in report.bindings}
+        self.assertEqual(statuses["Broken NaN"], "not_numeric")
+        self.assertEqual(statuses["Broken Inf"], "not_numeric")
+        self.assertEqual(statuses["Broken NegInf"], "not_numeric")
+        # The valid sensor in the same batch still binds.
+        self.assertEqual(statuses["Output rating voltage"], "unique")
+
     def test_report_serializes_with_counts(self) -> None:
         report = bind_cloud_labels_to_registers(
             sensors=[

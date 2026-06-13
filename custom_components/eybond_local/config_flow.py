@@ -130,7 +130,7 @@ from .collector.smartess_ble import (
     normalize_discovered_candidate,
     parse_wifi_scan_response,
 )
-from .collector.transport import SharedEybondTransport
+from .collector.transport import SharedEybondTransport, _finish_cleanup_on_cancel
 from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
 from .drivers.registry import driver_options
 from .metadata.local_metadata import (
@@ -5486,10 +5486,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         consent = bool((user_input or {}).get("shadow_learning_confirm_cloud_write", False))
         if user_input is not None:
             if consent:
-                # Start a fresh wizard pass: drop any prior run's transient state
-                # (credentials are never persisted) before advancing.
-                self._shadow_learning_state.pop("wizard_credentials", None)
-                self._shadow_learning_state.pop("wizard_progress_task", None)
+                # Start a fresh wizard pass: drop ALL of the previous run's
+                # result state, not just credentials. Otherwise a run that fails
+                # early (e.g. a preflight blocker) would still show the prior
+                # run's overlay/controls/read counts as if they were its own.
+                self._reset_control_discovery_run_state()
                 self._shadow_learning_state["wizard_consent"] = True
                 return await self.async_step_shadow_learning_credentials()
             errors["shadow_learning_confirm_cloud_write"] = "required"
@@ -5694,6 +5695,21 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 username=username,
                 password=password,
             )
+        except asyncio.CancelledError:
+            # HA's flow manager cancels this progress task when the user closes
+            # the options dialog mid-scan. CancelledError does NOT subclass
+            # Exception, so it would otherwise skip the fail-closed cleanup and
+            # leave the collector redirected to the local proxy until the
+            # session lease expires. Run the cleanup (which never raises) even
+            # while being cancelled, then propagate the cancellation.
+            self._shadow_learning_state["discovery"] = {
+                "status": "cancelled",
+                "reason": "control_discovery_cancelled",
+            }
+            await _finish_cleanup_on_cancel(
+                self._async_control_discovery_failsafe_stop(coordinator)
+            )
+            raise
         except Exception as exc:
             # Fail-closed cleanup: stop the shadow session and restore the
             # collector endpoint, then surface the failure in flow state.
@@ -5987,6 +6003,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         registers = read_map.get("registers")
         if not isinstance(registers, dict) or not registers:
             return None
+        # The whole correlation is best-effort: the caller treats read-label
+        # binding as supplemental, so NOTHING here (cloud fetch, parsing, or the
+        # value-correlation binder) may fail the discovery run after the probe
+        # sweep already succeeded.
         try:
             envelope = await self.hass.async_add_executor_job(
                 lambda: fetch_signed_action(
@@ -5999,19 +6019,19 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     session=cloud_session,
                 )
             )
+            dat = envelope.dat if isinstance(envelope.dat, dict) else {}
+            pars = dat.get("pars") if isinstance(dat.get("pars"), dict) else {}
+            sensors: list[dict[str, Any]] = []
+            for items in pars.values():
+                if isinstance(items, list):
+                    sensors.extend(item for item in items if isinstance(item, dict))
+            if not sensors:
+                return None
+            report = bind_cloud_labels_to_registers(sensors=sensors, registers=registers)
+            return report.to_json_dict()
         except Exception as exc:
-            logger.debug("Read-label fetch failed during learning session: %s", exc)
+            logger.debug("Read-label binding failed during learning session: %s", exc)
             return None
-        dat = envelope.dat if isinstance(envelope.dat, dict) else {}
-        pars = dat.get("pars") if isinstance(dat.get("pars"), dict) else {}
-        sensors: list[dict[str, Any]] = []
-        for items in pars.values():
-            if isinstance(items, list):
-                sensors.extend(item for item in items if isinstance(item, dict))
-        if not sensors:
-            return None
-        report = bind_cloud_labels_to_registers(sensors=sensors, registers=registers)
-        return report.to_json_dict()
 
     async def _async_generate_control_discovery_overlay(
         self,
@@ -6244,6 +6264,33 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if not isinstance(learned_all, list):
             return []
         return [dict(entry) for entry in learned_all if isinstance(entry, dict)]
+
+    # Per-run keys in _shadow_learning_state, cleared between wizard passes.
+    # The wizard_* keys (consent, credentials, progress_task) are lifecycle
+    # state managed separately and are intentionally NOT in this set.
+    _CONTROL_DISCOVERY_RUN_STATE_KEYS = (
+        "activation",
+        "discovery",
+        "identity",
+        "orchestration",
+        "overlay",
+        "preflight",
+        "progress",
+        "read_bindings",
+        "review_phase",
+        "review_selections",
+        "session",
+        "status",
+        "support_package_path",
+    )
+
+    def _reset_control_discovery_run_state(self) -> None:
+        """Drop every result key from the previous discovery run plus credentials."""
+
+        for key in self._CONTROL_DISCOVERY_RUN_STATE_KEYS:
+            self._shadow_learning_state.pop(key, None)
+        self._shadow_learning_state.pop("wizard_credentials", None)
+        self._shadow_learning_state.pop("wizard_progress_task", None)
 
     def _control_discovery_failed(self) -> bool:
         """Return whether the discovery run ended in an error (vs a genuine empty result)."""
@@ -6492,8 +6539,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return await self.async_step_shadow_learning()
 
         controls = self._control_discovery_review_controls()
-        error_detail = self._control_discovery_error_detail()
-        failed = self._control_discovery_failed() or bool(error_detail)
+        # Failure is decided ONLY by the run's status (discovery.status=="error").
+        # error_detail falls back to the last status line, which on success holds
+        # the success message — OR-ing it in here turned a successful-but-empty
+        # run into a failure screen that printed the success text as the error.
+        failed = self._control_discovery_failed()
+        error_detail = self._control_discovery_error_detail() if failed else ""
         selected_count = self._control_discovery_enabled_selection_count()
         read_count = int(
             dict(self._shadow_learning_state.get("overlay") or {}).get(
