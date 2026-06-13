@@ -18,6 +18,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .shadow_learning import coerce_optional_int as _to_int
+
 
 RISK_NORMAL = "normal"
 RISK_HIGH = "high"
@@ -564,14 +566,6 @@ def _has_clear_enum_labels(capability: dict[str, Any]) -> bool:
             return False
     return True
 
-
-def _to_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 __all__ = [

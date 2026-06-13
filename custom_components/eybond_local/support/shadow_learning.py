@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from typing import Any
 
 from ..payload.modbus import decode_write_request
@@ -18,6 +19,18 @@ def utc_now_iso() -> str:
     """Return one UTC ISO-8601 timestamp for evidence records."""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def shadow_learning_slug(value: Any) -> str:
+    """Slugify one value for shadow-learning artifact keys/paths.
+
+    Shared so learned capability keys (overlay generator) and trace directory
+    names (backend) slug identically -- artifacts must cross-reference. Empty
+    input falls back to the literal 'shadow_learning'.
+    """
+
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", str(value or "").strip().lower())
+    return normalized.strip("_") or "shadow_learning"
 
 
 def compact_json_dumps(payload: Any) -> str:
@@ -258,10 +271,16 @@ def write_observation_from_modbus_request(
     )
 
 
-def _maybe_int(value: Any) -> int | None:
+def coerce_optional_int(value: Any) -> int | None:
+    """Best-effort int coercion; returns None for empty / non-numeric values."""
+
     if value in (None, ""):
         return None
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# Internal alias kept so this module's existing call sites need no churn.
+_maybe_int = coerce_optional_int

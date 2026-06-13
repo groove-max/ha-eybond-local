@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import asyncio
-import re
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +18,13 @@ from ..const import LOCAL_METADATA_DIR
 from ..fixtures.utils import build_command_fixture_responses
 from ..payload.modbus import crc16_modbus, decode_read_request, decode_write_request
 from .collector_cloud_proxy import JsonLineWriter
-from .shadow_learning import ShadowWriteObservation, write_observation_from_modbus_request
+from .shadow_learning import (
+    ShadowWriteObservation,
+    coerce_optional_int as _maybe_int,
+    shadow_learning_slug as _slugify,
+    utc_now_iso,
+    write_observation_from_modbus_request,
+)
 
 
 _SHADOW_TRACE_DIR = "shadow_learning_traces"
@@ -32,18 +36,6 @@ _CLOUD_REDIRECT_AT_COMMAND_PREFIX = "CLDSRVHOST"
 
 # Bounded distinct value samples kept per register in the in-memory read map.
 _READ_SAMPLE_LIMIT = 8
-
-
-def utc_now_iso() -> str:
-    """Return one UTC ISO-8601 timestamp."""
-
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _slugify(value: str) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", str(value or "").strip().lower())
-    normalized = normalized.strip("_")
-    return normalized or "shadow_learning"
 
 
 def shadow_learning_trace_root(config_dir: Path) -> Path:
@@ -944,14 +936,6 @@ def _best_capture(raw_capture: dict[str, Any]) -> dict[str, Any] | None:
     return best_capture
 
 
-
-def _maybe_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 __all__ = [

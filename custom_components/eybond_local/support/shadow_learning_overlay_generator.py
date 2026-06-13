@@ -22,7 +22,11 @@ from ..metadata.profile_loader import builtin_base_profile_name, load_driver_pro
 from ..metadata.semantic_titles_loader import resolve_semantic_title
 from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
 from .read_learning_binder import match_enum_bindings
-from .shadow_learning import deterministic_evidence_hash
+from .shadow_learning import (
+    coerce_optional_int as _to_int,
+    deterministic_evidence_hash,
+    shadow_learning_slug as _slugify,
+)
 from .shadow_learning_review_model import build_learned_control_review_model
 
 
@@ -960,12 +964,6 @@ def _append_suffix(text: str, suffix: str) -> str:
     return text if text.endswith(suffix) else f"{text}{suffix}"
 
 
-def _slugify(value: Any) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", str(value or "").strip().lower())
-    normalized = normalized.strip("_")
-    return normalized or "shadow_learning"
-
-
 def _capability_key(*, field_id: str, field_name: str, register: int) -> str:
     base = _slugify(field_id or field_name)
     if not base.startswith("learned_"):
@@ -981,14 +979,6 @@ def _unique_capability_key(base_key: str, existing_keys: set[str]) -> str:
         index += 1
     return f"{base_key}_{index}"
 
-
-def _to_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _normalize_title(value: str) -> str:
