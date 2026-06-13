@@ -6838,6 +6838,27 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             placeholders.update(extra)
         return placeholders
 
+    @staticmethod
+    def _preflight_effective_metadata(coordinator) -> dict[str, Any]:
+        """Return the effective metadata the preflight validates.
+
+        Prefer the persisted snapshot, but partial / unidentified tiers never
+        persist one (the persisted snapshot requires a controls profile, which
+        those tiers deliberately lack). They DO have a live effective register
+        schema (the family base), and that is all the preflight needs -- so fall
+        back to the live effective metadata instead of blocking learning on the
+        exact devices it exists for.
+        """
+
+        snapshot = coordinator.effective_metadata_snapshot
+        if str(getattr(snapshot, "register_schema_name", "") or "").strip():
+            return snapshot
+        return {
+            "effective_owner_key": coordinator.effective_owner_key,
+            "profile_name": coordinator.effective_profile_name,
+            "register_schema_name": coordinator.effective_register_schema_name,
+        }
+
     async def _build_shadow_learning_preflight_snapshot(self, coordinator) -> dict[str, Any]:
         connected = bool(getattr(coordinator.data, "connected", False))
         raw_capture = None
@@ -6853,7 +6874,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             collector_cloud_profile_source=coordinator.collector_cloud_profile_source,
             collector_cloud_profile_confidence=coordinator.collector_cloud_profile_confidence,
             collector_callback_endpoint=coordinator.collector_callback_target_endpoint,
-            effective_metadata_snapshot=coordinator.effective_metadata_snapshot,
+            effective_metadata_snapshot=self._preflight_effective_metadata(coordinator),
             raw_capture=raw_capture,
         )
         preflight = build_shadow_learning_preflight(seed)

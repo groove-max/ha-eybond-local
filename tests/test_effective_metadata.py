@@ -174,6 +174,31 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         self.assertEqual(selection.profile_name, "smg_modbus.json")
         self.assertEqual(selection.register_schema_name, "modbus_smg/models/smg_6200.json")
 
+    def test_detected_partial_tier_inverter_keeps_empty_profile(self) -> None:
+        # A partial / unidentified device is bound with profile_name="" on
+        # purpose (base reads, controls locked). The driver's full default
+        # profile must NOT leak in for a DETECTED inverter, or the device would
+        # silently inherit the complete control set and overlay generation would
+        # dedupe against the wrong base.
+        selection = resolve_effective_metadata_selection(
+            inverter=types.SimpleNamespace(
+                driver_key="modbus_smg",
+                profile_name="",
+                register_schema_name="modbus_smg/base.json",
+            ),
+            driver=types.SimpleNamespace(
+                key="modbus_smg",
+                name="SMG / Modbus",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            ),
+        )
+
+        self.assertEqual(selection.profile_name, "")
+        self.assertIsNone(selection.profile_metadata)
+        self.assertEqual(selection.register_schema_name, "modbus_smg/base.json")
+        self.assertEqual(selection.effective_owner_key, "modbus_smg")
+
     def test_preserves_runtime_owner_alongside_smartess_family_label(self) -> None:
         selection = resolve_effective_metadata_selection(
             driver=types.SimpleNamespace(

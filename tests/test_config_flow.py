@@ -5794,5 +5794,39 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class PreflightEffectiveMetadataTests(unittest.TestCase):
+    def test_falls_back_to_live_metadata_when_no_snapshot_persisted(self) -> None:
+        # Partial / unidentified tiers never persist an effective-metadata
+        # snapshot (it requires a controls profile they deliberately lack), but
+        # they DO have a live effective register schema. The preflight must use
+        # it instead of blocking learning with missing_effective_metadata_snapshot.
+        coordinator = types.SimpleNamespace(
+            effective_metadata_snapshot=types.SimpleNamespace(register_schema_name=""),
+            effective_owner_key="modbus_smg",
+            effective_profile_name="",
+            effective_register_schema_name="modbus_smg/base.json",
+        )
+
+        result = EybondLocalOptionsFlow._preflight_effective_metadata(coordinator)
+
+        self.assertEqual(result["register_schema_name"], "modbus_smg/base.json")
+        self.assertEqual(result["profile_name"], "")
+
+    def test_prefers_persisted_snapshot_when_present(self) -> None:
+        snapshot = types.SimpleNamespace(
+            register_schema_name="modbus_smg/models/smg_6200.json"
+        )
+        coordinator = types.SimpleNamespace(
+            effective_metadata_snapshot=snapshot,
+            effective_owner_key="modbus_smg",
+            effective_profile_name="smg_modbus.json",
+            effective_register_schema_name="modbus_smg/models/smg_6200.json",
+        )
+
+        result = EybondLocalOptionsFlow._preflight_effective_metadata(coordinator)
+
+        self.assertIs(result, snapshot)
+
+
 if __name__ == "__main__":
     unittest.main()

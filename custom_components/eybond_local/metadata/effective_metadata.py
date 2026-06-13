@@ -78,7 +78,14 @@ def resolve_effective_metadata_selection(
     profile_name = _normalized_name(getattr(inverter, "profile_name", ""))
     if not profile_name and snapshot_profile_metadata is not None:
         profile_name = _normalized_name(getattr(snapshot_profile_metadata, "source_name", ""))
-    if not profile_name:
+    if not profile_name and inverter is None:
+        # An EMPTY profile on a *detected* inverter is authoritative: the
+        # catalog binds partial / unidentified tiers to profile_name="" on
+        # purpose (base reads, controls locked until learning). Only synthesize
+        # the driver's full default profile when there is no detected inverter
+        # at all -- otherwise a partial-tier device would silently inherit the
+        # complete control set and overlay generation would dedupe against the
+        # wrong base.
         profile_name = _normalized_name(getattr(driver, "profile_name", ""))
     if not profile_name and smartess_protocol is not None:
         profile_name = smartess_protocol.profile_name
