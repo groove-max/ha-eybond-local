@@ -1403,10 +1403,31 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     # ---- step: user (welcome) ----
 
     @_with_translation_bundle
+    async def _async_refresh_force_unsupported_override(self) -> None:
+        """Re-read the on-device force-unsupported sentinel for flow-time detection.
+
+        The integration's async_setup only runs after the first entry exists, so
+        on a fresh install the very first config flow would otherwise ignore the
+        force_unsupported.flag sentinel. Refresh it once here (in an executor —
+        it stats a file) so the validation toggle works during onboarding too.
+        """
+
+        if getattr(self, "_force_unsupported_refreshed", False):
+            return
+        self._force_unsupported_refreshed = True
+        from .metadata.device_catalog_loader import refresh_force_unsupported_override
+
+        with suppress(Exception):
+            config_root = Path(self.hass.config.path("eybond_local")).resolve()
+            await self.hass.async_add_executor_job(
+                refresh_force_unsupported_override, config_root
+            )
+
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
+        await self._async_refresh_force_unsupported_override()
         await self._async_ensure_network_defaults()
 
         def _select_connection_type(connection_type: str) -> None:

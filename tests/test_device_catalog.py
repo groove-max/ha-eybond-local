@@ -33,6 +33,33 @@ from custom_components.eybond_local.metadata.device_catalog_loader import (  # n
 COMPONENT_ROOT = REPO_ROOT / "custom_components" / "eybond_local"
 
 
+class TierValidationTest(unittest.TestCase):
+    def test_invalid_tier_string_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            device_catalog_loader._validate_tier("x", "Full", "p.json")
+
+    def test_full_tier_requires_a_controls_profile(self) -> None:
+        with self.assertRaises(ValueError):
+            device_catalog_loader._validate_tier("x", "full", "")
+        self.assertEqual(device_catalog_loader._validate_tier("x", "full", "p.json"), "full")
+
+    def test_partial_tier_must_not_carry_a_profile(self) -> None:
+        with self.assertRaises(ValueError):
+            device_catalog_loader._validate_tier("x", "partial", "p.json")
+        self.assertEqual(device_catalog_loader._validate_tier("x", "partial", ""), "partial")
+
+    def test_shipped_catalog_satisfies_the_tier_invariant(self) -> None:
+        clear_device_catalog_cache()
+        self.addCleanup(clear_device_catalog_cache)
+        catalog = load_device_catalog()
+        for entry in catalog.devices:
+            self.assertIn(entry.tier, ("full", "partial"))
+            if entry.tier == "full":
+                self.assertTrue(entry.binding.profile_name)
+            else:
+                self.assertEqual(entry.binding.profile_name, "")
+
+
 class DeviceCatalogLoadTest(unittest.TestCase):
     def setUp(self) -> None:
         clear_device_catalog_cache()

@@ -30,12 +30,14 @@ DEVICE_CATALOG_PATH = (
 # read + control learning end to end on a device that is otherwise fully
 # supported (e.g. an SMG 6200).
 #
-# It is ENABLED ONLY via the EYBOND_FORCE_UNSUPPORTED environment variable, and
-# is deliberately NOT a hard-coded constant: a hard-coded `True` once reached a
-# production device through an rsync of the working tree, forced every model to
-# the partial tier, and the resulting entity + recorder-write explosion
-# OOM-looped the host. An env var never travels with the source tree, so it
-# cannot ship by accident. To test locally: `EYBOND_FORCE_UNSUPPORTED=1`.
+# It is enabled by EITHER the EYBOND_FORCE_UNSUPPORTED environment variable OR
+# the on-device force_unsupported.flag sentinel (see FORCE_UNSUPPORTED_SENTINEL
+# _NAME below) — and is deliberately NOT a hard-coded constant. A hard-coded
+# `True` once reached a production device through an rsync of the working tree,
+# forced every model to the partial tier, and the resulting entity +
+# recorder-write explosion OOM-looped the host. Neither the env var nor the
+# config-dir sentinel travels with the source tree, so the toggle cannot ship by
+# accident. To test locally: `EYBOND_FORCE_UNSUPPORTED=1`.
 _FORCE_UNSUPPORTED_ENV = "EYBOND_FORCE_UNSUPPORTED"
 
 
@@ -389,18 +391,42 @@ def _parse_binding(raw: dict[str, object]) -> CatalogBinding:
     )
 
 
+_VALID_TIERS = (TIER_FULL, TIER_PARTIAL)
+
+
+def _validate_tier(entry_key: str, tier: str, profile_name: str) -> str:
+    """Validate a catalog tier and the tier<->controls-profile invariant.
+
+    A typo'd tier silently dropped both the detection-summary copy and the
+    partial-tier learning nudge (config_flow matches the exact strings), so
+    catch it at load. The invariant: a 'full' tier carries a controls profile;
+    a 'partial' tier carries none (base reads, controls locked until learning).
+    """
+
+    if tier not in _VALID_TIERS:
+        raise ValueError(f"device_catalog:{entry_key}:invalid_tier:{tier!r}")
+    has_profile = bool(str(profile_name or "").strip())
+    if tier == TIER_FULL and not has_profile:
+        raise ValueError(f"device_catalog:{entry_key}:full_tier_without_profile")
+    if tier == TIER_PARTIAL and has_profile:
+        raise ValueError(f"device_catalog:{entry_key}:partial_tier_with_profile")
+    return tier
+
+
 def _parse_device(raw: dict[str, object]) -> DeviceCatalogEntry:
     provenance = raw.get("provenance")
     provenance = provenance if isinstance(provenance, dict) else {}
     cloud_hints = raw.get("cloud_hints")
     cloud_hints = cloud_hints if isinstance(cloud_hints, dict) else {}
+    entry_key = str(raw["entry_key"]).strip()
+    binding = _parse_binding(raw["binding"])
     return DeviceCatalogEntry(
-        entry_key=str(raw["entry_key"]).strip(),
+        entry_key=entry_key,
         fingerprint=_parse_fingerprint(raw["fingerprint"]),
         structural=tuple(str(check) for check in raw.get("structural", [])),
         model_name=str(raw.get("model_name", "")).strip(),
-        tier=str(raw.get("tier", "")).strip(),
-        binding=_parse_binding(raw["binding"]),
+        tier=_validate_tier(entry_key, str(raw.get("tier", "")).strip(), binding.profile_name),
+        binding=binding,
         devcodes=tuple(int(code) for code in cloud_hints.get("devcodes", [])),
         provenance_sources=tuple(str(item) for item in provenance.get("sources", [])),
         provenance_confidence=str(provenance.get("confidence", "")).strip(),
@@ -408,9 +434,15 @@ def _parse_device(raw: dict[str, object]) -> DeviceCatalogEntry:
 
 
 def _parse_family_default(raw: dict[str, object]) -> FamilyDefault:
+    binding = _parse_binding(raw["binding"])
+    layout_codes = tuple(int(code) for code in raw.get("when_layout_codes", []))
     return FamilyDefault(
-        when_layout_codes=tuple(int(code) for code in raw.get("when_layout_codes", [])),
-        tier=str(raw.get("tier", "")).strip(),
-        binding=_parse_binding(raw["binding"]),
+        when_layout_codes=layout_codes,
+        tier=_validate_tier(
+            f"family_default:{layout_codes}",
+            str(raw.get("tier", "")).strip(),
+            binding.profile_name,
+        ),
+        binding=binding,
         note=str(raw.get("note", "")).strip(),
     )
