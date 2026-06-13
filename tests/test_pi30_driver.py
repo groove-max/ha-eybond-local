@@ -493,5 +493,42 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get_driver("pi30").name, "PI30 / ASCII")
 
 
+class ReplaceVoltageRangeTests(unittest.TestCase):
+    def test_rescaling_a_capability_preserves_every_other_field(self) -> None:
+        # The voltage-range rescaler must change ONLY minimum/maximum; dropping
+        # provenance/word_count/bitmask/etc. (the old field-by-field rebuild)
+        # silently changed write-gating and would clobber shared-register bits.
+        from custom_components.eybond_local.drivers.pi30 import _replace_voltage_range
+        from custom_components.eybond_local.models import WriteCapability
+
+        capability = WriteCapability(
+            key="battery_bulk_voltage",
+            register=0,
+            value_kind="scaled_u16",
+            note="n",
+            word_count=2,
+            combine="u32_high_first",
+            bitmask=0x00FF,
+            provenance="cloud_hint",
+            experimental=True,
+            metadata_scope="device",
+            divisor=10,
+            minimum=400,
+            maximum=600,
+        )
+
+        rescaled = _replace_voltage_range(capability, scale=10.0, minimum=44, maximum=58)
+
+        self.assertEqual(rescaled.minimum, 440)
+        self.assertEqual(rescaled.maximum, 580)
+        # Everything else is preserved.
+        self.assertEqual(rescaled.word_count, 2)
+        self.assertEqual(rescaled.combine, "u32_high_first")
+        self.assertEqual(rescaled.bitmask, 0x00FF)
+        self.assertEqual(rescaled.provenance, "cloud_hint")
+        self.assertTrue(rescaled.experimental)
+        self.assertEqual(rescaled.metadata_scope, "device")
+
+
 if __name__ == "__main__":
     unittest.main()

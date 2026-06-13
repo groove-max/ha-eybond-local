@@ -695,6 +695,40 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(written, "Off")
         self.assertEqual(transport._registers[354], 0xABCE)
 
+    async def test_bitmask_pre_write_read_modbus_error_is_not_a_write_rejection(self) -> None:
+        # A Modbus exception on the read-modify-write PRE-READ (reg 354) must
+        # surface as CapabilityPreWriteReadError, not a Modbus write rejection —
+        # otherwise the hub records a persistent 'unsupported_or_locked' blocker
+        # for a control nothing was ever written to. No write is attempted.
+        from custom_components.eybond_local.drivers.smg import (
+            CapabilityPreWriteReadError,
+        )
+        from custom_components.eybond_local.payload.modbus import ModbusError
+
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = self._op2_inverter(target)
+
+        class _ReadFailSession:
+            def __init__(self) -> None:
+                self.writes: list[tuple[int, list[int]]] = []
+
+            async def read_holding(self, register: int, count: int) -> list[int]:
+                raise ModbusError("exception_code:7")
+
+            async def write_holding(self, register: int, values: list[int]) -> None:
+                self.writes.append((register, list(values)))
+
+        session = _ReadFailSession()
+        with patch.object(
+            SmgModbusDriver, "_session", staticmethod(lambda *a, **k: session)
+        ):
+            with self.assertRaises(CapabilityPreWriteReadError):
+                await driver.async_write_capability(
+                    object(), inverter, "output2_enable", True
+                )
+        self.assertEqual(session.writes, [])
+
     def test_capability_read_back_extracts_bitmask_field(self) -> None:
         from custom_components.eybond_local.drivers.smg import _apply_capability_read_back
         from custom_components.eybond_local.metadata.profile_loader import load_driver_profile

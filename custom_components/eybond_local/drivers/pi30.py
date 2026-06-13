@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..models import (
@@ -704,42 +704,16 @@ def _replace_voltage_range(
     minimum: int,
     maximum: int,
 ) -> WriteCapability:
-    raw_minimum = int(round(minimum * scale))
-    raw_maximum = int(round(maximum * scale))
-    return WriteCapability(
-        key=capability.key,
-        register=capability.register,
-        value_kind=capability.value_kind,
-        note=capability.note,
-        tested=capability.tested,
-        support_tier=capability.support_tier,
-        support_notes=capability.support_notes,
-        action_value=capability.action_value,
-        divisor=capability.divisor,
-        minimum=raw_minimum,
-        maximum=raw_maximum,
-        enum_map=capability.enum_map,
-        choices=capability.choices,
-        recommendations=capability.recommendations,
-        title=capability.title,
-        group=capability.group,
-        order=capability.order,
-        unit=capability.unit,
-        device_class=capability.device_class,
-        step=capability.step,
-        enabled_default=capability.enabled_default,
-        advanced=capability.advanced,
-        requires_confirm=capability.requires_confirm,
-        reboot_required=capability.reboot_required,
-        read_key=capability.read_key,
-        depends_on=capability.depends_on,
-        affects=capability.affects,
-        exclusive_with=capability.exclusive_with,
-        change_summary=capability.change_summary,
-        unsafe_while_running=capability.unsafe_while_running,
-        safe_operating_modes=capability.safe_operating_modes,
-        visible_if=capability.visible_if,
-        editable_if=capability.editable_if,
+    # Copy ONLY the two changed fields via dataclasses.replace. The previous
+    # field-by-field rebuild silently dropped every field it forgot to list
+    # (word_count, combine, bitmask, provenance, experimental, metadata_scope) —
+    # resetting them to defaults, which e.g. reset provenance to 'inferred' and
+    # quietly changed the runtime write-gating. replace() preserves everything
+    # and is immune to new WriteCapability fields.
+    return replace(
+        capability,
+        minimum=int(round(minimum * scale)),
+        maximum=int(round(maximum * scale)),
     )
 
 

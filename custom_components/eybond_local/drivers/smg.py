@@ -75,6 +75,16 @@ _SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES: tuple[tuple[str, int, int], ...] = (
 )
 
 
+class CapabilityPreWriteReadError(RuntimeError):
+    """A masked write's read-modify-write failed on its PRE-WRITE read.
+
+    No write was attempted, so the hub must NOT classify it as a write
+    rejection (which would record a persistent 'unsupported_or_locked' blocker).
+    It carries no Modbus exception code, so the hub's write-error classifier
+    skips it and the failure surfaces as a plain transient error.
+    """
+
+
 class SmgModbusDriver(InverterDriver):
     """Bench-safe SMG probe and runtime reader."""
 
@@ -423,9 +433,21 @@ class SmgModbusDriver(InverterDriver):
             field = (int(raw_words[0]) << shift) & 0xFFFF
             if field & ~capability.bitmask:
                 raise ValueError(f"value_exceeds_bitmask:{capability.key}:{raw_words[0]}")
-            current = await session.read_holding(capability.register, 1)
+            try:
+                current = await session.read_holding(capability.register, 1)
+            except ModbusError as exc:
+                # A Modbus exception on the PRE-WRITE read is NOT a write
+                # rejection (no write happened): re-raise without a Modbus code
+                # so the hub does not lock the control. A ConnectionError here
+                # propagates unchanged so the hub's retry-after-reconnect still
+                # applies.
+                raise CapabilityPreWriteReadError(
+                    f"bitmask_pre_write_read_failed:{capability.key}:{exc}"
+                ) from exc
             if not current:
-                raise ModbusError(f"bitmask_read_back_empty:{capability.key}")
+                raise CapabilityPreWriteReadError(
+                    f"bitmask_read_back_empty:{capability.key}"
+                )
             merged = (int(current[0]) & 0xFFFF & ~capability.bitmask) | field
             await session.write_holding(capability.register, [merged])
         else:
