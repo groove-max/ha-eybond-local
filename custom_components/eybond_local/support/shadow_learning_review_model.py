@@ -26,25 +26,6 @@ RISK_UNCERTAIN = "uncertain"
 REVIEW_MODEL_KIND = "learned_control_review_model"
 REVIEW_MODEL_SCHEMA_VERSION = 1
 
-# Conservative high-risk name fragments. A control whose SmartESS title or cloud
-# field id contains any of these defaults to high risk and disabled, even when the
-# overlay generator did not already classify it as an action. Over-disabling a benign
-# control is acceptable here (the user can re-enable it on the review screen); silently
-# enabling a destructive one is not.
-HIGH_RISK_NAME_KEYWORDS: tuple[str, ...] = (
-    "reset",
-    "restore",
-    "clear",
-    "factory",
-    "reboot",
-    "restart",
-    "calibration",
-    "calibrate",
-    "format",
-    "erase",
-    "delete",
-)
-
 # Confidence labels accepted as a real correlation. Anything else (missing, low,
 # unknown) is treated as weak/missing correlation and defaults to disabled.
 _ACCEPTED_CONFIDENCE: frozenset[str] = frozenset({"high", "medium"})
@@ -81,9 +62,6 @@ def classify_learned_control_risk(capability: dict[str, Any]) -> dict[str, Any]:
     provenance = provenance if isinstance(provenance, dict) else {}
 
     value_kind = str(capability.get("value_kind") or "").strip()
-    field_id = str(provenance.get("cloud_field_id") or "")
-    field_name = str(capability.get("title") or "")
-    normalized_name = _normalized_name(f"{field_name} {field_id}")
     confidence = str(provenance.get("confidence") or "").strip().lower()
     safety_class = str(provenance.get("safety_class") or "").strip().lower()
 
@@ -94,6 +72,9 @@ def classify_learned_control_risk(capability: dict[str, Any]) -> dict[str, Any]:
     # captured by safety_class=="destructive_action" on action controls). Everything else --
     # ordinary switches, selects, numbers, and non-destructive actions like "Forced EQ
     # Charging"/"Exit Fault Mode" -- is enabled by default, so the review screen pre-checks them.
+    # A scary NAME alone is deliberately NOT high-risk (see
+    # test_name_keyword_alone_no_longer_disables_control): the review screen pre-checks it and
+    # the user still confirms every write at runtime.
     if safety_class == "destructive_action":
         high_reasons.append("destructive_action")
 
@@ -584,10 +565,6 @@ def _has_clear_enum_labels(capability: dict[str, Any]) -> bool:
     return True
 
 
-def _normalized_name(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().replace("_", " ").split())
-
-
 def _to_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -605,7 +582,6 @@ __all__ = [
     "REVIEW_MODEL_SCHEMA_VERSION",
     "CONTROL_DISCOVERY_EVIDENCE_KIND",
     "CONTROL_DISCOVERY_EVIDENCE_SCHEMA_VERSION",
-    "HIGH_RISK_NAME_KEYWORDS",
     "classify_learned_control_risk",
     "default_learned_control_label",
     "build_learned_control_review_entry",

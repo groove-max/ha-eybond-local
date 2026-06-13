@@ -525,7 +525,10 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
         response_header = decode_header(upstream_responses[0][:HEADER_SIZE])
         response_payload = upstream_responses[0][HEADER_SIZE:]
         self.assertEqual(response_header.tid, 91)
-        self.assertEqual(response_payload[:2], bytes([1, 0x84]))
+        # The frame is a FORWARD_TO_DEVICE-wrapped Modbus PDU (\x01\x02...): the
+        # NACK echoes the INNER slave id (1) and function (2 | 0x80 = 0x82),
+        # NOT the eybond wrapper fcode (was wrongly 0x84).
+        self.assertEqual(response_payload[:2], bytes([1, 0x82]))
 
     async def test_correlated_tid_spoofed_cloud_device_command_is_not_forwarded(self) -> None:
         upstream_responses: list[bytes] = []

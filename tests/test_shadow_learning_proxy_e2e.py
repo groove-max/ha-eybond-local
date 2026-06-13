@@ -293,7 +293,9 @@ class ShadowLearningProxyE2ETests(unittest.IsolatedAsyncioTestCase):
         response_header = decode_header(cloud_observed_response[0][:HEADER_SIZE])
         response_payload = cloud_observed_response[0][HEADER_SIZE:]
         self.assertEqual(response_header.tid, 944)
-        self.assertEqual(response_payload[:2], bytes([1, 0x84]))
+        # FORWARD_TO_DEVICE-wrapped Modbus PDU: the NACK echoes the inner slave
+        # id (1) and function (2 | 0x80 = 0x82), not the wrapper fcode (0x84).
+        self.assertEqual(response_payload[:2], bytes([1, 0x82]))
         self.assertTrue(
             any(event.get("kind") == "shadow_proxy_intercept_cloud_unclassified" for event in trace)
         )

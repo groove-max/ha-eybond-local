@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from ..collector.at import build_at_response, parse_at_command
-from ..collector.protocol import HEADER_SIZE, build_collector_request, decode_header
+from ..collector.protocol import (
+    FC_FORWARD_TO_DEVICE,
+    HEADER_SIZE,
+    build_collector_request,
+    decode_header,
+)
 from ..const import LOCAL_METADATA_DIR
 from ..fixtures.utils import build_command_fixture_responses
 from ..payload.modbus import crc16_modbus, decode_read_request, decode_write_request
@@ -290,12 +295,17 @@ class InProcessShadowLearningHandler:
         if timeout <= 0:
             return ()
 
+        async def _wait_for_new_observation() -> None:
+            async with self._observation_condition:
+                while start >= len(self._write_observations):
+                    await self._observation_condition.wait()
+
+        # asyncio.wait_for (3.8+) instead of asyncio.timeout (3.11+): the project
+        # ships a deliberate Python 3.10 fallback elsewhere, so the backend must
+        # not hard-require 3.11 in the middle of a live learning sweep.
         try:
-            async with asyncio.timeout(timeout):
-                async with self._observation_condition:
-                    while start >= len(self._write_observations):
-                        await self._observation_condition.wait()
-        except TimeoutError:
+            await asyncio.wait_for(_wait_for_new_observation(), timeout=timeout)
+        except (asyncio.TimeoutError, TimeoutError):
             return ()
         return tuple(self._write_observations[start:])
 
@@ -443,6 +453,13 @@ class InProcessShadowLearningHandler:
             buffer.clear()
             raise RuntimeError(f"shadow_frame_decode_error:{type(exc).__name__}:{exc}") from exc
         total_len = header.total_len
+        if total_len < HEADER_SIZE:
+            # A header claiming a body shorter than the header itself (wire_len
+            # < 2) would otherwise yield a 6-7 byte "frame" that crashes
+            # decode_header downstream with a struct.error and desyncs the
+            # stream. Drop the buffer and fail cleanly, like the proxy does.
+            buffer.clear()
+            raise RuntimeError(f"shadow_frame_invalid_length:{total_len}")
         if len(buffer) < total_len:
             return None
         frame = bytes(buffer[:total_len])
@@ -534,7 +551,7 @@ class InProcessShadowLearningHandler:
                 "cloud_to_shadow",
                 {"remote": remote, "payload_hex": payload.hex(), "fcode": header.fcode},
             )
-            return self._build_exception_frame(header, exception_code=0x01)
+            return self._build_exception_frame(header, payload, exception_code=0x01)
 
         observation = write_observation_from_modbus_request(
             frame=payload,
@@ -790,12 +807,26 @@ class InProcessShadowLearningHandler:
         payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
         return bytes(payload)
 
-    def _build_exception_frame(self, header, *, exception_code: int) -> bytes:
-        payload = bytearray([header.devaddr, header.fcode | 0x80, exception_code])
-        payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
+    def _build_exception_frame(self, header, inner_payload: bytes, *, exception_code: int) -> bytes:
+        if header.fcode == FC_FORWARD_TO_DEVICE and len(inner_payload) >= 2:
+            # A modbus-to-device wrapper carries a real Modbus PDU: the NACK's
+            # inner bytes must echo the INNER slave id and function code
+            # (inner_payload[0]/[1]), not the eybond wrapper's devaddr/fcode
+            # (FC_FORWARD_TO_DEVICE is not a Modbus function) -- otherwise the
+            # cloud sees a function-code-mismatched response and treats it as a
+            # protocol error instead of a clean rejection.
+            unit = inner_payload[0]
+            function = inner_payload[1]
+        else:
+            # Non-modbus wrapper (set-collector, query, ...): there is no inner
+            # Modbus function, so keep the wrapper-based generic reject.
+            unit = header.devaddr
+            function = header.fcode
+        modbus = bytearray([unit, function | 0x80, exception_code])
+        modbus.extend(crc16_modbus(modbus).to_bytes(2, "little"))
         return build_collector_request(
             header.tid,
-            bytes(payload),
+            bytes(modbus),
             devcode=header.devcode,
             collector_addr=header.devaddr,
             fcode=header.fcode,
