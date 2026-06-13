@@ -42,14 +42,18 @@ EyeBond Local works with inverters whose stock monitoring is available through *
 |---|---|---|
 | **Sandisolar SD-HYM-4862HWP** | Supported | Full monitoring and tested controls on the verified SMG path. |
 | **Anenji ANJ-11KW-48V-WIFI-P** | Supported | Full monitoring, PV1/PV2 telemetry, inverter clock support, and tested controls. |
+| **Anenji 6200 (dual output)** | Supported | Full monitoring including second-output telemetry, the SMG control set, and an Output 2 on/off switch. Capture-derived from a community donation. |
+| **Anenji 6200** | Supported | Full monitoring and the SMG control set (single-output sibling of the dual-output model). Capture-derived from a community donation. |
 | **Anenji 4200 (Protocol 1)** | Partial support | Monitoring works, but the write surface still needs broader real-hardware validation. Use `Full Control` only if you understand the risk. |
 | **PowMr 4.2kW** (raw model `VMII-NXPW5KW`) | Supported | Full monitoring and tested controls on the verified PI30-family path. |
-| **Unknown but clearly SMG-family inverter** | Read-only fallback | Monitoring stays available, but writes remain disabled until the exact model is verified. |
+| **Unknown but clearly SMG-family inverter** | Partial tier + learning | Identified by its register fingerprint as SMG-family: base read sensors work out of the box, writes stay locked for safety, and the guided **device learning** wizard can discover its controls and extra sensors. |
 | **PI18-family hardware** | Experimental | Replay-tested only. Useful for research, but not yet public production-ready support. |
+
+Devices are identified by an offline catalog of register fingerprints (protocol layout + model code + rated power). After detection, onboarding shows the identified model and its **support tier** — full, partial, or not recognized — and tells you what to do next.
 
 For deeper protocol notes and SMG-specific support details, see the [SMG Support Matrix](docs/SMG_SUPPORT_MATRIX.md).
 
-Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support.
+Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support. Even unrecognized SMG-family models onboard with base sensors and can learn their controls.
 
 ---
 
@@ -75,13 +79,10 @@ Don't see your inverter? It might still work — open an issue with a [Support A
 
 ## Setup Walkthrough
 
-The setup wizard now walks you through the collector first, then the inverter.
+The setup wizard now walks you through the collector first, then the inverter. There is no
+separate welcome form anymore — the flow starts right at the collector network step.
 
-**1. Welcome** — choose the connection type and start the flow.
-
-<p align="center"><img src="docs/images/setup-01-welcome.png" alt="Welcome screen" width="320"></p>
-
-**2. Get the collector onto the same network** — if it is already on the same Wi-Fi or LAN as Home Assistant, continue. If not, the wizard explains the practical choices: use the SmartESS app, do it manually, or, on supported collectors, send the Wi-Fi settings over Bluetooth.
+**1. Get the collector onto the same network** — if it is already on the same Wi-Fi or LAN as Home Assistant, continue. If not, the wizard explains the practical choices: use the SmartESS app, do it manually, or, on supported collectors, send the Wi-Fi settings over Bluetooth.
 
 <p align="center"><img src="docs/images/setup-02-collector-network.png" alt="Collector network setup choice" width="480"></p>
 
@@ -89,21 +90,23 @@ If your collector supports Bluetooth provisioning, EyeBond Local can write the W
 
 <p align="center"><img src="docs/images/setup-03-bluetooth-wifi.png" alt="Bluetooth Wi-Fi setup" width="480"></p>
 
-**3. Choose how to look for the device** — select the Home Assistant network interface, then start with a quick scan, run a deep scan, or jump straight to manual setup.
+**2. Choose how to look for the device** — select the Home Assistant network interface, then start with a quick scan, run a deep scan, or jump straight to manual setup.
 
 <p align="center"><img src="docs/images/setup-04-scan-interface.png" alt="Choose scan interface" width="480"></p>
 
-**4. Scan the network** — the normal quick scan usually finishes in 5–15 seconds. If it comes back empty, the same flow can retry, switch to deep scan, or open manual setup.
+**3. Scan the network** — the normal quick scan usually finishes in 5–15 seconds. If it comes back empty, the same flow can retry, switch to deep scan, or open manual setup.
 
 <p align="center"><img src="docs/images/setup-05-scanning.png" alt="Scanning network" width="480"></p>
 
-**5. Review detected devices** — you'll see found collectors and inverters with clear statuses:
+**4. Review detected devices** — you'll see found collectors and inverters with clear statuses:
 
 - **Ready** — confidently detected and safe to add.
 - **Review** — found, but EyeBond Local wants you to double-check it.
 - **Collector only** — the collector answered, but the inverter model is not fully confirmed yet.
 
 <p align="center"><img src="docs/images/setup-06-detected-devices.png" alt="Detected devices" width="480"></p>
+
+**5. Check the identification summary** — before anything is created, the wizard shows the identified model and its support tier (full / partial / not recognized) and what to do next. Partially supported and unrecognized models onboard with base sensors and point you to device learning.
 
 **6. Confirm and choose the collector mode** — review the detected collector and inverter, choose `SmartESS + HA` or `HA only`, then finish the setup.
 
@@ -206,27 +209,42 @@ When local detection only reaches a collector-only or low-confidence state, EyeB
 - **Export SmartESS cloud evidence** is the standalone advanced action when you want the evidence itself for review or experimental metadata work.
 - **Evidence files stay on disk until you remove them manually**. The latest matching file for the entry is reused automatically.
 
-## Advanced Control Discovery Workflow
+## Device Learning (Guided Control Discovery)
 
-**Add controls for this device** is an advanced diagnostics workflow (control discovery) for unsupported or partially matched devices. It is optional and does not affect normal runtime polling.
+**Add controls (device learning)** is a guided wizard for partially supported and unrecognized
+inverters. It discovers which settings the device actually supports — and which registers the
+cloud reads as sensors — then lets you review and apply the result. It is optional and does
+not affect normal runtime polling.
 
-During a control-discovery session, EyeBond Local uses a fail-closed proxy-shadow route:
+How it works, in one linear flow:
+
+1. Open **Configure → Add controls (device learning)** on the integration.
+2. **Consent** — the wizard explains that Home Assistant will briefly sign in to SmartESS to
+   find which settings it can control. Close the SmartESS mobile app first so it does not
+   compete with the scan.
+3. **Sign-in** — your SmartESS credentials are used only for this session and are not saved.
+4. **Progress** — the integration probes choice/enum settings automatically (one value each,
+   no numeric sweeps) and captures the cloud's read map at the same time.
+5. **Review** — discovered controls are listed with a risk classification; risky controls are
+   never pre-selected. Learned read sensors are counted separately.
+6. **Apply** — the selection is activated for this one device only (device-scoped overlay).
+   You can also apply read sensors alone when no controls were selected.
+
+Safety model — the session is fail-closed end to end:
 
 - collector session traffic required to keep the cloud session alive is forwarded upstream,
 - cloud write/read commands are intercepted locally by the synthetic shadow backend,
 - unknown cloud-to-collector traffic is blocked by default,
-- discovery controls are accepted only while the session is explicitly `ready` or `learning`.
-
-1. Open **Add controls for this device** from **Diagnostics and experimental metadata → Advanced metadata tools**.
-2. Run a small, intentional control sample in SmartESS so the discovery session captures paired write observations.
-3. Generate discovered-control overlay drafts from the captured evidence.
-4. Activate the discovered-control draft for this one device only (device-scoped activation).
-5. Export a support archive and share it for review.
+- the collector is restored to its normal route even when a run fails,
+- on memory-tight hosts the scan refuses to start instead of risking an out-of-memory crash.
 
 Important scope boundary:
 
-- A discovered-control overlay activation is device-scoped evidence and should be treated as experimental local metadata.
-- Model-level support promotion is a separate developer step after review. Promotion does not happen automatically from local discovered-control overlays.
+- A learned overlay is device-scoped evidence and should be treated as experimental local
+  metadata.
+- Model-level support promotion is a separate review step: share a support archive (and, if
+  you like, a contribution record built with the contribution toolchain) and the model can be
+  added to the built-in catalog for everyone.
 
 ---
 

@@ -62,8 +62,7 @@ Open:
 2. Open the EyeBond Local entry
 3. Choose **Configure**
 4. Open **Diagnostics and service tools**
-5. Open **Advanced metadata tools**
-6. Choose **Collector traffic capture**
+5. Choose **Collector traffic capture**
 
 That screen is better when you want to watch the live session, refresh the log, or download the saved result right after the capture ends.
 

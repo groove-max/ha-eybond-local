@@ -9,19 +9,81 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
-- Nothing yet.
+- Added an offline device identification catalog: inverters are now identified by a
+  deterministic register fingerprint (protocol layout + model code + rated power) with explicit
+  support tiers, and the catalog — not heuristics — decides which schema and controls apply.
+- Added a detection summary step to onboarding: after the scan you see the identified model,
+  its support tier (full / partial / not recognized), and what to do next, before the device
+  is created.
+- Added a guided control-discovery wizard ("Add controls (device learning)") for partially
+  supported and unrecognized inverters: one linear flow (consent → SmartESS sign-in → progress
+  → review → apply) replaces the old technical action menu. Sessions are fail-closed: the
+  collector is always restored even when a run fails.
+- Added read-sensor learning: during a learning session the integration also captures which
+  registers the cloud reads, binds cloud sensor labels to registers by value correlation and
+  enum matching, and can apply the learned read sensors even when no controls were selected.
+- Added new supported models from community-donated captures: **Anenji 6200 (dual output)** —
+  full support including second-output telemetry (power, apparent power, load, voltage,
+  cut-off SOC, overload threshold) and an **Output 2 on/off switch** — and **Anenji 6200**
+  (single output, full support with the SMG control set).
+- Added bit-level write capabilities: controls that own a single bit of a shared register are
+  written read-modify-write, preserving the other bits (this enables the Output 2 switch).
+- Added a memory guard to learning: on memory-tight hosts the scan refuses to start
+  (`insufficient_memory`) instead of risking an out-of-memory crash.
+- Added a contribution toolchain for donated captures: contribution record builder, vetting
+  tool, and a GitHub issue template for sharing support packages.
+- Added a validation toggle (`EYBOND_FORCE_UNSUPPORTED=1` env var, or a
+  `force_unsupported.flag` sentinel file in the HA config data dir) that treats every model as
+  unsupported so the learning flow can be exercised on a fully supported device.
 
 ### Changed
 
-- Nothing yet.
+- Onboarding UX overhaul: the welcome form is gone, the happy path is decluttered, SmartESS
+  cloud assist is an explicit optional choice (never an interstitial), developer tooling is
+  removed from the options flow, and long wall-of-text screens were rewritten into short
+  actionable guidance (en/ru/uk).
+- Unknown-but-SMG-family inverters now onboard at the partial tier with base read sensors and
+  a clear pointer to device learning, instead of being rejected with
+  "no supported driver matched".
+- Inverter-communication loss during detection now surfaces as "inverter link down / retry"
+  instead of a false "no supported driver matched".
+- Startup is lighter: metadata catalogs are warmed off the event loop, removing blocking file
+  reads during driver detection (matters on slow or throttled hosts).
 
 ### Fixed
 
-- Nothing yet.
+- Device learning now actually works on the partial / unrecognized tier it targets. Two
+  coupled defects made it unusable there: those devices silently inherited the full controls
+  profile (so overlay generation deduped against the wrong base), and the readiness check kept
+  reporting `missing_effective_metadata_snapshot` because that tier never persists a snapshot.
+- Changing the collector Wi-Fi no longer fails with
+  "collector_listener_bind_failed … address in use" while the entry is loaded.
+- Guided control discovery is more robust: closing the dialog mid-scan now still restores the
+  collector route (fail-closed), a single bad cloud value can no longer abort a successful run,
+  a successful-but-empty run is no longer shown as a failure, and re-running the wizard no
+  longer shows the previous run's results.
+- The Output 2 / bitmask switches no longer get permanently blocked when a transient read error
+  happens while toggling them.
+- Partially supported devices: the add flow now tells you the next step to unlock controls,
+  and the learning consent dialog is correctly translated (ru/uk).
+- Removed a harmless but noisy "Unable to remove unknown job listener" error on unload.
+- Catalog entries are validated on load (support tier and its controls-profile invariant), so a
+  malformed entry fails fast instead of silently degrading onboarding.
+- Privacy: all real device identifiers (collector PNs, serials, credentials, network details)
+  were replaced with synthetic stand-ins across tests and catalog provenance, and a guard test
+  now fails the suite if a real-looking identifier enters the source tree.
+
+### Performance
+
+- Lighter coordinator refresh on resource-constrained hosts: metadata base-name resolution is
+  cached instead of reading overlay files from disk every poll, the shadow-learning session
+  state is no longer re-read from disk every refresh, and redundant per-poll Modbus reads on
+  multi-output variants were removed.
 
 ### Docs
 
-- Nothing yet.
+- Updated the README hardware table, device-learning guide, and setup walkthrough (en/uk) for
+  the catalog-based identification, the guided learning wizard, and the new Anenji 6200 models.
 
 ## [0.2.0-beta.1] - 2026-05-12
 
