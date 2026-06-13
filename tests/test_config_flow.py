@@ -267,6 +267,7 @@ from custom_components.eybond_local.collector.smartess_ble import (
 )
 from custom_components.eybond_local.collector.smartess_local import (
     SET_REBOOT_OR_APPLY,
+    SET_SERVER_ENDPOINT,
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
 )
@@ -2784,6 +2785,139 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "collector-cloud.smartess.example,18899,TCP",
         )
 
+    def _bridge_confirm_result(self, *, is_bridge: bool) -> OnboardingResult:
+        details = {"collector_virtual_bridge": True} if is_bridge else {}
+        return OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="udp",
+                ip="192.168.1.55",
+                connected=True,
+                collector=CollectorInfo(collector_pn="PN123"),
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632500000001",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                details=details,
+            ),
+            connection_mode="known_ip",
+        )
+
+    async def test_confirm_step_hides_operation_mode_selector_for_detected_bridge(self) -> None:
+        # Item 1: a detected bridge forces HA-only and hides the SmartESS+HA /
+        # HA-only choice, showing an informational note instead.
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result(is_bridge=True)
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "confirm")
+        self.assertIn("poll_interval", result["data_schema"].schema)
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertTrue(
+            result["description_placeholders"]["collector_operation_mode_note"].strip()
+        )
+
+    async def test_confirm_step_keeps_operation_mode_selector_for_factory_collector(self) -> None:
+        # Item 1 fail-safe: a factory collector keeps the selector and an empty note.
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result(is_bridge=False)
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertEqual(
+            result["description_placeholders"]["collector_operation_mode_note"], ""
+        )
+
+    async def test_confirm_step_bridge_refused_endpoint_write_does_not_hard_fail(self) -> None:
+        # Item 1: the bridge currently refuses the FC=3 param-21 endpoint write.
+        # For a detected bridge that refusal is non-fatal — the flow forces
+        # HA-only and creates the entry instead of surfacing a hard error.
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result(is_bridge=True)
+
+        transport = AsyncMock()
+        session = AsyncMock()
+
+        async def set_collector(parameter: int, value: str):
+            # The bridge refuses the endpoint write with a non-zero status.
+            status = 1 if parameter == SET_SERVER_ENDPOINT else 0
+            return type("_SetResponse", (), {"status": status, "parameter": parameter})()
+
+        session.set_collector.side_effect = set_collector
+
+        async def with_session():
+            return transport, session
+
+        # The current endpoint differs from the HA target, so the explicit write
+        # path runs (skipping the early current==target return). The bind resets
+        # cached endpoint state first, so the differing value must come from the
+        # read, not a pre-set attribute.
+        async def read_endpoint():
+            flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
+            return "collector-cloud.smartess.example,18899,TCP"
+
+        flow._async_with_selected_collector_session = with_session
+        flow._async_read_selected_collector_server_endpoint = read_endpoint
+
+        result = await flow.async_step_confirm(
+            {
+                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
+                "poll_interval": 15,
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE], COLLECTOR_OPERATION_HA_ONLY
+        )
+        # The reboot/apply write must NOT run after a refused endpoint write.
+        applied_parameters = [
+            call.args[0] for call in session.set_collector.await_args_list
+        ]
+        self.assertEqual(applied_parameters, [SET_SERVER_ENDPOINT])
+
+    async def test_confirm_step_factory_refused_endpoint_write_hard_fails(self) -> None:
+        # Item 1 fail-safe: a factory collector keeps today's hard error on a
+        # refused HA-only endpoint write.
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result(is_bridge=False)
+
+        transport = AsyncMock()
+        session = AsyncMock()
+
+        async def set_collector(parameter: int, value: str):
+            status = 1 if parameter == SET_SERVER_ENDPOINT else 0
+            return type("_SetResponse", (), {"status": status, "parameter": parameter})()
+
+        session.set_collector.side_effect = set_collector
+
+        async def with_session():
+            return transport, session
+
+        async def read_endpoint():
+            flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
+            return "collector-cloud.smartess.example,18899,TCP"
+
+        flow._async_with_selected_collector_session = with_session
+        flow._async_read_selected_collector_server_endpoint = read_endpoint
+
+        result = await flow.async_step_confirm(
+            {
+                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
+                "poll_interval": 15,
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"]["base"], "collector_endpoint_write_failed")
+
     async def test_collector_callback_target_uses_legacy_cloud_port(self) -> None:
         flow = self._make_flow()
         flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
@@ -3967,6 +4101,111 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "Reload local metadata",
         )
         self.assertNotIn("advanced_metadata", result["menu_options"])
+
+    async def test_diagnostics_menu_omits_proxy_capture_for_detected_bridge(self) -> None:
+        # Item 3: a detected bridge has no SmartESS cloud side and refuses the
+        # FC=3 param-21 redirect, so proxy capture (which has nothing to capture)
+        # is omitted from the diagnostics menu.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            menu_options = options._diagnostics_menu_options("create_support_package")
+
+        self.assertNotIn("proxy_capture", menu_options)
+        self.assertIn("create_support_package", menu_options)
+
+    async def test_diagnostics_menu_keeps_proxy_capture_for_factory_collector(self) -> None:
+        # Item 3 fail-safe: a factory collector keeps proxy capture.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            menu_options = options._diagnostics_menu_options("create_support_package")
+
+        self.assertIn("proxy_capture", menu_options)
+
+    async def test_options_runtime_step_hides_operation_mode_selector_for_bridge(self) -> None:
+        # Item 1: the runtime options flow forces/hides the collector operation
+        # mode for a detected bridge, exactly like the onboarding confirm step.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        result = await options.async_step_runtime()
+
+        self.assertEqual(result["type"], "form")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertTrue(
+            result["description_placeholders"]["collector_operation_mode_note"].strip()
+        )
+
+    async def test_options_runtime_step_keeps_operation_mode_selector_for_factory(self) -> None:
+        # Item 1 fail-safe: a factory collector keeps the selector and empty note.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        result = await options.async_step_runtime()
+
+        self.assertEqual(result["type"], "form")
+        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertEqual(
+            result["description_placeholders"]["collector_operation_mode_note"], ""
+        )
+
+    async def test_options_runtime_step_forces_ha_only_for_bridge_on_submit(self) -> None:
+        # Item 1: submitting the bridge runtime form (no operation-mode field)
+        # still persists HA-only.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        result = await options.async_step_runtime(
+            {
+                "poll_interval": 15,
+                "control_mode": "auto",
+                "connection": {
+                    "server_ip": "192.168.1.50",
+                    "collector_ip": "192.168.1.55",
+                    "tcp_port": 8899,
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 3,
+                    "heartbeat_interval": 60,
+                    "driver_hint": "auto",
+                },
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE], COLLECTOR_OPERATION_HA_ONLY
+        )
 
     async def test_proxy_capture_step_shows_planner_status(self) -> None:
         options = self._make_options_flow()

@@ -180,6 +180,7 @@
       "collector_network_needs_bluetooth": "No, connect the collector to Wi-Fi using Bluetooth first",
       "collector_operation_smartess_and_ha": "Cloud + HA",
       "collector_operation_ha_only": "Home Assistant only",
+      "collector_operation_mode_bridge_note": "Local bridge — always Home Assistant only; it has no SmartESS cloud side.",
       "collector_endpoint_original_hint": "This looks like the original cloud endpoint. Write it down before continuing; the integration will remember it, but keeping your own copy is safer.",
       "collector_endpoint_custom_hint": "This endpoint does not look like the stock cloud address. Make sure you know how to restore it before continuing.",
       "collector_endpoint_unknown_hint": "The current collector callback endpoint could not be read yet.",

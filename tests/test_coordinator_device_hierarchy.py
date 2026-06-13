@@ -1366,6 +1366,36 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(reverse_discovery_flags, [False])
 
+    def test_configure_reverse_discovery_stays_on_for_ha_only_bridge(self) -> None:
+        # Item 1: a detected bridge refuses the param-21 endpoint write and does
+        # not persist the endpoint, so it relearns the HA server only from UDP
+        # discovery. Forced to HA-only, it must KEEP reverse discovery enabled to
+        # reconnect after a reboot — unlike a factory collector.
+        reverse_discovery_flags: list[bool] = []
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._connection_spec = types.SimpleNamespace(
+            effective_advertised_server_ip="192.168.1.104",
+            effective_advertised_tcp_port=8899,
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            effective_advertised_server_ip="192.168.1.104",
+            collector_server_endpoint_rollback_target="",
+            set_reverse_discovery_enabled=reverse_discovery_flags.append,
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_operation_mode": "home_assistant_only"},
+            options={"collector_operation_mode": "home_assistant_only"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
+            collector=types.SimpleNamespace(collector_virtual_bridge=True),
+        )
+
+        coordinator._configure_reverse_discovery_mode()
+
+        self.assertEqual(reverse_discovery_flags, [True])
+
     def test_async_trigger_collector_rediscovery_keeps_bootstrap_transport_separate(self) -> None:
         async def _run() -> None:
             reverse_discovery_calls: list[dict[str, float | int]] = []

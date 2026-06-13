@@ -180,6 +180,7 @@
       "collector_network_needs_bluetooth": "Ні, спочатку підключити колектор до Wi-Fi через Bluetooth",
       "collector_operation_smartess_and_ha": "Cloud + HA",
       "collector_operation_ha_only": "Тільки Home Assistant",
+      "collector_operation_mode_bridge_note": "Локальний міст — завжди тільки Home Assistant; у нього немає хмарної сторони SmartESS.",
       "collector_endpoint_original_hint": "Схоже, це оригінальний хмарний endpoint. Запишіть його перед продовженням: інтеграція його запам'ятає, але власна копія надійніша.",
       "collector_endpoint_custom_hint": "Цей endpoint не схожий на штатну хмарну адресу. Переконайтеся, що знаєте, як його відновити, перш ніж продовжити.",
       "collector_endpoint_unknown_hint": "Поточний callback endpoint колектора поки не вдалося прочитати.",

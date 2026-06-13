@@ -12,6 +12,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
 from custom_components.eybond_local.collector.at import CollectorAtResponse  # noqa: E402
 from custom_components.eybond_local.collector.at_runtime import (  # noqa: E402
     CollectorVirtualBridgeInfo,
@@ -19,7 +21,16 @@ from custom_components.eybond_local.collector.at_runtime import (  # noqa: E402
     query_runtime_collector_at_values,
 )
 from custom_components.eybond_local.connection.models import EybondConnectionSpec  # noqa: E402
-from custom_components.eybond_local.models import CollectorInfo  # noqa: E402
+from custom_components.eybond_local.models import (  # noqa: E402
+    CollectorInfo,
+    DetectedInverter,
+    DriverMatch,
+    ProbeTarget,
+)
+from custom_components.eybond_local.onboarding.driver_detection import (  # noqa: E402
+    DetectedDriverContext,
+)
+from custom_components.eybond_local.onboarding.eybond import OnboardingDetector  # noqa: E402
 from custom_components.eybond_local.runtime.hub import EybondHub  # noqa: E402
 
 
@@ -175,6 +186,93 @@ class SnapshotDetectionFlagTests(unittest.TestCase):
 
         self.assertFalse(snapshot.collector.collector_virtual_bridge)
         self.assertNotIn("collector_virtual_bridge", snapshot.values)
+
+
+class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):
+    """Item 2: the onboarding AT+VDTU probe carries the bridge verdict to confirm."""
+
+    def _make_context(self) -> DetectedDriverContext:
+        probe_target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        inverter = DetectedInverter(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="Bench Inverter",
+            serial_number="000000000000001",
+            probe_target=probe_target,
+            details={},
+        )
+        match = DriverMatch(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="Bench Inverter",
+            serial_number="000000000000001",
+            probe_target=probe_target,
+            details={},
+        )
+
+        class _FakeDriver:
+            async def async_read_values(self, transport, inverter, **kwargs):
+                return {}
+
+        return DetectedDriverContext(driver=_FakeDriver(), inverter=inverter, match=match)
+
+    class _FakeAtTransport:
+        def __init__(self, *, host, port, request_timeout, collector_ip) -> None:
+            self.collector_ip = collector_ip
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def _run_enrich(self, at_values: dict[str, object]) -> DetectedDriverContext:
+        detector = OnboardingDetector(server_ip="192.0.2.10")
+        context = self._make_context()
+        # No async_send_collector on the transport -> the FC query path is skipped,
+        # leaving only the AT-value (VDTU) path under test.
+        transport = object()
+        with (
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.SharedCollectorAtTransport",
+                self._FakeAtTransport,
+            ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.query_runtime_collector_at_values",
+                new=AsyncMock(return_value=at_values),
+            ),
+        ):
+            await detector._async_enrich_onboarding_runtime_details(
+                transport,
+                context,
+                collector_ip="192.0.2.14",
+            )
+        return context
+
+    async def test_bridge_vdtu_carries_verdict_to_match_details(self) -> None:
+        context = await self._run_enrich({"collector_vdtu_raw": _VALID_VDTU})
+
+        self.assertTrue(context.match.details["collector_virtual_bridge"])
+        self.assertEqual(context.match.details["collector_bridge_kind"], "esp-collector")
+        self.assertEqual(context.match.details["collector_bridge_version"], "0.4.0")
+        self.assertEqual(
+            context.match.details["collector_bridge_features"],
+            "local_only, no_cloud, wifi_params",
+        )
+        # The raw VDTU string is intentionally not carried into match details.
+        self.assertNotIn("collector_vdtu_raw", context.match.details)
+
+    async def test_factory_collector_carries_no_bridge_verdict(self) -> None:
+        context = await self._run_enrich({"collector_vdtu_raw": "ERROR"})
+
+        self.assertNotIn("collector_virtual_bridge", context.match.details)
+        self.assertNotIn("collector_vdtu_raw", context.match.details)
+
+    async def test_unanswered_vdtu_carries_no_bridge_verdict(self) -> None:
+        # AT query answered, but no VDTU key at all (older firmware / missed probe).
+        context = await self._run_enrich({"collector_signal_strength": -67})
+
+        self.assertNotIn("collector_virtual_bridge", context.match.details)
 
 
 if __name__ == "__main__":

@@ -978,6 +978,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         return self.collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
 
+    def _collector_is_virtual_bridge(self) -> bool:
+        """Return True when the running collector is a detected virtual bridge.
+
+        Positive-only: reads the runtime snapshot's parsed AT+VDTU verdict and
+        defaults to False when the snapshot is unavailable, so a factory
+        collector behaves exactly as before.
+        """
+
+        collector = getattr(self.data, "collector", None)
+        return bool(getattr(collector, "collector_virtual_bridge", False))
+
     def _configure_reverse_discovery_mode(self) -> None:
         """Control steady reverse discovery according to the collector ownership mode."""
 
@@ -986,8 +997,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "set_reverse_discovery_enabled",
             None,
         )
-        if set_reverse_discovery_enabled is not None:
-            set_reverse_discovery_enabled(not self.collector_home_assistant_primary)
+        if set_reverse_discovery_enabled is None:
+            return
+        # HA-only normally disables steady reverse discovery, because a factory
+        # collector reconnects to the persisted (param-21-written) endpoint on
+        # its own. A virtual bridge, however, refuses that write and does not
+        # persist the endpoint (until firmware Item 5): it relearns the HA server
+        # ONLY from UDP discovery broadcasts. So a detected bridge must keep
+        # reverse discovery ENABLED even when forced to HA-only, otherwise it
+        # cannot reconnect after a reboot.
+        keep_reverse_discovery = (
+            not self.collector_home_assistant_primary
+            or self._collector_is_virtual_bridge()
+        )
+        set_reverse_discovery_enabled(keep_reverse_discovery)
 
     def consume_entry_reload_suppression(self) -> bool:
         """Return whether the next config-entry update listener should skip reload."""

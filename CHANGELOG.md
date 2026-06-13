@@ -16,9 +16,11 @@ the GitHub release body should be rendered from the matching version section her
   collector. A detected bridge is shown as an honest **ESP EyeBond Collector** device
   (manufacturer, model, firmware version, and project link) and its cloud-only actions —
   device learning / shadow learning, proxy capture, and SmartESS cloud assist — are hidden,
-  since the bridge has no SmartESS cloud side. Local actions (runtime settings, diagnostics,
-  and Change Collector Wi-Fi) stay fully available. Factory collectors and bridges with older
-  firmware that never answer `AT+VDTU` behave exactly as before.
+  since the bridge has no SmartESS cloud side. Its collector operation mode is fixed to
+  **Home Assistant only** (the SmartESS+HA choice is not shown), and reverse discovery stays
+  on so it can reconnect. Local actions (runtime settings, diagnostics, and Change Collector
+  Wi-Fi) stay fully available. Factory collectors and bridges with older firmware that never
+  answer `AT+VDTU` behave exactly as before.
 - Added an offline device identification catalog: inverters are now identified by a
   deterministic register fingerprint (protocol layout + model code + rated power) with explicit
   support tiers, and the catalog — not heuristics — decides which schema and controls apply.

@@ -59,7 +59,7 @@ Don't see your inverter? It might still work — open an issue with a [Support A
 
 If your inverter has no factory SmartESS / EyeBond Wi-Fi collector, you can build a fully local one with the community **[ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector)** firmware. It turns an ESP8266/ESP32 wired to the inverter into a virtual EyeBond collector that is byte-for-byte compatible with this integration — discovery, sensors, controls, and the collector Wi-Fi settings all work the same way.
 
-The bridge is a purely local transparent link: it never talks to the SmartESS cloud. EyeBond Local detects it automatically and shows it as an **ESP EyeBond Collector** device, hiding the cloud-only actions (device learning / shadow learning, proxy capture, SmartESS cloud assist) that have nothing to talk to. Everything local — runtime settings, diagnostics, and changing the collector Wi-Fi — stays available.
+The bridge is a purely local transparent link: it never talks to the SmartESS cloud. EyeBond Local detects it automatically and shows it as an **ESP EyeBond Collector** device, hiding the cloud-only actions (device learning / shadow learning and proxy capture) that have nothing to talk to, and forcing the collector operation mode to **Home Assistant only** (the SmartESS + HA choice is hidden, since there is no cloud side). Proxy capture on a bridge does not silently wait — its cloud-callback redirect is simply refused, so it fails visibly; that is why it is hidden. (SmartESS cloud assist is not offered in this build, so it is absent for everyone.) Everything local — runtime settings, diagnostics, and changing the collector Wi-Fi — stays available.
 
 ---
 

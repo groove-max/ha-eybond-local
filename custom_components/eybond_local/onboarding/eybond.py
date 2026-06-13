@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..canonical_telemetry import apply_canonical_measurements
-from ..collector.at_runtime import query_runtime_collector_at_values
+from ..collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
 from ..collector.discovery import async_probe_target, async_probe_target_replies
 from ..collector.parameter_registry import RUNTIME_COLLECTOR_PARAMETERS, query_runtime_collector_values
 from ..collector.smartess_local import SmartEssLocalSession, SmartEssProtocolDescriptor
@@ -63,6 +63,14 @@ _ONBOARDING_RUNTIME_DETAIL_KEYS = {
     "collector_signal_strength_source",
     "output_rating_active_power",
     "rated_power",
+    # Virtual-bridge verdict carried from the AT+VDTU probe so the confirm step
+    # can gate the collector operation-mode UI before the entry exists. The
+    # raw VDTU string itself is deliberately NOT carried — only the parsed
+    # boolean/identity, populated below in _async_enrich_onboarding_runtime_details.
+    "collector_virtual_bridge",
+    "collector_bridge_kind",
+    "collector_bridge_version",
+    "collector_bridge_features",
 }
 
 _ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS = tuple(
@@ -821,6 +829,20 @@ class OnboardingDetector:
                     await at_transport.stop()
         except Exception as exc:
             logger.debug("Onboarding collector AT transport unavailable ip=%s error=%s", collector_ip, exc)
+
+        # Parse the AT+VDTU probe (if it answered) into the bridge verdict and
+        # carry it to the confirm step. Positive-only: a factory collector or an
+        # unanswered probe leaves no carrier keys, so onboarding behaves exactly
+        # as before. The raw VDTU string is intentionally dropped here.
+        bridge = parse_collector_vdtu(details.pop("collector_vdtu_raw", None))
+        if bridge.is_virtual_bridge:
+            details["collector_virtual_bridge"] = True
+            if bridge.kind:
+                details["collector_bridge_kind"] = bridge.kind
+            if bridge.version:
+                details["collector_bridge_version"] = bridge.version
+            if bridge.features:
+                details["collector_bridge_features"] = ", ".join(bridge.features)
 
         try:
             runtime_values = await deadline.wait_for(

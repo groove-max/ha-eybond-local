@@ -89,7 +89,8 @@ The integration recognizes such a bridge automatically. Detection is done with a
 When a bridge is detected:
 
 - It is shown as an **ESP EyeBond Collector** device (honest manufacturer, model, and firmware version), instead of the generic `EyeBond Collector` / `Wi-Fi.DTU` identity.
-- **Cloud-only actions are hidden**, because the bridge has no SmartESS cloud side and nothing to talk to: device learning / shadow learning, proxy capture, and SmartESS cloud assist would all wait forever for cloud traffic that never comes.
+- **Cloud-only actions are hidden**, because the bridge has no SmartESS cloud side and nothing to talk to: device learning / shadow learning and proxy capture are both removed from the menus. Proxy capture is hidden because it would only redirect the cloud callback (FC=3 param 21) to record SmartESS cloud reads — a redirect the bridge refuses, so the action would fail visibly with `collector_set_failed` rather than capture anything. (SmartESS cloud assist is not offered in this build at all, so it is vacuously absent for a bridge too.)
+- **The collector operation mode is forced to Home Assistant only** and the SmartESS + HA / HA-only selector is hidden (it is replaced with a short note), because a bridge has no SmartESS cloud side. The bridge is still told where to connect by writing the Home Assistant server endpoint; until the firmware accepts and persists that write, a refused endpoint write to a bridge is treated as applied instead of surfacing an error.
 - **Local actions stay available**: runtime/connection settings, diagnostics, and **Change Collector Wi-Fi** all work normally — the bridge implements the real Wi-Fi parameter path.
 
 If `AT+VDTU` is never answered (older bridge firmware, a factory collector, or a missed query), the collector behaves exactly as before — nothing is hidden or restricted.

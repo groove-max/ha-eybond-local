@@ -2226,19 +2226,39 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if self._selected_result is None:
             return await self.async_step_auto()
 
+        # A detected virtual bridge has no SmartESS cloud side: it is inherently
+        # Home Assistant only. Force the mode and hide the SmartESS+HA / HA-only
+        # selector instead of offering a meaningless choice. The bridge verdict
+        # comes from Item 2 (the onboarding AT+VDTU probe), so the confirm step
+        # can gate before the entry exists. Fail-safe: factory collectors and
+        # unanswered probes keep today's SmartESS+HA default and the selector.
+        is_bridge = self._selected_result_is_virtual_bridge()
+
         errors: dict[str, str] = {}
         if user_input is not None:
-            mode = str(
-                user_input.get(CONF_COLLECTOR_OPERATION_MODE, DEFAULT_COLLECTOR_OPERATION_MODE)
-                or DEFAULT_COLLECTOR_OPERATION_MODE
-            )
+            if is_bridge:
+                # Ignore any (hidden) selector value: a bridge is always HA-only.
+                mode = COLLECTOR_OPERATION_HA_ONLY
+            else:
+                mode = str(
+                    user_input.get(CONF_COLLECTOR_OPERATION_MODE, DEFAULT_COLLECTOR_OPERATION_MODE)
+                    or DEFAULT_COLLECTOR_OPERATION_MODE
+                )
             if mode not in COLLECTOR_OPERATION_MODES:
                 errors[CONF_COLLECTOR_OPERATION_MODE] = "invalid_selection"
             elif mode == COLLECTOR_OPERATION_HA_ONLY and not self._collector_endpoint_bind_applied:
                 self._collector_operation_mode = mode
                 self._reset_collector_endpoint_binding_state()
                 try:
-                    await self._async_bind_selected_collector_to_home_assistant()
+                    # For a bridge, writing the HA server endpoint is still how
+                    # the bridge is told where to connect — keep the bind. But
+                    # the bridge currently REFUSES the FC=3 param-21 write (until
+                    # firmware Item 5), so a refused write must be non-fatal:
+                    # treat it as applied, log at debug, and continue. A factory
+                    # collector keeps today's hard error on a refused write.
+                    await self._async_bind_selected_collector_to_home_assistant(
+                        allow_refused_endpoint_write=is_bridge,
+                    )
                 except Exception as exc:
                     self._collector_endpoint_error = _exception_detail(exc)
                     errors["base"] = "collector_endpoint_write_failed"
@@ -2250,17 +2270,29 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 return await self._async_create_entry_from_result(user_input)
 
         description_placeholders = self._collector_operation_placeholders()
+        if is_bridge:
+            description_placeholders = dict(description_placeholders)
+            description_placeholders["collector_operation_mode_note"] = self._tr(
+                "common.dynamic.collector_operation_mode_bridge_note",
+                "Local bridge — always Home Assistant only; it has no SmartESS "
+                "cloud side.",
+            )
+            schema: dict[Any, Any] = {
+                vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
+            }
+        else:
+            description_placeholders = dict(description_placeholders)
+            description_placeholders.setdefault("collector_operation_mode_note", "")
+            schema = {
+                vol.Required(
+                    CONF_COLLECTOR_OPERATION_MODE,
+                    default=self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE,
+                ): self._collector_operation_mode_selector(),
+                vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
+            }
         return self.async_show_form(
             step_id=step_id,
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_COLLECTOR_OPERATION_MODE,
-                        default=self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE,
-                    ): self._collector_operation_mode_selector(),
-                    vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
-                }
-            ),
+            data_schema=vol.Schema(schema),
             errors=errors,
             description_placeholders=description_placeholders,
         )
@@ -2877,6 +2909,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
         )
 
+    def _selected_result_is_virtual_bridge(self) -> bool:
+        """Return True when the selected onboarding result is a detected bridge.
+
+        Reads the bridge verdict carried from the onboarding AT+VDTU probe (see
+        ``onboarding/eybond.py``). Positive-only and fail-safe: a factory
+        collector or an unanswered probe leaves no verdict, so the confirm step
+        behaves exactly as before — the runtime path still corrects identity and
+        menu gating after the entry runs.
+        """
+
+        result = self._selected_result
+        match = getattr(result, "match", None) if result is not None else None
+        details = getattr(match, "details", None)
+        if isinstance(details, dict):
+            return bool(details.get("collector_virtual_bridge"))
+        return False
+
     def _reset_scan_progress(self) -> None:
         """Reset scan-progress bookkeeping before one new scan attempt starts."""
 
@@ -3094,7 +3143,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._collector_target_server_endpoint = self._collector_callback_target_endpoint()
         return endpoint
 
-    async def _async_bind_selected_collector_to_home_assistant(self) -> None:
+    async def _async_bind_selected_collector_to_home_assistant(
+        self,
+        *,
+        allow_refused_endpoint_write: bool = False,
+    ) -> None:
         target_endpoint = self._collector_callback_target_endpoint()
         current_endpoint = self._collector_current_server_endpoint or await self._async_read_selected_collector_server_endpoint()
         self._collector_target_server_endpoint = target_endpoint
@@ -3105,6 +3158,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         try:
             set_response = await session.set_collector(SET_SERVER_ENDPOINT, target_endpoint)
             if set_response.status != 0 or set_response.parameter != SET_SERVER_ENDPOINT:
+                # A virtual bridge refuses the FC=3 param-21 endpoint write until
+                # firmware Item 5 ships. For a bridge this is expected and the
+                # mode is HA-only regardless, so treat a refused write as applied
+                # (log at debug, do not surface a hard error). A factory
+                # collector keeps the original hard failure.
+                if allow_refused_endpoint_write:
+                    logger.debug(
+                        "Collector endpoint write refused by a detected bridge "
+                        "(parameter=%s status=%s); treating as applied and continuing.",
+                        SET_SERVER_ENDPOINT,
+                        set_response.status,
+                    )
+                    return
                 raise RuntimeError(
                     f"collector_set_failed:parameter={SET_SERVER_ENDPOINT}:status={set_response.status}"
                 )
@@ -5389,9 +5455,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     ) -> ConfigFlowResult:
         if not self._interface_options:
             self._interface_options = await self.hass.async_add_executor_job(_get_ipv4_interfaces)
+        # A detected bridge is inherently Home Assistant only and the operation-mode
+        # selector is hidden for it, so the submitted form carries no mode value.
+        # Fail-safe: factory collectors / unanswered probes keep today's selector.
+        is_bridge = self._collector_is_virtual_bridge()
         errors: dict[str, str] = {}
         if user_input is not None:
             flat_input = _flatten_sections(user_input)
+            if is_bridge:
+                # Force HA-only regardless of any (absent) selector input.
+                flat_input[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
             flat_input.setdefault(
                 CONF_COLLECTOR_OPERATION_MODE,
                 self._config_entry.options.get(
@@ -5446,37 +5519,42 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if collector_operation_mode not in COLLECTOR_OPERATION_MODES:
             collector_operation_mode = DEFAULT_COLLECTOR_OPERATION_MODE
 
-        data_schema = vol.Schema(
-            {
-                vol.Required(CONF_POLL_INTERVAL, default=poll_interval): _POLL_INTERVAL_SELECTOR,
-                vol.Required(CONF_CONTROL_MODE, default=control_mode): _control_mode_selector(
-                    self._translation_bundle,
-                ),
+        schema_fields: dict[Any, Any] = {
+            vol.Required(CONF_POLL_INTERVAL, default=poll_interval): _POLL_INTERVAL_SELECTOR,
+            vol.Required(CONF_CONTROL_MODE, default=control_mode): _control_mode_selector(
+                self._translation_bundle,
+            ),
+        }
+        if not is_bridge:
+            # Only a factory collector / unanswered probe gets the SmartESS+HA vs
+            # HA-only choice. A bridge has no SmartESS cloud side, so the selector
+            # is hidden and an informational note is shown instead.
+            schema_fields[
                 vol.Required(
                     CONF_COLLECTOR_OPERATION_MODE,
                     default=collector_operation_mode,
-                ): _collector_operation_mode_selector(
-                    self._tr(
-                        "common.dynamic.collector_operation_smartess_and_ha",
-                        "SmartESS cloud + Home Assistant",
-                    ),
-                    self._tr(
-                        "common.dynamic.collector_operation_ha_only",
-                        "Home Assistant only",
-                    ),
+                )
+            ] = _collector_operation_mode_selector(
+                self._tr(
+                    "common.dynamic.collector_operation_smartess_and_ha",
+                    "SmartESS cloud + Home Assistant",
                 ),
-                vol.Required("connection"): section(
-                    vol.Schema(
-                        self._build_connection_fields_schema(
-                            connection_type,
-                            fields=branch.form_layout.runtime_fields,
-                            values=connection_values,
-                        )
-                    ),
-                    {"collapsed": True},
+                self._tr(
+                    "common.dynamic.collector_operation_ha_only",
+                    "Home Assistant only",
                 ),
-            }
+            )
+        schema_fields[vol.Required("connection")] = section(
+            vol.Schema(
+                self._build_connection_fields_schema(
+                    connection_type,
+                    fields=branch.form_layout.runtime_fields,
+                    values=connection_values,
+                )
+            ),
+            {"collapsed": True},
         )
+        data_schema = vol.Schema(schema_fields)
 
         return self.async_show_form(
             step_id="runtime",
@@ -5491,6 +5569,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "control_summary": self._control_summary(
                     control_mode=control_mode,
                     confidence=self._config_entry.data.get(CONF_DETECTION_CONFIDENCE, "none"),
+                ),
+                "collector_operation_mode_note": (
+                    self._tr(
+                        "common.dynamic.collector_operation_mode_bridge_note",
+                        "Local bridge — always Home Assistant only; it has no "
+                        "SmartESS cloud side.",
+                    )
+                    if is_bridge
+                    else ""
                 ),
             },
         )
@@ -8041,7 +8128,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if rollback_paths.paths and "rollback_local_metadata" not in menu_options:
             menu_options.append("rollback_local_metadata")
 
-        menu_options.append("proxy_capture")
+        # Proxy capture redirects the collector's cloud callback (FC=3 param 21)
+        # to record the SmartESS cloud's control reads. A virtual bridge has no
+        # SmartESS cloud side and refuses that redirect write, so the action has
+        # nothing to capture — omit it for a detected bridge. Fail-safe: factory
+        # collectors / unanswered probes keep proxy capture exactly as before.
+        if not self._collector_is_virtual_bridge():
+            menu_options.append("proxy_capture")
         return menu_options
 
     def _current_cloud_evidence_path(self, coordinator=None) -> str:

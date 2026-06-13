@@ -100,7 +100,7 @@
       },
       "confirm": {
         "title": "Подтвердите обнаружение",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Режим работы коллектора",
           "poll_interval": "Интервал опроса"
@@ -112,7 +112,7 @@
       },
       "confirm_without_cloud_assist": {
         "title": "Подтвердите обнаружение",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Режим работы коллектора",
           "poll_interval": "Интервал опроса"
@@ -275,7 +275,7 @@
       },
       "runtime": {
         "title": "Параметры работы",
-        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}",
+        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "poll_interval": "Интервал опроса",
           "collector_operation_mode": "Режим работы коллектора",
