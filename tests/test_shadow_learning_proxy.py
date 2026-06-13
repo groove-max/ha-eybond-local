@@ -32,6 +32,7 @@ from custom_components.eybond_local.payload.modbus import (
 from custom_components.eybond_local.support.shadow_learning_backend import ShadowLearningSeed
 from custom_components.eybond_local.support.shadow_learning_proxy import (
     InProcessFailClosedShadowProxyHandler,
+    _consume_next_message,
     route_status_indicates_control_ready,
     route_status_indicates_control_write_ready,
 )
@@ -908,6 +909,36 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(observations), 1)
         self.assertEqual(observations[0]["payload"]["register"], 300)
         self.assertEqual(observations[0]["payload"]["values"], [5])
+
+
+class ConsumeNextMessageFramingTests(unittest.TestCase):
+    def test_eybond_frame_with_modbus_colliding_tid_is_not_stalled(self) -> None:
+        # An eybond frame whose tid low byte is 0x10 (Modbus write-multiple
+        # fcode) used to be read as a phantom Modbus frame and stall the
+        # direction. It must be framed as a complete eybond frame instead.
+        for tid in (0x0010, 0x0110, 0x0003, 0x0106):
+            with self.subTest(tid=tid):
+                frame = build_collector_request(
+                    tid,
+                    b"\x01\x03\x00\x10",
+                    devcode=2376,
+                    collector_addr=1,
+                    fcode=4,
+                )
+                buffer = bytearray(frame)
+                result = _consume_next_message(buffer)
+                self.assertIsNotNone(result)
+                kind, consumed = result
+                self.assertEqual(kind, "frame")
+                self.assertEqual(consumed, frame)
+                self.assertEqual(len(buffer), 0)
+
+    def test_partial_eybond_frame_still_waits(self) -> None:
+        frame = build_collector_request(
+            0x0010, b"\x01\x03\x00\x10", devcode=2376, collector_addr=1, fcode=4
+        )
+        buffer = bytearray(frame[:-2])  # one short of complete
+        self.assertIsNone(_consume_next_message(buffer))
 
 
 class RouteStatusControlReadyTests(unittest.TestCase):

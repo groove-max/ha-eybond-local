@@ -7,7 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from ..collector.protocol import HEADER_SIZE, decode_header
+from ..collector.protocol import (
+    FC_FORWARD_TO_DEVICE,
+    FC_HEARTBEAT,
+    FC_QUERY_COLLECTOR,
+    FC_SET_COLLECTOR,
+    FC_SET_DEVICE_REG,
+    FC_TRIGGER_QUERY_HISTORY,
+    FC_TRIGGER_QUERY_REAL_TIME,
+    HEADER_SIZE,
+    decode_header,
+)
 from ..collector.smartess_local import parse_query_collector_response, parse_set_collector_response
 from ..payload.modbus import crc16_modbus
 from .collector_cloud_proxy import JsonLineWriter
@@ -21,6 +31,20 @@ _CLOUD_CORRELATED_RESPONSE_FCODES = frozenset({2, 3})
 # read input / write single). Write-multiple (0x10) has a variable length.
 _MODBUS_FIXED_LEN_FCODES = frozenset({3, 4, 6})
 _MODBUS_WRITE_MULTIPLE_FCODE = 16
+# Valid eybond collector wrapper function codes (header byte 7). Used to tell a
+# real eybond frame apart from a byte run whose 2nd byte merely collides with a
+# Modbus function code (an eybond frame's 2nd byte is the TID low byte).
+_KNOWN_EYBOND_FCODES = frozenset(
+    {
+        FC_HEARTBEAT,
+        FC_QUERY_COLLECTOR,
+        FC_SET_COLLECTOR,
+        FC_FORWARD_TO_DEVICE,
+        FC_TRIGGER_QUERY_REAL_TIME,
+        FC_SET_DEVICE_REG,
+        FC_TRIGGER_QUERY_HISTORY,
+    }
+)
 
 # Sentinel: the buffer head looks like a Modbus RTU frame that is still
 # accumulating bytes; the caller must wait rather than try collector framing.
@@ -591,6 +615,15 @@ def _consume_next_message(buffer: bytearray) -> tuple[str, bytes] | None:
     # be misparsed as a (short) collector frame.
     modbus = _consume_modbus_rtu_frame(buffer)
     if modbus is _MODBUS_INCOMPLETE:
+        # The 2nd byte looked like a Modbus function code, but for an eybond
+        # frame that byte is the TID low byte (e.g. tid % 256 == 0x10 collides
+        # with write-multiple, whose length is then read from the eybond
+        # devaddr byte and can stall forever). If a COMPLETE, structurally-valid
+        # eybond frame is already buffered, consume it instead of waiting on
+        # phantom-Modbus bytes.
+        frame = _consume_eybond_frame_if_complete(buffer)
+        if frame is not None:
+            return "frame", frame
         return None
     if modbus is not None:
         return "modbus", modbus
@@ -605,6 +638,30 @@ def _consume_next_message(buffer: bytearray) -> tuple[str, bytes] | None:
     frame = bytes(buffer[:total_len])
     del buffer[:total_len]
     return "frame", frame
+
+
+def _consume_eybond_frame_if_complete(buffer: bytearray) -> bytes | None:
+    """Consume one head-of-buffer eybond frame only if it is complete and valid.
+
+    Returns the frame bytes (and removes them) when the head decodes as a
+    complete eybond collector frame with a known wrapper fcode; otherwise leaves
+    the buffer untouched and returns None.
+    """
+
+    if len(buffer) < HEADER_SIZE:
+        return None
+    try:
+        header = decode_header(bytes(buffer[:HEADER_SIZE]))
+    except Exception:
+        return None
+    total_len = header.total_len
+    if total_len < HEADER_SIZE or len(buffer) < total_len:
+        return None
+    if header.fcode not in _KNOWN_EYBOND_FCODES:
+        return None
+    frame = bytes(buffer[:total_len])
+    del buffer[:total_len]
+    return frame
 
 
 def _consume_modbus_rtu_frame(buffer: bytearray) -> bytes | object | None:

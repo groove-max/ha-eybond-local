@@ -202,7 +202,10 @@ def generate_shadow_learning_overlay_drafts(
             {
                 int(item.get("register", 0))
                 for item in learned_summary["generated"]
-                if int(item.get("register", 0)) > 0
+                # Admit register 0 (a valid Modbus address): _group_matched_records
+                # admits it (rejects only register < 0), so excluding it here left
+                # the schema's write-register list inconsistent with the controls.
+                if int(item.get("register", 0)) >= 0
             }
         ),
         **learned_read["schema_fragment"],
