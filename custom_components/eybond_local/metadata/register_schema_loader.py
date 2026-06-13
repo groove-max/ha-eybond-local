@@ -96,6 +96,7 @@ def set_external_register_schema_roots(roots: tuple[Path, ...] | list[Path]) -> 
     _EXTERNAL_REGISTER_SCHEMA_ROOTS = normalized
     load_register_schema.cache_clear()
     _load_raw_schema.cache_clear()
+    builtin_base_schema_name.cache_clear()
 
 
 def clear_register_schema_loader_cache() -> None:
@@ -103,6 +104,7 @@ def clear_register_schema_loader_cache() -> None:
 
     load_register_schema.cache_clear()
     _load_raw_schema.cache_clear()
+    builtin_base_schema_name.cache_clear()
 
 
 def _register_schema_search_dirs() -> tuple[Path, ...]:
@@ -143,6 +145,7 @@ def load_register_schema_raw(schema_name: str) -> dict[str, Any]:
     return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
+@lru_cache(maxsize=None)
 def builtin_base_schema_name(schema_name: str) -> str:
     """Return the built-in base schema name underlying ``schema_name``.
 
@@ -151,6 +154,12 @@ def builtin_base_schema_name(schema_name: str) -> str:
     extend that built-in base, not the overlay itself -- re-wrapping an overlay
     name in ``builtin:`` resolves to a non-existent install-dir path. Walk the
     ``extends`` chain until the name resolves to a built-in (or absolute) schema.
+
+    Cached: an overlay name always resolves to the same base (overlay names
+    carry a session token, so a new overlay is a new key). This is reached from
+    metadata resolution on every coordinator refresh, so it must not stat +
+    json-load the extends chain in the event loop each time. The cache is
+    cleared whenever the external roots change.
     """
 
     current = str(schema_name or "").strip()

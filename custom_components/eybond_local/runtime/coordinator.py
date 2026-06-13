@@ -596,6 +596,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._cached_smartess_cloud_evidence_warmed = False
         self._cached_proxy_capture_session_state = None
         self._cached_shadow_learning_session_state = None
+        # Once True, _cached_shadow_learning_session_state is authoritative and
+        # the per-refresh disk read is skipped. The save/clear paths keep the
+        # cache in sync (this coordinator is the only writer of the file), so the
+        # steady-state cost is zero when learning is never used.
+        self._shadow_learning_session_state_loaded = False
         self._proxy_trace_download_manifest_path = ""
         self._proxy_trace_download_details: tuple[str, str] = ("", "")
         self._proxy_capture_deadline_refresh_handle = None
@@ -4447,9 +4452,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Return the persisted active shadow-learning state when it belongs to this entry."""
 
         del require_process
+        if self._shadow_learning_session_state_loaded:
+            # Authoritative in-memory cache: save/clear keep it fresh and this
+            # coordinator is the only writer, so skip the per-refresh disk read.
+            return self._cached_shadow_learning_session_state
         state = await self.hass.async_add_executor_job(
             lambda: load_shadow_learning_session_state(Path(self.hass.config.config_dir))
         )
+        self._shadow_learning_session_state_loaded = True
         if state is None:
             self._cached_shadow_learning_session_state = None
             return None
@@ -4473,6 +4483,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         )
         self._cached_shadow_learning_session_state = state
+        self._shadow_learning_session_state_loaded = True
 
     async def _async_clear_shadow_learning_session_state(self) -> None:
         """Delete persisted shadow-learning session state without blocking the event loop."""
@@ -4481,6 +4492,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             lambda: clear_shadow_learning_session_state(Path(self.hass.config.config_dir))
         )
         self._cached_shadow_learning_session_state = None
+        self._shadow_learning_session_state_loaded = True
 
     def _clear_proxy_capture_session_runtime_values(self) -> None:
         """Drop stale transient proxy-session values from both cache and current snapshot."""

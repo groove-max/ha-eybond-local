@@ -139,6 +139,7 @@ def set_external_profile_roots(roots: tuple[Path, ...] | list[Path]) -> None:
     _EXTERNAL_PROFILE_ROOTS = normalized
     load_driver_profile.cache_clear()
     _load_raw_profile.cache_clear()
+    builtin_base_profile_name.cache_clear()
 
 
 def clear_profile_loader_cache() -> None:
@@ -146,6 +147,7 @@ def clear_profile_loader_cache() -> None:
 
     load_driver_profile.cache_clear()
     _load_raw_profile.cache_clear()
+    builtin_base_profile_name.cache_clear()
 
 
 def _profile_search_dirs() -> tuple[Path, ...]:
@@ -172,6 +174,7 @@ def builtin_profile_path(profile_name: str) -> Path:
     return (PROFILES_DIR / profile_name).resolve()
 
 
+@lru_cache(maxsize=None)
 def builtin_base_profile_name(profile_name: str) -> str:
     """Return the built-in base profile name underlying ``profile_name``.
 
@@ -180,6 +183,10 @@ def builtin_base_profile_name(profile_name: str) -> str:
     start from that built-in base, not the overlay -- otherwise output names and
     parent references accumulate the overlay's own session token. Walk the
     ``extends``/``draft_of`` chain until the name resolves to a built-in profile.
+
+    Cached for the same reason as builtin_base_schema_name: it is reached from
+    metadata resolution on every coordinator refresh and must not walk the
+    extends chain on disk in the event loop each time. Cleared on root changes.
     """
 
     current = str(profile_name or "").strip()

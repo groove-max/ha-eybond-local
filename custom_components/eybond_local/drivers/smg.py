@@ -407,8 +407,14 @@ class SmgModbusDriver(InverterDriver):
         )
         # A few learned controls (e.g. Boot method reg 406, Output control reg 420) sit OUTSIDE
         # the polled blocks; read those single registers directly so they too report state.
+        # The aux_config registers were already fetched above, so exclude them from the budget.
+        aux_registers = frozenset(
+            spec.register + offset
+            for spec in aux_config_fields
+            for offset in range(max(int(getattr(spec, "word_count", 1) or 1), 1))
+        )
         extra_blocks = await _read_out_of_block_capability_registers(
-            session, inverter.capabilities, polled_blocks
+            session, inverter.capabilities, polled_blocks, already_read=aux_registers
         )
         _apply_capability_read_back(values, inverter.capabilities, polled_blocks + extra_blocks)
         return values
@@ -554,6 +560,8 @@ async def _read_out_of_block_capability_registers(
     session: ModbusSession,
     capabilities,
     polled_blocks: tuple[tuple[int, list[int]], ...],
+    *,
+    already_read: frozenset[int] = frozenset(),
 ) -> tuple[tuple[int, list[int]], ...]:
     """Read writable-capability registers that fall OUTSIDE the polled blocks.
 
@@ -562,9 +570,15 @@ async def _read_out_of_block_capability_registers(
     registers directly so their selects/numbers report current state too. De-duplicated and
     bounded (at most 16 extra reads per refresh); ``action`` controls have no readable state and
     are skipped; individual read failures are skipped silently.
+
+    ``already_read`` lists registers the caller fetched through other paths (the
+    aux_config / optional-spec reads). Excluding them stops the 16-read budget
+    from being spent re-reading registers already in hand -- which on variants
+    with many aux registers (anenji_anj_11kw: 677-693) would otherwise crowd out
+    the genuinely out-of-block controls this helper exists to read.
     """
 
-    polled: set[int] = set()
+    polled: set[int] = set(already_read)
     for start, block in polled_blocks:
         polled.update(range(start, start + len(block)))
 
