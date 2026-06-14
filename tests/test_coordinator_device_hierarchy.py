@@ -951,6 +951,64 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertIsNone(inverter)
         self.assertFalse(has_inverter_identity)
 
+    def test_shadow_learning_effective_metadata_falls_back_to_live_for_partial_tier(self) -> None:
+        # Partial-tier devices persist NO snapshot, so the learning start path
+        # must fall back to the LIVE effective metadata (base schema) instead of
+        # seeding with the empty persisted snapshot — otherwise it blocks with
+        # missing_effective_metadata_snapshot on exactly the devices learning is
+        # for. This property is the single source of truth shared with the
+        # config-flow preflight.
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={"driver_hint": "auto"},
+            options={},
+            title="SMG Family",
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
+
+        family_selection = types.SimpleNamespace(
+            effective_owner_key="modbus_smg",
+            effective_owner_name="SMG-family runtime",
+            profile_name="",
+            register_schema_name="modbus_smg/base.json",
+        )
+        with patch.object(
+            self.coordinator_module,
+            "resolve_effective_metadata_selection",
+            return_value=family_selection,
+        ):
+            result = coordinator.shadow_learning_effective_metadata
+
+        self.assertEqual(result["register_schema_name"], "modbus_smg/base.json")
+        self.assertEqual(result["profile_name"], "")
+
+    def test_shadow_learning_effective_metadata_prefers_persisted_snapshot(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={"driver_hint": "auto"},
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "modbus_smg",
+                    "effective_owner_name": "SMG-family runtime",
+                    "profile_name": "smg_modbus.json",
+                    "register_schema_name": "modbus_smg/models/smg_6200.json",
+                    "confidence": "high",
+                    "generation": 4,
+                    "generated_at": "2026-06-03T19:00:00+00:00",
+                }
+            },
+            title="SMG 6200",
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
+
+        result = coordinator.shadow_learning_effective_metadata
+
+        self.assertEqual(result.register_schema_name, "modbus_smg/models/smg_6200.json")
+
     def test_snapshot_backed_setup_is_not_synthesized_for_invalid_snapshot_payload(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.hass = object()
@@ -3010,6 +3068,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 return_value={},
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
+                "shadow_learning_effective_metadata",
+                new_callable=PropertyMock,
+                return_value={"register_schema_name": "modbus_smg/base.json"},
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
                 "collector_cloud_family",
                 new_callable=PropertyMock,
                 return_value="smartess",
@@ -3167,6 +3230,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 "effective_metadata_snapshot",
                 new_callable=PropertyMock,
                 return_value={},
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "shadow_learning_effective_metadata",
+                new_callable=PropertyMock,
+                return_value={"register_schema_name": "modbus_smg/base.json"},
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_cloud_family",
@@ -3386,6 +3454,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 "effective_metadata_snapshot",
                 new_callable=PropertyMock,
                 return_value={},
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "shadow_learning_effective_metadata",
+                new_callable=PropertyMock,
+                return_value={"register_schema_name": "modbus_smg/base.json"},
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_cloud_family",

@@ -2210,7 +2210,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             collector_cloud_profile_source=self.collector_cloud_profile_source,
             collector_cloud_profile_confidence=self.collector_cloud_profile_confidence,
             collector_callback_endpoint=self.collector_callback_target_endpoint,
-            effective_metadata_snapshot=self.effective_metadata_snapshot,
+            effective_metadata_snapshot=self.shadow_learning_effective_metadata,
             raw_capture=raw_capture,
             write_response_mode="ack" if allow_ack_writes else "exception",
             allow_ack_writes=allow_ack_writes,
@@ -3359,6 +3359,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Return the effective detected register schema name when available."""
 
         return self.effective_metadata.register_schema_name
+
+    @property
+    def shadow_learning_effective_metadata(self) -> Any:
+        """Return the effective metadata a shadow-learning seed should carry.
+
+        Prefer the persisted snapshot, but the partial / unidentified tier never
+        persists one (it has no controls profile by design), so fall back to the
+        LIVE effective metadata (the family base schema). Without this fallback
+        the start path blocks with ``missing_effective_metadata_snapshot`` on
+        exactly the devices learning exists for. This is the single source of
+        truth shared with the config-flow preflight so the preview and the
+        actual start can never drift.
+        """
+
+        snapshot = self.effective_metadata_snapshot
+        if str(getattr(snapshot, "register_schema_name", "") or "").strip():
+            return snapshot
+        return {
+            "effective_owner_key": self.effective_owner_key,
+            "profile_name": self.effective_profile_name,
+            "register_schema_name": self.effective_register_schema_name,
+        }
 
     @property
     def smartess_collector_pn(self) -> str:

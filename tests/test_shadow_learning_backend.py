@@ -155,6 +155,27 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertEqual(blockers, ())
         self.assertTrue(build_shadow_learning_preflight(seed).can_start)
 
+    def test_empty_persisted_snapshot_is_blocked(self) -> None:
+        # The raw PERSISTED snapshot is empty for a partial-tier device (it never
+        # persists one). Passing it straight through is the bug that blocked the
+        # learning start: the coordinator must fall back to live metadata first
+        # (coordinator.shadow_learning_effective_metadata) before seeding.
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260605T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=EffectiveMetadataSnapshot(),
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertIn("missing_effective_metadata_snapshot", blockers)
+
     def test_exception_mode_logs_write_without_mutating_register_bank(self) -> None:
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",

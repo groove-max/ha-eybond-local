@@ -7037,22 +7037,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     def _preflight_effective_metadata(coordinator) -> dict[str, Any]:
         """Return the effective metadata the preflight validates.
 
-        Prefer the persisted snapshot, but partial / unidentified tiers never
-        persist one (the persisted snapshot requires a controls profile, which
-        those tiers deliberately lack). They DO have a live effective register
-        schema (the family base), and that is all the preflight needs -- so fall
-        back to the live effective metadata instead of blocking learning on the
-        exact devices it exists for.
+        Delegates to the coordinator so this preview preflight and the actual
+        learning start path (``async_start_shadow_learning``) share ONE fallback
+        implementation. They used to each carry their own copy and drifted: the
+        preview fell back to live metadata while the start path passed the raw
+        (empty, for a partial tier) persisted snapshot, so learning previewed as
+        startable and then failed with ``missing_effective_metadata_snapshot``.
         """
 
-        snapshot = coordinator.effective_metadata_snapshot
-        if str(getattr(snapshot, "register_schema_name", "") or "").strip():
-            return snapshot
-        return {
-            "effective_owner_key": coordinator.effective_owner_key,
-            "profile_name": coordinator.effective_profile_name,
-            "register_schema_name": coordinator.effective_register_schema_name,
-        }
+        return coordinator.shadow_learning_effective_metadata
 
     async def _build_shadow_learning_preflight_snapshot(self, coordinator) -> dict[str, Any]:
         connected = bool(getattr(coordinator.data, "connected", False))
