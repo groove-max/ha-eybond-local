@@ -18,9 +18,11 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
     _apply_capability_read_back,
+    _decode_block,
     _resolve_smg_identity_binding,
     _support_capture_ranges,
 )
+from custom_components.eybond_local.models import RegisterValueSpec  # noqa: E402
 from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.metadata.smg_identity_anchor_catalog_loader import (  # noqa: E402
@@ -1341,6 +1343,41 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         catalog_details = inverter.details["device_catalog"]
         self.assertEqual(catalog_details["kind"], "family")
         self.assertEqual(catalog_details["tier"], "partial")
+
+
+class DecodeUnavailableSentinelTests(unittest.TestCase):
+    """An all-ones UNSIGNED register decodes as unavailable, not 65535."""
+
+    def test_unsigned_all_ones_is_unavailable(self) -> None:
+        specs = (RegisterValueSpec(key="output_power", register=10),)
+        decoded = _decode_block(10, [0xFFFF], specs)
+        self.assertIsNone(decoded["output_power"])
+
+    def test_unsigned_all_ones_with_divisor_is_unavailable(self) -> None:
+        specs = (RegisterValueSpec(key="grid_voltage", register=10, divisor=10),)
+        decoded = _decode_block(10, [0xFFFF], specs)
+        self.assertIsNone(decoded["grid_voltage"])
+
+    def test_u32_all_ones_is_unavailable(self) -> None:
+        specs = (
+            RegisterValueSpec(
+                key="energy", register=10, word_count=2, combine="u32_high_first"
+            ),
+        )
+        decoded = _decode_block(10, [0xFFFF, 0xFFFF], specs)
+        self.assertIsNone(decoded["energy"])
+
+    def test_signed_minus_one_is_kept(self) -> None:
+        # On a signed register 0xFFFF == -1 is a legitimate reading (e.g. a
+        # small reverse current) and must NOT be treated as unavailable.
+        specs = (RegisterValueSpec(key="battery_current", register=10, signed=True),)
+        decoded = _decode_block(10, [0xFFFF], specs)
+        self.assertEqual(decoded["battery_current"], -1)
+
+    def test_normal_unsigned_value_is_unchanged(self) -> None:
+        specs = (RegisterValueSpec(key="output_power", register=10),)
+        decoded = _decode_block(10, [4200], specs)
+        self.assertEqual(decoded["output_power"], 4200)
 
 
 if __name__ == "__main__":
