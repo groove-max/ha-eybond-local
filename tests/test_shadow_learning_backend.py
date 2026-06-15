@@ -176,6 +176,29 @@ class ShadowLearningBackendTests(unittest.TestCase):
 
         self.assertIn("missing_effective_metadata_snapshot", blockers)
 
+    def test_missing_cloud_profile_does_not_block(self) -> None:
+        # The collector cloud profile is manifest metadata only. A collector that
+        # reports no protocol asset (e.g. firmware 8.50.18.3) returns empty
+        # key/label, but the device is still fully learnable, so the scan must NOT
+        # be blocked on it.
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260615T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="",
+            collector_cloud_profile_label="",
+            collector_cloud_profile_source="",
+            collector_cloud_profile_confidence="",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=_sample_snapshot(),
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertNotIn("missing_collector_cloud_profile", blockers)
+        self.assertEqual(blockers, ())
+        self.assertTrue(build_shadow_learning_preflight(seed).can_start)
+
     def test_exception_mode_logs_write_without_mutating_register_bank(self) -> None:
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",

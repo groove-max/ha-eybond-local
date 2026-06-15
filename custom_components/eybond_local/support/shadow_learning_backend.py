@@ -176,8 +176,12 @@ def build_shadow_learning_preflight(seed: ShadowLearningSeed) -> ShadowLearningP
     blockers: list[str] = []
     if not seed.collector_pn:
         blockers.append("missing_collector_pn")
-    if not (seed.collector_cloud_profile_key or seed.collector_cloud_profile_label):
-        blockers.append("missing_collector_cloud_profile")
+    # The collector cloud PROFILE (key/label) is NOT a blocker: it is
+    # session-manifest metadata only. The proxy redirect uses the cloud FAMILY
+    # endpoint and the learn plan comes from the cloud device settings -- neither
+    # needs the per-collector protocol asset. That asset is firmware-dependent
+    # (fw 8.50.12.3 reports a "0000" placeholder, 8.50.18.3 reports nothing), so
+    # gating the scan on it blocked perfectly learnable devices arbitrarily.
     if not _snapshot_is_valid(seed.effective_metadata_snapshot):
         blockers.append("missing_effective_metadata_snapshot")
     if not seed.register_bank:
