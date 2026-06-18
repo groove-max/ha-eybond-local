@@ -594,6 +594,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._tooling_values: dict[str, Any] = {}
         self._cached_smartess_cloud_evidence_record = None
         self._cached_smartess_cloud_evidence_warmed = False
+        self._cached_effective_metadata = None
         self._cached_proxy_capture_session_state = None
         self._cached_shadow_learning_session_state = None
         # Once True, _cached_shadow_learning_session_state is authoritative and
@@ -738,6 +739,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         await self._async_recover_proxy_capture_state()
         await self._async_recover_shadow_learning_state()
         await self._async_warm_smartess_cloud_evidence_cache()
+        await self._async_warm_effective_metadata_cache()
 
     async def async_shutdown(self) -> None:
         """Stop the underlying hub."""
@@ -1358,6 +1360,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             and stable_snapshot.profile_name == current_snapshot.profile_name
             and stable_snapshot.register_schema_name == current_snapshot.register_schema_name
             and stable_snapshot.confidence == current_snapshot.confidence
+            and stable_snapshot.candidate_keys == current_snapshot.candidate_keys
+            and stable_snapshot.resolution_level == current_snapshot.resolution_level
+            and stable_snapshot.surface_key == current_snapshot.surface_key
+            and stable_snapshot.evidence_fingerprint == current_snapshot.evidence_fingerprint
+            and stable_snapshot.catalog_version == current_snapshot.catalog_version
+            and stable_snapshot.descriptor_revisions == current_snapshot.descriptor_revisions
         ):
             return None
 
@@ -1530,6 +1538,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # Keep self.data aligned with the fresh snapshot before helpers that
         # inspect coordinator state instead of the local snapshot argument.
         self.data = snapshot
+        await self._async_warm_effective_metadata_cache()
         collector_cloud_family = self.collector_cloud_family
         if collector_cloud_family:
             snapshot.values["collector_cloud_family"] = collector_cloud_family
@@ -1587,13 +1596,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # serialize inverter.capabilities).
         _runtime_inverter = getattr(snapshot, "inverter", None)
         _runtime_capabilities = tuple(getattr(_runtime_inverter, "capabilities", ()) or ())
-        snapshot.values["effective_overlay_merge_status"] = self._device_overlay_merge_status
-        snapshot.values["effective_inverter_capability_count"] = len(_runtime_capabilities)
-        snapshot.values["effective_inverter_learned_capability_keys"] = sorted(
+        _learned_capability_keys = sorted(
             str(getattr(capability, "key", ""))
             for capability in _runtime_capabilities
             if getattr(capability, "is_device_scoped_experimental", False)
         )
+        if _selected_control_keys is None:
+            _exposed_learned_capability_keys = (
+                _learned_capability_keys
+                if write_exposure_context["device_scoped_overlay_active"]
+                else []
+            )
+        else:
+            _exposed_learned_capability_keys = [
+                key for key in _learned_capability_keys if key in _selected_control_keys
+            ]
+        snapshot.values["effective_overlay_merge_status"] = self._device_overlay_merge_status
+        snapshot.values["effective_inverter_capability_count"] = len(_runtime_capabilities)
+        snapshot.values["effective_inverter_all_learned_capability_keys"] = _learned_capability_keys
+        snapshot.values["effective_inverter_exposed_learned_capability_keys"] = (
+            _exposed_learned_capability_keys
+        )
+        snapshot.values["effective_inverter_learned_capability_keys"] = _learned_capability_keys
         snapshot.values.update(self._support_workflow_values(snapshot))
         snapshot.values.update(self._collector_onboarding_values(snapshot))
         snapshot.values.update(self._tooling_values)
@@ -3288,6 +3312,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def effective_metadata(self):
         """Return the effective metadata selection for the current entry state."""
 
+        cached = getattr(self, "_cached_effective_metadata", None)
+        if cached is not None:
+            return cached
         return resolve_effective_metadata_selection(
             inverter=self.identified_inverter,
             driver=self.current_driver,
@@ -4211,6 +4238,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     async def async_reload_local_metadata(self) -> None:
         """Reload the current config entry after local metadata changes."""
 
+        self._cached_effective_metadata = None
         clear_local_metadata_loader_caches()
         self._publish_tooling_values(local_metadata_status="Reloading local metadata")
         await self.hass.config_entries.async_reload(self.config_entry.entry_id)
@@ -4292,6 +4320,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         options[_DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY] = activation
         self._async_update_entry_without_reload(options=options)
 
+        self._cached_effective_metadata = None
         clear_local_metadata_loader_caches()
         self._publish_tooling_values(
             local_metadata_status="Device-scoped learned overlay activated; reloading local metadata",
@@ -4312,6 +4341,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         )
         clear_local_metadata_loader_caches()
+        self._cached_effective_metadata = None
         self._publish_tooling_values(local_metadata_status="Rolling back local metadata")
         await self.hass.config_entries.async_reload(self.config_entry.entry_id)
         return tuple(str(path) for path in removed_paths)
@@ -4417,6 +4447,34 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         self._cached_smartess_cloud_evidence_record = record
         self._cached_smartess_cloud_evidence_warmed = True
+
+    def _warm_effective_metadata_cache_blocking(self):
+        """Resolve effective metadata and force profile/schema cache population."""
+
+        metadata = resolve_effective_metadata_selection(
+            inverter=self.identified_inverter,
+            driver=self.current_driver,
+            collector=self.data.collector,
+            entry_data=self.config_entry.data,
+            entry_options=self.config_entry.options,
+            persisted_snapshot=self.effective_metadata_snapshot,
+        )
+        # Access the lazy fields in the executor thread. The sync properties are used
+        # later by HA runtime/UI code, so their JSON files must already be cached there.
+        _ = metadata.profile_metadata
+        _ = metadata.register_schema_metadata
+        return metadata
+
+    async def _async_warm_effective_metadata_cache(self) -> None:
+        """Warm profile/schema loaders outside the event loop."""
+
+        try:
+            self._cached_effective_metadata = await self.hass.async_add_executor_job(
+                self._warm_effective_metadata_cache_blocking
+            )
+        except Exception as exc:
+            self._cached_effective_metadata = None
+            logger.debug("Effective metadata cache warm-up failed: %s", exc)
 
     def _latest_proxy_trace_record(self):
         """Return the latest proxy-trace manifest record for this entry."""
@@ -4825,14 +4883,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         metadata = self.effective_metadata
         smartess_protocol = metadata.smartess_protocol
         values = dict(self.data.values)
-        cloud_evidence_record = load_latest_cloud_evidence(
-            Path(self.hass.config.config_dir),
-            entry_id=self.config_entry.entry_id,
-            collector_pn=(
-                getattr(self.data.collector, "collector_pn", "")
-                or str(self.config_entry.data.get(CONF_COLLECTOR_PN, "") or "")
-            ),
-        )
+        cloud_evidence_record = self._latest_smartess_cloud_evidence_record()
         cloud_evidence = None
         if cloud_evidence_record is not None:
             cloud_evidence = cloud_evidence_record.payload

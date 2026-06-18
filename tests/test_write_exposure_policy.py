@@ -23,7 +23,7 @@ class WriteExposurePolicyTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.smg_profile = load_driver_profile("smg_modbus.json")
         cls.anenji_profile = load_driver_profile(
-            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.variant.json"
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"
         )
 
     def test_full_control_does_not_enable_family_fallback_writes(self) -> None:
@@ -80,7 +80,7 @@ class WriteExposurePolicyTests(unittest.TestCase):
                 variant_key="anenji_anj_11kw_48v_wifi_p",
                 profile_source_scope="builtin",
                 schema_source_scope="builtin",
-                profile_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.variant.json",
+                profile_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
             )
         )
 

@@ -47,6 +47,12 @@ _GENERATED_AT_KEYS = (
     "timestamp",
     "updated_at",
 )
+_CANDIDATE_KEYS_KEYS = ("candidate_keys", "device_candidates")
+_RESOLUTION_LEVEL_KEYS = ("resolution_level", "resolution")
+_SURFACE_KEY_KEYS = ("surface_key",)
+_EVIDENCE_FINGERPRINT_KEYS = ("evidence_fingerprint",)
+_CATALOG_VERSION_KEYS = ("catalog_version",)
+_DESCRIPTOR_REVISIONS_KEYS = ("descriptor_revisions",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +65,12 @@ class EffectiveMetadataSnapshot:
     profile_name: str = ""
     register_schema_name: str = ""
     confidence: str = "none"
+    candidate_keys: tuple[str, ...] = ()
+    resolution_level: str = ""
+    surface_key: str = ""
+    evidence_fingerprint: str = ""
+    catalog_version: str = ""
+    descriptor_revisions: tuple[str, ...] = ()
     generation: int = 0
     generated_at: str = ""
 
@@ -73,6 +85,12 @@ class EffectiveMetadataSnapshot:
             and not self.profile_name
             and not self.register_schema_name
             and self.confidence == "none"
+            and not self.candidate_keys
+            and not self.resolution_level
+            and not self.surface_key
+            and not self.evidence_fingerprint
+            and not self.catalog_version
+            and not self.descriptor_revisions
             and self.generation == 0
             and not self.generated_at
         )
@@ -81,12 +99,17 @@ class EffectiveMetadataSnapshot:
     def is_valid(self) -> bool:
         """Return whether the snapshot has enough metadata to be consumed safely."""
 
-        return bool(
+        base_valid = bool(
             self.effective_owner_key
             and self.profile_name
             and self.register_schema_name
             and self.confidence != "none"
         )
+        if not base_valid:
+            return False
+        if not self.catalog_version:
+            return True
+        return _catalog_surface_matches(self)
 
     def as_dict(self) -> dict[str, Any]:
         """Serialize this snapshot into one plain dictionary payload."""
@@ -102,6 +125,12 @@ def build_effective_metadata_snapshot(
     profile_name: Any = "",
     register_schema_name: Any = "",
     confidence: Any = "none",
+    candidate_keys: Any = (),
+    resolution_level: Any = "",
+    surface_key: Any = "",
+    evidence_fingerprint: Any = "",
+    catalog_version: Any = "",
+    descriptor_revisions: Any = (),
     generation: Any = 0,
     generated_at: Any = "",
 ) -> EffectiveMetadataSnapshot:
@@ -114,6 +143,12 @@ def build_effective_metadata_snapshot(
         profile_name=_normalize_text(profile_name),
         register_schema_name=_normalize_text(register_schema_name),
         confidence=_normalize_confidence(confidence),
+        candidate_keys=_normalize_text_tuple(candidate_keys),
+        resolution_level=_normalize_text(resolution_level),
+        surface_key=_normalize_text(surface_key),
+        evidence_fingerprint=_normalize_text(evidence_fingerprint),
+        catalog_version=_normalize_text(catalog_version),
+        descriptor_revisions=_normalize_text_tuple(descriptor_revisions),
         generation=_normalize_generation(generation),
         generated_at=_normalize_generated_at(generated_at),
     )
@@ -129,6 +164,7 @@ def build_effective_metadata_snapshot_from_runtime(
 ) -> EffectiveMetadataSnapshot:
     """Build one snapshot from runtime inverter and effective-selection objects."""
 
+    resolution = _runtime_resolution_metadata(inverter)
     return build_effective_metadata_snapshot(
         effective_owner_key=_first_non_empty(
             getattr(selection, "effective_owner_key", ""),
@@ -145,6 +181,12 @@ def build_effective_metadata_snapshot_from_runtime(
             getattr(selection, "register_schema_name", ""),
         ),
         confidence=confidence,
+        candidate_keys=resolution.get("candidate_keys", ()),
+        resolution_level=resolution.get("resolution", ""),
+        surface_key=resolution.get("surface_key", ""),
+        evidence_fingerprint=resolution.get("evidence_fingerprint", ""),
+        catalog_version=resolution.get("catalog_version", ""),
+        descriptor_revisions=resolution.get("descriptor_revisions", ()),
         generation=generation,
         generated_at=generated_at,
     )
@@ -165,6 +207,12 @@ def effective_metadata_snapshot_from_dict(
         profile_name=_first_key_value(raw, _PROFILE_NAME_KEYS),
         register_schema_name=_first_key_value(raw, _REGISTER_SCHEMA_NAME_KEYS),
         confidence=_first_key_value(raw, _CONFIDENCE_KEYS),
+        candidate_keys=_first_key_value(raw, _CANDIDATE_KEYS_KEYS),
+        resolution_level=_first_key_value(raw, _RESOLUTION_LEVEL_KEYS),
+        surface_key=_first_key_value(raw, _SURFACE_KEY_KEYS),
+        evidence_fingerprint=_first_key_value(raw, _EVIDENCE_FINGERPRINT_KEYS),
+        catalog_version=_first_key_value(raw, _CATALOG_VERSION_KEYS),
+        descriptor_revisions=_first_key_value(raw, _DESCRIPTOR_REVISIONS_KEYS),
         generation=_first_key_value(raw, _GENERATION_KEYS),
         generated_at=_first_key_value(raw, _GENERATED_AT_KEYS),
     )
@@ -182,6 +230,12 @@ def effective_metadata_snapshot_to_dict(
         "profile_name": snapshot.profile_name,
         "register_schema_name": snapshot.register_schema_name,
         "confidence": snapshot.confidence,
+        "candidate_keys": list(snapshot.candidate_keys),
+        "resolution_level": snapshot.resolution_level,
+        "surface_key": snapshot.surface_key,
+        "evidence_fingerprint": snapshot.evidence_fingerprint,
+        "catalog_version": snapshot.catalog_version,
+        "descriptor_revisions": list(snapshot.descriptor_revisions),
         "generation": snapshot.generation,
         "generated_at": snapshot.generated_at,
     }
@@ -210,6 +264,70 @@ def _normalize_text(value: Any) -> str:
     if isinstance(value, bool):
         return ""
     return ""
+
+
+def _normalize_text_tuple(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(
+        normalized
+        for item in value
+        if (normalized := _normalize_text(item))
+    )
+
+
+def _runtime_resolution_metadata(inverter: Any) -> Mapping[str, Any]:
+    details = getattr(inverter, "details", None)
+    if not isinstance(details, Mapping):
+        return {}
+    direct = details.get("catalog_detection")
+    if isinstance(direct, Mapping):
+        return direct
+    device_catalog = details.get("device_catalog")
+    if isinstance(device_catalog, Mapping):
+        compiled = device_catalog.get("compiled_resolution")
+        if isinstance(compiled, Mapping):
+            return compiled
+    return {}
+
+
+def _catalog_surface_matches(snapshot: EffectiveMetadataSnapshot) -> bool:
+    if not snapshot.surface_key:
+        return False
+    try:
+        from .compiled_detection_catalog import load_compiled_detection_catalog
+
+        catalog = load_compiled_detection_catalog()
+    except (ImportError, OSError, ValueError):
+        return False
+    if catalog.catalog_version != snapshot.catalog_version:
+        return False
+    surface = catalog.surfaces.get(snapshot.surface_key)
+    if surface is None:
+        return False
+    if surface.driver_key != snapshot.effective_owner_key:
+        return False
+    if snapshot.candidate_keys:
+        expected_revisions = tuple(
+            f"{key}:{catalog.devices[key].revision}"
+            for key in snapshot.candidate_keys
+            if key in catalog.devices
+        )
+        if len(expected_revisions) != len(snapshot.candidate_keys):
+            return False
+        if (
+            snapshot.descriptor_revisions
+            and snapshot.descriptor_revisions != expected_revisions
+        ):
+            return False
+    from .profile_loader import canonical_driver_profile_name
+
+    return (
+        surface.variant_key == snapshot.variant_key
+        and canonical_driver_profile_name(surface.profile_name)
+        == canonical_driver_profile_name(snapshot.profile_name)
+        and surface.register_schema_name == snapshot.register_schema_name
+    )
 
 
 def _normalize_confidence(value: Any) -> str:

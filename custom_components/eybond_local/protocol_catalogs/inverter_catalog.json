@@ -1,0 +1,995 @@
+{
+  "schema_version": 2,
+  "catalog_version": "2026.06.4",
+  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
+  "protocols": [
+    {
+      "key": "modbus_smg",
+      "transport_key": "eybond_modbus",
+      "probe_timeout": 18.0,
+      "probe_targets": [
+        {"devcode": 1, "collector_addr": 255, "device_addr": 1}
+      ],
+      "probe_actions": [
+        {
+          "key": "modbus_smg.identity.171",
+          "kind": "modbus_read",
+          "register": 171,
+          "count": 14,
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {
+              "key": "fingerprint.model_code",
+              "source_key": "model_code",
+              "register": 171
+            },
+            {
+              "key": "fingerprint.layout_code",
+              "source_key": "layout_code",
+              "register": 184
+            }
+          ]
+        },
+        {
+          "key": "modbus_smg.identity.186",
+          "kind": "modbus_read",
+          "register": 186,
+          "count": 12,
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": [
+            {
+              "key": "identity.serial_ascii",
+              "source_key": "serial_ascii",
+              "register": 186,
+              "words": 12,
+              "decoder": "ascii"
+            }
+          ]
+        },
+        {
+          "key": "modbus_smg.identity.643",
+          "kind": "modbus_read",
+          "register": 643,
+          "count": 2,
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": [
+            {
+              "key": "fingerprint.rated_power",
+              "source_key": "rated_power",
+              "register": 643
+            }
+          ]
+        }
+      ],
+      "layouts": [
+        {
+          "key": "smg",
+          "layout_codes": [
+            1,
+            2,
+            11
+          ],
+          "rated_power_register_valid": true,
+          "base_schema": "modbus_smg/base.json"
+        },
+        {
+          "key": "anenji_11k",
+          "layout_codes": [
+            3,
+            4,
+            5,
+            6
+          ],
+          "rated_power_register_valid": false,
+          "base_schema": ""
+        }
+      ]
+    },
+    {
+      "key": "pi30",
+      "transport_key": "eybond_ascii",
+      "probe_timeout": 12.0,
+      "signature_timeout": 4.0,
+      "probe_targets": [
+        {"devcode": 2452, "collector_addr": 255, "device_addr": 0},
+        {"devcode": 2452, "collector_addr": 1, "device_addr": 0},
+        {"devcode": 258, "collector_addr": 255, "device_addr": 0}
+      ],
+      "probe_actions": [
+        {
+          "key": "pi30.qpi",
+          "kind": "ascii_command",
+          "command": "QPI",
+          "parser_key": "pi30.protocol_id",
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "protocol.protocol_id", "source_key": "protocol_id"}
+          ]
+        },
+        {
+          "key": "pi30.qid",
+          "kind": "ascii_command",
+          "command": "QID",
+          "parser_key": "pi30.serial_number",
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "identity.serial_number", "source_key": "serial_number"}
+          ]
+        },
+        {
+          "key": "pi30.qpiri",
+          "kind": "ascii_command",
+          "command": "QPIRI",
+          "parser_key": "pi30.qpiri",
+          "cost": 2,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "identity.rated_power", "source_key": "output_rating_active_power"},
+            {"key": "shape.qpiri_field_count", "source_key": "qpiri_field_count"}
+          ]
+        },
+        {
+          "key": "pi30.qmn",
+          "kind": "ascii_command",
+          "command": "QMN",
+          "parser_key": "pi30.model_number",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": [
+            {"key": "identity.model_number", "source_key": "model_number"}
+          ]
+        },
+        {
+          "key": "pi30.qflag",
+          "kind": "ascii_command",
+          "command": "QFLAG",
+          "parser_key": "pi30.qflag",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": [
+            {"key": "shape.capability_flags", "source_key": "capability_flags_all"}
+          ]
+        },
+        {
+          "key": "pi30.qmod",
+          "kind": "ascii_command",
+          "command": "QMOD",
+          "parser_key": "pi30.qmod",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": [
+            {"key": "runtime.operating_mode_code", "source_key": "operating_mode_code"}
+          ]
+        },
+        {
+          "key": "pi30.qpiws",
+          "kind": "ascii_command",
+          "command": "QPIWS",
+          "parser_key": "pi30.qpiws",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": [
+            {"key": "shape.qpiws_bit_count", "source_key": "qpiws_bit_count"}
+          ]
+        },
+        {
+          "key": "pi30.qpigs",
+          "kind": "ascii_command",
+          "command": "QPIGS",
+          "parser_key": "pi30.qpigs",
+          "cost": 2,
+          "optional": true,
+          "evidence_fields": [
+            {"key": "shape.qpigs_field_count", "source_key": "qpigs_field_count"}
+          ]
+        },
+        {
+          "key": "pi30.qvfw",
+          "kind": "ascii_command",
+          "command": "QVFW",
+          "parser_key": "pi30.main_firmware",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": []
+        },
+        {
+          "key": "pi30.qvfw2",
+          "kind": "ascii_command",
+          "command": "QVFW2",
+          "parser_key": "pi30.secondary_firmware",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": []
+        },
+        {
+          "key": "pi30.qvfw3",
+          "kind": "ascii_command",
+          "command": "QVFW3",
+          "parser_key": "pi30.tertiary_firmware",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": []
+        },
+        {
+          "key": "pi30.collector.smartess",
+          "kind": "collector_metadata",
+          "cost": 0,
+          "optional": true,
+          "evidence_fields": [
+            {
+              "key": "collector.smartess_protocol_asset_id",
+              "source_key": "smartess_protocol_asset_id"
+            }
+          ]
+        },
+        {
+          "key": "pi30.smartess.asset",
+          "kind": "smartess_query",
+          "parser_key": "smartess.protocol_asset",
+          "cost": 10,
+          "optional": true,
+          "timeout": 1.5,
+          "evidence_fields": [
+            {
+              "key": "smartess.protocol_asset_id",
+              "source_key": "protocol_asset_id"
+            }
+          ]
+        }
+      ],
+      "layouts": []
+    },
+    {
+      "key": "pi18",
+      "transport_key": "eybond_ascii",
+      "probe_targets": [
+        {"devcode": 2452, "collector_addr": 1, "device_addr": 0},
+        {"devcode": 2452, "collector_addr": 255, "device_addr": 0},
+        {"devcode": 258, "collector_addr": 255, "device_addr": 0}
+      ],
+      "probe_actions": [
+        {
+          "key": "pi18.pi",
+          "kind": "ascii_command",
+          "command": "^P005PI",
+          "parser_key": "pi18.protocol_id",
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "protocol.protocol_id", "source_key": "protocol_id"}
+          ]
+        },
+        {
+          "key": "pi18.id",
+          "kind": "ascii_command",
+          "command": "^P005ID",
+          "parser_key": "pi18.serial_number",
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "identity.serial_number", "source_key": "serial_number"}
+          ]
+        },
+        {
+          "key": "pi18.piri",
+          "kind": "ascii_command",
+          "command": "^P007PIRI",
+          "parser_key": "pi18.qpiri",
+          "cost": 2,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "identity.rated_power", "source_key": "output_rating_active_power"},
+            {"key": "shape.qpiri_field_count", "source_key": "qpiri_field_count"}
+          ]
+        },
+        {
+          "key": "pi18.vfw",
+          "kind": "ascii_command",
+          "command": "^P006VFW",
+          "parser_key": "pi18.firmware_versions",
+          "cost": 1,
+          "optional": true,
+          "evidence_fields": []
+        }
+      ],
+      "layouts": []
+    }
+  ],
+  "support_capture_policies": {
+    "smg_protocol_1": {
+      "ranges": [
+        [171, 14],
+        [277, 5],
+        [338, 16],
+        [389, 3],
+        [607, 1],
+        [626, 8],
+        [644, 1],
+        [696, 9],
+        [700, 45]
+      ],
+      "notes": [
+        "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+        "Protocol-1 SMG layouts also include documented fault/log windows: 700-744."
+      ]
+    },
+    "smg_anenji_11k": {
+      "ranges": [
+        [171, 14],
+        [277, 5],
+        [338, 16],
+        [389, 3],
+        [607, 1],
+        [626, 8],
+        [644, 1],
+        [696, 9],
+        [326, 2],
+        [338, 18],
+        [376, 18],
+        [414, 18],
+        [677, 18],
+        [707, 1],
+        [709, 1],
+        [858, 2]
+      ],
+      "notes": [
+        "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704."
+      ]
+    },
+    "pi_ascii": {
+      "ranges": [],
+      "notes": []
+    }
+  },
+  "surfaces": [
+    {
+      "key": "smg_6200_full",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "default",
+      "profile_name": "modbus_smg/default.json",
+      "register_schema_name": "modbus_smg/models/smg_6200.json",
+      "tier": "full",
+      "read_only": false,
+      "default_for_driver": true,
+      "support_capture_policy": "smg_protocol_1"
+    },
+    {
+      "key": "anenji_4200_protocol_1_full",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "anenji_4200_protocol_1",
+      "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+      "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "smg_protocol_1"
+    },
+    {
+      "key": "smg_base_partial",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "default",
+      "profile_name": "",
+      "register_schema_name": "modbus_smg/base.json",
+      "tier": "partial",
+      "read_only": true,
+      "support_capture_policy": "smg_protocol_1"
+    },
+    {
+      "key": "anenji_anj_11kw_full",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "anenji_anj_11kw_48v_wifi_p",
+      "profile_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+      "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "smg_anenji_11k"
+    },
+    {
+      "key": "anenji_op2_6200_full",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "default",
+      "profile_name": "modbus_smg/models/anenji_op2_6200.json",
+      "register_schema_name": "modbus_smg/models/anenji_op2_6200.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "smg_protocol_1"
+    },
+    {
+      "key": "smg_base_full",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "default",
+      "profile_name": "modbus_smg/default.json",
+      "register_schema_name": "modbus_smg/base.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "smg_protocol_1"
+    },
+    {
+      "key": "smg_family_read_only",
+      "protocol_key": "modbus_smg",
+      "driver_key": "modbus_smg",
+      "variant_key": "family_fallback",
+      "profile_name": "",
+      "register_schema_name": "modbus_smg/base.json",
+      "tier": "partial",
+      "read_only": true,
+      "support_capture_policy": "smg_protocol_1"
+    },
+    {
+      "key": "pi30_default_full",
+      "protocol_key": "pi30",
+      "driver_key": "pi30",
+      "variant_key": "default",
+      "profile_name": "pi30_ascii/models/smartess_0925_compat.json",
+      "register_schema_name": "pi30_ascii/models/smartess_0925_compat.json",
+      "tier": "full",
+      "read_only": false,
+      "default_for_driver": true,
+      "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "pi30_vmii_full",
+      "protocol_key": "pi30",
+      "driver_key": "pi30",
+      "variant_key": "vmii_nxpw5kw",
+      "profile_name": "pi30_ascii/models/vmii_nxpw5kw.json",
+      "register_schema_name": "pi30_ascii/models/vmii_nxpw5kw.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "pi30_max_full",
+      "protocol_key": "pi30",
+      "driver_key": "pi30",
+      "variant_key": "pi30_max",
+      "profile_name": "pi30_ascii/models/pi30_max.json",
+      "register_schema_name": "pi30_ascii/models/pi30_max.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "pi30_pip_gk_full",
+      "protocol_key": "pi30",
+      "driver_key": "pi30",
+      "variant_key": "pi30_pip_gk",
+      "profile_name": "pi30_ascii/models/pi30_pip_gk.json",
+      "register_schema_name": "pi30_ascii/models/pi30_pip_gk.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "pi41_full",
+      "protocol_key": "pi30",
+      "driver_key": "pi30",
+      "variant_key": "pi41",
+      "profile_name": "pi30_ascii/models/pi41.json",
+      "register_schema_name": "pi30_ascii/models/pi41.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "pi18_read_only",
+      "protocol_key": "pi18",
+      "driver_key": "pi18",
+      "variant_key": "default",
+      "profile_name": "",
+      "register_schema_name": "pi18_ascii/base.json",
+      "tier": "partial",
+      "read_only": true,
+      "default_for_driver": true,
+      "support_capture_policy": "pi_ascii"
+    }
+  ],
+  "devices": [
+    {
+      "entry_key": "smg_6200",
+      "fingerprint": {
+        "layout_code": 1,
+        "model_code": 7680,
+        "rated_power_one_of": [
+          6200
+        ]
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "SMG 6200",
+      "surface_key": "smg_6200_full",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "rated_power", "one_of": [6200]}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644},
+          {"key": "max_discharge_current_protection", "register": 351}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": [
+          2376
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "corpus:own-device …9645 (16 captures, 2026-04..06)"
+        ],
+        "confidence": "verified-on-hardware"
+      }
+    },
+    {
+      "entry_key": "anenji_4200",
+      "fingerprint": {
+        "layout_code": 1,
+        "model_code": 13569,
+        "rated_power_one_of": [
+          4200
+        ]
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "Anenji 4200 (Protocol 1)",
+      "surface_key": "anenji_4200_protocol_1_full",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "protocol_number", "equals": 1},
+          {"key": "device_type", "equals": 13569},
+          {"key": "rated_power", "equals": 4200},
+          {"key": "turn_on_mode", "known_enum": true},
+          {"key": "remote_switch", "known_enum": true}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": []
+      },
+      "provenance": {
+        "sources": [
+          "catalog-migration:anenji_4200_protocol_1"
+        ],
+        "confidence": "rule-migrated"
+      }
+    },
+    {
+      "entry_key": "smg_variant_4200",
+      "fingerprint": {
+        "layout_code": 11,
+        "model_code": 30721
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "SMG family 4200 variant",
+      "surface_key": "smg_base_partial",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "rated_power", "one_of": [4200]}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": [
+          6514
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "corpus:donor …5865 (5 captures)"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "anenji_anj_11kw",
+      "fingerprint": {
+        "layout_code": 4,
+        "model_code": 32768
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "Anenji ANJ-11KW-48V-WIFI-P",
+      "surface_key": "anenji_anj_11kw_full",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "protocol_number", "one_of": [3, 4, 5, 6]},
+          {"key": "turn_on_mode", "known_enum": true},
+          {"key": "remote_switch", "known_enum": true},
+          {"key": "pv_grid_connected_max_power", "min": 200, "max": 20000}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": [
+          6544
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "corpus:donor …4544 (3 captures)",
+          "catalog-migration:anenji_anj_11kw_48v_wifi_p"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "anenji_op2_6200",
+      "fingerprint": {
+        "layout_code": 11,
+        "model_code": 30979,
+        "rated_power_one_of": [
+          6200
+        ]
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "Anenji 6200 (dual output)",
+      "surface_key": "anenji_op2_6200_full",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "rated_power", "one_of": [6200]}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644},
+          {"key": "max_discharge_current_protection", "register": 351}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": [
+          6514
+        ]
+      },
+      "provenance": {
+        "sources": [
+          "corpus:donor …2875 (dual-output capture, 2026-06-12)",
+          "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write)",
+          "fw 7903_A6260126v1 (reg626 hex == model_code 30979)",
+          "donor ran smg_modbus.json profile bound as SMG 6200: full SMG control set read back correct values (developer-witnessed 2026-06-12)",
+          "output2_enable @354 bit0: donor-verified write via ESPHome (bitmask 0x0001, use_write_multiple) -> model profile adds it as a bitmask RMW capability"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "anenji_6200",
+      "fingerprint": {
+        "layout_code": 1,
+        "model_code": 14080,
+        "rated_power_one_of": [
+          6200
+        ]
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "Anenji 6200",
+      "surface_key": "smg_base_full",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "rated_power", "one_of": [6200]}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644},
+          {"key": "max_discharge_current_protection", "register": 351}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": []
+      },
+      "provenance": {
+        "sources": [
+          "corpus:donor …5481 (single-output capture, 2026-06-12)",
+          "fw 3700_A6250424v1 (reg626 hex == model_code 14080)",
+          "donor ran smg_modbus.json profile bound as SMG 6200 (same layout 1 as the verified smg_6200): full SMG control set read back correct values (developer-witnessed 2026-06-12)"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "aninerel_anl_4200t_24l_w_pro",
+      "fingerprint": {
+        "layout_code": 11,
+        "model_code": 30723,
+        "rated_power_one_of": [
+          4200
+        ]
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "Aninerel ANL-4200T-24L-W-PRO",
+      "surface_key": "smg_family_read_only",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "rated_power", "one_of": [4200]}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": []
+      },
+      "provenance": {
+        "sources": [
+          "github:issue#3 Aninerel ANL-4200T-24L-W-PRO",
+          "corpus:donor …GVB2 (3 captures, 2026-06-15)",
+          "fingerprint layout=11 model_code=30723 rated_power=4200"
+        ],
+        "confidence": "capture-derived-partial"
+      }
+    },
+    {
+      "entry_key": "anenji_anj_6200_48pl",
+      "fingerprint": {
+        "layout_code": 2,
+        "model_code": 8960,
+        "rated_power_one_of": [
+          6200
+        ]
+      },
+      "structural": [
+        "serial_ascii_plausible"
+      ],
+      "model_name": "Anenji ANJ-6200-48PL",
+      "surface_key": "smg_6200_full",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1},
+          {"key": "rated_power", "one_of": [6200]}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644},
+          {"key": "max_discharge_current_protection", "register": 351}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "cloud_hints": {
+        "devcodes": []
+      },
+      "provenance": {
+        "sources": [
+          "github:issue#8 Anenji ANJ-6200-48PL",
+          "corpus:donor …57E (capture, 2026-06-15)",
+          "fingerprint layout=2 model_code=8960 rated_power=6200",
+          "support archive runtime bound successfully to SMG 6200 register schema/profile"
+        ],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "pi41_family",
+      "surface_key": "pi41_full",
+      "model_name": "PI41",
+      "priority": 220,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI41"}
+      ],
+      "provenance": {
+        "sources": ["catalog-migration:pi_family.pi41"],
+        "confidence": "rule-migrated"
+      }
+    },
+    {
+      "entry_key": "pi30_vmii_nxpw5kw",
+      "surface_key": "pi30_vmii_full",
+      "model_name": "PowMr 4.2kW",
+      "priority": 220,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"},
+        {"key": "identity.model_number", "equals": "VMII-NXPW5KW"}
+      ],
+      "provenance": {
+        "sources": ["fixture:pi30-vmii-nxpw5kw-live-capture"],
+        "confidence": "capture-derived"
+      }
+    },
+    {
+      "entry_key": "pi30_pip_gk",
+      "surface_key": "pi30_pip_gk_full",
+      "model_name": "PI30",
+      "priority": 210,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"},
+        {"key": "shape.qpiri_field_count", "min": 25},
+        {"key": "shape.qpigs_field_count", "min": 21},
+        {"key": "shape.qpiws_bit_count", "min": 36}
+      ],
+      "provenance": {
+        "sources": ["catalog-migration:pi_family.pi30_pip_gk"],
+        "confidence": "rule-migrated"
+      }
+    },
+    {
+      "entry_key": "pi30_max_qpiri",
+      "surface_key": "pi30_max_full",
+      "model_name": "PI30",
+      "priority": 200,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"},
+        {"key": "shape.qpiri_field_count", "min": 28}
+      ],
+      "provenance": {
+        "sources": ["catalog-migration:pi_family.pi30_max.qpiri"],
+        "confidence": "rule-migrated"
+      }
+    },
+    {
+      "entry_key": "pi30_max_qflag",
+      "surface_key": "pi30_max_full",
+      "model_name": "PI30",
+      "priority": 200,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"},
+        {"key": "shape.capability_flags", "contains_any": ["d"]}
+      ],
+      "provenance": {
+        "sources": ["catalog-migration:pi_family.pi30_max.qflag"],
+        "confidence": "rule-migrated"
+      }
+    },
+    {
+      "entry_key": "pi30_smartess_0925_compatible",
+      "surface_key": "pi30_default_full",
+      "model_name": "PI30",
+      "priority": 20,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"},
+        {
+          "key": "collector.smartess_protocol_asset_id",
+          "equals": "0925"
+        }
+      ],
+      "provenance": {
+        "sources": ["smartess-protocol-asset:0925"],
+        "confidence": "supporting-evidence"
+      }
+    },
+    {
+      "entry_key": "pi30_smartess_query_0925_compatible",
+      "surface_key": "pi30_default_full",
+      "model_name": "PI30",
+      "priority": 20,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"},
+        {
+          "key": "smartess.protocol_asset_id",
+          "equals": "0925"
+        }
+      ],
+      "provenance": {
+        "sources": ["smartess-query-protocol-asset:0925"],
+        "confidence": "supporting-evidence"
+      }
+    },
+    {
+      "entry_key": "pi30_family",
+      "surface_key": "pi30_default_full",
+      "model_name": "PI30",
+      "priority": 10,
+      "family_fallback": true,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI30"}
+      ],
+      "provenance": {
+        "sources": ["catalog-migration:pi30-default"],
+        "confidence": "family-compatible"
+      }
+    },
+    {
+      "entry_key": "pi18_family",
+      "surface_key": "pi18_read_only",
+      "model_name": "PI18",
+      "priority": 10,
+      "family_fallback": true,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "PI18"}
+      ],
+      "provenance": {
+        "sources": ["protocol-family:PI18"],
+        "confidence": "family-compatible"
+      }
+    }
+  ],
+  "family_defaults": [
+    {
+      "when_layout_codes": [
+        1,
+        2,
+        11
+      ],
+      "model_name": "SMG Family (Unverified Variant)",
+      "surface_key": "smg_family_read_only",
+      "runtime_probe": {
+        "validation": [
+          {"key": "output_rating_voltage", "min": 1},
+          {"key": "output_rating_frequency", "min": 1}
+        ],
+        "optional_registers": [
+          {"key": "device_type", "register": 171},
+          {"key": "protocol_number", "register": 184},
+          {"key": "rated_cell_count", "register": 644}
+        ],
+        "optional_ascii": [
+          {"key": "device_name", "register": 172, "word_count": 12},
+          {"key": "program_version", "register": 626, "word_count": 8}
+        ]
+      },
+      "note": "Known SMG layout, unknown model: base reads only; writes require learning."
+    }
+  ]
+}

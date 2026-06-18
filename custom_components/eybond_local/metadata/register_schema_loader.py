@@ -17,7 +17,7 @@ from ..models import (
 from .register_schema_models import RegisterBlockLayout, RegisterSchemaMetadata
 from ..const import BUILTIN_SCHEMA_PREFIX
 
-REGISTER_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "register_schemas"
+REGISTER_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs" / "register_schemas"
 _EXTERNAL_REGISTER_SCHEMA_ROOTS: tuple[Path, ...] = ()
 
 

@@ -98,7 +98,7 @@ class NoRealIdentifiersTest(unittest.TestCase):
         files = _iter_tracked_text_files()
         self.assertGreater(len(files), 200)
         joined = "\n".join(str(f) for f in files)
-        self.assertIn("device_catalog.json", joined)
+        self.assertIn("inverter_catalog.json", joined)
         hits = 0
         for path in files:
             try:

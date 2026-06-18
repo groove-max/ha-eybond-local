@@ -82,11 +82,37 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(probe.match.entry.entry_key, "smg_6200")
         self.assertEqual(probe.layout_code, 1)
         self.assertEqual(probe.model_code, 7680)
-        self.assertEqual(probe.rated_power, 6200)
-        self.assertEqual(probe.serial_ascii, "92632500000001")
+        self.assertIsNone(probe.rated_power)
+        self.assertEqual(probe.serial_ascii, "")
         self.assertFalse(probe_indicates_link_down(probe))
         # The probe must stay within the declared identity window.
-        self.assertEqual(session.reads, [(171, 14), (186, 12), (643, 2)])
+        self.assertEqual(session.reads, [(171, 14)])
+        self.assertEqual(
+            probe.probe_action_keys,
+            ("modbus_smg.identity.171",),
+        )
+        self.assertEqual(probe.failed_probe_action_keys, ())
+        self.assertIsNotNone(probe.compiled_resolution)
+        self.assertEqual(probe.compiled_resolution.resolution, "exact")
+        self.assertEqual(probe.compiled_resolution.candidate_keys, ("smg_6200",))
+
+    async def test_force_unsupported_uses_compiled_family_resolution(self) -> None:
+        with patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            True,
+        ):
+            probe = await async_probe_catalog_identity(
+                _RegisterSession(_smg_6200_identity_registers())
+            )
+
+        assert probe is not None
+        self.assertEqual(probe.match.kind, "family")
+        self.assertEqual(probe.compiled_resolution.resolution, "family")
+        self.assertEqual(
+            probe.compiled_resolution.surface_key,
+            "smg_family_read_only",
+        )
 
     async def test_zero_identity_region_is_link_down(self) -> None:
         probe = await async_probe_catalog_identity(_RegisterSession({}))
@@ -120,7 +146,21 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(details["kind"], MATCH_DEVICE)
         self.assertEqual(details["entry_key"], "smg_6200")
         self.assertEqual(details["tier"], "full")
-        self.assertIn("rated_power", details["confidence_signals"])
+        self.assertEqual(details["confidence_signals"], ["layout_code", "model_code"])
+        descriptor_decision = details["descriptor_decision"]
+        self.assertEqual(descriptor_decision["kind"], "descriptor_decision_shadow")
+        self.assertEqual(descriptor_decision["agreement"], "match")
+        self.assertEqual(
+            descriptor_decision["evaluation"]["resolved_key"],
+            "smg_6200",
+        )
+        compiled_resolution = details["compiled_resolution"]
+        self.assertEqual(compiled_resolution["resolution"], "exact")
+        self.assertEqual(compiled_resolution["candidate_keys"], ["smg_6200"])
+        self.assertTrue(compiled_resolution["surface_key"])
+        self.assertTrue(compiled_resolution["catalog_version"])
+        self.assertTrue(compiled_resolution["descriptor_revisions"])
+        self.assertTrue(compiled_resolution["evidence_fingerprint"])
 
 
 class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
@@ -203,10 +243,23 @@ class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(shadow, dict)
         self.assertEqual(shadow["kind"], MATCH_DEVICE)
         self.assertEqual(shadow["entry_key"], "smg_6200")
+        descriptor_decision = shadow["descriptor_decision"]
+        self.assertEqual(descriptor_decision["kind"], "descriptor_decision_shadow")
+        self.assertEqual(descriptor_decision["agreement"], "match")
+        self.assertEqual(descriptor_decision["evaluation"]["resolved_key"], "smg_6200")
+        self.assertEqual(
+            inverter.details["descriptor_decision_shadow"],
+            descriptor_decision,
+        )
+        self.assertEqual(
+            descriptor_decision["selection"]["source"],
+            "compiled_catalog_exact",
+        )
+        self.assertTrue(descriptor_decision["selection"]["safe_switch_active"])
         # The binding now comes FROM the catalog entry itself.
         self.assertEqual(inverter.variant_key, "default")
         self.assertEqual(inverter.register_schema_name, "modbus_smg/models/smg_6200.json")
-        self.assertEqual(inverter.profile_name, "smg_modbus.json")
+        self.assertEqual(inverter.profile_name, "modbus_smg/default.json")
 
     async def test_probe_raises_link_down_on_zero_identity(self) -> None:
         driver = SmgModbusDriver()

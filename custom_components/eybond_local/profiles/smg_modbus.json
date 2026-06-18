@@ -1,7 +1,0 @@
-{
-  "extends": "modbus_smg/default.json",
-  "profile_key": "smg_modbus",
-  "title": "SMG / Modbus",
-  "driver_key": "modbus_smg",
-  "protocol_family": "modbus_smg"
-}

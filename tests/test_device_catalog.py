@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 import sys
 import tempfile
@@ -13,24 +14,57 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.metadata import device_catalog_loader  # noqa: E402
+from custom_components.eybond_local.metadata.compiled_detection_catalog import (  # noqa: E402
+    RESOLUTION_EXACT,
+    RESOLUTION_FAMILY,
+    RESOLUTION_UNRESOLVED,
+    load_compiled_detection_catalog,
+)
+from custom_components.eybond_local.metadata.profile_loader import builtin_profile_path  # noqa: E402
 from custom_components.eybond_local.metadata.device_catalog_loader import (  # noqa: E402
     FORCE_UNSUPPORTED_SENTINEL_NAME,
-    MATCH_DEVICE,
-    MATCH_FAMILY,
-    MATCH_NO_DATA,
-    MATCH_UNIDENTIFIED,
-    TIER_FULL,
     TIER_PARTIAL,
     clear_device_catalog_cache,
     force_unsupported_models,
     load_device_catalog,
-    match_device_identity,
     refresh_force_unsupported_override,
+    resolve_catalog_surface_binding,
+    resolve_runtime_probe_policy,
+    resolve_support_capture_policy,
     serial_ascii_plausible,
 )
 
 
 COMPONENT_ROOT = REPO_ROOT / "custom_components" / "eybond_local"
+
+
+class CatalogValidationGuardTest(unittest.TestCase):
+    """The source catalog rejects ambiguity at load, never resolves it by order."""
+
+    def test_ambiguous_fingerprint_is_rejected(self) -> None:
+        # Two fingerprint-based devices sharing (layout_code, model_code) is
+        # ambiguous and must raise at validation rather than be resolved by
+        # catalog order (Acceptance Criterion: ambiguity is explicit).
+        catalog = load_device_catalog()
+        base = next(device for device in catalog.devices if not device.anchors)
+        duplicate = dataclasses.replace(base, entry_key=f"{base.entry_key}_dup")
+        bad = dataclasses.replace(catalog, devices=catalog.devices + (duplicate,))
+
+        with self.assertRaises(ValueError) as ctx:
+            device_catalog_loader._validate_device_catalog(bad)
+        self.assertIn("ambiguous_fingerprint", str(ctx.exception))
+
+    def test_overlapping_family_defaults_are_rejected(self) -> None:
+        # Two family defaults claiming an overlapping layout code must raise.
+        catalog = load_device_catalog()
+        self.assertTrue(catalog.family_defaults)
+        first = catalog.family_defaults[0]
+        overlapping = dataclasses.replace(first)  # identical when_layout_codes
+        bad = dataclasses.replace(catalog, family_defaults=(first, overlapping))
+
+        with self.assertRaises(ValueError) as ctx:
+            device_catalog_loader._validate_device_catalog(bad)
+        self.assertIn("overlapping_family_defaults", str(ctx.exception))
 
 
 class TierValidationTest(unittest.TestCase):
@@ -67,15 +101,29 @@ class DeviceCatalogLoadTest(unittest.TestCase):
 
     def test_catalog_loads_with_expected_structure(self) -> None:
         catalog = load_device_catalog()
-        self.assertEqual(catalog.schema_version, 1)
+        self.assertEqual(catalog.schema_version, 2)
         self.assertTrue(catalog.catalog_version)
+        self.assertIn("modbus_smg", catalog.protocols)
         self.assertIn("eybond_modbus", catalog.transports)
         self.assertGreaterEqual(len(catalog.layouts), 2)
+        self.assertGreaterEqual(len(catalog.surfaces), 4)
         self.assertGreaterEqual(len(catalog.devices), 4)
         self.assertGreaterEqual(len(catalog.family_defaults), 1)
 
     def test_identity_probe_covers_fingerprint_fields(self) -> None:
-        probe = load_device_catalog().transports["eybond_modbus"]
+        catalog = load_device_catalog()
+        protocol = catalog.protocols["modbus_smg"]
+        self.assertEqual(
+            tuple(action.key for action in protocol.probe_actions),
+            (
+                "modbus_smg.identity.171",
+                "modbus_smg.identity.186",
+                "modbus_smg.identity.643",
+            ),
+        )
+        self.assertTrue(all(action.kind == "modbus_read" for action in protocol.probe_actions))
+
+        probe = catalog.transports["eybond_modbus"]
         self.assertEqual(probe.fields["layout_code"].register, 184)
         self.assertEqual(probe.fields["model_code"].register, 171)
         self.assertEqual(probe.fields["rated_power"].register, 643)
@@ -92,20 +140,22 @@ class DeviceCatalogLoadTest(unittest.TestCase):
         bindings.extend(default.binding for default in catalog.family_defaults)
         for binding in bindings:
             if binding.register_schema_name:
-                path = COMPONENT_ROOT / "register_schemas" / binding.register_schema_name
+                path = COMPONENT_ROOT / "protocol_catalogs" / "register_schemas" / binding.register_schema_name
                 self.assertTrue(path.is_file(), f"missing schema payload: {path}")
             if binding.profile_name:
-                path = COMPONENT_ROOT / "profiles" / binding.profile_name
+                path = builtin_profile_path(binding.profile_name)
                 self.assertTrue(path.is_file(), f"missing profile payload: {path}")
         for layout in catalog.layouts:
             if layout.base_schema:
-                path = COMPONENT_ROOT / "register_schemas" / layout.base_schema
+                path = COMPONENT_ROOT / "protocol_catalogs" / "register_schemas" / layout.base_schema
                 self.assertTrue(path.is_file(), f"missing layout base schema: {path}")
 
     def test_fingerprints_are_unique(self) -> None:
         catalog = load_device_catalog()
         seen: set[tuple[int, int, tuple[int, ...]]] = set()
         for entry in catalog.devices:
+            if entry.anchors:
+                continue
             key = (
                 entry.fingerprint.layout_code,
                 entry.fingerprint.model_code,
@@ -119,177 +169,119 @@ class DeviceCatalogLoadTest(unittest.TestCase):
         for default in catalog.family_defaults:
             self.assertEqual(default.binding.profile_name, "")
             self.assertEqual(default.tier, TIER_PARTIAL)
+            self.assertTrue(default.model_name)
 
+    def test_catalog_models_own_runtime_probe_policy(self) -> None:
+        catalog = load_device_catalog()
+        smg_6200 = next(entry for entry in catalog.devices if entry.entry_key == "smg_6200")
+        validation = {rule.key: rule for rule in smg_6200.runtime_probe.validation}
+        self.assertEqual(validation["rated_power"].one_of, (6200,))
+        optional = {
+            item.key: (item.register, item.word_count)
+            for item in smg_6200.runtime_probe.optional_registers
+        }
+        self.assertEqual(optional["max_discharge_current_protection"], (351, 1))
+        ascii_ranges = {
+            item.key: (item.register, item.word_count)
+            for item in smg_6200.runtime_probe.optional_ascii
+        }
+        self.assertEqual(ascii_ranges["program_version"], (626, 8))
 
-class DeviceCatalogMatchCorpusTest(unittest.TestCase):
-    """Replay the literal fingerprints from the user-dump corpus."""
-    def setUp(self) -> None:
-        _force_patch = patch(
-            "custom_components.eybond_local.metadata.device_catalog_loader."
-            "FORCE_UNSUPPORTED_MODELS",
-            False,
-        )
-        _force_patch.start()
-        self.addCleanup(_force_patch.stop)
+        anenji_11kw = next(entry for entry in catalog.devices if entry.entry_key == "anenji_anj_11kw")
+        validation = {rule.key: rule for rule in anenji_11kw.runtime_probe.validation}
+        self.assertEqual(validation["protocol_number"].one_of, (3, 4, 5, 6))
+        self.assertEqual(validation["pv_grid_connected_max_power"].min_value, 200)
+        self.assertEqual(validation["pv_grid_connected_max_power"].max_value, 20000)
 
+    def test_catalog_surfaces_own_runtime_and_support_metadata(self) -> None:
+        catalog = load_device_catalog()
+        surface = catalog.surfaces["smg_6200_full"]
 
-    def test_smg_6200_own_device(self) -> None:
-        match = match_device_identity(
-            layout_code=1,
-            model_code=7680,
-            rated_power=6200,
-            serial_ascii="92632500000001",
-        )
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "smg_6200")
-        self.assertEqual(match.tier, TIER_FULL)
+        self.assertTrue(surface.default_for_driver)
+        self.assertFalse(surface.read_only)
+        self.assertEqual(surface.binding.profile_name, "modbus_smg/default.json")
+        self.assertIn((700, 45), surface.support_capture.ranges)
         self.assertEqual(
-            match.confidence_signals,
-            ("layout_code", "model_code", "rated_power", "serial_ascii"),
+            resolve_catalog_surface_binding("modbus_smg"),
+            surface.binding,
         )
-
-    def test_smg_variant_4200_user_dump(self) -> None:
-        match = match_device_identity(
-            layout_code=11, model_code=30721, rated_power=4200,
-            serial_ascii="15573400000004",
-        )
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "smg_variant_4200")
-        self.assertEqual(match.tier, TIER_PARTIAL)
-        self.assertEqual(match.entry.binding.profile_name, "")
-
-    def test_anenji_11kw_user_dump_with_foreign_rated_register(self) -> None:
-        # @643 reads 505 on this layout (not a rated power); the entry must
-        # match without rated narrowing and the layout must mark @643 invalid.
-        match = match_device_identity(
-            layout_code=4, model_code=32768, rated_power=505,
-            serial_ascii="70S10300000005Q",
-        )
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "anenji_anj_11kw")
-        self.assertFalse(match.layout.rated_power_register_valid)
-
-    def test_anenji_4200_migrated_rule(self) -> None:
-        match = match_device_identity(layout_code=1, model_code=13569, rated_power=4200)
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "anenji_4200")
-
-    def test_anenji_op2_6200_user_dump(self) -> None:
-        # Donor dual-output (OP2) capture 2026-06-12: 6.2 kW unit, fw 7903_A6260126v1
-        # (reg626 hex string == model_code), cloud devcode 6514, range_failures [].
-        match = match_device_identity(
-            layout_code=11, model_code=30979, rated_power=6200,
-            serial_ascii="99632600000002",
-        )
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "anenji_op2_6200")
-        self.assertEqual(match.tier, TIER_FULL)
         self.assertEqual(
-            match.entry.binding.register_schema_name,
-            "modbus_smg/models/anenji_op2_6200.json",
-        )
-        # The donor ran this unit with the full SMG control set bound and every
-        # control read back correct values (developer-witnessed), so a model
-        # profile attaches: the SMG set plus the OP2 enable switch (reg 354
-        # bit 0, donor-verified write) as a bitmask read-modify-write control.
-        self.assertEqual(
-            match.entry.binding.profile_name,
-            "modbus_smg/models/anenji_op2_6200.json",
+            resolve_support_capture_policy(
+                driver_key="modbus_smg",
+                variant_key=surface.binding.variant_key,
+                profile_name=surface.binding.profile_name,
+                register_schema_name=surface.binding.register_schema_name,
+            ),
+            surface.support_capture,
         )
 
-    def test_anenji_6200_2025_user_dump(self) -> None:
-        # Donor single-output capture 2026-06-12: same family, fw 3700_A6250424v1.
-        # Same rated power (6200) as smg_6200 but a DIFFERENT model_code — rated
-        # power never identifies a model on its own. Layout 1 is the verified SMG
-        # layout and the donor ran the SMG control set with correct read-back, so
-        # the profile attaches (full tier).
-        match = match_device_identity(
-            layout_code=1, model_code=14080, rated_power=6200,
-            serial_ascii="92632500000003",
+    def test_runtime_probe_policy_resolves_by_binding(self) -> None:
+        policy = resolve_runtime_probe_policy(
+            driver_key="modbus_smg",
+            variant_key="default",
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
         )
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "anenji_6200")
-        self.assertEqual(match.tier, TIER_FULL)
-        self.assertEqual(match.entry.binding.profile_name, "smg_modbus.json")
 
-    def test_force_unsupported_downgrades_known_model_to_family(self) -> None:
-        # Debug toggle: a fully-supported device (SMG 6200) must drop to the
-        # family/partial tier so the learning flow can be validated on it.
-        with patch(
-            "custom_components.eybond_local.metadata.device_catalog_loader."
-            "force_unsupported_models",
-            return_value=True,
-        ):
-            match = match_device_identity(
-                layout_code=1, model_code=7680, rated_power=6200,
-                serial_ascii="92632500000001",
-            )
-        self.assertEqual(match.kind, MATCH_FAMILY)
-        self.assertEqual(match.tier, TIER_PARTIAL)
-        self.assertIsNone(match.entry)
-        self.assertEqual(match.family_default.binding.profile_name, "")
-
-    def test_force_unsupported_unknown_layout_stays_unidentified(self) -> None:
-        with patch(
-            "custom_components.eybond_local.metadata.device_catalog_loader."
-            "force_unsupported_models",
-            return_value=True,
-        ):
-            match = match_device_identity(layout_code=99, model_code=1234)
-        self.assertEqual(match.kind, MATCH_UNIDENTIFIED)
-
-    def test_all_zero_identity_is_no_data_never_unknown(self) -> None:
-        # The 2026-06-08 incident: comm-down captures read @171=0 @184=0 and
-        # were misclassified as no_supported_driver_matched.
-        match = match_device_identity(layout_code=0, model_code=0, rated_power=0)
-        self.assertEqual(match.kind, MATCH_NO_DATA)
-
-    def test_absent_identity_is_no_data(self) -> None:
-        match = match_device_identity(layout_code=None, model_code=None)
-        self.assertEqual(match.kind, MATCH_NO_DATA)
-
-
-class DeviceCatalogMatchSemanticsTest(unittest.TestCase):
-    def setUp(self) -> None:
-        _force_patch = patch(
-            "custom_components.eybond_local.metadata.device_catalog_loader."
-            "FORCE_UNSUPPORTED_MODELS",
-            False,
+        self.assertIn(
+            "rated_power",
+            {rule.key for rule in policy.validation},
         )
-        _force_patch.start()
-        self.addCleanup(_force_patch.stop)
-
-    def test_unknown_model_in_known_layout_falls_to_family_partial(self) -> None:
-        match = match_device_identity(layout_code=1, model_code=9999, rated_power=5500)
-        self.assertEqual(match.kind, MATCH_FAMILY)
-        self.assertEqual(match.tier, TIER_PARTIAL)
-        self.assertEqual(match.family_default.binding.register_schema_name, "modbus_smg/base.json")
-        self.assertEqual(match.family_default.binding.profile_name, "")
-
-    def test_other_wattage_of_pinned_model_is_family_not_device(self) -> None:
-        # SMG 6200 pins rated_power one_of [6200]; a 5500 unit with the same
-        # codes must NOT silently get the 6200 schema.
-        match = match_device_identity(layout_code=1, model_code=7680, rated_power=5500)
-        self.assertEqual(match.kind, MATCH_FAMILY)
-
-    def test_unread_rated_power_still_matches_pinned_entry(self) -> None:
-        match = match_device_identity(layout_code=1, model_code=7680, rated_power=None)
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertEqual(match.entry.entry_key, "smg_6200")
-        self.assertNotIn("rated_power", match.confidence_signals)
-
-    def test_unknown_layout_is_unidentified(self) -> None:
-        match = match_device_identity(layout_code=99, model_code=1234)
-        self.assertEqual(match.kind, MATCH_UNIDENTIFIED)
-        self.assertIsNone(match.layout)
-
-    def test_scrambled_serial_does_not_reject_only_drops_signal(self) -> None:
-        # Anonymized fixtures scramble the serial words; identity must hold.
-        match = match_device_identity(
-            layout_code=1, model_code=7680, rated_power=6200, serial_ascii="\x00\x00"
+        self.assertIn(
+            "device_type",
+            {item.key for item in policy.optional_registers},
         )
-        self.assertEqual(match.kind, MATCH_DEVICE)
-        self.assertNotIn("serial_ascii", match.confidence_signals)
+
+
+class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
+    def test_every_smg_fingerprint_resolves_to_its_descriptor(self) -> None:
+        source = load_device_catalog()
+        compiled = load_compiled_detection_catalog()
+        for entry in source.devices:
+            if entry.anchors:
+                continue
+            evidence = {
+                "fingerprint.layout_code": entry.fingerprint.layout_code,
+                "fingerprint.model_code": entry.fingerprint.model_code,
+            }
+            if entry.fingerprint.rated_power_one_of:
+                evidence["fingerprint.rated_power"] = entry.fingerprint.rated_power_one_of[0]
+            result = compiled.resolve(protocol_key="modbus_smg", evidence=evidence)
+            self.assertEqual(result.resolution, RESOLUTION_EXACT, entry.entry_key)
+            self.assertEqual(result.candidate_keys, (entry.entry_key,))
+            self.assertEqual(result.surface_key, entry.surface_key)
+
+    def test_unknown_known_layout_resolves_family(self) -> None:
+        result = load_compiled_detection_catalog().resolve(
+            protocol_key="modbus_smg",
+            evidence={
+                "fingerprint.layout_code": 1,
+                "fingerprint.model_code": 9999,
+            },
+        )
+        self.assertEqual(result.resolution, RESOLUTION_FAMILY)
+        self.assertEqual(result.surface_key, "smg_family_read_only")
+
+    def test_conflicting_optional_rated_power_resolves_family(self) -> None:
+        result = load_compiled_detection_catalog().resolve(
+            protocol_key="modbus_smg",
+            evidence={
+                "fingerprint.layout_code": 1,
+                "fingerprint.model_code": 7680,
+                "fingerprint.rated_power": 5500,
+            },
+        )
+        self.assertEqual(result.resolution, RESOLUTION_FAMILY)
+
+    def test_unknown_layout_remains_unresolved(self) -> None:
+        result = load_compiled_detection_catalog().resolve(
+            protocol_key="modbus_smg",
+            evidence={
+                "fingerprint.layout_code": 99,
+                "fingerprint.model_code": 1234,
+            },
+        )
+        self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
 
     def test_serial_plausibility_helper(self) -> None:
         self.assertTrue(serial_ascii_plausible("92632500000001"))

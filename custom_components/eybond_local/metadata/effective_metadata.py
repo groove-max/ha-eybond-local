@@ -87,8 +87,6 @@ def resolve_effective_metadata_selection(
         # complete control set and overlay generation would dedupe against the
         # wrong base.
         profile_name = _normalized_name(getattr(driver, "profile_name", ""))
-    if not profile_name and smartess_protocol is not None:
-        profile_name = smartess_protocol.profile_name
 
     register_schema_name = _normalized_name(getattr(inverter, "register_schema_name", ""))
     if not register_schema_name and snapshot_register_schema_metadata is not None:
@@ -97,8 +95,6 @@ def resolve_effective_metadata_selection(
         )
     if not register_schema_name:
         register_schema_name = _normalized_name(getattr(driver, "register_schema_name", ""))
-    if not register_schema_name and smartess_protocol is not None:
-        register_schema_name = smartess_protocol.register_schema_name
 
     activated_profile_name, activated_register_schema_name = _resolve_activated_device_overlay_names(
         inverter=inverter,

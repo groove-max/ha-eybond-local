@@ -81,6 +81,54 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertIn("async_start_shadow_learning", method_names)
         self.assertIn("async_stop_shadow_learning", method_names)
 
+    def test_shadow_trace_start_paths_do_not_block_event_loop_with_file_open(self) -> None:
+        for relative_path, class_name in (
+            ("support/shadow_learning_backend.py", "InProcessShadowLearningHandler"),
+            ("support/shadow_learning_proxy.py", "InProcessFailClosedShadowProxyHandler"),
+        ):
+            module_path = REPO_ROOT / "custom_components/eybond_local" / relative_path
+            tree = ast.parse(module_path.read_text(encoding="utf-8"))
+            class_node = next(
+                node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == class_name
+            )
+            start_node = next(
+                node
+                for node in class_node.body
+                if isinstance(node, ast.AsyncFunctionDef) and node.name == "start"
+            )
+            blocking_calls = [
+                node
+                for node in ast.walk(start_node)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"mkdir", "open"}
+            ]
+            self.assertEqual(blocking_calls, [], relative_path)
+
+    def test_json_line_writer_does_not_write_or_flush_directly_in_async_write(self) -> None:
+        module_path = REPO_ROOT / "custom_components/eybond_local/support/collector_cloud_proxy.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        class_node = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "JsonLineWriter"
+        )
+        write_node = next(
+            node
+            for node in class_node.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "write"
+        )
+        blocking_calls = [
+            node
+            for node in ast.walk(write_node)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"write", "flush"}
+        ]
+        self.assertEqual(blocking_calls, [])
+
     def test_seed_builder_uses_raw_capture_and_synthesizes_required_at_responses(self) -> None:
         seed, blockers = build_shadow_learning_seed(
             session_id="entry-1_20260605T120000Z",

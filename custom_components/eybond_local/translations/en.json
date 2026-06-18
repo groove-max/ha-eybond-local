@@ -600,7 +600,8 @@
       "options": {
         "auto": "Auto",
         "modbus_smg": "SMG / Modbus",
-        "pi30": "PI30"
+        "pi30": "PI30",
+        "pi18": "PI18"
       }
     },
     "control_mode": {

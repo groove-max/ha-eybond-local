@@ -202,6 +202,7 @@ def parse_qflag(payload: str) -> dict[str, Any]:
     values: dict[str, Any] = {
         "capability_flags_enabled": enabled_letters,
         "capability_flags_disabled": disabled_letters,
+        "capability_flags_all": enabled_letters + disabled_letters,
     }
     for letter, key in _QFLAG_KEY_MAP.items():
         if letter in enabled_set:

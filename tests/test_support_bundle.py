@@ -97,6 +97,72 @@ class SupportBundleTests(unittest.TestCase):
         self.assertIn("last_error", raw["roles"]["integration"]["values"])
         self.assertIn("operating_mode", raw["roles"]["inverter"]["values"])
 
+    def test_builds_support_bundle_payload_with_descriptor_decision_shadow_evidence(self) -> None:
+        descriptor_decision_shadow = {
+            "kind": "descriptor_decision_shadow",
+            "agreement": "match",
+            "evaluation": {"status": "resolved", "resolved_key": "smg_6200"},
+        }
+
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG 6200",
+            connected=True,
+            collector={"collector_pn": "E5000020000000"},
+            inverter={
+                "driver_key": "modbus_smg",
+                "model_name": "SMG 6200",
+                "details": {
+                    "device_catalog": {
+                        "descriptor_decision": descriptor_decision_shadow,
+                    },
+                },
+            },
+            values={"operating_mode": "Off-Grid"},
+            data={},
+            options={},
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            variant_key="default",
+        )
+
+        self.assertEqual(
+            raw["evidence"]["descriptor_decision_shadow"],
+            descriptor_decision_shadow,
+        )
+
+    def test_builds_support_bundle_with_canonical_catalog_detection(self) -> None:
+        catalog_detection = {
+            "resolution": "exact",
+            "candidate_keys": ["smg_6200"],
+            "surface_key": "smg_6200_full",
+            "catalog_version": "2026.06.2",
+        }
+
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG 6200",
+            connected=True,
+            collector={"collector_pn": "E5000020000000"},
+            inverter={
+                "driver_key": "modbus_smg",
+                "model_name": "SMG 6200",
+                "details": {
+                    "device_catalog": {
+                        "compiled_resolution": catalog_detection,
+                    },
+                },
+            },
+            values={},
+            data={},
+            options={},
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            variant_key="default",
+        )
+
+        self.assertEqual(raw["evidence"]["catalog_detection"], catalog_detection)
+
     def test_builds_support_bundle_payload_with_smartess_raw_effective_split(self) -> None:
         raw = build_support_bundle_payload(
             entry_id="entry-smartess",

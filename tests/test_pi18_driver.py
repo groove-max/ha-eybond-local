@@ -186,6 +186,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
                 "qpiri_field_count",
                 "qpigs_field_count",
                 "battery_power_balance_current",
+                "catalog_detection",
             }
         }
         missing = sorted(

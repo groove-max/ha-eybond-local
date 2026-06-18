@@ -57,7 +57,7 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.protocol_family, "modbus_smg")
         self.assertEqual(profile.source_name, "smg_modbus.json")
         self.assertEqual(profile.source_scope, "builtin")
-        self.assertTrue(profile.source_path.endswith("profiles/smg_modbus.json"))
+        self.assertTrue(profile.source_path.endswith("profiles/modbus_smg/default.json"))
         self.assertGreaterEqual(len(profile.groups), 4)
         self.assertEqual(len(profile.capabilities), 33)
         self.assertEqual(len(profile.presets), 2)

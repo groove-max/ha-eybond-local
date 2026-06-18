@@ -15,9 +15,8 @@ from ..entity_descriptions import (
 from ..metadata.collector_cloud_profile_catalog_loader import (
     load_collector_cloud_profile_catalog,
 )
+from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.device_catalog_loader import load_device_catalog
-from ..metadata.model_binding_catalog_loader import load_driver_model_binding_catalog
-from ..metadata.pi_family_catalog_loader import load_pi_family_catalog
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
@@ -37,11 +36,10 @@ from .smg import SmgModbusDriver
 _DRIVERS: tuple[InverterDriver, ...] = (
     SmgModbusDriver(),
     Pi30Driver(),
-)
-
-_EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = (
     Pi18Driver(),
 )
+
+_EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = ()
 
 _COLLECTOR_ONLY_BASE_SENSOR_EXTRA_KEYS: frozenset[str] = frozenset({"last_error"})
 
@@ -294,13 +292,14 @@ def _prime_catalog_driven_metadata() -> None:
     # lands in the event loop during driver detection (HA's blocking-call
     # warning), which needlessly prolongs startup on slow/throttled hosts.
     load_device_catalog()
+    compiled_catalog = load_compiled_detection_catalog()
     load_collector_cloud_profile_catalog()
 
-    for binding in load_driver_model_binding_catalog().bindings.values():
-        if binding.profile_name:
-            load_driver_profile(binding.profile_name)
-        if binding.register_schema_name:
-            load_register_schema(binding.register_schema_name)
+    for surface in compiled_catalog.surfaces.values():
+        if surface.profile_name:
+            load_driver_profile(surface.profile_name)
+        if surface.register_schema_name:
+            load_register_schema(surface.register_schema_name)
 
     for protocol in load_smartess_protocol_catalog().protocols.values():
         for profile_name in (protocol.raw_profile_name, protocol.profile_name):
@@ -312,9 +311,3 @@ def _prime_catalog_driven_metadata() -> None:
         ):
             if schema_name:
                 load_register_schema(schema_name)
-
-    for variant in load_pi_family_catalog().pi30_variants:
-        if variant.profile_name:
-            load_driver_profile(variant.profile_name)
-        if variant.register_schema_name:
-            load_register_schema(variant.register_schema_name)

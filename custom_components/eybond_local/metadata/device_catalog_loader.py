@@ -1,7 +1,7 @@
-"""Load the offline device identification catalog and match identity fingerprints.
+"""Load the universal offline inverter catalog.
 
-The catalog replaces score-based identity rules with a deterministic lookup over
-immutable identity registers. Match semantics:
+Compiled runtime detection owns model and surface resolution. The compatibility
+match types below are retained only for serialized diagnostics:
 
 - ``no_data``     — the identity region read as zeros/absent (inverter comm down);
                     callers must retry/diagnose, never classify the device.
@@ -21,7 +21,7 @@ from pathlib import Path
 
 
 DEVICE_CATALOG_PATH = (
-    Path(__file__).resolve().parents[1] / "protocol_catalogs" / "device_catalog.json"
+    Path(__file__).resolve().parents[1] / "protocol_catalogs" / "inverter_catalog.json"
 )
 
 # DEBUG / VALIDATION toggle. When enabled, exact catalog model matches are
@@ -101,11 +101,60 @@ class IdentityProbeField:
 
 
 @dataclass(frozen=True, slots=True)
+class CatalogEvidenceField:
+    """One normalized evidence value emitted by a source probe action."""
+
+    key: str
+    source_key: str
+    register: int = 0
+    words: int = 1
+    decoder: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class IdentityProbeSpec:
     """Registers to read and fields to extract for one transport family."""
 
     read_blocks: tuple[tuple[int, int], ...]
     fields: dict[str, IdentityProbeField]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogProbeAction:
+    """One read-only source-catalog protocol action."""
+
+    key: str
+    kind: str
+    cost: int
+    optional: bool
+    timeout: float = 0.0
+    retries: int = 0
+    register: int | None = None
+    count: int | None = None
+    command: str = ""
+    parser_key: str = ""
+    fields: tuple[CatalogEvidenceField, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogProtocol:
+    """One canonical protocol descriptor from the source catalog."""
+
+    key: str
+    transport_key: str
+    probe_actions: tuple[CatalogProbeAction, ...]
+    probe_targets: tuple["CatalogProbeTarget", ...] = ()
+    probe_timeout: float = 0.0
+    signature_timeout: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogProbeTarget:
+    """One catalog-owned EyeBond route used for protocol probing."""
+
+    devcode: int
+    collector_addr: int
+    device_addr: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,27 +188,99 @@ class CatalogBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeValidationRule:
+    """One catalog-owned runtime sanity check for a matched binding."""
+
+    key: str
+    equals: object | None = None
+    one_of: tuple[object, ...] = ()
+    min_value: int | float | None = None
+    max_value: int | float | None = None
+    known_enum: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeOptionalRegister:
+    """One optional diagnostic register to read after a model match."""
+
+    key: str
+    register: int
+    word_count: int = 1
+    signed: bool = False
+    combine: str = "u16"
+    divisor: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeOptionalAsciiRange:
+    """One optional ASCII diagnostic register range to read after a model match."""
+
+    key: str
+    register: int
+    word_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeProbePolicy:
+    """Model-owned runtime probe validation and supplemental diagnostics."""
+
+    validation: tuple[RuntimeValidationRule, ...] = ()
+    optional_registers: tuple[RuntimeOptionalRegister, ...] = ()
+    optional_ascii: tuple[RuntimeOptionalAsciiRange, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SupportCapturePolicy:
+    """Surface-owned supplemental support capture plan."""
+
+    ranges: tuple[tuple[int, int], ...] = ()
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogSurface:
+    """One reusable runtime surface declared by the source catalog."""
+
+    key: str
+    protocol_key: str
+    binding: CatalogBinding
+    tier: str
+    read_only: bool
+    default_for_driver: bool = False
+    support_capture: SupportCapturePolicy = SupportCapturePolicy()
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceCatalogEntry:
     """One identified device model in the catalog."""
 
     entry_key: str
+    surface_key: str
     fingerprint: DeviceFingerprint
     structural: tuple[str, ...]
     model_name: str
+    aliases: tuple[str, ...]
     tier: str
     binding: CatalogBinding
+    runtime_probe: RuntimeProbePolicy = RuntimeProbePolicy()
     devcodes: tuple[int, ...] = ()
     provenance_sources: tuple[str, ...] = ()
     provenance_confidence: str = ""
+    anchors: tuple[dict[str, object], ...] = ()
+    priority: int = 100
+    family_fallback: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class FamilyDefault:
     """Reads-only fallback for a recognized layout with an unknown model."""
 
+    surface_key: str
     when_layout_codes: tuple[int, ...]
+    model_name: str
     tier: str
     binding: CatalogBinding
+    runtime_probe: RuntimeProbePolicy = RuntimeProbePolicy()
     note: str = ""
 
 
@@ -169,8 +290,10 @@ class DeviceCatalog:
 
     schema_version: int
     catalog_version: str
+    protocols: dict[str, CatalogProtocol]
     transports: dict[str, IdentityProbeSpec]
     layouts: tuple[LayoutFamily, ...]
+    surfaces: dict[str, CatalogSurface]
     devices: tuple[DeviceCatalogEntry, ...]
     family_defaults: tuple[FamilyDefault, ...]
 
@@ -182,6 +305,7 @@ class DeviceCatalogMatch:
     kind: str
     tier: str = ""
     entry: DeviceCatalogEntry | None = None
+    entries: tuple[DeviceCatalogEntry, ...] = ()
     layout: LayoutFamily | None = None
     family_default: FamilyDefault | None = None
     confidence_signals: tuple[str, ...] = ()
@@ -192,36 +316,72 @@ def load_device_catalog() -> DeviceCatalog:
     """Load and parse the offline device identification catalog."""
 
     raw = json.loads(DEVICE_CATALOG_PATH.read_text(encoding="utf-8"))
+    protocol_items = tuple(
+        item for item in raw.get("protocols", []) if isinstance(item, dict)
+    )
+    protocols = {
+        protocol.key: protocol
+        for protocol in (_parse_protocol(item) for item in protocol_items)
+    }
     transports = {
-        str(key): _parse_probe_spec(value)
-        for key, value in (raw.get("transports") or {}).items()
-        if isinstance(value, dict)
+        protocol.transport_key: _identity_probe_spec(protocol)
+        for protocol in protocols.values()
     }
     layouts = tuple(
-        _parse_layout(item) for item in raw.get("layouts", []) if isinstance(item, dict)
+        _parse_layout(layout, transport_key=protocol.transport_key)
+        for item, protocol in zip(protocol_items, protocols.values(), strict=True)
+        for layout in item.get("layouts", [])
+        if isinstance(layout, dict)
     )
+    support_capture_policies = {
+        str(key).strip(): _parse_support_capture(value)
+        for key, value in (raw.get("support_capture_policies") or {}).items()
+        if isinstance(value, dict)
+    }
+    surfaces = {
+        surface.key: surface
+        for surface in (
+            _parse_surface(item, support_capture_policies)
+            for item in raw.get("surfaces", [])
+            if isinstance(item, dict)
+        )
+    }
     devices = tuple(
-        _parse_device(item) for item in raw.get("devices", []) if isinstance(item, dict)
+        _parse_device(item, surfaces)
+        for item in raw.get("devices", [])
+        if isinstance(item, dict)
     )
     family_defaults = tuple(
-        _parse_family_default(item)
+        _parse_family_default(item, surfaces)
         for item in raw.get("family_defaults", [])
         if isinstance(item, dict)
     )
-    return DeviceCatalog(
+    catalog = DeviceCatalog(
         schema_version=int(raw.get("schema_version", 0)),
         catalog_version=str(raw.get("catalog_version", "")),
+        protocols=protocols,
         transports=transports,
         layouts=layouts,
+        surfaces=surfaces,
         devices=devices,
         family_defaults=family_defaults,
     )
+    _validate_device_catalog(catalog)
+    return catalog
 
 
 def clear_device_catalog_cache() -> None:
     """Clear the cached device identification catalog."""
 
     load_device_catalog.cache_clear()
+    try:
+        from .detection_descriptor_loader import (
+            clear_detection_descriptor_catalog_cache,
+        )
+
+        clear_detection_descriptor_catalog_cache()
+    except ImportError:
+        pass
 
 
 def serial_ascii_plausible(serial_ascii: str) -> bool:
@@ -237,137 +397,191 @@ def serial_ascii_plausible(serial_ascii: str) -> bool:
     return len(cleaned) >= _SERIAL_PLAUSIBLE_MIN_CHARS
 
 
-def match_device_identity(
+def resolve_runtime_probe_policy(
     *,
-    layout_code: int | None,
-    model_code: int | None,
-    rated_power: int | None = None,
-    serial_ascii: str = "",
+    driver_key: str,
+    variant_key: str,
+    profile_name: str = "",
+    register_schema_name: str = "",
     catalog: DeviceCatalog | None = None,
-) -> DeviceCatalogMatch:
-    """Match one identity probe result against the catalog.
-
-    ``rated_power`` narrowing applies only when the value was actually read: an
-    entry that pins ``rated_power_one_of`` rejects a DIFFERENT wattage but still
-    matches when the register was not captured.
-    """
+) -> RuntimeProbePolicy:
+    """Resolve the catalog-owned runtime probe policy for one binding."""
 
     resolved = catalog if catalog is not None else load_device_catalog()
-
-    if layout_code is None or model_code is None:
-        return DeviceCatalogMatch(kind=MATCH_NO_DATA)
-    if layout_code == 0 and model_code == 0:
-        # The identity region reads as zeros when the collector has no inverter
-        # link; classifying this as "unknown device" caused real false negatives.
-        return DeviceCatalogMatch(kind=MATCH_NO_DATA)
-
-    layout = _resolve_layout(resolved, layout_code)
-
-    # Debug toggle: skip exact model matching so a supported device drops to the
-    # family/partial tier and the learning flow can be validated on it.
-    if not force_unsupported_models():
-        for entry in resolved.devices:
-            fingerprint = entry.fingerprint
-            if fingerprint.layout_code != layout_code:
-                continue
-            if fingerprint.model_code != model_code:
-                continue
-            if (
-                fingerprint.rated_power_one_of
-                and rated_power is not None
-                and rated_power not in fingerprint.rated_power_one_of
-            ):
-                continue
-            signals = _confidence_signals(
-                entry=entry,
-                rated_power=rated_power,
-                serial_ascii=serial_ascii,
-            )
-            return DeviceCatalogMatch(
-                kind=MATCH_DEVICE,
-                tier=entry.tier,
-                entry=entry,
-                layout=layout,
-                confidence_signals=signals,
-            )
-
-    if layout is not None:
-        for default in resolved.family_defaults:
-            if layout_code in default.when_layout_codes:
-                return DeviceCatalogMatch(
-                    kind=MATCH_FAMILY,
-                    tier=default.tier,
-                    layout=layout,
-                    family_default=default,
-                    confidence_signals=("layout_code",),
-                )
-
-    return DeviceCatalogMatch(kind=MATCH_UNIDENTIFIED, layout=layout)
-
-
-def resolve_family_default(
-    layout_code: int,
-    *,
-    catalog: DeviceCatalog | None = None,
-) -> FamilyDefault | None:
-    """Resolve the reads-only family default for one layout code, if any."""
-
-    resolved = catalog if catalog is not None else load_device_catalog()
-    for default in resolved.family_defaults:
-        if layout_code in default.when_layout_codes:
-            return default
-    return None
-
-
-def _confidence_signals(
-    *,
-    entry: DeviceCatalogEntry,
-    rated_power: int | None,
-    serial_ascii: str,
-) -> tuple[str, ...]:
-    signals = ["layout_code", "model_code"]
-    if (
-        entry.fingerprint.rated_power_one_of
-        and rated_power is not None
-        and rated_power in entry.fingerprint.rated_power_one_of
-    ):
-        signals.append("rated_power")
-    if "serial_ascii_plausible" in entry.structural and serial_ascii_plausible(serial_ascii):
-        signals.append("serial_ascii")
-    return tuple(signals)
-
-
-def _resolve_layout(catalog: DeviceCatalog, layout_code: int) -> LayoutFamily | None:
-    for layout in catalog.layouts:
-        if layout_code in layout.layout_codes:
-            return layout
-    return None
-
-
-def _parse_probe_spec(raw: dict[str, object]) -> IdentityProbeSpec:
-    probe = raw.get("identity_probe")
-    probe = probe if isinstance(probe, dict) else {}
-    read_blocks = tuple(
-        (int(block[0]), int(block[1]))
-        for block in probe.get("read_blocks", [])
-        if isinstance(block, (list, tuple)) and len(block) == 2
+    binding = CatalogBinding(
+        driver_key=str(driver_key or "").strip(),
+        variant_key=str(variant_key or "").strip() or "default",
+        profile_name=str(profile_name or "").strip(),
+        register_schema_name=str(register_schema_name or "").strip(),
     )
-    fields: dict[str, IdentityProbeField] = {}
-    raw_fields = probe.get("fields")
-    if isinstance(raw_fields, dict):
-        for name, value in raw_fields.items():
-            if isinstance(value, dict) and "register" in value:
-                fields[str(name)] = IdentityProbeField(
-                    register=int(value["register"]),
-                    words=int(value.get("words", 1)),
-                )
-    return IdentityProbeSpec(read_blocks=read_blocks, fields=fields)
+
+    for entry in resolved.devices:
+        if _binding_matches(entry.binding, binding):
+            return entry.runtime_probe
+    for default in resolved.family_defaults:
+        if _binding_matches(default.binding, binding):
+            return default.runtime_probe
+    return RuntimeProbePolicy()
 
 
-def _parse_layout(raw: dict[str, object]) -> LayoutFamily:
+def resolve_catalog_surface_binding(
+    driver_key: str,
+    *,
+    variant_key: str = "default",
+    catalog: DeviceCatalog | None = None,
+) -> CatalogBinding | None:
+    """Resolve a source-catalog surface binding by driver and variant."""
+
+    resolved = catalog if catalog is not None else load_device_catalog()
+    normalized_driver = str(driver_key or "").strip()
+    normalized_variant = str(variant_key or "default").strip() or "default"
+    candidates = tuple(
+        surface
+        for surface in resolved.surfaces.values()
+        if surface.binding.driver_key == normalized_driver
+        and surface.binding.variant_key == normalized_variant
+    )
+    if normalized_variant == "default":
+        default = next(
+            (surface for surface in candidates if surface.default_for_driver),
+            None,
+        )
+        return default.binding if default is not None else None
+    if len(candidates) == 1:
+        return candidates[0].binding
+    return None
+
+
+def resolve_support_capture_policy(
+    *,
+    driver_key: str,
+    variant_key: str = "",
+    profile_name: str = "",
+    register_schema_name: str = "",
+    catalog: DeviceCatalog | None = None,
+) -> SupportCapturePolicy:
+    """Resolve surface-owned support capture metadata for one binding."""
+
+    resolved = catalog if catalog is not None else load_device_catalog()
+    requested = CatalogBinding(
+        driver_key=str(driver_key or "").strip(),
+        variant_key=str(variant_key or "").strip() or "default",
+        profile_name=str(profile_name or "").strip(),
+        register_schema_name=str(register_schema_name or "").strip(),
+    )
+    for surface in resolved.surfaces.values():
+        if _binding_matches(surface.binding, requested):
+            return surface.support_capture
+    schema_matches = tuple(
+        surface
+        for surface in resolved.surfaces.values()
+        if surface.binding.driver_key == requested.driver_key
+        and surface.binding.register_schema_name == requested.register_schema_name
+    )
+    if schema_matches and len(
+        {surface.support_capture for surface in schema_matches}
+    ) == 1:
+        return schema_matches[0].support_capture
+    return SupportCapturePolicy()
+
+
+def _binding_matches(candidate: CatalogBinding, requested: CatalogBinding) -> bool:
+    from .profile_loader import canonical_driver_profile_name
+
+    if candidate.driver_key != requested.driver_key:
+        return False
+    if candidate.variant_key != requested.variant_key:
+        return False
+    if canonical_driver_profile_name(
+        candidate.profile_name
+    ) != canonical_driver_profile_name(requested.profile_name):
+        return False
+    if candidate.register_schema_name != requested.register_schema_name:
+        return False
+    return True
+
+
+def _parse_protocol(raw: dict[str, object]) -> CatalogProtocol:
+    return CatalogProtocol(
+        key=str(raw["key"]).strip(),
+        transport_key=str(raw["transport_key"]).strip(),
+        probe_actions=tuple(
+            _parse_probe_action(item)
+            for item in raw.get("probe_actions", [])
+            if isinstance(item, dict)
+        ),
+        probe_targets=tuple(
+            CatalogProbeTarget(
+                devcode=int(item["devcode"]),
+                collector_addr=int(item["collector_addr"]),
+                device_addr=int(item.get("device_addr", 0)),
+            )
+            for item in raw.get("probe_targets", [])
+            if isinstance(item, dict)
+        ),
+        probe_timeout=float(raw.get("probe_timeout", 0.0)),
+        signature_timeout=float(raw.get("signature_timeout", 0.0)),
+    )
+
+
+def _parse_probe_action(raw: dict[str, object]) -> CatalogProbeAction:
+    return CatalogProbeAction(
+        key=str(raw["key"]).strip(),
+        kind=str(raw["kind"]).strip(),
+        cost=int(raw.get("cost", 1)),
+        optional=bool(raw.get("optional", False)),
+        timeout=float(raw.get("timeout", 0.0)),
+        retries=max(int(raw.get("retries", 0)), 0),
+        register=_optional_int(raw.get("register")),
+        count=_optional_int(raw.get("count")),
+        command=str(raw.get("command", "")).strip(),
+        parser_key=str(raw.get("parser_key", "")).strip(),
+        fields=tuple(
+            CatalogEvidenceField(
+                key=str(item.get("key", item["source_key"])).strip(),
+                source_key=str(item["source_key"]).strip(),
+                register=int(item.get("register", 0)),
+                words=int(item.get("words", 1)),
+                decoder=str(item.get("decoder", "")).strip(),
+            )
+            for item in raw.get("evidence_fields", [])
+            if isinstance(item, dict)
+        ),
+    )
+
+
+def _identity_probe_spec(protocol: CatalogProtocol) -> IdentityProbeSpec:
+    modbus_actions = tuple(
+        action
+        for action in protocol.probe_actions
+        if action.kind == "modbus_read"
+        and action.register is not None
+        and action.count is not None
+    )
+    return IdentityProbeSpec(
+        read_blocks=tuple(
+            (action.register, action.count)
+            for action in modbus_actions
+        ),
+        fields={
+            field.source_key: IdentityProbeField(
+                register=field.register,
+                words=field.words,
+            )
+            for action in modbus_actions
+            for field in action.fields
+        },
+    )
+
+
+def _parse_layout(
+    raw: dict[str, object],
+    *,
+    transport_key: str,
+) -> LayoutFamily:
     return LayoutFamily(
         key=str(raw["key"]).strip(),
-        transport=str(raw.get("transport", "")).strip(),
+        transport=transport_key,
         layout_codes=tuple(int(code) for code in raw.get("layout_codes", [])),
         rated_power_register_valid=bool(raw.get("rated_power_register_valid", False)),
         base_schema=str(raw.get("base_schema", "")).strip(),
@@ -389,6 +603,117 @@ def _parse_binding(raw: dict[str, object]) -> CatalogBinding:
         register_schema_name=str(raw.get("register_schema_name", "")).strip(),
         profile_name=str(raw.get("profile_name", "")).strip(),
     )
+
+
+def _parse_support_capture(raw: object) -> SupportCapturePolicy:
+    payload = raw if isinstance(raw, dict) else {}
+    return SupportCapturePolicy(
+        ranges=tuple(
+            (int(item[0]), int(item[1]))
+            for item in payload.get("ranges", [])
+            if isinstance(item, (list, tuple)) and len(item) == 2
+        ),
+        notes=tuple(
+            str(item).strip()
+            for item in payload.get("notes", [])
+            if str(item).strip()
+        ),
+    )
+
+
+def _parse_surface(
+    raw: dict[str, object],
+    support_capture_policies: dict[str, SupportCapturePolicy],
+) -> CatalogSurface:
+    key = str(raw["key"]).strip()
+    binding = _parse_binding(raw)
+    tier = _validate_tier(key, str(raw.get("tier", "")).strip(), binding.profile_name)
+    read_only = bool(raw.get("read_only", tier == TIER_PARTIAL))
+    if read_only != (tier == TIER_PARTIAL):
+        raise ValueError(f"device_catalog:{key}:surface_read_only_tier_mismatch")
+    support_capture_key = str(raw.get("support_capture_policy", "")).strip()
+    support_capture = support_capture_policies.get(support_capture_key)
+    if support_capture is None:
+        raise ValueError(
+            f"device_catalog:{key}:unknown_support_capture_policy:{support_capture_key}"
+        )
+    return CatalogSurface(
+        key=key,
+        protocol_key=str(raw["protocol_key"]).strip(),
+        binding=binding,
+        tier=tier,
+        read_only=read_only,
+        default_for_driver=bool(raw.get("default_for_driver", False)),
+        support_capture=support_capture,
+    )
+
+
+def _parse_runtime_probe(raw: object) -> RuntimeProbePolicy:
+    payload = raw if isinstance(raw, dict) else {}
+    return RuntimeProbePolicy(
+        validation=tuple(
+            _parse_runtime_validation_rule(item)
+            for item in payload.get("validation", [])
+            if isinstance(item, dict)
+        ),
+        optional_registers=tuple(
+            _parse_runtime_optional_register(item)
+            for item in payload.get("optional_registers", [])
+            if isinstance(item, dict)
+        ),
+        optional_ascii=tuple(
+            _parse_runtime_optional_ascii_range(item)
+            for item in payload.get("optional_ascii", [])
+            if isinstance(item, dict)
+        ),
+    )
+
+
+def _parse_runtime_validation_rule(raw: dict[str, object]) -> RuntimeValidationRule:
+    one_of = raw.get("one_of", ())
+    if not isinstance(one_of, list):
+        one_of = ()
+    return RuntimeValidationRule(
+        key=str(raw["key"]).strip(),
+        equals=raw.get("equals"),
+        one_of=tuple(one_of),
+        min_value=_optional_number(raw.get("min")),
+        max_value=_optional_number(raw.get("max")),
+        known_enum=bool(raw.get("known_enum", False)),
+    )
+
+
+def _parse_runtime_optional_register(raw: dict[str, object]) -> RuntimeOptionalRegister:
+    return RuntimeOptionalRegister(
+        key=str(raw["key"]).strip(),
+        register=int(raw["register"]),
+        word_count=int(raw.get("word_count", raw.get("words", 1))),
+        signed=bool(raw.get("signed", False)),
+        combine=str(raw.get("combine", "u16") or "u16"),
+        divisor=_optional_int(raw.get("divisor")),
+    )
+
+
+def _parse_runtime_optional_ascii_range(raw: dict[str, object]) -> RuntimeOptionalAsciiRange:
+    return RuntimeOptionalAsciiRange(
+        key=str(raw["key"]).strip(),
+        register=int(raw["register"]),
+        word_count=int(raw.get("word_count", raw.get("words", 1))),
+    )
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_number(value: object) -> int | float | None:
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return value
+    return int(value)
 
 
 _VALID_TIERS = (TIER_FULL, TIER_PARTIAL)
@@ -413,36 +738,134 @@ def _validate_tier(entry_key: str, tier: str, profile_name: str) -> str:
     return tier
 
 
-def _parse_device(raw: dict[str, object]) -> DeviceCatalogEntry:
+def _validate_device_catalog(catalog: DeviceCatalog) -> None:
+    if not catalog.protocols:
+        raise ValueError("device_catalog:missing_protocols")
+    for protocol in catalog.protocols.values():
+        if not protocol.transport_key:
+            raise ValueError(f"device_catalog:{protocol.key}:missing_transport")
+        if not protocol.probe_actions:
+            raise ValueError(f"device_catalog:{protocol.key}:missing_probe_actions")
+        if not protocol.probe_targets:
+            raise ValueError(f"device_catalog:{protocol.key}:missing_probe_targets")
+        for action in protocol.probe_actions:
+            if action.kind == "modbus_read" and (
+                action.register is None
+                or action.count is None
+                or action.count <= 0
+            ):
+                raise ValueError(
+                    f"device_catalog:{protocol.key}:invalid_modbus_action:{action.key}"
+                )
+    default_drivers: set[str] = set()
+    for surface in catalog.surfaces.values():
+        if surface.protocol_key not in catalog.protocols:
+            raise ValueError(
+                f"device_catalog:{surface.key}:unknown_protocol:{surface.protocol_key}"
+            )
+        if surface.default_for_driver:
+            driver_key = surface.binding.driver_key
+            if driver_key in default_drivers:
+                raise ValueError(
+                    f"device_catalog:duplicate_default_surface:{driver_key}"
+                )
+            default_drivers.add(driver_key)
+    fingerprints: dict[tuple[int, int], str] = {}
+    for entry in catalog.devices:
+        if entry.anchors:
+            continue
+        key = (entry.fingerprint.layout_code, entry.fingerprint.model_code)
+        existing = fingerprints.get(key)
+        if existing is not None:
+            raise ValueError(
+                "device_catalog:ambiguous_fingerprint:"
+                f"{key[0]}:{key[1]}:{existing}:{entry.entry_key}"
+            )
+        fingerprints[key] = entry.entry_key
+    claimed_layout_codes: set[int] = set()
+    for default in catalog.family_defaults:
+        overlap = claimed_layout_codes.intersection(default.when_layout_codes)
+        if overlap:
+            raise ValueError(
+                "device_catalog:overlapping_family_defaults:"
+                + ",".join(str(value) for value in sorted(overlap))
+            )
+        claimed_layout_codes.update(default.when_layout_codes)
+
+
+def _surface_for_reference(
+    raw: dict[str, object],
+    surfaces: dict[str, CatalogSurface],
+) -> CatalogSurface:
+    surface_key = str(raw.get("surface_key", "")).strip()
+    surface = surfaces.get(surface_key)
+    if surface is None:
+        raise ValueError(f"device_catalog:unknown_surface:{surface_key}")
+    return surface
+
+
+def _parse_device(
+    raw: dict[str, object],
+    surfaces: dict[str, CatalogSurface],
+) -> DeviceCatalogEntry:
     provenance = raw.get("provenance")
     provenance = provenance if isinstance(provenance, dict) else {}
     cloud_hints = raw.get("cloud_hints")
     cloud_hints = cloud_hints if isinstance(cloud_hints, dict) else {}
     entry_key = str(raw["entry_key"]).strip()
-    binding = _parse_binding(raw["binding"])
+    surface = _surface_for_reference(raw, surfaces)
+    fingerprint_raw = raw.get("fingerprint")
+    fingerprint = (
+        _parse_fingerprint(fingerprint_raw)
+        if isinstance(fingerprint_raw, dict)
+        else DeviceFingerprint(layout_code=0, model_code=0)
+    )
     return DeviceCatalogEntry(
         entry_key=entry_key,
-        fingerprint=_parse_fingerprint(raw["fingerprint"]),
+        surface_key=surface.key,
+        fingerprint=fingerprint,
         structural=tuple(str(check) for check in raw.get("structural", [])),
         model_name=str(raw.get("model_name", "")).strip(),
-        tier=_validate_tier(entry_key, str(raw.get("tier", "")).strip(), binding.profile_name),
-        binding=binding,
+        aliases=tuple(
+            dict.fromkeys(
+                (
+                    str(raw.get("model_name", "")).strip(),
+                    *(
+                        str(alias).strip()
+                        for alias in raw.get("aliases", [])
+                        if str(alias).strip()
+                    ),
+                )
+            )
+        ),
+        tier=surface.tier,
+        binding=surface.binding,
+        runtime_probe=_parse_runtime_probe(raw.get("runtime_probe")),
         devcodes=tuple(int(code) for code in cloud_hints.get("devcodes", [])),
         provenance_sources=tuple(str(item) for item in provenance.get("sources", [])),
         provenance_confidence=str(provenance.get("confidence", "")).strip(),
+        anchors=tuple(
+            dict(item)
+            for item in raw.get("anchors", [])
+            if isinstance(item, dict)
+        ),
+        priority=int(raw.get("priority", 100)),
+        family_fallback=bool(raw.get("family_fallback", False)),
     )
 
 
-def _parse_family_default(raw: dict[str, object]) -> FamilyDefault:
-    binding = _parse_binding(raw["binding"])
+def _parse_family_default(
+    raw: dict[str, object],
+    surfaces: dict[str, CatalogSurface],
+) -> FamilyDefault:
+    surface = _surface_for_reference(raw, surfaces)
     layout_codes = tuple(int(code) for code in raw.get("when_layout_codes", []))
     return FamilyDefault(
+        surface_key=surface.key,
         when_layout_codes=layout_codes,
-        tier=_validate_tier(
-            f"family_default:{layout_codes}",
-            str(raw.get("tier", "")).strip(),
-            binding.profile_name,
-        ),
-        binding=binding,
+        model_name=str(raw.get("model_name", "")).strip(),
+        tier=surface.tier,
+        binding=surface.binding,
+        runtime_probe=_parse_runtime_probe(raw.get("runtime_probe")),
         note=str(raw.get("note", "")).strip(),
     )

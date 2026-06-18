@@ -254,8 +254,11 @@ class JsonLineWriter:
     async def write(self, payload: dict[str, object]) -> None:
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         async with self._lock:
-            self._output.write(line + "\n")
-            self._output.flush()
+            await asyncio.to_thread(self._write_line, line)
+
+    def _write_line(self, line: str) -> None:
+        self._output.write(line + "\n")
+        self._output.flush()
 
 
 def parse_restore_target(value: str) -> RestoreTarget:

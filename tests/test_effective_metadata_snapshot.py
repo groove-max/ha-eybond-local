@@ -18,6 +18,9 @@ from custom_components.eybond_local.metadata.effective_metadata_snapshot import 
     effective_metadata_snapshot_from_dict,
     effective_metadata_snapshot_to_dict,
 )
+from custom_components.eybond_local.metadata.compiled_detection_catalog import (  # noqa: E402
+    load_compiled_detection_catalog,
+)
 
 
 class EffectiveMetadataSnapshotTests(unittest.TestCase):
@@ -177,6 +180,41 @@ class EffectiveMetadataSnapshotTests(unittest.TestCase):
 
         self.assertEqual(restored, original)
         self.assertEqual(restored.as_dict(), encoded)
+
+    def test_catalog_bound_snapshot_validates_current_surface(self) -> None:
+        catalog = load_compiled_detection_catalog()
+        snapshot = build_effective_metadata_snapshot(
+            effective_owner_key="modbus_smg",
+            variant_key="default",
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            confidence="high",
+            candidate_keys=("smg_6200",),
+            resolution_level="exact",
+            surface_key="smg_6200_full",
+            evidence_fingerprint="abc",
+            catalog_version=catalog.catalog_version,
+            descriptor_revisions=(
+                f"smg_6200:{catalog.devices['smg_6200'].revision}",
+            ),
+        )
+
+        self.assertTrue(snapshot.is_valid)
+        self.assertEqual(snapshot.candidate_keys, ("smg_6200",))
+        self.assertEqual(snapshot.surface_key, "smg_6200_full")
+
+    def test_stale_catalog_bound_snapshot_is_invalid(self) -> None:
+        snapshot = build_effective_metadata_snapshot(
+            effective_owner_key="modbus_smg",
+            variant_key="default",
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            confidence="high",
+            surface_key="smg_6200_full",
+            catalog_version="stale",
+        )
+
+        self.assertFalse(snapshot.is_valid)
 
 
 if __name__ == "__main__":

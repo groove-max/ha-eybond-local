@@ -20,8 +20,11 @@ from ..models import (
     WriteCapability,
 )
 
-PROFILES_DIR = Path(__file__).resolve().parents[1] / "profiles"
+PROFILES_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs" / "profiles"
 _EXTERNAL_PROFILE_ROOTS: tuple[Path, ...] = ()
+_BUILTIN_PROFILE_ALIASES = {
+    "smg_modbus.json": "modbus_smg/default.json",
+}
 _ALLOWED_CAPABILITY_PROVENANCE: frozenset[str] = frozenset(
     {"verified", "doc_backed", "inferred", "cloud_hint"}
 )
@@ -54,6 +57,13 @@ class DriverProfileMetadata:
         """Return the effective enum map for one capability."""
 
         return self.get_capability(capability_key).enum_value_map
+
+
+def canonical_driver_profile_name(profile_name: str) -> str:
+    """Return the canonical built-in profile name for persisted metadata."""
+
+    normalized = str(profile_name or "").strip()
+    return _BUILTIN_PROFILE_ALIASES.get(normalized, normalized)
 
 
 @lru_cache(maxsize=None)
@@ -165,13 +175,17 @@ def _resolve_profile_path(profile_name: str) -> Path:
             continue
         if candidate.is_file():
             return candidate
+    alias = _BUILTIN_PROFILE_ALIASES.get(str(profile_name))
+    if alias:
+        return (PROFILES_DIR / alias).resolve()
     raise FileNotFoundError(f"profile_not_found:{profile_name}")
 
 
 def builtin_profile_path(profile_name: str) -> Path:
     """Return the built-in profile path, bypassing external overrides."""
 
-    return (PROFILES_DIR / profile_name).resolve()
+    resolved_name = _BUILTIN_PROFILE_ALIASES.get(profile_name, profile_name)
+    return (PROFILES_DIR / resolved_name).resolve()
 
 
 @lru_cache(maxsize=None)

@@ -209,8 +209,10 @@ class InProcessFailClosedShadowProxyHandler:
 
         if self._running:
             return
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._output_handle = self._output_path.open("a", encoding="utf-8")
+        self._output_handle = await asyncio.to_thread(
+            _open_append_text_file,
+            self._output_path,
+        )
         self._writer = JsonLineWriter(self._output_handle)
         await self._backend.start()
         self._collector_connected = False
@@ -252,7 +254,7 @@ class InProcessFailClosedShadowProxyHandler:
         self._output_handle = None
         self._writer = None
         if output_handle is not None:
-            output_handle.close()
+            await asyncio.to_thread(output_handle.close)
 
     async def handle_client(
         self,
@@ -768,6 +770,11 @@ def _matches_fc3_set_response(
     if response.parameter != pending.request_payload[0]:
         return False, "fc3_response_parameter_mismatch"
     return True, "fc3_response"
+
+
+def _open_append_text_file(path: Path) -> TextIO:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.open("a", encoding="utf-8")
 
 
 __all__ = [

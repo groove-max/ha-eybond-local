@@ -28,11 +28,21 @@ from ..payload.pi30 import (
     parse_qt_clock,
     parse_serial_number,
 )
-from ..metadata.model_binding_catalog_loader import resolve_driver_model_binding
-from ..metadata.pi_family import resolve_pi_identity, resolve_pi30_metadata_names
+from ..metadata.compiled_detection_catalog import (
+    RESOLUTION_COMPATIBLE_GROUP,
+    RESOLUTION_EXACT,
+    RESOLUTION_FAMILY,
+    load_compiled_detection_catalog,
+)
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .catalog_probe import (
+    async_probe_ascii_catalog,
+    async_probe_ascii_catalog_signature,
+    catalog_model_name,
+    evidence_providers_from_transport,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,31 +63,6 @@ class Pi30PollGroup:
     include_energy: bool = False
     minimum_interval: float = 0.0
     interval_multiplier: float = 1.0
-
-_PROBE_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
-    Pi30CommandSpec(command="QPI", parser=parse_protocol_id),
-    Pi30CommandSpec(command="QID", parser=parse_serial_number),
-    Pi30CommandSpec(command="QPIRI", parser=parse_qpiri),
-    Pi30CommandSpec(command="QMN", parser=parse_model_number, optional=True),
-    Pi30CommandSpec(command="QFLAG", parser=parse_qflag, optional=True),
-    Pi30CommandSpec(command="QMOD", parser=parse_qmod, optional=True),
-    Pi30CommandSpec(command="QPIWS", parser=parse_qpiws, optional=True),
-    Pi30CommandSpec(
-        command="QVFW",
-        parser=lambda payload: parse_firmware_version(payload, key="main_cpu_firmware_version"),
-        optional=True,
-    ),
-    Pi30CommandSpec(
-        command="QVFW2",
-        parser=lambda payload: parse_firmware_version(payload, key="secondary_cpu_firmware_version"),
-        optional=True,
-    ),
-    Pi30CommandSpec(
-        command="QVFW3",
-        parser=lambda payload: parse_firmware_version(payload, key="tertiary_cpu_firmware_version"),
-        optional=True,
-    ),
-)
 
 _RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
     Pi30CommandSpec(command="QPIGS", parser=parse_qpigs),
@@ -100,15 +85,6 @@ _PI30_RUNTIME_GROUPS: tuple[Pi30PollGroup, ...] = (
     Pi30PollGroup(key="fast", specs=_FAST_RUNTIME_COMMAND_SPECS, minimum_interval=5.0, interval_multiplier=1.0),
     Pi30PollGroup(key="medium", specs=_MEDIUM_RUNTIME_COMMAND_SPECS, minimum_interval=30.0, interval_multiplier=3.0),
     Pi30PollGroup(key="slow", include_energy=True, minimum_interval=60.0, interval_multiplier=6.0),
-)
-
-_SUPPORT_COMMANDS: tuple[str, ...] = tuple(
-    dict.fromkeys(
-        [
-            *(spec.command for spec in _PROBE_COMMAND_SPECS),
-            *(spec.command for spec in _RUNTIME_COMMAND_SPECS),
-        ]
-    )
 )
 
 _PI30_BOOL_COMMANDS: dict[str, str] = {
@@ -138,19 +114,55 @@ _PI30_NUMERIC_COMMANDS: dict[str, str] = {
     "battery_float_voltage": "PBFT",
 }
 
+_CATALOG_PARSERS = {
+    "pi30.protocol_id": parse_protocol_id,
+    "pi30.serial_number": parse_serial_number,
+    "pi30.qpiri": parse_qpiri,
+    "pi30.model_number": parse_model_number,
+    "pi30.qflag": parse_qflag,
+    "pi30.qmod": parse_qmod,
+    "pi30.qpiws": parse_qpiws,
+    "pi30.qpigs": parse_qpigs,
+    "pi30.main_firmware": lambda payload: parse_firmware_version(
+        payload,
+        key="main_cpu_firmware_version",
+    ),
+    "pi30.secondary_firmware": lambda payload: parse_firmware_version(
+        payload,
+        key="secondary_cpu_firmware_version",
+    ),
+    "pi30.tertiary_firmware": lambda payload: parse_firmware_version(
+        payload,
+        key="tertiary_cpu_firmware_version",
+    ),
+}
+
 
 class Pi30Driver(InverterDriver):
     """PI30 probe, runtime reader, and command-based controller."""
 
     key = "pi30"
     name = "PI30 / ASCII"
-    signature_timeout = 4.0
-    probe_timeout = 12.0
-    probe_targets = (
-        ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-        ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
-        ProbeTarget(devcode=0x0102, collector_addr=0xFF, device_addr=0),
-    )
+
+    @property
+    def signature_timeout(self) -> float:
+        return load_compiled_detection_catalog().protocols[self.key].signature_timeout
+
+    @property
+    def probe_timeout(self) -> float:
+        return load_compiled_detection_catalog().protocols[self.key].probe_timeout
+
+    @property
+    def probe_targets(self) -> tuple[ProbeTarget, ...]:
+        return tuple(
+            ProbeTarget(
+                devcode=devcode,
+                collector_addr=collector_addr,
+                device_addr=device_addr,
+            )
+            for devcode, collector_addr, device_addr
+            in load_compiled_detection_catalog().protocols[self.key].probe_targets
+        )
 
     @property
     def profile_name(self) -> str:
@@ -182,42 +194,44 @@ class Pi30Driver(InverterDriver):
 
     async def async_probe_signature(self, transport, target: ProbeTarget) -> bool:
         session = self._session(transport, target)
-        try:
-            values = parse_protocol_id(await session.request("QPI"))
-        except Pi30Error:
-            return False
-
-        protocol_id = values.get("protocol_id")
-        if not isinstance(protocol_id, str):
-            return False
-
-        identity = resolve_pi_identity(protocol_id, values)
-        return identity is not None and identity.family_key == "pi30"
+        return await async_probe_ascii_catalog_signature(
+            protocol_key=self.key,
+            session=session,
+            parsers=_CATALOG_PARSERS,
+        )
 
     async def async_probe(self, transport, target: ProbeTarget) -> DetectedInverter | None:
         session = self._session(transport, target)
         try:
-            config_values = await _async_collect_values(session, _PROBE_COMMAND_SPECS)
-        except Pi30Error:
+            probe = await async_probe_ascii_catalog(
+                protocol_key="pi30",
+                session=session,
+                parsers=_CATALOG_PARSERS,
+                collector=getattr(transport, "collector_info", None),
+                evidence_providers=evidence_providers_from_transport(transport),
+            )
+        except (Pi30Error, RuntimeError):
             return None
-
-        protocol_id = config_values.get("protocol_id")
-        if not isinstance(protocol_id, str):
+        if probe.resolution.resolution not in {
+            RESOLUTION_EXACT,
+            RESOLUTION_COMPATIBLE_GROUP,
+            RESOLUTION_FAMILY,
+        }:
             return None
-
-        identity = resolve_pi_identity(protocol_id, config_values)
-        if identity is None or identity.family_key != "pi30":
-            return None
-
-        model_name = identity.model_name
-        metadata_names = resolve_pi30_metadata_names(
-            config_values,
-            model_name,
-            default_profile_name=self.profile_name,
-            default_register_schema_name=self.register_schema_name,
+        surface = load_compiled_detection_catalog().surfaces.get(
+            probe.resolution.surface_key or ""
         )
-        profile_name = metadata_names.profile_name
-        schema_name = metadata_names.register_schema_name
+        if surface is None:
+            return None
+        config_values = probe.values
+        config_values["catalog_detection"] = probe.as_details()
+        model_name = catalog_model_name(
+            protocol_key="pi30",
+            resolution=probe.resolution,
+            values=config_values,
+        )
+        profile_name = surface.profile_name
+        schema_name = surface.register_schema_name
         profile = load_driver_profile(profile_name)
         schema = load_register_schema(schema_name)
         config_values.update(_translate_config_enums(config_values, schema))
@@ -229,7 +243,7 @@ class Pi30Driver(InverterDriver):
             driver_key=self.key,
             protocol_family="pi30",
             model_name=model_name,
-            variant_key=identity.variant_key,
+            variant_key=surface.variant_key,
             serial_number=serial_number,
             probe_target=target,
             details=config_values,
@@ -320,7 +334,7 @@ class Pi30Driver(InverterDriver):
         responses: dict[str, str] = {}
         failures: dict[str, str] = {}
 
-        for command in _SUPPORT_COMMANDS:
+        for command in _support_commands():
             try:
                 responses[command] = await session.request(command)
             except Exception as exc:
@@ -345,12 +359,6 @@ class Pi30Driver(InverterDriver):
         )
 
 
-def _build_model_name(protocol_id: str, values: dict[str, Any]) -> str:
-    from ..metadata.pi_family import build_pi_model_name
-
-    return build_pi_model_name(protocol_id, values)
-
-
 def _schema_for_inverter(
     inverter: DetectedInverter | None,
     fallback_schema_name: str,
@@ -361,31 +369,31 @@ def _schema_for_inverter(
     return load_register_schema(schema_name)
 
 
-def _resolve_pi30_schema_name(values: dict[str, Any], model_name: str) -> str:
-    default_binding = _pi30_default_binding()
-    return resolve_pi30_metadata_names(
-        values,
-        model_name,
-        default_profile_name=default_binding.profile_name,
-        default_register_schema_name=default_binding.register_schema_name,
-    ).register_schema_name
-
-
-def _resolve_pi30_profile_name(values: dict[str, Any], model_name: str) -> str:
-    default_binding = _pi30_default_binding()
-    return resolve_pi30_metadata_names(
-        values,
-        model_name,
-        default_profile_name=default_binding.profile_name,
-        default_register_schema_name=default_binding.register_schema_name,
-    ).profile_name
-
-
 def _pi30_default_binding():
-    binding = resolve_driver_model_binding("pi30")
-    if binding is None:
-        raise RuntimeError("missing_model_binding:pi30")
-    return binding
+    surfaces = tuple(
+        surface
+        for surface in load_compiled_detection_catalog().surfaces.values()
+        if surface.driver_key == "pi30" and surface.default_for_driver
+    )
+    if len(surfaces) != 1:
+        raise RuntimeError("missing_default_surface:pi30")
+    return surfaces[0]
+
+
+def _support_commands() -> tuple[str, ...]:
+    protocol = load_compiled_detection_catalog().protocols["pi30"]
+    return tuple(
+        dict.fromkeys(
+            [
+                *(
+                    action.command
+                    for action in protocol.probe_actions
+                    if action.kind == "ascii_command" and action.command
+                ),
+                *(spec.command for spec in _RUNTIME_COMMAND_SPECS),
+            ]
+        )
+    )
 
 
 async def _async_collect_values(

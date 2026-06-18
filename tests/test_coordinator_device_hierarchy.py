@@ -692,6 +692,38 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertIs(result, inverter)
 
+    def test_write_exposure_context_uses_warmed_effective_metadata_cache(self) -> None:
+        # Regression: after activating a learned overlay, write-exposure checks run in the
+        # event loop. They must use the executor-warmed effective metadata selection instead
+        # of re-resolving the overlay and reading external profile/schema JSON synchronously.
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator.data = types.SimpleNamespace(
+            collector=None,
+            inverter=types.SimpleNamespace(model_name="SMG 6200", variant_key="smg_6200"),
+        )
+        coordinator._cached_effective_metadata = types.SimpleNamespace(
+            profile_name="learned/shadow_learning/device/profile.json",
+            profile_metadata=types.SimpleNamespace(source_scope="external"),
+            register_schema_metadata=types.SimpleNamespace(source_scope="external"),
+            device_scoped_overlay_active=True,
+            device_scoped_overlay_scope="device",
+            device_scoped_overlay_selected_control_keys={"learned_a"},
+        )
+
+        with patch.object(
+            self.coordinator_module,
+            "resolve_effective_metadata_selection",
+            side_effect=AssertionError("sync resolver should not run after warm-up"),
+        ):
+            context = coordinator._write_exposure_context()
+
+        self.assertEqual(context["variant_key"], "smg_6200")
+        self.assertEqual(context["profile_source_scope"], "external")
+        self.assertEqual(context["schema_source_scope"], "external")
+        self.assertTrue(context["device_scoped_overlay_active"])
+        self.assertEqual(context["selected_control_keys"], {"learned_a"})
+
     def test_shadow_learning_main_redirect_uses_real_server_not_additive_callback(self) -> None:
         # SAFETY regression: in "SmartESS + HA" the HA callback is additive and the live
         # endpoint can already look like HA. The scan must still rewrite the collector's main
@@ -1910,6 +1942,12 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
     def test_remember_runtime_identity_persists_effective_snapshot_in_options(self) -> None:
         updated_entries: list[dict[str, object]] = []
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        descriptor_revision = catalog.devices["smg_6200"].revision
 
         class _ConfigEntries:
             def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
@@ -1954,9 +1992,21 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 model_name="PowMr 4.2kW",
                 serial_number="55355535553555",
                 driver_key="modbus_smg",
-                variant_key="powmr_4200_protocol_1",
-                profile_name="modbus_smg/models/powmr_4200_protocol_1.json",
-                register_schema_name="modbus_smg/models/powmr_4200_protocol_1.json",
+                variant_key="default",
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+                details={
+                    "catalog_detection": {
+                        "candidate_keys": ["smg_6200"],
+                        "resolution": "exact",
+                        "surface_key": "smg_6200_full",
+                        "evidence_fingerprint": "fingerprint",
+                        "catalog_version": catalog.catalog_version,
+                        "descriptor_revisions": [
+                            f"smg_6200:{descriptor_revision}"
+                        ],
+                    }
+                },
             ),
             collector=types.SimpleNamespace(
                 collector_pn="Q0000000000001",
@@ -1979,17 +2029,32 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(persisted_snapshot.get("effective_owner_key"), "modbus_smg")
         self.assertEqual(
             persisted_snapshot.get("profile_name"),
-            "modbus_smg/models/powmr_4200_protocol_1.json",
+            "smg_modbus.json",
         )
         self.assertEqual(
             persisted_snapshot.get("register_schema_name"),
-            "modbus_smg/models/powmr_4200_protocol_1.json",
+            "modbus_smg/models/smg_6200.json",
         )
         self.assertNotIn("collector_cloud_profile_key", persisted_snapshot)
         self.assertNotIn("collector_cloud_profile_label", persisted_snapshot)
         self.assertNotIn("collector_cloud_profile_source", persisted_snapshot)
         self.assertNotIn("collector_cloud_profile_confidence", persisted_snapshot)
         self.assertEqual(persisted_snapshot.get("confidence"), "high")
+        self.assertEqual(persisted_snapshot.get("candidate_keys"), ["smg_6200"])
+        self.assertEqual(persisted_snapshot.get("resolution_level"), "exact")
+        self.assertEqual(persisted_snapshot.get("surface_key"), "smg_6200_full")
+        self.assertEqual(
+            persisted_snapshot.get("evidence_fingerprint"),
+            "fingerprint",
+        )
+        self.assertEqual(
+            persisted_snapshot.get("catalog_version"),
+            catalog.catalog_version,
+        )
+        self.assertEqual(
+            persisted_snapshot.get("descriptor_revisions"),
+            [f"smg_6200:{descriptor_revision}"],
+        )
         self.assertEqual(persisted_snapshot.get("generation"), 1)
         self.assertTrue(str(persisted_snapshot.get("generated_at") or ""))
         self.assertEqual(len(updated_entries), 1)

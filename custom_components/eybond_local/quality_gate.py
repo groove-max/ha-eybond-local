@@ -55,7 +55,7 @@ def generated_exports() -> tuple[GeneratedExport, ...]:
             key="support_matrix",
             tool_path=TOOLS_DIR / "export_support_matrix.py",
             output_path=GENERATED_DOCS_DIR / "SMG_SUPPORT_MATRIX.generated.md",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/default.json",
         ),
         GeneratedExport(
             key="support_overview",

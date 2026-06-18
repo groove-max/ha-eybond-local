@@ -25,7 +25,7 @@ class QualityGateTests(unittest.TestCase):
         exports = generated_exports()
 
         self.assertEqual(len(exports), 2)
-        self.assertEqual(exports[0].profile_name, "smg_modbus.json")
+        self.assertEqual(exports[0].profile_name, "modbus_smg/default.json")
         self.assertEqual(DOCS_DIR.name, "docs")
         self.assertEqual(GENERATED_DOCS_DIR.parent, DOCS_DIR)
         self.assertEqual(exports[0].output_path, GENERATED_DOCS_DIR / "SMG_SUPPORT_MATRIX.generated.md")

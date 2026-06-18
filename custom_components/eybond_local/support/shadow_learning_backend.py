@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from ..collector.at import build_at_response, parse_at_command
 from ..collector.protocol import (
@@ -310,8 +310,10 @@ class InProcessShadowLearningHandler:
 
         if self._running:
             return
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._output_handle = self._output_path.open("a", encoding="utf-8")
+        self._output_handle = await asyncio.to_thread(
+            _open_append_text_file,
+            self._output_path,
+        )
         self._writer = JsonLineWriter(self._output_handle)
         self._running = True
         await self._writer.write(
@@ -360,7 +362,7 @@ class InProcessShadowLearningHandler:
             except Exception:
                 pass
         if output_handle is not None:
-            output_handle.close()
+            await asyncio.to_thread(output_handle.close)
 
     async def handle_client(
         self,
@@ -938,6 +940,11 @@ def _best_capture(raw_capture: dict[str, Any]) -> dict[str, Any] | None:
             best_score = score
             best_capture = capture
     return best_capture
+
+
+def _open_append_text_file(path: Path) -> TextIO:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.open("a", encoding="utf-8")
 
 
 

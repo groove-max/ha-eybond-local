@@ -205,6 +205,52 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["sent_count"], 1)
         self.assertEqual(result["error_count"], 0)
 
+    def test_live_orchestrator_marks_proxy_nack_with_observation_as_captured(self) -> None:
+        settings_dat = {
+            "field": [
+                {
+                    "id": "sys_eybond_ctrl_53",
+                    "name": "Backlight Control",
+                    "item": [{"key": "0", "val": "Off"}],
+                }
+            ]
+        }
+
+        def _nacking_fetch(**_kwargs):
+            raise RuntimeError("action_failed:1:ERR_FAIL(Read-Only Register)")
+
+        result = orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_ready=True,
+            field_ids=[],
+            include_numeric=False,
+            observed_writes=[
+                ShadowWriteObservation(
+                    register=305,
+                    values=(0,),
+                    function_code=16,
+                    devcode=2376,
+                    devaddr=1,
+                    raw_payload_hex="nacked-write",
+                    timestamp="2999-06-05T12:00:00.050000+00:00",
+                )
+            ],
+            fetch_action=_nacking_fetch,
+        )
+
+        self.assertEqual(result["results"][0]["status"], "captured_not_applied")
+        self.assertEqual(result["captured_not_applied_count"], 1)
+        self.assertEqual(result["error_count"], 0)
+        self.assertEqual(result["correlation"]["matched_count"], 1)
+        self.assertEqual(result["results"][0]["observation"]["raw_payload_hex"], "nacked-write")
+
     def test_correlation_matches_by_sequence_and_timestamps(self) -> None:
         attempts = [
             {
@@ -488,8 +534,11 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             fetch_action=_nacking_fetch,
         )
 
-        self.assertEqual(result["results"][0]["status"], "error")
-        self.assertIn("ERR_FAIL", result["results"][0]["error"])
+        self.assertEqual(result["results"][0]["status"], "captured_not_applied")
+        self.assertEqual(result["captured_not_applied_count"], 1)
+        self.assertEqual(result["error_count"], 0)
+        self.assertIn("ERR_FAIL", result["results"][0]["cloud_nack"])
+        self.assertNotIn("error", result["results"][0])
         self.assertEqual(result["correlation"]["matched_count"], 1)
         self.assertEqual(result["results"][0]["observation"]["raw_payload_hex"], "nacked-write")
         self.assertEqual(result["correlation"]["unmatched_write_count"], 0)
@@ -690,6 +739,3 @@ class SafeReadMapTests(unittest.TestCase):
     def test_valid_snapshot_passes_through(self) -> None:
         payload = {"read_blocks": [[200, 22, 1]], "registers": {"205": [2305]}}
         self.assertEqual(_safe_read_map(lambda: payload), payload)
-
-
-

@@ -27,6 +27,7 @@ from .shadow_learning import ShadowWriteObservation, utc_now_iso
 _CONTROL_STATUS_PLANNED = "planned"
 _CONTROL_STATUS_SENT = "sent"
 _CONTROL_STATUS_ERROR = "error"
+_CONTROL_STATUS_CAPTURED_NOT_APPLIED = "captured_not_applied"
 _CONTROL_STATUS_DEGRADED = "degraded"
 # SAFETY-CRITICAL: a write whose cloud response was a *success* (ERR_NONE) in observe-only
 # mode -- proof it bypassed our proxy and reached the real inverter. See the hard-abort below.
@@ -146,11 +147,15 @@ def orchestrate_shadow_learning_settings(
         attempts=attempts,
         observed_writes=observed_writes or (),
     )
+    _normalize_correlated_captured_not_applied_attempts(attempts, correlation)
 
     return {
         "planned_write_count": len(plan),
         "executed_result_count": len(attempts),
         "sent_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_SENT),
+        "captured_not_applied_count": sum(
+            1 for item in attempts if item.get("status") == _CONTROL_STATUS_CAPTURED_NOT_APPLIED
+        ),
         "error_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_ERROR),
         "leaked_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_LEAKED),
         "unknown_field_count": sum(1 for item in attempts if bool(item.get("unknown_field"))),
@@ -322,6 +327,7 @@ async def async_orchestrate_shadow_learning_settings(
             attempt=attempt,
             observations=observations,
         )
+        _normalize_captured_not_applied_status(attempt)
         if observations:
             run_observations.extend(observations)
 
@@ -343,6 +349,9 @@ async def async_orchestrate_shadow_learning_settings(
         "planned_write_count": len(plan),
         "executed_result_count": len(attempts),
         "sent_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_SENT),
+        "captured_not_applied_count": sum(
+            1 for item in attempts if item.get("status") == _CONTROL_STATUS_CAPTURED_NOT_APPLIED
+        ),
         "error_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_ERROR),
         "degraded_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_DEGRADED),
         "leaked_count": sum(1 for item in attempts if item.get("status") == _CONTROL_STATUS_LEAKED),
@@ -460,7 +469,9 @@ def correlate_cloud_attempts_with_shadow_writes(
 
     write_index = 0
     for attempt in normalized_attempts:
-        if attempt.get("status") == _CONTROL_STATUS_ERROR:
+        if attempt.get("status") == _CONTROL_STATUS_ERROR and not _is_expected_proxy_nack(
+            str(attempt.get("error") or "")
+        ):
             unmatched_attempts.append({**attempt, "reason": "control_error"})
             continue
 
@@ -617,6 +628,55 @@ def _attach_attempt_observation(
         )
         return
     attempt["reason"] = "timeout_no_observed_write"
+
+
+def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
+    """Reclassify expected proxy NACKs once the write was observed locally."""
+
+    if attempt.get("status") != _CONTROL_STATUS_ERROR:
+        return
+    if not isinstance(attempt.get("observation"), dict):
+        return
+    error = str(attempt.get("error") or "")
+    if not _is_expected_proxy_nack(error):
+        return
+    attempt["status"] = _CONTROL_STATUS_CAPTURED_NOT_APPLIED
+    attempt["proxy_capture_result"] = "captured_not_applied"
+    attempt["cloud_nack"] = error
+    attempt.pop("error", None)
+
+
+def _normalize_correlated_captured_not_applied_attempts(
+    attempts: list[dict[str, Any]],
+    correlation: dict[str, Any],
+) -> None:
+    matched = correlation.get("matched") if isinstance(correlation, dict) else None
+    if not isinstance(matched, list):
+        return
+    attempts_by_sequence = {
+        int(attempt.get("sequence_index", 0)): attempt
+        for attempt in attempts
+        if isinstance(attempt, dict)
+    }
+    for item in matched:
+        if not isinstance(item, dict):
+            continue
+        attempt = attempts_by_sequence.get(int(item.get("sequence_index", 0)))
+        if attempt is None:
+            continue
+        observation = item.get("observation")
+        if isinstance(observation, dict):
+            attempt["observation"] = observation
+            attempt["match_mode"] = "post_run_order"
+            attempt["timestamp_delta_seconds"] = item.get("timestamp_delta_seconds")
+        _normalize_captured_not_applied_status(attempt)
+
+
+def _is_expected_proxy_nack(error: str) -> bool:
+    normalized = str(error or "")
+    return "ERR_FAIL(Read-Only Register)" in normalized or (
+        "Read-Only Register" in normalized and "action_failed" in normalized
+    )
 
 
 def _resolve_live_observation_cursor(

@@ -21,9 +21,14 @@ from ..payload.pi18 import (
     parse_qpiri,
     parse_serial_number,
 )
-from ..metadata.model_binding_catalog_loader import resolve_driver_model_binding
+from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .catalog_probe import (
+    async_probe_ascii_catalog,
+    catalog_model_name,
+    evidence_providers_from_transport,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +38,6 @@ class Pi18CommandSpec:
     optional: bool = False
 
 
-_PROBE_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
-    Pi18CommandSpec(command="^P005PI", parser=parse_protocol_id),
-    Pi18CommandSpec(command="^P005ID", parser=parse_serial_number),
-    Pi18CommandSpec(command="^P007PIRI", parser=parse_qpiri),
-    Pi18CommandSpec(command="^P006VFW", parser=parse_firmware_versions, optional=True),
-)
-
 _RUNTIME_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
     Pi18CommandSpec(command="^P005GS", parser=parse_qpigs),
     Pi18CommandSpec(command="^P006MOD", parser=parse_qmod),
@@ -47,21 +45,35 @@ _RUNTIME_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
     Pi18CommandSpec(command="^P005FWS", parser=parse_qfws, optional=True),
 )
 
-_SUPPORT_COMMANDS: tuple[str, ...] = tuple(
-    dict.fromkeys([*(spec.command for spec in _PROBE_COMMAND_SPECS), *(spec.command for spec in _RUNTIME_COMMAND_SPECS)])
-)
+_CATALOG_PARSERS = {
+    "pi18.protocol_id": parse_protocol_id,
+    "pi18.serial_number": parse_serial_number,
+    "pi18.qpiri": parse_qpiri,
+    "pi18.firmware_versions": parse_firmware_versions,
+}
 
 
 class Pi18Driver(InverterDriver):
-    """Experimental read-only PI18 family driver."""
+    """Read-only PI18 family driver."""
 
     key = "pi18"
-    name = "PI18 / Experimental"
-    probe_targets = (
-        ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-        ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
-        ProbeTarget(devcode=0x0102, collector_addr=0xFF, device_addr=0),
-    )
+    name = "PI18 / ASCII"
+
+    @property
+    def probe_timeout(self) -> float:
+        return load_compiled_detection_catalog().protocols[self.key].probe_timeout
+
+    @property
+    def probe_targets(self) -> tuple[ProbeTarget, ...]:
+        return tuple(
+            ProbeTarget(
+                devcode=devcode,
+                collector_addr=collector_addr,
+                device_addr=device_addr,
+            )
+            for devcode, collector_addr, device_addr
+            in load_compiled_detection_catalog().protocols[self.key].probe_targets
+        )
 
     @property
     def profile_name(self) -> str:
@@ -84,28 +96,43 @@ class Pi18Driver(InverterDriver):
     async def async_probe(self, transport, target: ProbeTarget) -> DetectedInverter | None:
         session = self._session(transport, target)
         try:
-            values = await _async_collect_values(session, _PROBE_COMMAND_SPECS)
-        except Pi18Error:
+            probe = await async_probe_ascii_catalog(
+                protocol_key="pi18",
+                session=session,
+                parsers=_CATALOG_PARSERS,
+                collector=getattr(transport, "collector_info", None),
+                evidence_providers=evidence_providers_from_transport(transport),
+            )
+        except (Pi18Error, RuntimeError):
             return None
-
-        if values.get("protocol_id") != "PI18":
+        if not probe.resolution.resolved:
             return None
-
+        values = probe.values
+        values["catalog_detection"] = probe.as_details()
         serial_number = values.get("serial_number", "")
         if len(serial_number) < 6:
             return None
 
         schema = load_register_schema(self.register_schema_name)
         values.update(_translate_config_enums(values, schema))
-        model_name = _build_model_name(values)
+        model_name = catalog_model_name(
+            protocol_key="pi18",
+            resolution=probe.resolution,
+            values=values,
+        )
+        surface = load_compiled_detection_catalog().surfaces[
+            probe.resolution.surface_key
+        ]
         return DetectedInverter(
             driver_key=self.key,
             protocol_family="pi18",
             model_name=model_name,
+            variant_key=surface.variant_key,
             serial_number=serial_number,
             probe_target=target,
             details=values,
-            register_schema_name=self.register_schema_name,
+            profile_name=surface.profile_name,
+            register_schema_name=surface.register_schema_name,
         )
 
     async def async_read_values(
@@ -130,7 +157,7 @@ class Pi18Driver(InverterDriver):
         session = self._session(transport, inverter.probe_target)
         responses: dict[str, str] = {}
         failures: dict[str, str] = {}
-        for command in _SUPPORT_COMMANDS:
+        for command in _support_commands():
             try:
                 responses[command] = await session.request(command)
             except Exception as exc:
@@ -211,18 +238,31 @@ async def _async_capture_energy_support(session: Pi18Session, responses: dict[st
             failures[command] = str(exc)
 
 
-def _build_model_name(values: dict[str, Any]) -> str:
-    rated_power = values.get("output_rating_active_power")
-    if isinstance(rated_power, int) and rated_power > 0:
-        return f"PI18 {rated_power}"
-    return "PI18"
-
-
 def _pi18_default_binding():
-    binding = resolve_driver_model_binding("pi18")
-    if binding is None:
-        raise RuntimeError("missing_model_binding:pi18")
-    return binding
+    surfaces = tuple(
+        surface
+        for surface in load_compiled_detection_catalog().surfaces.values()
+        if surface.driver_key == "pi18" and surface.default_for_driver
+    )
+    if len(surfaces) != 1:
+        raise RuntimeError("missing_default_surface:pi18")
+    return surfaces[0]
+
+
+def _support_commands() -> tuple[str, ...]:
+    protocol = load_compiled_detection_catalog().protocols["pi18"]
+    return tuple(
+        dict.fromkeys(
+            [
+                *(
+                    action.command
+                    for action in protocol.probe_actions
+                    if action.kind == "ascii_command" and action.command
+                ),
+                *(spec.command for spec in _RUNTIME_COMMAND_SPECS),
+            ]
+        )
+    )
 
 
 def _translate_config_enums(values: dict[str, Any], schema) -> dict[str, Any]:

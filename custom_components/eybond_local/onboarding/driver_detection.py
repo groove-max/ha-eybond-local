@@ -13,18 +13,14 @@ from ..drivers.catalog_identity import (
     InverterIdentityNoDataError,
 )
 from ..drivers.registry import iter_drivers
+from ..metadata.compiled_detection_catalog import (
+    CompiledDeviceDescriptor,
+    CompiledSurfaceDescriptor,
+    load_compiled_detection_catalog,
+)
 from ..models import DetectedInverter, DriverMatch, ProbeTarget
 
 logger = logging.getLogger(__name__)
-
-
-_SMG_READ_ONLY_PROFILE_NAME = "modbus_smg/family_fallback.json"
-_SMG_UNVERIFIED_VARIANT_KEYS = {"anenji_4200_protocol_1"}
-_PI30_PROBE_TARGET_PRIORITY: dict[tuple[int, int], int] = {
-    (0x0994, 0xFF): 0,
-    (0x0994, 0x01): 1,
-    (0x0102, 0xFF): 2,
-}
 
 
 @dataclass(slots=True)
@@ -181,9 +177,6 @@ def _ordered_probe_targets(driver: InverterDriver, transport: Any) -> tuple[Prob
     probe_targets = tuple(getattr(driver, "probe_targets", ()))
     if not probe_targets:
         return ()
-    if getattr(driver, "key", "") != "pi30":
-        return probe_targets
-
     collector_info = getattr(transport, "collector_info", None)
     preferred_devcodes: tuple[int, ...] = ()
     if collector_info is not None:
@@ -204,11 +197,7 @@ def _ordered_probe_targets(driver: InverterDriver, transport: Any) -> tuple[Prob
         devcode_rank = 0
         if preferred_devcodes:
             devcode_rank = 0 if target.devcode in preferred_devcodes else 1
-        route_rank = _PI30_PROBE_TARGET_PRIORITY.get(
-            (target.devcode, target.collector_addr),
-            len(_PI30_PROBE_TARGET_PRIORITY) + original_index,
-        )
-        return (devcode_rank, route_rank, original_index)
+        return (devcode_rank, original_index, original_index)
 
     return tuple(sorted(probe_targets, key=_sort_key))
 
@@ -224,11 +213,18 @@ def _build_driver_match(driver: InverterDriver, inverter: DetectedInverter) -> D
         reasons.append("serial_number_present")
     if inverter.details.get("rated_power"):
         reasons.append("rated_power_present")
-    if inverter.variant_key == "family_fallback":
+    surface, candidates = _catalog_surface_context(inverter)
+    if surface is not None and surface.read_only and inverter.variant_key == "family_fallback":
         reasons.append("family_fallback_variant")
-    elif inverter.variant_key in _SMG_UNVERIFIED_VARIANT_KEYS:
+    elif candidates and all(
+        candidate.provenance_confidence == "rule-migrated"
+        for candidate in candidates
+    ):
         reasons.append("unverified_variant")
-    elif inverter.profile_name == _SMG_READ_ONLY_PROFILE_NAME:
+    elif (
+        (surface is not None and surface.read_only)
+        or str(inverter.profile_name or "").strip().endswith("/family_fallback.json")
+    ):
         reasons.append("read_only_profile")
     elif inverter.protocol_family and inverter.model_name and inverter.serial_number:
         confidence = "high"
@@ -244,3 +240,32 @@ def _build_driver_match(driver: InverterDriver, inverter: DetectedInverter) -> D
         reasons=tuple(reasons),
         details=dict(inverter.details),
     )
+
+
+def _catalog_surface_context(
+    inverter: DetectedInverter,
+) -> tuple[
+    CompiledSurfaceDescriptor | None,
+    tuple[CompiledDeviceDescriptor, ...],
+]:
+    catalog = load_compiled_detection_catalog()
+    surfaces = tuple(
+        surface
+        for surface in catalog.surfaces.values()
+        if surface.driver_key == inverter.driver_key
+        and surface.variant_key == inverter.variant_key
+        and surface.profile_name == inverter.profile_name
+        and (
+            not inverter.register_schema_name
+            or surface.register_schema_name == inverter.register_schema_name
+        )
+    )
+    if len(surfaces) != 1:
+        return None, ()
+    surface = surfaces[0]
+    candidates = tuple(
+        catalog.devices[key]
+        for key in catalog.devices_by_surface.get(surface.key, ())
+        if key in catalog.devices
+    )
+    return surface, candidates

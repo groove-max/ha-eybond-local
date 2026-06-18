@@ -50,27 +50,19 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(selection.effective_owner_key, "pi30")
-        self.assertEqual(selection.effective_owner_name, "PI30-family runtime")
+        self.assertEqual(selection.effective_owner_key, "")
+        self.assertEqual(selection.effective_owner_name, "")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
         self.assertEqual(selection.raw_profile_name, "smartess_local/models/0925.json")
         self.assertEqual(
             selection.raw_register_schema_name,
             "smartess_local/models/0925.json",
         )
-        self.assertEqual(selection.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
-        self.assertEqual(
-            selection.register_schema_name,
-            "pi30_ascii/models/smartess_0925_compat.json",
-        )
+        self.assertEqual(selection.profile_name, "")
+        self.assertEqual(selection.register_schema_name, "")
         self.assertIsNotNone(selection.smartess_protocol)
-        self.assertIsNotNone(selection.profile_metadata)
-        self.assertIsNotNone(selection.register_schema_metadata)
-        self.assertEqual(getattr(selection.profile_metadata, "source_scope", ""), "builtin")
-        self.assertEqual(
-            getattr(selection.register_schema_metadata, "source_scope", ""),
-            "builtin",
-        )
+        self.assertIsNone(selection.profile_metadata)
+        self.assertIsNone(selection.register_schema_metadata)
 
     def test_prefers_live_collector_smartess_hint_over_saved_entry_data(self) -> None:
         selection = resolve_effective_metadata_selection(
@@ -84,14 +76,11 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(selection.effective_owner_key, "pi30")
-        self.assertEqual(selection.effective_owner_name, "PI30-family runtime")
+        self.assertEqual(selection.effective_owner_key, "")
+        self.assertEqual(selection.effective_owner_name, "")
         self.assertEqual(selection.smartess_family_name, "SmartESS 0925")
-        self.assertEqual(selection.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
-        self.assertEqual(
-            selection.register_schema_name,
-            "pi30_ascii/models/smartess_0925_compat.json",
-        )
+        self.assertEqual(selection.profile_name, "")
+        self.assertEqual(selection.register_schema_name, "")
 
     def test_uses_persisted_snapshot_metadata_when_live_inverter_is_absent(self) -> None:
         selection = resolve_effective_metadata_selection(

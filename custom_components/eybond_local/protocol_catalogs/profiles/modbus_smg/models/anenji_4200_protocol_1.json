@@ -1,5 +1,5 @@
 {
-  "extends": "./anenji_4200_protocol_1.variant.json",
+  "extends": "../base.json",
   "profile_key": "modbus_smg_anenji_4200_protocol_1",
   "title": "Anenji 4200 Protocol 1",
   "driver_key": "modbus_smg",

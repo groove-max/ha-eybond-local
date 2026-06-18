@@ -172,7 +172,6 @@ from .smartess_cloud import (
     login_with_password,
 )
 from .support.cloud_evidence import fetch_and_export_smartess_device_bundle_cloud_evidence
-from .support.cloud_evidence import load_latest_cloud_evidence
 from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
 from .support.read_learning_binder import bind_cloud_labels_to_registers
 from .support.shadow_learning_orchestrator import (
@@ -874,6 +873,7 @@ def _driver_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
         DRIVER_HINT_AUTO: "Auto",
         "modbus_smg": "SMG / Modbus",
         "pi30": "PI30",
+        "pi18": "PI18",
     }
     options = [
         SelectOptionDict(
@@ -7128,11 +7128,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         }
 
     def _shadow_learning_settings_dat(self, coordinator) -> dict[str, Any] | None:
-        record = load_latest_cloud_evidence(
-            Path(self.hass.config.config_dir),
-            entry_id=self._config_entry.entry_id,
-            collector_pn=coordinator.smartess_collector_pn,
-        )
+        record = self._cached_cloud_evidence_record(coordinator)
         if record is None:
             return None
         payload = dict(record.payload or {})
@@ -7167,11 +7163,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return dict(dat) if isinstance(dat, dict) else None
 
     def _shadow_learning_cloud_identity(self, coordinator) -> dict[str, Any] | None:
-        record = load_latest_cloud_evidence(
-            Path(self.hass.config.config_dir),
-            entry_id=self._config_entry.entry_id,
-            collector_pn=coordinator.smartess_collector_pn,
-        )
+        record = self._cached_cloud_evidence_record(coordinator)
         if record is None:
             return None
         identity = record.payload.get("device_identity")
@@ -7189,6 +7181,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "devcode": int(devcode),
             "devaddr": int(devaddr),
         }
+
+    def _cached_cloud_evidence_record(self, coordinator):
+        latest = getattr(coordinator, "_latest_smartess_cloud_evidence_record", None)
+        if callable(latest):
+            return latest()
+        return None
 
     def _shadow_learning_cloud_identity_from_bundle(
         self, bundle: dict[str, Any] | None

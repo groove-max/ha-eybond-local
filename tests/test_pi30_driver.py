@@ -35,6 +35,7 @@ class _FakeTransport:
         self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
         self.connected = True
         self.commands: list[str] = []
+        self.detection_evidence_providers = {}
 
     async def wait_until_connected(self, timeout: float) -> bool:
         return True
@@ -61,6 +62,38 @@ class _FakeTransport:
 
 
 class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_uses_optional_smartess_evidence_provider(self) -> None:
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPI"): "PI30",
+                (0x0994, 0x01, "QID"): "553555355535552",
+                (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 28.2 27.0 2 30 80 0 2 2 1 10 0 0 27.0 0 1",
+            }
+        )
+        calls = []
+
+        async def _smartess_provider(action):
+            calls.append(action.key)
+            return {"protocol_asset_id": "0925"}
+
+        transport.detection_evidence_providers = {
+            "smartess.protocol_asset": _smartess_provider,
+        }
+
+        inverter = await Pi30Driver().async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(calls, ["pi30.smartess.asset"])
+        self.assertEqual(
+            inverter.details["catalog_detection"]["candidate_keys"],
+            ["pi30_smartess_query_0925_compatible"],
+        )
+        self.assertEqual(
+            inverter.details["catalog_detection"]["surface_key"],
+            "pi30_default_full",
+        )
+
     async def test_probe_detects_pi30_inverter(self) -> None:
         driver = Pi30Driver()
         self.assertEqual(driver.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
@@ -90,7 +123,9 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["output_source_priority"], "SBU first")
         self.assertEqual(inverter.details["machine_type"], "Hybrid")
         self.assertTrue(inverter.details["buzzer_enabled"])
-        self.assertEqual(inverter.details["main_cpu_firmware_version"], "00012.09")
+        self.assertNotIn("main_cpu_firmware_version", inverter.details)
+        self.assertNotIn("QVFW", transport.commands)
+        self.assertEqual(inverter.details["catalog_detection"]["resolution"], "family")
         self.assertEqual(driver.profile_metadata.source_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(driver.register_schema_metadata.source_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(driver.measurements, driver.register_schema_metadata.measurement_descriptions)
@@ -168,7 +203,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
                 (0x0994, 0x01, "QID"): "553555355535552",
                 (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 5000 5000 48.0 54.0 42.0 56.4 54.0 2 30 80 0 2 2 1 10 0 0 54.0 0 1 120 1 80",
                 (0x0994, 0x01, "QFLAG"): "EadzDbjkuvxy",
-                (0x0994, 0x01, "QMOD"): "E",
+                (0x0994, 0x01, "QPIGS"): "239.5 49.9 239.5 49.9 0927 0924 015 396 26.60 000 100 0028 002.2 315.9 00.00 00000 00010000 00 00 00665 000",
                 (0x0994, 0x01, "QPIWS"): "000000000000000000000000000000000000",
             }
         )
@@ -177,8 +212,9 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.details["qpiri_field_count"], 28)
-        self.assertEqual(inverter.details["operating_mode_code"], "E")
         self.assertEqual(inverter.details["qpiws_bit_count"], 36)
+        self.assertNotIn("QMOD", transport.commands)
+        self.assertEqual(inverter.variant_key, "pi30_pip_gk")
 
     async def test_read_values_decodes_live_metrics(self) -> None:
         driver = Pi30Driver()
