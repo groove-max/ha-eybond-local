@@ -300,6 +300,34 @@
       "layouts": []
     },
     {
+      "key": "srne_modbus",
+      "transport_key": "eybond_modbus",
+      "probe_timeout": 12.0,
+      "probe_targets": [
+        {"devcode": 1, "collector_addr": 255, "device_addr": 1}
+      ],
+      "probe_actions": [
+        {
+          "key": "srne_modbus.product_info",
+          "kind": "modbus_read",
+          "register": 53,
+          "count": 20,
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {
+              "key": "identity.product_info",
+              "source_key": "product_info",
+              "register": 53,
+              "words": 20,
+              "decoder": "ascii_low_byte"
+            }
+          ]
+        }
+      ],
+      "layouts": []
+    },
+    {
       "key": "must_pv_ph18",
       "transport_key": "eybond_modbus",
       "probe_timeout": 12.0,
@@ -392,6 +420,18 @@
     "pi_ascii": {
       "ranges": [],
       "notes": []
+    },
+    "srne_modbus": {
+      "ranges": [
+        [53, 20],
+        [256, 18],
+        [516, 4],
+        [528, 18],
+        [554, 14]
+      ],
+      "notes": [
+        "SRNE-compatible support is read-only. Devices are expected to use Modbus RTU 9600 8N1 and slave address 1."
+      ]
     },
     "must_pv_ph18": {
       "ranges": [
@@ -560,6 +600,18 @@
       "read_only": true,
       "default_for_driver": true,
       "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "srne_modbus_read_only",
+      "protocol_key": "srne_modbus",
+      "driver_key": "srne_modbus",
+      "variant_key": "srne_family",
+      "profile_name": "",
+      "register_schema_name": "srne_modbus/base.json",
+      "tier": "partial",
+      "read_only": true,
+      "default_for_driver": true,
+      "support_capture_policy": "srne_modbus"
     },
     {
       "key": "must_pv_ph18_read_only",
@@ -1062,6 +1114,23 @@
           "third-party MUST PV/PH18 Modbus register map"
         ],
         "confidence": "third-party-map-with-support-archive"
+      }
+    },
+    {
+      "entry_key": "srne_modbus_family",
+      "surface_key": "srne_modbus_read_only",
+      "model_name": "SRNE-compatible Modbus family",
+      "priority": 120,
+      "family_fallback": true,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "SRNE_MODBUS"},
+        {"key": "identity.product_info", "contains_any": ["sr"]}
+      ],
+      "provenance": {
+        "sources": [
+          "private register map: SRNE-compatible Modbus product-info and telemetry ranges"
+        ],
+        "confidence": "third-party-map-unconfirmed"
       }
     }
   ],
