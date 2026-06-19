@@ -245,7 +245,10 @@
       "collector_wifi_password_required": "Enter the Wi-Fi password.",
       "collector_wifi_password_not_ascii": "This collector accepts only ASCII Wi-Fi passwords on the local management path.",
       "collector_wifi_apply_not_confirmed": "Confirm that applying Wi-Fi settings may temporarily disconnect the collector.",
-      "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details."
+      "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details.",
+      "diagnostic_commands_required": "Paste at least one diagnostic command.",
+      "diagnostic_commands_unavailable": "The integration runtime is not loaded, so diagnostic commands cannot run.",
+      "diagnostic_commands_failed": "The diagnostic scenario failed unexpectedly. Check the Home Assistant log."
     },
     "step": {
       "init": {
@@ -321,9 +324,24 @@
         "description": "**{support_archive_action_label}** builds one ZIP with everything needed to help: runtime data, capture evidence, an anonymized replay fixture, and saved SmartESS cloud evidence.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}",
         "menu_options": {
           "create_support_package": "Create support archive",
+          "diagnostic_commands": "Run diagnostic commands",
           "reload_local_metadata": "Reload local metadata",
           "rollback_local_metadata": "Rollback local metadata",
           "proxy_capture": "Collector traffic capture"
+        }
+      },
+      "diagnostic_commands": {
+        "title": "Diagnostic Commands",
+        "description": "Paste the diagnostic scenario provided by the developer. Commands are executed directly on the device through the current collector connection and write commands can change inverter settings.\n\n**Local result:** `{diagnostic_result_path}`\n**Shareable result:** {diagnostic_download_markdown}",
+        "data": {
+          "diagnostic_commands": "Commands",
+          "diagnostic_stop_on_error": "Stop after the first error",
+          "diagnostic_result": "Result"
+        },
+        "data_description": {
+          "diagnostic_commands": "Paste the complete multiline scenario, including driver or address overrides when provided.",
+          "diagnostic_stop_on_error": "Disable this only when later commands should still run after a failed command.",
+          "diagnostic_result": "Read-only output from the latest run. Copy it or use the shareable download link above."
         }
       },
       "proxy_capture": {

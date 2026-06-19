@@ -227,3 +227,54 @@ set_collector_server_endpoint:
       required: true
       selector:
         boolean:
+
+run_diagnostic_commands:
+  name: Run diagnostic commands
+  description: >-
+    Run a one-off diagnostic command scenario against the inverter over the
+    existing collector connection. Diagnostic commands are executed directly on
+    the device. Write commands can change its settings. The active driver and
+    route are used as defaults but can be temporarily overridden by the
+    scenario; permanent config entry settings are not modified.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: EyeBond Local config entry ID that owns the collector.
+      required: true
+      selector:
+        text:
+    commands:
+      name: Commands
+      description: >-
+        Multi-line diagnostic scenario. Directives (driver, devcode,
+        collector_addr, device_addr, stop_on_error, operation_timeout) must come
+        before the first command (read, write, write_bit, ascii, sleep).
+      required: true
+      example: |
+        driver modbus_smg
+        device_addr 4
+        read 171 14
+        write_bit 354 0 1
+        read 354
+      selector:
+        text:
+          multiline: true
+    stop_on_error:
+      name: Stop on first error
+      description: Stop the scenario after the first runtime error. Overridden by a stop_on_error directive in the scenario.
+      required: false
+      default: true
+      selector:
+        boolean:
+    operation_timeout:
+      name: Per-operation timeout
+      description: Timeout in seconds for one transport operation. This is not an overall scenario timeout. When unset, the driver's built-in timeout is used.
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 0.1
+          max: 120
+          step: 0.1
+          mode: box
+          unit_of_measurement: s

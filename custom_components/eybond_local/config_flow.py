@@ -832,6 +832,7 @@ def _build_multiline_log_text_selector() -> TextSelector:
 
 
 _MULTILINE_LOG_TEXT_SELECTOR = _build_multiline_log_text_selector()
+_MULTILINE_TEXT_SELECTOR = TextSelector(TextSelectorConfig(multiline=True))
 _PASSWORD_TEXT_SELECTOR = TextSelector(TextSelectorConfig(type="password"))
 
 _BOOLEAN_SELECTOR = BooleanSelector()
@@ -5283,6 +5284,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._translation_bundle_language = ""
         self._interface_options: list[dict[str, str]] = []
         self._diagnostics_result: dict[str, str] = {}
+        self._diagnostic_commands_text = ""
+        self._diagnostic_commands_output = ""
+        self._diagnostic_commands_download_url = ""
+        self._diagnostic_commands_result_path = ""
         self._collector_wifi_current_ssid = ""
         self._collector_wifi_network_diagnostics = ""
         self._collector_wifi_last_error = ""
@@ -5595,6 +5600,88 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             step_id="diagnostics",
             menu_options=menu_options,
             description_placeholders=placeholders,
+        )
+
+    @_with_translation_bundle
+    async def async_step_diagnostic_commands(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Run a one-off multiline diagnostic scenario from the options UI."""
+
+        errors: dict[str, str] = {}
+        submitted = dict(user_input or {})
+        commands = str(
+            submitted.get("diagnostic_commands", self._diagnostic_commands_text) or ""
+        )
+        stop_on_error = bool(submitted.get("diagnostic_stop_on_error", True))
+
+        if user_input is not None:
+            self._diagnostic_commands_text = commands
+            if not commands.strip():
+                errors["diagnostic_commands"] = "diagnostic_commands_required"
+            else:
+                coordinator = self._coordinator()
+                if coordinator is None or not callable(
+                    getattr(coordinator, "async_run_diagnostic_commands", None)
+                ):
+                    errors["base"] = "diagnostic_commands_unavailable"
+                else:
+                    try:
+                        result = await coordinator.async_run_diagnostic_commands(
+                            commands=commands,
+                            stop_on_error=stop_on_error,
+                        )
+                    except Exception:
+                        logger.exception("Diagnostic command scenario failed")
+                        errors["base"] = "diagnostic_commands_failed"
+                    else:
+                        self._diagnostic_commands_output = str(
+                            result.get("output") or ""
+                        )
+                        self._diagnostic_commands_download_url = str(
+                            result.get("download_url") or ""
+                        )
+                        self._diagnostic_commands_result_path = str(
+                            result.get("result_path") or ""
+                        )
+
+        schema: dict[Any, Any] = {
+            vol.Required(
+                "diagnostic_commands",
+                default=commands,
+            ): _MULTILINE_TEXT_SELECTOR,
+            vol.Required(
+                "diagnostic_stop_on_error",
+                default=stop_on_error,
+            ): _BOOLEAN_SELECTOR,
+        }
+        if self._diagnostic_commands_output:
+            schema[
+                vol.Optional(
+                    "diagnostic_result",
+                    default=self._diagnostic_commands_output,
+                )
+            ] = _MULTILINE_LOG_TEXT_SELECTOR
+
+        download_markdown = (
+            self._tr(
+                "common.dynamic.download_file",
+                "[Download file]({url})",
+                {"url": self._diagnostic_commands_download_url},
+            )
+            if self._diagnostic_commands_download_url
+            else self._tr("common.dynamic.not_available", "Not available")
+        )
+        return self.async_show_form(
+            step_id="diagnostic_commands",
+            data_schema=vol.Schema(schema),
+            errors=errors,
+            description_placeholders={
+                "diagnostic_result_path": self._diagnostic_commands_result_path
+                or self._tr("common.dynamic.not_created_yet", "Not created yet"),
+                "diagnostic_download_markdown": download_markdown,
+            },
         )
 
     @_with_translation_bundle
@@ -8111,7 +8198,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     def _diagnostics_menu_options(self, primary_action: str) -> list[str]:
         coordinator = self._coordinator()
         rollback_paths = self._local_metadata_rollback_paths()
-        menu_options: list[str] = ["create_support_package"]
+        menu_options: list[str] = [
+            "create_support_package",
+            "diagnostic_commands",
+        ]
 
         if primary_action == "reload_local_metadata":
             menu_options.append("reload_local_metadata")

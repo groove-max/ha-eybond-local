@@ -59,6 +59,31 @@ def to_signed_16(value: int) -> int:
     return value - 0x10000 if value >= 0x8000 else value
 
 
+def merge_register_field(current: int, mask: int, field: int) -> int:
+    """Return one 16-bit register with only the masked bits replaced by ``field``.
+
+    Read-modify-write primitive shared by SMG bitmask capabilities and the raw
+    diagnostic ``write_bit`` command, so there is one merge implementation. Bits
+    of ``field`` outside ``mask`` are ignored; the result is clamped to 16 bits.
+    """
+
+    masked = mask & 0xFFFF
+    kept = int(current) & 0xFFFF & ~masked
+    return (kept | (int(field) & masked)) & 0xFFFF
+
+
+def merge_register_bit(current: int, bit_index: int, bit_value: int) -> int:
+    """Return one 16-bit register with a single bit set or cleared.
+
+    Single-bit case of :func:`merge_register_field`. ``bit_index`` is ``0..15``
+    and ``bit_value`` is ``0`` or ``1``; the other 15 bits are preserved.
+    """
+
+    mask = 1 << bit_index
+    field = (bit_value & 1) << bit_index
+    return merge_register_field(current, mask, field)
+
+
 def decode_read_request(frame: bytes) -> ModbusReadRequestFrame | None:
     """Decode one Modbus RTU read request frame when valid."""
 

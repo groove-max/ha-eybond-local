@@ -375,6 +375,19 @@ class EybondHub:
 
         return self._link_manager.effective_advertised_server_ip
 
+    def diagnostic_link_transport(self):
+        """Return the shared payload transport for read-only diagnostic command runs.
+
+        Exposes the active collector link so the diagnostic command runner can
+        reuse the existing connection instead of opening its own socket. Returns
+        ``None`` when no link manager/transport is available.
+        """
+
+        link_manager = getattr(self, "_link_manager", None)
+        if link_manager is None:
+            return None
+        return getattr(link_manager, "transport", None)
+
     def __init__(
         self,
         *,

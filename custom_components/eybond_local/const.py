@@ -8,6 +8,7 @@ LOCAL_REGISTER_SCHEMAS_DIR = "register_schemas"
 LOCAL_CLOUD_EVIDENCE_DIR = "cloud_evidence"
 LOCAL_PROXY_TRACES_DIR = "proxy_traces"
 LOCAL_SUPPORT_PACKAGES_DIR = "support_packages"
+LOCAL_DIAGNOSTIC_RUNS_DIR = "diagnostic_runs"
 BUILTIN_SCHEMA_PREFIX = "builtin:"
 
 CONF_SERVER_IP = "server_ip"
@@ -79,3 +80,4 @@ SERVICE_ROLLBACK_COLLECTOR_SERVER_ENDPOINT = "rollback_collector_server_endpoint
 SERVICE_SET_COLLECTOR_SERVER_ENDPOINT = "set_collector_server_endpoint"
 SERVICE_START_PROXY_CAPTURE = "start_proxy_capture"
 SERVICE_STOP_PROXY_CAPTURE = "stop_proxy_capture"
+SERVICE_RUN_DIAGNOSTIC_COMMANDS = "run_diagnostic_commands"

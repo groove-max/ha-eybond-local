@@ -246,7 +246,10 @@
       "collector_wifi_password_not_ascii": "На локальному керівному шляху цей колектор приймає лише ASCII-паролі Wi-Fi.",
       "collector_wifi_apply_not_confirmed": "Підтвердьте, що застосування Wi-Fi параметрів може тимчасово відключити колектор.",
       "proxy_capture_action_failed": "Не вдалося виконати дію захоплення. Перевірте журнал Home Assistant.",
-      "shadow_learning_failed": "Дія виявлення елементів керування завершилась помилкою. Перевірте деталі та підтвердження і повторіть спробу."
+      "shadow_learning_failed": "Дія виявлення елементів керування завершилась помилкою. Перевірте деталі та підтвердження і повторіть спробу.",
+      "diagnostic_commands_required": "Вставте хоча б одну діагностичну команду.",
+      "diagnostic_commands_unavailable": "Runtime інтеграції не завантажено, тому діагностичні команди зараз недоступні.",
+      "diagnostic_commands_failed": "Діагностичний сценарій неочікувано завершився помилкою. Перевірте журнал Home Assistant."
     },
     "step": {
       "init": {
@@ -322,9 +325,24 @@
         "description": "**{support_archive_action_label}** збирає один ZIP з усім необхідним для допомоги: дані рантайму, захоплені докази, анонімізовану фікстуру та збережені хмарні дані SmartESS.\n\n**Статус підтримки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Пристрій:** {model_name} — серійний {serial_number}\n**Останній архів підтримки:** {support_package_path}\n**Завантажити:** {support_package_download_markdown}",
         "menu_options": {
           "create_support_package": "Створити архів підтримки",
+          "diagnostic_commands": "Виконати діагностичні команди",
           "reload_local_metadata": "Перезавантажити локальні метадані",
           "rollback_local_metadata": "Відкотити локальні метадані",
           "proxy_capture": "Захоплення трафіку колектора"
+        }
+      },
+      "diagnostic_commands": {
+        "title": "Діагностичні команди",
+        "description": "Вставте діагностичний сценарій, отриманий від розробника. Команди виконуються безпосередньо на пристрої через поточне з'єднання з колектором; команди запису можуть змінити налаштування інвертора.\n\n**Локальний результат:** `{diagnostic_result_path}`\n**Результат для надсилання:** {diagnostic_download_markdown}",
+        "data": {
+          "diagnostic_commands": "Команди",
+          "diagnostic_stop_on_error": "Зупинитися після першої помилки",
+          "diagnostic_result": "Результат"
+        },
+        "data_description": {
+          "diagnostic_commands": "Вставте повний багаторядковий сценарій, включно з перевизначенням драйвера або адрес, якщо їх було вказано.",
+          "diagnostic_stop_on_error": "Вимкніть лише якщо наступні команди мають виконуватися навіть після помилки.",
+          "diagnostic_result": "Результат останнього запуску лише для читання. Скопіюйте його або скористайтеся посиланням вище."
         }
       },
       "shadow_learning": {

@@ -12,7 +12,12 @@ from ..models import (
     WriteCapability,
     decimals_for_divisor,
 )
-from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
+from ..payload.modbus import (
+    ModbusError,
+    ModbusSession,
+    merge_register_field,
+    to_signed_16,
+)
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.detection_evidence import (
@@ -506,7 +511,7 @@ class SmgModbusDriver(InverterDriver):
                 raise CapabilityPreWriteReadError(
                     f"bitmask_read_back_empty:{capability.key}"
                 )
-            merged = (int(current[0]) & 0xFFFF & ~capability.bitmask) | field
+            merged = merge_register_field(int(current[0]), capability.bitmask, field)
             await session.write_holding(capability.register, [merged])
         else:
             await session.write_holding(capability.register, raw_words)

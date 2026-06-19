@@ -136,6 +136,8 @@ def _install_coordinator_stubs() -> None:
     const.CONTROL_MODE_READ_ONLY = "read_only"
     const.DOMAIN = "eybond_local"
     const.DRIVER_HINT_AUTO = "auto"
+    const.LOCAL_DIAGNOSTIC_RUNS_DIR = "diagnostic_runs"
+    const.LOCAL_METADATA_DIR = "eybond_local"
     const.COLLECTOR_OPERATION_MODES = (
         "smartess_cloud_home_assistant",
         "home_assistant_only",
@@ -424,6 +426,44 @@ def _install_coordinator_stubs() -> None:
     support_workflow = _ensure_module("custom_components.eybond_local.support.workflow")
     support_workflow.build_support_workflow_state = lambda *args, **kwargs: {}
 
+    support_diagnostic_export = _ensure_module(
+        "custom_components.eybond_local.support.diagnostic_export"
+    )
+    support_diagnostic_export.export_diagnostic_run = lambda *args, **kwargs: None
+
+    support_diagnostic_runner = _ensure_module(
+        "custom_components.eybond_local.support.diagnostic_runner"
+    )
+
+    @dataclasses.dataclass
+    class DiagnosticRuntimeContext:
+        transport: object | None = None
+
+    @dataclasses.dataclass
+    class DiagnosticRunResult:
+        success: bool
+        output: str
+        results: list
+        context: dict
+        started_at: str
+        finished_at: str
+        error: str | None = None
+
+    class DiagnosticSingleFlight:
+        async def cancel(self) -> None:
+            return None
+
+        async def run(self, factory, **_kwargs):
+            return await factory()
+
+    async def run_scenario(*_args, **_kwargs):
+        return DiagnosticRunResult(True, "", [], {}, "", "")
+
+    support_diagnostic_runner.DiagnosticRuntimeContext = DiagnosticRuntimeContext
+    support_diagnostic_runner.DiagnosticRunResult = DiagnosticRunResult
+    support_diagnostic_runner.DiagnosticSingleFlight = DiagnosticSingleFlight
+    support_diagnostic_runner.run_scenario = run_scenario
+
 _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components",
     "custom_components.eybond_local",
@@ -444,6 +484,8 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components.eybond_local.schema",
     "custom_components.eybond_local.support.bundle",
     "custom_components.eybond_local.support.cloud_evidence",
+    "custom_components.eybond_local.support.diagnostic_export",
+    "custom_components.eybond_local.support.diagnostic_runner",
     "custom_components.eybond_local.support.package",
     "custom_components.eybond_local.support.proxy_capture",
     "custom_components.eybond_local.support.proxy_session",
@@ -574,6 +616,78 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             notification_id,
             "eybond_local_proxy_capture_entry-1_session_bundle",
         )
+
+    def test_diagnostic_waits_for_in_progress_runtime_refresh(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(
+                self.coordinator_module.EybondLocalCoordinator
+            )
+            coordinator.data = types.SimpleNamespace()
+            coordinator._diagnostic_active = False
+            coordinator._runtime_operation_lock = asyncio.Lock()
+
+            poll_started = asyncio.Event()
+            release_poll = asyncio.Event()
+            diagnostic_started = asyncio.Event()
+
+            async def _poll_with_lock():
+                poll_started.set()
+                await release_poll.wait()
+                return coordinator.data
+
+            async def _fake_run_scenario(_commands, _context):
+                diagnostic_started.set()
+                return types.SimpleNamespace(
+                    success=True,
+                    output="ok\n",
+                    results=[],
+                    context={},
+                    started_at="start",
+                    finished_at="finish",
+                    error=None,
+                )
+
+            coordinator._async_update_data_with_runtime_lock = _poll_with_lock
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
+
+            async def _run_executor_job(job):
+                return job()
+
+            coordinator.hass = types.SimpleNamespace(
+                config=types.SimpleNamespace(config_dir="/tmp"),
+                async_add_executor_job=_run_executor_job,
+            )
+            export = types.SimpleNamespace(
+                result_path=Path("/tmp/result.json"),
+                download_url=None,
+            )
+
+            poll_task = asyncio.create_task(coordinator._async_update_data())
+            await poll_started.wait()
+            with patch.object(
+                self.coordinator_module,
+                "run_scenario",
+                _fake_run_scenario,
+            ), patch.object(
+                self.coordinator_module,
+                "export_diagnostic_run",
+                return_value=export,
+            ):
+                diagnostic_task = asyncio.create_task(
+                    coordinator._async_execute_diagnostic(
+                        "read 1",
+                        types.SimpleNamespace(),
+                    )
+                )
+                await asyncio.sleep(0)
+                self.assertFalse(diagnostic_started.is_set())
+
+                release_poll.set()
+                await poll_task
+                await diagnostic_task
+                self.assertTrue(diagnostic_started.is_set())
+
+        asyncio.run(_run())
 
     def test_proxy_capture_notification_body_without_link_uses_saved_path(self) -> None:
         hass = types.SimpleNamespace(config=types.SimpleNamespace(language="uk"))

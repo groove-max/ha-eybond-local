@@ -4088,6 +4088,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["menu_options"],
             [
                 "create_support_package",
+                "diagnostic_commands",
                 "reload_local_metadata",
                 "proxy_capture",
             ],
@@ -4101,6 +4102,74 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "Reload local metadata",
         )
         self.assertNotIn("advanced_metadata", result["menu_options"])
+
+    async def test_diagnostic_commands_step_runs_and_displays_result(self) -> None:
+        options = self._make_options_flow()
+        calls: list[dict[str, object]] = []
+
+        async def _run_diagnostic_commands(**kwargs):
+            calls.append(dict(kwargs))
+            return {
+                "success": True,
+                "output": "[1] read 171\nstatus: ok\ndecimal: 8960\n",
+                "results": [],
+                "context": {},
+                "started_at": "2026-06-19T00:00:00+00:00",
+                "finished_at": "2026-06-19T00:00:01+00:00",
+                "result_path": "/config/eybond_local/diagnostic_runs/result.json",
+                "download_url": "/local/eybond_local/diagnostic_runs/result.share.json",
+            }
+
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_run_diagnostic_commands=_run_diagnostic_commands,
+        )
+
+        initial = await options.async_step_diagnostic_commands()
+        self.assertEqual(initial["type"], "form")
+        self.assertEqual(initial["step_id"], "diagnostic_commands")
+        commands_selector = initial["data_schema"].schema["diagnostic_commands"]
+        self.assertTrue(commands_selector.config.kwargs.get("multiline"))
+        self.assertNotIn("diagnostic_result", initial["data_schema"].schema)
+
+        result = await options.async_step_diagnostic_commands(
+            {
+                "diagnostic_commands": "driver modbus_smg\nread 171\n",
+                "diagnostic_stop_on_error": False,
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "commands": "driver modbus_smg\nread 171\n",
+                    "stop_on_error": False,
+                }
+            ],
+        )
+        self.assertEqual(result["type"], "form")
+        self.assertIn("diagnostic_result", result["data_schema"].schema)
+        result_selector = result["data_schema"].schema["diagnostic_result"]
+        self.assertTrue(result_selector.config.kwargs.get("multiline"))
+        self.assertTrue(result_selector.config.kwargs.get("read_only"))
+        self.assertIn(
+            "/local/eybond_local/diagnostic_runs/result.share.json",
+            result["description_placeholders"]["diagnostic_download_markdown"],
+        )
+
+    async def test_diagnostic_commands_step_requires_commands(self) -> None:
+        options = self._make_options_flow()
+        result = await options.async_step_diagnostic_commands(
+            {
+                "diagnostic_commands": " \n",
+                "diagnostic_stop_on_error": True,
+            }
+        )
+
+        self.assertEqual(
+            result["errors"],
+            {"diagnostic_commands": "diagnostic_commands_required"},
+        )
 
     async def test_diagnostics_menu_omits_proxy_capture_for_detected_bridge(self) -> None:
         # Item 3: a detected bridge has no SmartESS cloud side and refuses the

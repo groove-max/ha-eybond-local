@@ -174,6 +174,12 @@ from ..support.shadow_learning_session import (
     shadow_learning_session_is_expired,
     shadow_learning_session_timestamp,
 )
+from ..support.diagnostic_export import export_diagnostic_run
+from ..support.diagnostic_runner import (
+    DiagnosticRuntimeContext,
+    DiagnosticSingleFlight,
+    run_scenario,
+)
 from ..support.package import export_support_package
 from ..support.shadow_learning_review_model import normalize_activation_selection
 from ..support.workflow import build_support_workflow_state
@@ -620,6 +626,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         self._shutdown_lock = asyncio.Lock()
         self._shutdown_complete = False
+        # Diagnostic command runner: at most one scenario per config entry, with
+        # normal polling quiesced while it holds the shared transport.
+        self._diagnostic_active = False
+        self._diagnostic_flight = DiagnosticSingleFlight()
+        self._runtime_operation_lock = asyncio.Lock()
 
     @property
     def proxy_capture_configured_duration_minutes(self) -> int:
@@ -747,6 +758,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         async with self._shutdown_lock:
             if self._shutdown_complete:
                 return
+            await self._async_cancel_diagnostic_run()
             self._cancel_proxy_capture_deadline_refresh()
             try:
                 await self.async_stop_shadow_learning(
@@ -763,6 +775,135 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self._async_stop_proxy_capture_process(force=True)
             await self._runtime.async_stop()
             self._shutdown_complete = True
+
+    async def _async_cancel_diagnostic_run(self) -> None:
+        """Cancel any in-flight diagnostic command run (called on unload)."""
+
+        await self._diagnostic_flight.cancel()
+
+    async def async_run_diagnostic_commands(
+        self,
+        *,
+        commands: str,
+        stop_on_error: bool = True,
+        operation_timeout: float | None = None,
+        integration_version: str = "",
+    ) -> dict:
+        """Run one diagnostic command scenario against the shared collector link.
+
+        Only one scenario runs per config entry at a time; normal polling is
+        quiesced while the run holds the transport. Permanent config-entry
+        settings (driver hint, probe target, detection snapshot) are never
+        modified.
+        """
+
+        async def _factory() -> dict:
+            context = self._build_diagnostic_context(
+                stop_on_error=stop_on_error,
+                operation_timeout=operation_timeout,
+                integration_version=integration_version,
+            )
+            return await self._async_execute_diagnostic(commands, context)
+
+        return await self._diagnostic_flight.run(
+            _factory,
+            on_start=self._mark_diagnostic_active,
+            on_finish=self._mark_diagnostic_idle,
+        )
+
+    def _mark_diagnostic_active(self) -> None:
+        self._diagnostic_active = True
+
+    def _mark_diagnostic_idle(self) -> None:
+        self._diagnostic_active = False
+
+    def _build_diagnostic_context(
+        self,
+        *,
+        stop_on_error: bool,
+        operation_timeout: float | None,
+        integration_version: str,
+    ) -> DiagnosticRuntimeContext:
+        snapshot = self.data
+        inverter = snapshot.inverter if snapshot is not None else None
+        transport = self._diagnostic_link_transport()
+        driver_hint = self.config_entry.options.get(
+            CONF_DRIVER_HINT,
+            self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+        )
+
+        def _is_connected() -> bool:
+            return bool(transport is not None and getattr(transport, "connected", False))
+
+        return DiagnosticRuntimeContext(
+            transport=transport,
+            active_driver_key=inverter.driver_key if inverter is not None else None,
+            active_probe_target=inverter.probe_target if inverter is not None else None,
+            configured_driver_hint=driver_hint,
+            driver_default_probe_target=self._diagnostic_default_probe_target,
+            is_connected=_is_connected,
+            entry_id=self.config_entry.entry_id,
+            integration_version=integration_version,
+            catalog_detection=self._diagnostic_catalog_detection(),
+            default_stop_on_error=stop_on_error,
+            default_operation_timeout=operation_timeout,
+        )
+
+    def _diagnostic_link_transport(self):
+        accessor = getattr(self._runtime, "diagnostic_link_transport", None)
+        if callable(accessor):
+            return accessor()
+        return None
+
+    @staticmethod
+    def _diagnostic_default_probe_target(driver_key: str):
+        try:
+            from ..drivers.registry import get_driver
+
+            driver = get_driver(driver_key)
+        except KeyError:
+            return None
+        targets = getattr(driver, "probe_targets", ())
+        return targets[0] if targets else None
+
+    def _diagnostic_catalog_detection(self) -> dict:
+        try:
+            snapshot = self.effective_metadata_snapshot
+            if snapshot is None:
+                return {}
+            return {
+                "candidate_keys": list(getattr(snapshot, "candidate_keys", ()) or ()),
+                "surface_key": getattr(snapshot, "surface_key", "") or "",
+                "evidence_fingerprint": getattr(snapshot, "evidence_fingerprint", "")
+                or "",
+            }
+        except Exception:  # noqa: BLE001 - diagnostic context must never block a run
+            return {}
+
+    async def _async_execute_diagnostic(
+        self, commands: str, context: DiagnosticRuntimeContext
+    ) -> dict:
+        async with self._runtime_operation_lock:
+            result = await run_scenario(commands, context)
+        config_dir = Path(self.hass.config.config_dir)
+        entry_id = self.config_entry.entry_id
+        export = await self.hass.async_add_executor_job(
+            lambda: export_diagnostic_run(
+                config_dir=config_dir,
+                entry_id=entry_id,
+                result=result,
+            )
+        )
+        return {
+            "success": result.success,
+            "output": result.output,
+            "results": result.results,
+            "context": result.context,
+            "started_at": result.started_at,
+            "finished_at": result.finished_at,
+            "result_path": str(export.result_path),
+            "download_url": export.download_url,
+        }
 
     async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
         """Reconcile listener bind/discovery state after HA or network readiness changes."""
@@ -1525,6 +1666,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             snapshot.values.pop(key, None)
 
     async def _async_update_data(self) -> RuntimeSnapshot:
+        if self._diagnostic_active and self.data is not None:
+            # A diagnostic command run holds the shared transport. Skip the live
+            # poll so it does not contend on the bus; return the last snapshot.
+            return self.data
+        async with self._runtime_operation_lock:
+            if self._diagnostic_active and self.data is not None:
+                return self.data
+            return await self._async_update_data_with_runtime_lock()
+
+    async def _async_update_data_with_runtime_lock(self) -> RuntimeSnapshot:
+        """Refresh runtime data while holding the shared transport operation lock."""
+
         await self._async_reconcile_network(reason="refresh")
         snapshot = await self._runtime.async_refresh(
             poll_interval=float(
