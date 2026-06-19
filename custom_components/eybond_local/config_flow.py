@@ -5771,7 +5771,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         errors: dict[str, str] = {}
         defaults = dict(user_input or {})
         username = str(defaults.get("username") or "").strip()
-        password = str(defaults.get("password") or "")
+        password = str(defaults.get("password") or "").strip()
         if user_input is not None:
             if not username:
                 errors["username"] = "required"
@@ -7771,7 +7771,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 )
             )
             smartess_username = str(form_input.get("username") or "").strip()
-            smartess_password = str(form_input.get("password") or "")
+            smartess_password = str(form_input.get("password") or "").strip()
             wants_inline_refresh = archive_cloud_mode == SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH
             errors: dict[str, str] = {}
             if wants_inline_refresh:

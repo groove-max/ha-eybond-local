@@ -4668,8 +4668,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_create_support_package(
             {
                 CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE: SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
-                "username": "test-user",
-                "password": "pw-test-0000",
+                "username": " test-user ",
+                "password": " pw-test-0000 ",
             }
         )
 
@@ -4903,8 +4903,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_create_support_package(
             {
                 CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE: SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
-                "username": "test-user",
-                "password": "pw-test-0000",
+                "username": " test-user ",
+                "password": " pw-test-0000 ",
             }
         )
 
@@ -5175,7 +5175,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._shadow_learning_state["wizard_progress_task"] = _DoneTask()
 
         result = await options.async_step_shadow_learning_credentials(
-            {"username": "demo", "password": "secret"}
+            {"username": " demo ", "password": " secret "}
         )
 
         self.assertEqual(result["type"], "progress_done")

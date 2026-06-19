@@ -2,8 +2,11 @@
   "schema_version": 1,
   "model_key": "anenji_4200_protocol_1",
   "manufacturer": "Anenji",
-  "model": "4200 (Protocol 1)",
-  "aliases": [],
+  "model": "ANJ-4000W-24V",
+  "aliases": [
+    "4200 (Protocol 1)",
+    "Anenji 4200 Protocol 1"
+  ],
   "lifecycle": "experimental",
   "variants": [
     {
@@ -12,19 +15,23 @@
       "device_descriptor_keys": [
         "anenji_4200"
       ],
-      "known_firmware": []
+      "known_firmware": [
+        "3501_A6251128v1"
+      ]
     }
   ],
   "validation": {
-    "hardware": "reported",
-    "telemetry": "partial",
+    "hardware": "captured",
+    "telemetry": "confirmed",
     "controls": "none"
   },
   "known_limitations": [
-    "Migrated from legacy detection rules; not validated on current hardware."
+    "Runtime read telemetry is confirmed by a user support archive; control writes remain unvalidated."
   ],
-  "knowledge_summary": "Anenji 4200 Protocol 1 variant carried over from legacy detection rules; a full runtime surface exists but lacks a current hardware capture.",
+  "knowledge_summary": "Anenji 4200 Protocol 1 variant now has a user support capture from an ANJ-4000W-24V device. Runtime detection resolves exactly to the SMG Protocol 1 surface and read telemetry is confirmed; controls are not validated.",
   "source_keys": [
-    "note_anenji_4200_rule_migration"
+    "note_anenji_4200_rule_migration",
+    "github_issue_9",
+    "support_archive_issue_9_20260619"
   ]
 }
