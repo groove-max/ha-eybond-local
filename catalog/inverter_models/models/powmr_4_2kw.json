@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "model_key": "powmr_4_2kw",
+  "manufacturer": "PowMr",
+  "model": "4.2KW",
+  "aliases": [
+    "VMII-NXPW5KW"
+  ],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "pi30_vmii_nxpw5kw",
+      "label": "PI30 VMII-NXPW5KW raw-model variant",
+      "device_descriptor_keys": [
+        "pi30_vmii_nxpw5kw"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "confirmed"
+  },
+  "known_limitations": [],
+  "knowledge_summary": "PowMr 4.2KW on the PI30 ASCII protocol. The inverter reports raw model number VMII-NXPW5KW, which is used as the runtime detection anchor.",
+  "source_keys": [
+    "fixture_pi30_vmii_nxpw5kw"
+  ]
+}

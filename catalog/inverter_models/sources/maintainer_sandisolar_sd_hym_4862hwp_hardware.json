@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_key": "maintainer_sandisolar_sd_hym_4862hwp_hardware",
+  "kind": "maintainer_test",
+  "title": "Maintainer Sandisolar SD-HYM-4862HWP own-device validation",
+  "reference": "private:maintainer-sandisolar-sd-hym-4862hwp-own-device",
+  "captured_at": "2026-06-01",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Maintainer's own Sandisolar SD-HYM-4862HWP resolves to runtime descriptor smg_6200 through the local SMG fingerprint anchors register 171 device_type/model_code=0x1E00 (7680), register 184 protocol/layout=1, and register 643 rated_power=6200. The commercial name is known from the device/source context, not from a local SMG register. Full telemetry and the complete SMG control set read back and write back correct values on hardware across 16 captures.",
+  "assertions": [
+    "hardware_test",
+    "fingerprint",
+    "telemetry_validation",
+    "write_validation",
+    "control_behavior"
+  ]
+}

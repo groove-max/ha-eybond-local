@@ -78,6 +78,29 @@ class ProfileLoaderTests(unittest.TestCase):
             profile.get_capability("power_saving_mode").support_notes,
         )
 
+    def test_loads_smg_6200_model_profile_shadow_learned_controls(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/smg_6200.json")
+
+        self.assertEqual(profile.key, "modbus_smg_6200")
+        self.assertEqual(profile.title, "SMG 6200")
+        self.assertEqual(len(profile.capabilities), 38)
+        learned_keys = {
+            "beeps_while_primary_source_interrupted": 304,
+            "battery_type": 322,
+            "constant_voltage_to_float_time": 330,
+            "automatic_mains_output_enabled": 338,
+            "forced_equalization_charging": 425,
+        }
+        for key, register in learned_keys.items():
+            capability = profile.get_capability(key)
+            self.assertEqual(capability.register, register)
+            self.assertTrue(capability.tested)
+            self.assertEqual(capability.provenance, "verified")
+            self.assertFalse(capability.enabled_default)
+            self.assertIn("shadow-learning", capability.support_notes)
+
     def test_loads_anenji_4200_protocol_1_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 
@@ -114,7 +137,7 @@ class ProfileLoaderTests(unittest.TestCase):
         profile = profile_loader.load_driver_profile("modbus_smg/models/anenji_op2_6200.json")
 
         self.assertEqual(profile.key, "modbus_smg_anenji_op2_6200")
-        self.assertEqual(profile.title, "Anenji 6200 Dual Output")
+        self.assertEqual(profile.title, "SMG OP2 6200 Dual Output")
         # The full SMG control set rides along from the default profile...
         self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
         self.assertGreaterEqual(len(profile.capabilities), 28)

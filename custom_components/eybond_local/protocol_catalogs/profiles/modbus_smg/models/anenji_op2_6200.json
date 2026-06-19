@@ -1,7 +1,7 @@
 {
   "extends": "../default.json",
   "profile_key": "modbus_smg_anenji_op2_6200",
-  "title": "Anenji 6200 Dual Output",
+  "title": "SMG OP2 6200 Dual Output",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
   "capabilities": [
@@ -16,7 +16,7 @@
       "enabled_default": true,
       "requires_confirm": true,
       "change_summary": "Turns the second output (OP2) on or off.",
-      "note": "OP2 enable is bit 0 of register 354 (other bits unknown -> read-modify-write via bitmask). Donor-verified write on hardware via ESPHome modbus_controller switch (address 354, bitmask 0x0001, use_write_multiple).",
+      "note": "OP2 enable is bit 0 of register 354 (other bits unknown -> read-modify-write via bitmask). Owner-supplied ESPHome modbus_controller switch used address 354, bitmask 0x0001, use_write_multiple.",
       "choices": [
         {"value": 0, "label": "Off", "order": 0, "description": "Second output disabled."},
         {"value": 1, "label": "On", "order": 1, "description": "Second output enabled."}

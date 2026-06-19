@@ -53,7 +53,14 @@ _SKIP_DIR_NAMES = {"__pycache__", ".local", ".git"}
 
 def _iter_tracked_text_files() -> list[Path]:
     files: list[Path] = []
-    for root in (REPO_ROOT / "custom_components", REPO_ROOT / "tests"):
+    for root in (
+        REPO_ROOT / "custom_components",
+        REPO_ROOT / "tests",
+        REPO_ROOT / "catalog",
+        REPO_ROOT / "docs" / "generated",
+    ):
+        if not root.exists():
+            continue
         for path in root.rglob("*"):
             if any(part in _SKIP_DIR_NAMES for part in path.parts):
                 continue

@@ -7,6 +7,15 @@
   "spec_sets": {
     "config": [
       {
+        "key": "beeps_while_primary_source_interrupted",
+        "register": 304,
+        "enum_table": "enabled_disabled"
+      },
+      {
+        "key": "constant_voltage_to_float_time",
+        "register": 330
+      },
+      {
         "key": "low_dc_protection_soc_grid_mode",
         "register": 341
       },
@@ -18,9 +27,39 @@
         "key": "low_dc_cutoff_soc",
         "register": 343
       }
+    ],
+    "aux_config": [
+      {
+        "key": "forced_equalization_charging",
+        "register": 425,
+        "enum_table": "enabled_disabled"
+      }
     ]
   },
   "measurement_descriptions": [
+    {
+      "key": "beeps_while_primary_source_interrupted",
+      "name": "Beeps While Primary Source Is Interrupted",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "constant_voltage_to_float_time",
+      "name": "Time From C.V To Floating Charge",
+      "unit": "min",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "forced_equalization_charging",
+      "name": "Forced Equalization Charging",
+      "icon": "mdi:battery-sync",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
     {
       "key": "max_discharge_current_protection",
       "name": "Max Discharge Current Protection",

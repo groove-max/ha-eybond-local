@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "model_key": "aninerel_6200_dual_output",
+  "manufacturer": "Aninerel",
+  "model": "6200 (dual output)",
+  "aliases": [
+    "SMG OP2 6200"
+  ],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "layout11_model30979",
+      "label": "OP2 dual-output variant",
+      "device_descriptor_keys": [
+        "anenji_op2_6200"
+      ],
+      "known_firmware": [
+        "7903_A6260126v1"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "known_limitations": [
+    "Only the output2 enable write is independently hardware-confirmed; other writes inherit the SMG control set."
+  ],
+  "knowledge_summary": "Aninerel dual-output 6200 from aninerel.zip. It uses the existing OP2 6200 runtime surface, which adds second-output telemetry/configuration and the output2 enable bitmask capability.",
+  "source_keys": [
+    "corpus_aninerel_op2_6200",
+    "private_message_op2_registers"
+  ]
+}

@@ -352,7 +352,7 @@
       "protocol_key": "modbus_smg",
       "driver_key": "modbus_smg",
       "variant_key": "default",
-      "profile_name": "modbus_smg/default.json",
+      "profile_name": "modbus_smg/models/smg_6200.json",
       "register_schema_name": "modbus_smg/models/smg_6200.json",
       "tier": "full",
       "read_only": false,
@@ -533,7 +533,9 @@
       },
       "provenance": {
         "sources": [
-          "corpus:own-device …9645 (16 captures, 2026-04..06)"
+          "corpus:own-device …9645 (16 captures, 2026-04..06)",
+          "identity anchors: reg171 device_type/model_code=0x1E00, reg184 protocol/layout=1, reg643 rated_power=6200",
+          "commercial name Sandisolar SD-HYM-4862HWP is source-backed; local SMG registers expose only the generic fingerprint"
         ],
         "confidence": "verified-on-hardware"
       }
@@ -667,7 +669,7 @@
       "structural": [
         "serial_ascii_plausible"
       ],
-      "model_name": "Anenji 6200 (dual output)",
+      "model_name": "Aninerel 6200 (dual output)",
       "surface_key": "anenji_op2_6200_full",
       "runtime_probe": {
         "validation": [
@@ -693,11 +695,11 @@
       },
       "provenance": {
         "sources": [
-          "corpus:donor …2875 (dual-output capture, 2026-06-12)",
-          "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write)",
+          "corpus:aninerel.zip (dual-output capture, 2026-06-12)",
+          "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write, 420 remote switch)",
           "fw 7903_A6260126v1 (reg626 hex == model_code 30979)",
-          "donor ran smg_modbus.json profile bound as SMG 6200: full SMG control set read back correct values (developer-witnessed 2026-06-12)",
-          "output2_enable @354 bit0: donor-verified write via ESPHome (bitmask 0x0001, use_write_multiple) -> model profile adds it as a bitmask RMW capability"
+          "donor ran smg_modbus.json profile bound as SMG 6200 before the built-in OP2 surface existed; full SMG control set read back correct values (developer-witnessed 2026-06-12)",
+          "output2_enable @354 bit0 from owner ESPHome config (bitmask 0x0001, use_write_multiple) -> model profile adds it as a bitmask RMW capability"
         ],
         "confidence": "capture-derived"
       }

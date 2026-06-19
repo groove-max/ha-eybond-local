@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "model_key": "aninerel_anl_4200t_24l_w_pro",
+  "manufacturer": "Aninerel",
+  "model": "ANL-4200T-24L-W-PRO",
+  "aliases": [],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "layout11_model30723",
+      "label": "Aninerel read-only variant",
+      "device_descriptor_keys": [
+        "aninerel_anl_4200t_24l_w_pro"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "known_limitations": [
+    "Read-only family-fallback surface; no model-specific profile and no confirmed controls."
+  ],
+  "knowledge_summary": "Aninerel 4200T reported via a GitHub issue and donor captures; resolves to the SMG read-only family surface pending a model-specific profile.",
+  "source_keys": [
+    "github_issue_3",
+    "corpus_aninerel_anl_4200t"
+  ]
+}

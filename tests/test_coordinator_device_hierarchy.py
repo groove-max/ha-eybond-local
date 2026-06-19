@@ -2107,7 +2107,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 serial_number="55355535553555",
                 driver_key="modbus_smg",
                 variant_key="default",
-                profile_name="smg_modbus.json",
+                profile_name="modbus_smg/models/smg_6200.json",
                 register_schema_name="modbus_smg/models/smg_6200.json",
                 details={
                     "catalog_detection": {
@@ -2143,7 +2143,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(persisted_snapshot.get("effective_owner_key"), "modbus_smg")
         self.assertEqual(
             persisted_snapshot.get("profile_name"),
-            "smg_modbus.json",
+            "modbus_smg/models/smg_6200.json",
         )
         self.assertEqual(
             persisted_snapshot.get("register_schema_name"),

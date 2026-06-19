@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "corpus_anenji_anj_11kw",
+  "kind": "support_archive",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P donor captures",
+  "reference": "private:corpus-anenji-anj-11kw",
+  "captured_at": "2026-04-17",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Donor captures from 2026-04-17/18 (layout 4, model code 32768) bound to the ANJ-11KW model profile with correct telemetry readback.",
+  "assertions": [
+    "fingerprint",
+    "telemetry_validation",
+    "runtime_compatibility"
+  ]
+}

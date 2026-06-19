@@ -96,7 +96,12 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.block("live").count, 34)
         self.assertEqual(schema.scalar_register("rated_power_register"), 643)
         self.assertEqual(schema.enum_map_for("mode_names")[3], "Off-Grid")
-        self.assertEqual(len(schema.spec_set("config")), 33)
+        config_specs = {spec.key: spec.register for spec in schema.spec_set("config")}
+        self.assertEqual(config_specs["beeps_while_primary_source_interrupted"], 304)
+        self.assertEqual(config_specs["constant_voltage_to_float_time"], 330)
+        self.assertEqual(config_specs["low_dc_cutoff_soc"], 343)
+        aux_specs = {spec.key: spec.register for spec in schema.spec_set("aux_config")}
+        self.assertEqual(aux_specs["forced_equalization_charging"], 425)
         self.assertEqual(
             schema.measurement_description("max_discharge_current_protection").name,
             "Max Discharge Current Protection",

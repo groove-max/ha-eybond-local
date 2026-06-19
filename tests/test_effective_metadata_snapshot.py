@@ -186,7 +186,7 @@ class EffectiveMetadataSnapshotTests(unittest.TestCase):
         snapshot = build_effective_metadata_snapshot(
             effective_owner_key="modbus_smg",
             variant_key="default",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/models/smg_6200.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
             confidence="high",
             candidate_keys=("smg_6200",),

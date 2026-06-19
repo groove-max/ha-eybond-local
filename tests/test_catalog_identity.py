@@ -259,7 +259,7 @@ class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
         # The binding now comes FROM the catalog entry itself.
         self.assertEqual(inverter.variant_key, "default")
         self.assertEqual(inverter.register_schema_name, "modbus_smg/models/smg_6200.json")
-        self.assertEqual(inverter.profile_name, "modbus_smg/default.json")
+        self.assertEqual(inverter.profile_name, "modbus_smg/models/smg_6200.json")
 
     async def test_probe_raises_link_down_on_zero_identity(self) -> None:
         driver = SmgModbusDriver()

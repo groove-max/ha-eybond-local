@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_anj_11kw_48v_wifi_p",
+  "manufacturer": "Anenji",
+  "model": "ANJ-11KW-48V-WIFI-P",
+  "aliases": [],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "layout4_model32768",
+      "label": "Anenji 11kW variant",
+      "device_descriptor_keys": [
+        "anenji_anj_11kw"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "confirmed"
+  },
+  "known_limitations": [],
+  "knowledge_summary": "Anenji 11kW unit with a model-specific profile and register schema, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 register documentation.",
+  "source_keys": [
+    "corpus_anenji_anj_11kw",
+    "private_message_anenji_anj_11kw_validation",
+    "documentation_anenji_protocol_3_10"
+  ]
+}

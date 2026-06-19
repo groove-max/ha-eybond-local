@@ -38,20 +38,9 @@ If your inverter's stock monitoring already works through the SmartESS app, that
 
 EyeBond Local works with inverters whose stock monitoring is available through **SmartESS**. This can be an external **SmartESS / EyeBond Wi-Fi collector** or a built-in Wi-Fi module that speaks the same local protocol.
 
-| Model / hardware class | Status | What it means |
-|---|---|---|
-| **Sandisolar SD-HYM-4862HWP** | Supported | Full monitoring and tested controls on the verified SMG path. |
-| **Anenji ANJ-11KW-48V-WIFI-P** | Supported | Full monitoring, PV1/PV2 telemetry, inverter clock support, and tested controls. |
-| **Anenji 6200 (dual output)** | Supported | Full monitoring including second-output telemetry, the SMG control set, and an Output 2 on/off switch. Capture-derived from a community donation. |
-| **Anenji 6200** | Supported | Full monitoring and the SMG control set (single-output sibling of the dual-output model). Capture-derived from a community donation. |
-| **Anenji 4200 (Protocol 1)** | Partial support | Monitoring works, but the write surface still needs broader real-hardware validation. Use `Full Control` only if you understand the risk. |
-| **PowMr 4.2kW** (raw model `VMII-NXPW5KW`) | Supported | Full monitoring and tested controls on the verified PI30-family path. |
-| **Unknown but clearly SMG-family inverter** | Partial tier + learning | Identified by its register fingerprint as SMG-family: base read sensors work out of the box, writes stay locked for safety, and the guided **device learning** wizard can discover its controls and extra sensors. |
-| **PI18-family hardware** | Experimental | Replay-tested only. Useful for research, but not yet public production-ready support. |
+The maintained list of commercial models, variants, validation state, limitations, and family-level runtime coverage is the [Inverter Model Catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md).
 
 Devices are identified by an offline catalog of register fingerprints (protocol layout + model code + rated power). After detection, onboarding shows the identified model and its **support tier** — full, partial, or not recognized — and tells you what to do next.
-
-For deeper protocol notes and SMG-specific support details, see the [SMG Support Matrix](docs/SMG_SUPPORT_MATRIX.md).
 
 Don't see your inverter? It might still work — open an issue with a [Support Archive](#getting-help) and we can evaluate compatibility and, when the protocol matches, extend support. Even unrecognized SMG-family models onboard with base sensors and can learn their controls.
 
@@ -296,7 +285,7 @@ The Support Archive contains an anonymized snapshot of your inverter's state, re
 - [Collector management guide](docs/COLLECTOR_MANAGEMENT.md) — collector modes, runtime settings, Wi-Fi change, and everyday collector actions
 - [Collector proxy capture guide](docs/PROXY_CAPTURE.md) — what proxy mode is for, how to run it, how the timer works, and how to restore the original server if needed
 - [Remote / NAT setup guide](docs/REMOTE_SETUP.md) — when and how to use the new callback override fields
-- [SMG support matrix](docs/SMG_SUPPORT_MATRIX.md)
+- [Inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md)
 - [Contributing guide](CONTRIBUTING.md)
 
 ---
@@ -306,8 +295,9 @@ The Support Archive contains an anonymized snapshot of your inverter's state, re
 A short orientation for people browsing the source. Full developer notes live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - `custom_components/eybond_local/` — integration source code
-- `custom_components/eybond_local/profiles/` — declarative capability metadata (JSON)
-- `custom_components/eybond_local/register_schemas/` — read-side register layouts (JSON)
+- `custom_components/eybond_local/protocol_catalogs/profiles/` — declarative capability metadata (JSON)
+- `custom_components/eybond_local/protocol_catalogs/register_schemas/` — read-side register layouts (JSON)
+- `catalog/inverter_models/` — maintained commercial model and source records
 - `docs/` — public documentation and generated reports
 - `.github/` — CI, validation, and release automation
 - `.local/` — maintainer-only notes, private utilities, and local release/debug artifacts that are intentionally outside the public user docs surface

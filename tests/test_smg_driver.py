@@ -52,6 +52,7 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
                 (389, 3),
                 (406, 1),
                 (420, 1),
+                (425, 1),
                 (607, 1),
                 (626, 8),
                 (643, 2),
@@ -548,7 +549,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         return DetectedInverter(
             driver_key="modbus_smg",
             protocol_family="modbus_smg",
-            model_name="Anenji 6200 (dual output)",
+            model_name="Aninerel 6200 (dual output)",
             serial_number="99632600000002",
             probe_target=target,
             variant_key="default",
@@ -799,7 +800,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "default")
         self.assertEqual(inverter.model_name, "SMG 6200")
-        self.assertEqual(inverter.profile_name, "modbus_smg/default.json")
+        self.assertEqual(inverter.profile_name, "modbus_smg/models/smg_6200.json")
         self.assertEqual(inverter.register_schema_name, "modbus_smg/models/smg_6200.json")
         self.assertGreater(len(inverter.capabilities), 0)
         self.assertEqual(inverter.details["protocol_number"], 1)
@@ -1038,7 +1039,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             serial_number="SMG11K240001",
             probe_target=target,
             variant_key="default",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/models/smg_6200.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
             details={
                 "device_type": 0x1E00,
@@ -1080,7 +1081,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             serial_number="SMG11K240001",
             probe_target=target,
             variant_key="default",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/models/smg_6200.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
             details={
                 "rated_power": 6200,

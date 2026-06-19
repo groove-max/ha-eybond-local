@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "private_message_op2_registers",
+  "kind": "private_message",
+  "title": "SMG OP2 register information",
+  "reference": "private:forum-pm-op2-registers",
+  "captured_at": "2026-06-12",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Owner-supplied OP2 register list: output2 apparent power 239 (signed), active power 240, load percent 243, voltage 244 scaled by 0.1, cut-off SOC 344, overload warning threshold 353, output2 enable at register 354 bit 0 with write-multiple, and remote switch at register 420 bit 0.",
+  "assertions": [
+    "register_map",
+    "write_validation",
+    "control_behavior"
+  ]
+}

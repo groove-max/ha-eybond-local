@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_key": "fixture_pi30_vmii_nxpw5kw",
+  "kind": "support_archive",
+  "title": "PowMr 4.2KW / VMII-NXPW5KW live-capture fixture",
+  "reference": "fixture:pi30-vmii-nxpw5kw-live-capture",
+  "captured_at": "2026-04-07",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Local PI30 live-capture (field dump pi30_vmii_nxpw5kw_20260408T0003Z) for the PowMr 4.2KW. The inverter reports raw model number VMII-NXPW5KW via QMN; the fixture validates PI30 telemetry and the tested control surface. The anonymized fixture is local-only.",
+  "assertions": [
+    "commercial_identity",
+    "fingerprint",
+    "telemetry_validation",
+    "write_validation",
+    "control_behavior"
+  ]
+}

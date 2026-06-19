@@ -201,12 +201,11 @@ Replace `X.Y.Z` with the same version you placed in `manifest.json` and the matc
 
 ## I want to refresh generated documentation
 
-Checked-in generated reports live under `docs/generated/`. Most contributors don't need to run these by hand — `quality_gate.py --refresh-generated` does it all in one go. Use the individual commands when iterating on a specific public report.
+The checked-in public report lives under `docs/generated/`. Most contributors don't need to run it by hand — `quality_gate.py --refresh-generated` refreshes it.
 
 | Report | Command |
 |---|---|
-| Support overview | `python3 tools/export_support_overview.py --format markdown --output docs/generated/SUPPORT_OVERVIEW.generated.md` |
-| SMG support matrix | `python3 tools/export_support_matrix.py --profile smg_modbus.json --format markdown --output docs/generated/SMG_SUPPORT_MATRIX.generated.md` |
+| Inverter model catalog | `python3 tools/model_catalog.py render --output docs/generated/INVERTER_MODEL_CATALOG.generated.md` |
 
 ## I want fixture-derived debug reports
 

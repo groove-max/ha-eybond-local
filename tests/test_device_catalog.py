@@ -199,7 +199,7 @@ class DeviceCatalogLoadTest(unittest.TestCase):
 
         self.assertTrue(surface.default_for_driver)
         self.assertFalse(surface.read_only)
-        self.assertEqual(surface.binding.profile_name, "modbus_smg/default.json")
+        self.assertEqual(surface.binding.profile_name, "modbus_smg/models/smg_6200.json")
         self.assertIn((700, 45), surface.support_capture.ranges)
         self.assertEqual(
             resolve_catalog_surface_binding("modbus_smg"),
@@ -219,7 +219,7 @@ class DeviceCatalogLoadTest(unittest.TestCase):
         policy = resolve_runtime_probe_policy(
             driver_key="modbus_smg",
             variant_key="default",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/models/smg_6200.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
         )
 

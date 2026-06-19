@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "corpus_aninerel_op2_6200",
+  "kind": "support_archive",
+  "title": "Aninerel 6200 dual-output donor capture",
+  "reference": "private:corpus-aninerel-op2-6200",
+  "captured_at": "2026-06-12",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Donor support archive aninerel.zip for a dual-output unit (layout 11, model code 30979, rated 6200, fw 7903_A6260126v1). The device ran with local SMG metadata and correct telemetry readback; OP2 config registers were present in the capture.",
+  "assertions": [
+    "fingerprint",
+    "telemetry_validation",
+    "runtime_compatibility"
+  ]
+}

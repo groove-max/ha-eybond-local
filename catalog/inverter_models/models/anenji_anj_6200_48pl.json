@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_anj_6200_48pl",
+  "manufacturer": "Anenji",
+  "model": "ANJ-6200-48PL",
+  "aliases": [],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "layout2_model8960",
+      "label": "Known SMG layout 2 variant",
+      "device_descriptor_keys": [
+        "anenji_anj_6200_48pl"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "known_limitations": [
+    "Shares the SMG 6200 runtime surface; writes are not independently hardware-confirmed on this unit."
+  ],
+  "knowledge_summary": "SMG layout 2 model that reuses the SMG 6200 runtime surface; reported via a GitHub issue and a support capture.",
+  "source_keys": [
+    "github_issue_8",
+    "support_archive_anj6200_48pl"
+  ]
+}

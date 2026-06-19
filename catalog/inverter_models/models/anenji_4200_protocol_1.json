@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_4200_protocol_1",
+  "manufacturer": "Anenji",
+  "model": "4200 (Protocol 1)",
+  "aliases": [],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "layout1_model13569",
+      "label": "Anenji 4200 Protocol 1 variant",
+      "device_descriptor_keys": [
+        "anenji_4200"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "reported",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "known_limitations": [
+    "Migrated from legacy detection rules; not validated on current hardware."
+  ],
+  "knowledge_summary": "Anenji 4200 Protocol 1 variant carried over from legacy detection rules; a full runtime surface exists but lacks a current hardware capture.",
+  "source_keys": [
+    "note_anenji_4200_rule_migration"
+  ]
+}
