@@ -9,6 +9,7 @@ This directory is the public documentation set for EyeBond Local.
 - [Collector Proxy Capture](PROXY_CAPTURE.md) — when to use proxy mode, how to start it, how the timer works, and how to restore the original server if needed
 - [Remote / NAT Setup Guide](REMOTE_SETUP.md) — only for collectors that are remote, routed through VPN, or behind port forwarding
 - [SMG Support Matrix](SMG_SUPPORT_MATRIX.md) — deeper SMG-family compatibility notes
+- [Inverter Model Catalog And Journal Plan](INVERTER_MODEL_CATALOG_PLAN.md) — maintainer plan for the commercial model catalog, evidence references, generated journal, and runtime boundaries
 - [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) — community firmware bridge for inverters without a factory collector (detected and supported automatically; see [Collector Management](COLLECTOR_MANAGEMENT.md#virtual-bridge-collectors-esp-eybond-collector))
 
 Ukrainian readers can also use the [Ukrainian README](../README.uk.md).
