@@ -298,6 +298,54 @@
         }
       ],
       "layouts": []
+    },
+    {
+      "key": "must_pv_ph18",
+      "transport_key": "eybond_modbus",
+      "probe_timeout": 12.0,
+      "probe_targets": [
+        {"devcode": 1, "collector_addr": 255, "device_addr": 4}
+      ],
+      "probe_actions": [
+        {
+          "key": "must_pv_ph18.model",
+          "kind": "modbus_read",
+          "register": 20000,
+          "count": 2,
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {
+              "key": "identity.model_prefix",
+              "source_key": "model_prefix",
+              "register": 20000,
+              "decoder": "ascii"
+            },
+            {
+              "key": "identity.model_suffix",
+              "source_key": "model_suffix",
+              "register": 20001
+            }
+          ]
+        },
+        {
+          "key": "must_pv_ph18.collector.smartess",
+          "kind": "collector_metadata",
+          "cost": 0,
+          "optional": true,
+          "evidence_fields": [
+            {
+              "key": "collector.smartess_protocol_asset_id",
+              "source_key": "smartess_protocol_asset_id"
+            },
+            {
+              "key": "collector.serial_baudrate",
+              "source_key": "collector_serial_baudrate"
+            }
+          ]
+        }
+      ],
+      "layouts": []
     }
   ],
   "support_capture_policies": {
@@ -344,6 +392,26 @@
     "pi_ascii": {
       "ranges": [],
       "notes": []
+    },
+    "must_pv_ph18": {
+      "ranges": [
+        [10103, 1],
+        [10110, 1],
+        [15201, 3],
+        [15205, 1],
+        [15207, 3],
+        [15212, 1],
+        [15217, 3],
+        [20000, 2],
+        [25201, 1],
+        [25205, 12],
+        [25225, 2],
+        [25233, 2],
+        [25274, 1]
+      ],
+      "notes": [
+        "MUST PV/PH18 support is read-only. Devices are expected to use Modbus RTU 19200 8N1 and slave address 4."
+      ]
     }
   },
   "surfaces": [
@@ -492,6 +560,18 @@
       "read_only": true,
       "default_for_driver": true,
       "support_capture_policy": "pi_ascii"
+    },
+    {
+      "key": "must_pv_ph18_read_only",
+      "protocol_key": "must_pv_ph18",
+      "driver_key": "must_pv_ph18",
+      "variant_key": "pv_ph18",
+      "profile_name": "",
+      "register_schema_name": "must_pv_ph18/base.json",
+      "tier": "partial",
+      "read_only": true,
+      "default_for_driver": true,
+      "support_capture_policy": "must_pv_ph18"
     }
   ],
   "devices": [
@@ -964,6 +1044,24 @@
       "provenance": {
         "sources": ["protocol-family:PI18"],
         "confidence": "family-compatible"
+      }
+    },
+    {
+      "entry_key": "must_pv18_3024",
+      "surface_key": "must_pv_ph18_read_only",
+      "model_name": "MUST PV18-3024",
+      "priority": 220,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "MUST_PV_PH18"},
+        {"key": "identity.model_number", "equals": "PV18"}
+      ],
+      "provenance": {
+        "sources": [
+          "github:issue#5 MUST PV18-3024 user report",
+          "support archives 2026-06-13/14: SmartESS protocol asset 02FF,0,0, and collector serial baudrate 19200-8-1-0",
+          "third-party MUST PV/PH18 Modbus register map"
+        ],
+        "confidence": "third-party-map-with-support-archive"
       }
     }
   ],

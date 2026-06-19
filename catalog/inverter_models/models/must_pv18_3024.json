@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "model_key": "must_pv18_3024",
+  "manufacturer": "MUST",
+  "model": "PV18-3024",
+  "aliases": [
+    "MUST PV18-3024",
+    "MUST PV/PH18"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "must_pv18",
+      "label": "MUST PV18 Modbus read-only variant",
+      "device_descriptor_keys": [
+        "must_pv18_3024"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "known_limitations": [
+    "Read-only first implementation; no write controls are exposed.",
+    "Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.",
+    "Telemetry map is based on a third-party MUST PV/PH18 Modbus register map and still needs owner confirmation through a fresh support archive after integration update."
+  ],
+  "knowledge_summary": "MUST PV18-3024 support is based on issue #5 support archives and a third-party MUST PV/PH18 Modbus register map. The user archives showed Auto/PI30 probe timeouts, SmartESS protocol asset \"02FF,0,0,\" and collector serial baudrate 19200-8-1-0. The runtime adds a read-only MUST PV/PH18 Modbus surface using slave address 4 and the third-party register map.",
+  "source_keys": [
+    "github_issue_5",
+    "private_must_pv_ph18_modbus_map"
+  ]
+}

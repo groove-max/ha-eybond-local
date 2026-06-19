@@ -29,12 +29,14 @@ from ..models import (
     decimals_for_divisor,
 )
 from .base import InverterDriver
+from .must import MustPvPh18Driver
 from .pi18 import Pi18Driver
 from .pi30 import Pi30Driver
 from .smg import SmgModbusDriver
 
 _DRIVERS: tuple[InverterDriver, ...] = (
     SmgModbusDriver(),
+    MustPvPh18Driver(),
     Pi30Driver(),
     Pi18Driver(),
 )

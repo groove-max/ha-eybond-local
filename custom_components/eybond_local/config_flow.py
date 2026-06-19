@@ -873,6 +873,7 @@ def _driver_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
     labels = {
         DRIVER_HINT_AUTO: "Auto",
         "modbus_smg": "SMG / Modbus",
+        "must_pv_ph18": "MUST PV/PH18",
         "pi30": "PI30",
         "pi18": "PI18",
     }

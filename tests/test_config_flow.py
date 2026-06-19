@@ -3370,7 +3370,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         selector = result["data_schema"].schema["driver_hint"]
         labels = [option["label"] for option in selector.config.kwargs["options"]]
-        self.assertEqual(labels, ["Авто", "SMG / Modbus", "PI30", "PI18"])
+        self.assertEqual(labels, ["Авто", "SMG / Modbus", "MUST PV/PH18", "PI30", "PI18"])
 
     async def test_manual_step_recovers_when_auto_config_is_missing(self) -> None:
         flow = self._make_flow()

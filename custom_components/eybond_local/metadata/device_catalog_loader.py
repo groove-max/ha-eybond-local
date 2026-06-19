@@ -323,10 +323,13 @@ def load_device_catalog() -> DeviceCatalog:
         protocol.key: protocol
         for protocol in (_parse_protocol(item) for item in protocol_items)
     }
-    transports = {
-        protocol.transport_key: _identity_probe_spec(protocol)
-        for protocol in protocols.values()
-    }
+    transports: dict[str, IdentityProbeSpec] = {}
+    for protocol in protocols.values():
+        spec = _identity_probe_spec(protocol)
+        current = transports.get(protocol.transport_key)
+        transports[protocol.transport_key] = (
+            spec if current is None else _merge_identity_probe_specs(current, spec)
+        )
     layouts = tuple(
         _parse_layout(layout, transport_key=protocol.transport_key)
         for item, protocol in zip(protocol_items, protocols.values(), strict=True)
@@ -572,6 +575,18 @@ def _identity_probe_spec(protocol: CatalogProtocol) -> IdentityProbeSpec:
             for field in action.fields
         },
     )
+
+
+def _merge_identity_probe_specs(
+    left: IdentityProbeSpec,
+    right: IdentityProbeSpec,
+) -> IdentityProbeSpec:
+    """Merge protocol identity specs that share one physical transport."""
+
+    read_blocks = tuple(dict.fromkeys((*left.read_blocks, *right.read_blocks)))
+    fields = dict(left.fields)
+    fields.update(right.fields)
+    return IdentityProbeSpec(read_blocks=read_blocks, fields=fields)
 
 
 def _parse_layout(

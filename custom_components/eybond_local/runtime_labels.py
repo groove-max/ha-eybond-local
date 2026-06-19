@@ -7,6 +7,7 @@ from typing import Final
 
 _RUNTIME_PATH_LABELS: Final[dict[str, str]] = {
     "modbus_smg": "SMG-family runtime",
+    "must_pv_ph18": "MUST PV/PH18 runtime",
     "pi18": "PI18-family runtime",
     "pi30": "PI30-family runtime",
     "smartess_local": "SmartESS-local runtime",
