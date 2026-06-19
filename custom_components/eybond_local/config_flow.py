@@ -6129,12 +6129,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         leaked_count = int(orchestration.get("leaked_count") or 0)
         degraded_count = int(orchestration.get("degraded_count") or 0)
         if leaked_count > 0:
-            # SAFETY: at least one control write was accepted by the cloud (ERR_NONE) instead of
-            # NACKed by our proxy -- proof the collector dropped off the proxy mid-run and the
-            # write reached the REAL inverter. The run was hard-stopped at the first such write,
-            # but a live change may already have been applied to the hardware. Do not build or
-            # offer a partial overlay from a safety-aborted run; let the caller perform the
-            # fail-closed stop/restore path and surface this as an error.
+            # SAFETY: at least one control write was accepted by the cloud (ERR_NONE) and did
+            # not have a matching local proxy write observation -- proof the write bypassed our
+            # proxy and may have reached the REAL inverter. The run was hard-stopped at the
+            # first such write, but a live change may already have been applied to the hardware.
+            # Do not build or offer a partial overlay from a safety-aborted run; let the caller
+            # perform the fail-closed stop/restore path and surface this as an error.
             raise RuntimeError(
                 self._tr(
                     "common.dynamic.control_discovery_leaked",

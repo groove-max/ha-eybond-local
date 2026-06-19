@@ -30,7 +30,9 @@ _CONTROL_STATUS_ERROR = "error"
 _CONTROL_STATUS_CAPTURED_NOT_APPLIED = "captured_not_applied"
 _CONTROL_STATUS_DEGRADED = "degraded"
 # SAFETY-CRITICAL: a write whose cloud response was a *success* (ERR_NONE) in observe-only
-# mode -- proof it bypassed our proxy and reached the real inverter. See the hard-abort below.
+# mode AND that has no matching local proxy write observation. Some SmartESS server paths return
+# success even after our proxy NACKs the locally observed write; only success without local
+# observation proves the write bypassed our proxy and may have reached the real inverter.
 _CONTROL_STATUS_LEAKED = "leaked"
 
 
@@ -124,13 +126,6 @@ def orchestrate_shadow_learning_settings(
                 "desc": str(getattr(envelope, "desc", "")),
             }
             attempt["dat"] = getattr(envelope, "dat", None)
-            # SAFETY-CRITICAL: a successful response (ERR_NONE) in observe-only mode means the
-            # write bypassed our proxy and reached the real inverter. Abort immediately.
-            if abort_on_unproxied_write and response_err == 0:
-                attempt["status"] = _CONTROL_STATUS_LEAKED
-                attempt["reason"] = "control_leaked_unproxied"
-                attempts.append(attempt)
-                break
         except Exception as exc:  # pragma: no cover - exact cloud errors are caller-dependent
             attempt["status"] = _CONTROL_STATUS_ERROR
             attempt["error"] = str(exc)
@@ -140,6 +135,15 @@ def orchestrate_shadow_learning_settings(
             continue
 
         attempts.append(attempt)
+        correlation = correlate_cloud_attempts_with_shadow_writes(
+            attempts=attempts,
+            observed_writes=observed_writes or (),
+        )
+        _normalize_correlated_captured_not_applied_attempts(attempts, correlation)
+        if abort_on_unproxied_write and _attempt_is_unproxied_success_candidate(attempt):
+            attempt["status"] = _CONTROL_STATUS_LEAKED
+            attempt["reason"] = "control_leaked_unproxied"
+            break
         if delay_seconds > 0:
             time.sleep(delay_seconds)
 
@@ -285,19 +289,6 @@ async def async_orchestrate_shadow_learning_settings(
                 "desc": str(getattr(envelope, "desc", "")),
             }
             attempt["dat"] = getattr(envelope, "dat", None)
-            # SAFETY-CRITICAL hard stop. In observe-only mode our shadow proxy NACKs EVERY
-            # write, so the cloud must return ERR_FAIL (handled in the except below). A
-            # *successful* response (err == 0 / ERR_NONE) proves this write was NOT intercepted
-            # by us: the collector had dropped off our proxy during the cloud's delivery (a
-            # revert/reboot race the pre-send gate cannot catch) and the write reached the REAL
-            # inverter. That leaks a live control change onto the hardware (it shut off the
-            # user's output). Abort the whole run now so no further writes can leak --
-            # unconditionally, regardless of continue_on_error, because this is a safety event.
-            if abort_on_unproxied_write and response_err == 0:
-                attempt["status"] = _CONTROL_STATUS_LEAKED
-                attempt["reason"] = "control_leaked_unproxied"
-                attempts.append(attempt)
-                break
         except Exception as exc:  # pragma: no cover - exact cloud errors are caller-dependent
             # In observe-only (exception) mode SmartESS rejects every write with
             # an expected NACK, yet the Modbus write is still delivered to the
@@ -318,6 +309,11 @@ async def async_orchestrate_shadow_learning_settings(
             is_session_ready=is_session_ready,
         )
         if observations is None:
+            if abort_on_unproxied_write and _attempt_is_unproxied_success_candidate(attempt):
+                attempt["status"] = _CONTROL_STATUS_LEAKED
+                attempt["reason"] = "control_leaked_unproxied"
+                attempts.append(attempt)
+                break
             attempt["status"] = _CONTROL_STATUS_DEGRADED
             attempt["reason"] = "session_degraded_during_run"
             attempts.append(attempt)
@@ -328,6 +324,11 @@ async def async_orchestrate_shadow_learning_settings(
             observations=observations,
         )
         _normalize_captured_not_applied_status(attempt)
+        if abort_on_unproxied_write and _attempt_is_unproxied_success_candidate(attempt):
+            attempt["status"] = _CONTROL_STATUS_LEAKED
+            attempt["reason"] = "control_leaked_unproxied"
+            attempts.append(attempt)
+            break
         if observations:
             run_observations.extend(observations)
 
@@ -631,11 +632,16 @@ def _attach_attempt_observation(
 
 
 def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
-    """Reclassify expected proxy NACKs once the write was observed locally."""
+    """Reclassify locally observed proxy writes that did not reach the inverter."""
 
-    if attempt.get("status") != _CONTROL_STATUS_ERROR:
-        return
     if not isinstance(attempt.get("observation"), dict):
+        return
+    if attempt.get("status") == _CONTROL_STATUS_SENT and _attempt_has_success_response(attempt):
+        attempt["status"] = _CONTROL_STATUS_CAPTURED_NOT_APPLIED
+        attempt["proxy_capture_result"] = "captured_not_applied"
+        attempt["cloud_ack_after_proxy_nack"] = True
+        return
+    if attempt.get("status") != _CONTROL_STATUS_ERROR:
         return
     error = str(attempt.get("error") or "")
     if not _is_expected_proxy_nack(error):
@@ -644,6 +650,23 @@ def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
     attempt["proxy_capture_result"] = "captured_not_applied"
     attempt["cloud_nack"] = error
     attempt.pop("error", None)
+
+
+def _attempt_has_success_response(attempt: dict[str, Any]) -> bool:
+    response = attempt.get("response")
+    if not isinstance(response, dict):
+        return False
+    try:
+        return int(response.get("err", -1)) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _attempt_is_unproxied_success_candidate(attempt: dict[str, Any]) -> bool:
+    return (
+        _attempt_has_success_response(attempt)
+        and attempt.get("status") != _CONTROL_STATUS_CAPTURED_NOT_APPLIED
+    )
 
 
 def _normalize_correlated_captured_not_applied_attempts(

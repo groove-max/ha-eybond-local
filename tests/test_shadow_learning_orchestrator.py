@@ -251,6 +251,55 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["correlation"]["matched_count"], 1)
         self.assertEqual(result["results"][0]["observation"]["raw_payload_hex"], "nacked-write")
 
+    def test_live_orchestrator_treats_cloud_success_with_proxy_observation_as_captured(self) -> None:
+        settings_dat = {
+            "field": [
+                {
+                    "id": "sys_eybond_ctrl_53",
+                    "name": "Backlight Control",
+                    "item": [{"key": "0", "val": "Off"}],
+                }
+            ]
+        }
+
+        def _success_fetch(**_kwargs):
+            return type("_Envelope", (), {"err": 0, "desc": "ERR_NONE", "dat": {}})()
+
+        result = orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_ready=True,
+            field_ids=[],
+            include_numeric=False,
+            observed_writes=[
+                ShadowWriteObservation(
+                    register=305,
+                    values=(0,),
+                    function_code=16,
+                    devcode=2376,
+                    devaddr=1,
+                    raw_payload_hex="cloud-success-nacked-write",
+                    timestamp="2999-06-05T12:00:00.050000+00:00",
+                )
+            ],
+            fetch_action=_success_fetch,
+        )
+
+        self.assertEqual(result["results"][0]["status"], "captured_not_applied")
+        self.assertEqual(result["captured_not_applied_count"], 1)
+        self.assertEqual(result["leaked_count"], 0)
+        self.assertTrue(result["results"][0]["cloud_ack_after_proxy_nack"])
+        self.assertEqual(
+            result["results"][0]["observation"]["raw_payload_hex"],
+            "cloud-success-nacked-write",
+        )
+
     def test_correlation_matches_by_sequence_and_timestamps(self) -> None:
         attempts = [
             {
@@ -543,11 +592,68 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["observation"]["raw_payload_hex"], "nacked-write")
         self.assertEqual(result["correlation"]["unmatched_write_count"], 0)
 
+    async def test_async_cloud_success_with_proxy_observation_is_not_leak(self) -> None:
+        # Some SmartESS server paths report success even when our proxy observed and NACKed the
+        # write locally. The local observation is the safety signal: it proves the write reached
+        # the fail-closed proxy instead of bypassing it to the real inverter.
+        settings_dat = {
+            "field": [
+                {"id": "sys_eybond_ctrl_53", "name": "Backlight", "item": [{"key": "0", "val": "Off"}]},
+            ]
+        }
+        source = _FakeObservationSource()
+        loop = asyncio.get_running_loop()
+
+        def _success_fetch(**_kwargs):
+            loop.call_soon_threadsafe(
+                source.add,
+                ShadowWriteObservation(
+                    register=305,
+                    values=(0,),
+                    function_code=16,
+                    devcode=2376,
+                    devaddr=1,
+                    raw_payload_hex="cloud-success-nacked-write",
+                    timestamp="2026-06-05T12:00:00.050000+00:00",
+                ),
+            )
+            return type("_Envelope", (), {"err": 0, "desc": "ERR_NONE", "dat": {}})()
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            observed_writes=source.all,
+            observation_cursor=source.observation_cursor,
+            current_observations_since=source.observations_since,
+            wait_for_observations_since=source.wait_for_observations_since,
+            is_session_ready=lambda: True,
+            correlation_timeout_seconds=0.3,
+            fetch_action=_success_fetch,
+        )
+
+        self.assertEqual(result["results"][0]["status"], "captured_not_applied")
+        self.assertEqual(result["captured_not_applied_count"], 1)
+        self.assertEqual(result["leaked_count"], 0)
+        self.assertTrue(result["results"][0]["cloud_ack_after_proxy_nack"])
+        self.assertEqual(result["correlation"]["matched_count"], 1)
+        self.assertEqual(
+            result["results"][0]["observation"]["raw_payload_hex"],
+            "cloud-success-nacked-write",
+        )
+
     async def test_async_hard_aborts_on_unproxied_write_success(self) -> None:
-        # SAFETY-CRITICAL: in observe-only mode every write is NACKed (ERR_FAIL). A *success*
-        # (ERR_NONE) proves the write bypassed our proxy and reached the real inverter -- the
-        # collector reverted off our proxy mid-run. The run must hard-stop on the FIRST such
-        # write so no further controls can leak (this is the bug that shut off the inverter).
+        # SAFETY-CRITICAL: in observe-only mode every write must be observed locally by the
+        # proxy. A cloud success with no local observation proves the write bypassed our proxy
+        # and may have reached the real inverter. The run must hard-stop on the FIRST such write.
         settings_dat = {
             "field": [
                 {"id": "sys_eybond_ctrl_53", "name": "Backlight", "item": [
