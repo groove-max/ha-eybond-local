@@ -94,7 +94,7 @@ class CollectorEndpointTests(unittest.TestCase):
                 require_explicit_protocol=False,
                 require_tcp=True,
             ),
-            ("ess.eybond.com", 18899, "TCP"),
+            ("ess.eybond.com", 502, "TCP"),
         )
 
         parsed = inspect_collector_server_endpoint(
@@ -106,7 +106,7 @@ class CollectorEndpointTests(unittest.TestCase):
         self.assertFalse(parsed.has_explicit_port)
         self.assertFalse(parsed.has_explicit_protocol)
         self.assertEqual(parsed.render(preserve_shape=True), "ess.eybond.com")
-        self.assertEqual(parsed.render(preserve_shape=False), "ess.eybond.com,18899,TCP")
+        self.assertEqual(parsed.render(preserve_shape=False), "ess.eybond.com,502,TCP")
 
     def test_parse_preserves_smartvalue_endpoint_shape_for_host_based_family_resolution(self) -> None:
         # APK-derived endpoint evidence indicates SmartValue AT collectors use

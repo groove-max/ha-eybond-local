@@ -30,6 +30,7 @@ except ModuleNotFoundError:  # Local tooling imports the package without Home As
 from .naming import installation_title, legacy_installation_titles
 from .collector.signal import is_legacy_disabled_signal_entity_key
 from .collector.transport import CollectorListenerBindError
+from .device_scoped_overlay import filter_learned_read_measurements_for_activation
 from .const import (
     COLLECTOR_OPERATION_MODES,
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -580,6 +581,11 @@ def _default_enabled_unique_ids_for_current_runtime(
         include_all_drivers_when_unknown=False,
         collector_only_mode=not has_inverter_identity,
     )
+    measurement_descriptions = filter_learned_read_measurements_for_activation(
+        measurement_descriptions,
+        entry_data=getattr(getattr(coordinator, "config_entry", None), "data", None),
+        entry_options=getattr(getattr(coordinator, "config_entry", None), "options", None),
+    )
     binary_sensor_descriptions = binary_sensors_for_runtime(
         driver_key=driver_key,
         register_schema_name=register_schema_name,
@@ -908,6 +914,11 @@ async def _async_cleanup_obsolete_entities(
         write_capabilities=capabilities,
         include_all_drivers_when_unknown=False,
         collector_only_mode=not has_inverter_identity,
+    )
+    measurement_descriptions = filter_learned_read_measurements_for_activation(
+        measurement_descriptions,
+        entry_data=getattr(entry, "data", None),
+        entry_options=getattr(entry, "options", None),
     )
     binary_sensor_descriptions = binary_sensors_for_runtime(
         driver_key=driver_key,

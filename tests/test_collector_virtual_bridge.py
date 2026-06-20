@@ -79,6 +79,15 @@ class ParseCollectorVdtuTests(unittest.TestCase):
             info.features,
             ("local_only", "no_cloud", "wifi_params"),
         )
+        self.assertEqual(
+            info.attributes,
+            (
+                ("features", "local_only,no_cloud,wifi_params"),
+                ("uart", "2400,8,1,NONE"),
+                ("spacing_ms", "100"),
+                ("queue", "4"),
+            ),
+        )
 
     def test_empty_value_is_not_a_bridge(self) -> None:
         self.assertEqual(parse_collector_vdtu(""), CollectorVirtualBridgeInfo())
@@ -108,6 +117,7 @@ class ParseCollectorVdtuTests(unittest.TestCase):
             info.features,
             ("local_only", "quantum_link", "teleport"),
         )
+        self.assertEqual(dict(info.attributes)["future_key"], "whatever")
 
     def test_truncated_reply_still_parses_prefix_and_version(self) -> None:
         # Reply cut off before the features segment.
@@ -163,12 +173,24 @@ class SnapshotDetectionFlagTests(unittest.TestCase):
             snapshot.collector.collector_bridge_features,
             ("local_only", "no_cloud", "wifi_params"),
         )
+        self.assertEqual(
+            snapshot.collector.collector_bridge_attributes,
+            (
+                ("features", "local_only,no_cloud,wifi_params"),
+                ("uart", "2400,8,1,NONE"),
+                ("spacing_ms", "100"),
+                ("queue", "4"),
+            ),
+        )
         self.assertTrue(snapshot.values["collector_virtual_bridge"])
         self.assertEqual(snapshot.values["collector_bridge_version"], "0.4.0")
         self.assertEqual(
             snapshot.values["collector_bridge_features"],
             "local_only, no_cloud, wifi_params",
         )
+        self.assertEqual(snapshot.values["collector_bridge_uart"], "2400,8,1,NONE")
+        self.assertEqual(snapshot.values["collector_bridge_spacing_ms"], "100")
+        self.assertEqual(snapshot.values["collector_bridge_queue"], "4")
 
     def test_factory_collector_does_not_set_flag(self) -> None:
         hub = _make_hub()
@@ -259,6 +281,9 @@ class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):
             context.match.details["collector_bridge_features"],
             "local_only, no_cloud, wifi_params",
         )
+        self.assertEqual(context.match.details["collector_bridge_uart"], "2400,8,1,NONE")
+        self.assertEqual(context.match.details["collector_bridge_spacing_ms"], "100")
+        self.assertEqual(context.match.details["collector_bridge_queue"], "4")
         # The raw VDTU string is intentionally not carried into match details.
         self.assertNotIn("collector_vdtu_raw", context.match.details)
 

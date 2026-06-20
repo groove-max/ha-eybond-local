@@ -121,6 +121,7 @@ class CollectorVirtualBridgeInfo:
     kind: str = ""
     version: str = ""
     features: tuple[str, ...] = ()
+    attributes: tuple[tuple[str, str], ...] = ()
 
 
 def parse_collector_vdtu(raw: object) -> CollectorVirtualBridgeInfo:
@@ -145,22 +146,27 @@ def parse_collector_vdtu(raw: object) -> CollectorVirtualBridgeInfo:
 
     version = segments[0].strip() if segments else ""
     features: tuple[str, ...] = ()
+    attributes: list[tuple[str, str]] = []
     for segment in segments[1:]:
         key, _, value = segment.partition("=")
-        if key.strip().lower() != "features":
+        normalized_key = key.strip().lower()
+        if not normalized_key:
+            continue
+        attributes.append((normalized_key, value.strip()))
+        if normalized_key != "features":
             continue
         features = tuple(
             token.strip()
             for token in value.split(",")
             if token.strip()
         )
-        break
 
     return CollectorVirtualBridgeInfo(
         is_virtual_bridge=True,
         kind="esp-collector",
         version=version,
         features=features,
+        attributes=tuple(attributes),
     )
 
 

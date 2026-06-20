@@ -12,6 +12,7 @@
     "lifecycle",
     "variants",
     "validation",
+    "coverage",
     "knowledge_summary",
     "source_keys"
   ],
@@ -57,6 +58,30 @@
         "hardware": {"type": "string", "enum": ["none", "reported", "captured", "confirmed"]},
         "telemetry": {"type": "string", "enum": ["unknown", "partial", "confirmed"]},
         "controls": {"type": "string", "enum": ["none", "partial", "confirmed"]}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_control_surface", "smartess_control_surface", "vendor_register_map"],
+      "description": "Coverage dimensions are intentionally separate from validation. They distinguish the runtime surface exposed by the integration, the SmartESS/cloud-learned write surface, and the broader vendor/MCU register map.",
+      "properties": {
+        "runtime_control_surface": {
+          "type": "string",
+          "enum": ["none", "read_only", "available", "device_scoped_overlay", "hardware_confirmed"],
+          "description": "What the integration can expose for this model today."
+        },
+        "smartess_control_surface": {
+          "type": "string",
+          "enum": ["unknown", "not_applicable", "cloud_catalog", "correlated", "device_scoped_overlay", "hardware_confirmed"],
+          "description": "How completely the SmartESS/cloud-known control surface is known."
+        },
+        "vendor_register_map": {
+          "type": "string",
+          "enum": ["unknown", "not_applicable", "partial", "documented", "extended"],
+          "description": "How much of the broader manufacturer/MCU register map is known."
+        },
+        "notes": {"type": "array", "items": {"type": "string"}}
       }
     },
     "known_limitations": {"type": "array", "items": {"type": "string"}},

@@ -25,7 +25,11 @@ from custom_components.eybond_local.metadata.register_schema_loader import (  # 
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.models import CollectorInfo  # noqa: E402
+from custom_components.eybond_local.device_scoped_overlay import (  # noqa: E402
+    filter_learned_read_measurements_for_activation,
+)
 from custom_components.eybond_local.support.shadow_learning_review_model import (  # noqa: E402
+    attach_learned_read_review_model,
     build_activation_selection,
     build_learned_control_review_model,
     normalize_activation_selection,
@@ -530,6 +534,27 @@ class ActivationSelectionModelTests(unittest.TestCase):
         }
         return build_learned_control_review_model([normal_capability, risky_capability])
 
+    def _review_model_with_reads(self) -> dict:
+        return attach_learned_read_review_model(
+            self._review_model(),
+            learned_read_sensors=[
+                {
+                    "key": "learned_read_344",
+                    "register": 344,
+                    "title": "Output 2 Cut-Off SOC Status",
+                    "kind": "numeric",
+                    "spec_set": "config",
+                },
+                {
+                    "key": "learned_read_239",
+                    "register": 239,
+                    "title": "Output 2 Apparent Power",
+                    "kind": "numeric",
+                    "spec_set": "live",
+                },
+            ],
+        )
+
     def test_build_activation_selection_records_labels_and_excluded_reasons(self) -> None:
         review_model = self._review_model()
         selections = {
@@ -603,6 +628,35 @@ class ActivationSelectionModelTests(unittest.TestCase):
             ["learned_factory_reset_702"],
         )
 
+    def test_build_activation_selection_records_selected_read_sensors(self) -> None:
+        review_model = self._review_model_with_reads()
+        selections = {
+            "read_sensors": {
+                "learned_read_344": {
+                    "key": "learned_read_344",
+                    "label": "OP2 Cut-Off SOC",
+                    "enabled": True,
+                },
+                "learned_read_239": {
+                    "key": "learned_read_239",
+                    "label": "OP2 Apparent Power",
+                    "enabled": False,
+                },
+            }
+        }
+
+        selection = build_activation_selection(
+            review_model=review_model, selections=selections
+        )
+
+        self.assertEqual(selection["selected_read_sensor_keys"], ["learned_read_344"])
+        self.assertEqual(
+            selection["selected_read_sensors"][0]["label"], "OP2 Cut-Off SOC"
+        )
+        self.assertEqual(
+            selection["excluded_read_sensors"][0]["reasons"], ["user_excluded"]
+        )
+
     def test_build_activation_selection_does_not_mutate_review_model(self) -> None:
         review_model = self._review_model()
         before = len(review_model["learned_all"])
@@ -633,6 +687,68 @@ class ActivationSelectionModelTests(unittest.TestCase):
         self.assertEqual(normalized["selected_controls"], [])
         self.assertEqual(normalized["excluded_controls"], [])
         self.assertEqual(normalized["selected_control_keys"], [])
+        self.assertEqual(normalized["selected_read_sensors"], [])
+        self.assertEqual(normalized["excluded_read_sensors"], [])
+        self.assertEqual(normalized["selected_read_sensor_keys"], [])
+
+    def test_normalize_activation_selection_derives_keys_from_selected_reads(self) -> None:
+        normalized = normalize_activation_selection(
+            {
+                "selected_read_sensors": [
+                    {"key": "learned_read_344", "label": "OP2 SOC"},
+                    {"key": "learned_read_239", "label": "OP2 Power"},
+                ],
+                "excluded_read_sensors": [
+                    {"key": "learned_read_240", "reasons": ["user_excluded"]}
+                ],
+            }
+        )
+
+        self.assertEqual(
+            normalized["selected_read_sensor_keys"],
+            ["learned_read_239", "learned_read_344"],
+        )
+        self.assertEqual(
+            normalized["excluded_read_sensors"][0]["reasons"], ["user_excluded"]
+        )
+
+
+class LearnedReadRuntimeFilterTests(unittest.TestCase):
+    def test_filter_keeps_only_selected_learned_read_sensors(self) -> None:
+        descriptions = [
+            types.SimpleNamespace(key="battery_voltage"),
+            types.SimpleNamespace(key="learned_read_344"),
+            types.SimpleNamespace(key="learned_read_239"),
+        ]
+
+        filtered = filter_learned_read_measurements_for_activation(
+            descriptions,
+            entry_data={},
+            entry_options={
+                "device_scoped_overlay_activation": {
+                    "selected_read_sensor_keys": ["learned_read_344"]
+                }
+            },
+        )
+
+        self.assertEqual(
+            [description.key for description in filtered],
+            ["battery_voltage", "learned_read_344"],
+        )
+
+    def test_filter_is_fail_open_for_legacy_activation_without_read_selection(self) -> None:
+        descriptions = [
+            types.SimpleNamespace(key="learned_read_344"),
+            types.SimpleNamespace(key="learned_read_239"),
+        ]
+
+        filtered = filter_learned_read_measurements_for_activation(
+            descriptions,
+            entry_data={},
+            entry_options={"device_scoped_overlay_activation": {}},
+        )
+
+        self.assertEqual([description.key for description in filtered], ["learned_read_344", "learned_read_239"])
 
 
 def _write_local_overlay_files(root: Path) -> tuple[str, str]:

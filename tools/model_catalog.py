@@ -651,6 +651,18 @@ def _counts_text(resolved: ResolvedDescriptor) -> str:
     return f"{resolved.capability_count} ({vs}); support tiers: {st}"
 
 
+def _coverage_text(coverage: dict) -> str:
+    """Render the three independent coverage dimensions in one compact line."""
+
+    if not isinstance(coverage, dict):
+        return "runtime ?, SmartESS ?, vendor map ?"
+    return (
+        f"runtime {coverage.get('runtime_control_surface', '?')}, "
+        f"SmartESS {coverage.get('smartess_control_surface', '?')}, "
+        f"vendor map {coverage.get('vendor_register_map', '?')}"
+    )
+
+
 def _render_model_detail(model: dict, catalog, sources_index: dict) -> list[str]:
     lines: list[str] = []
     title = f"{model.get('manufacturer', '')} — {model.get('model', '')} (`{model.get('model_key', '')}`)"
@@ -664,6 +676,13 @@ def _render_model_detail(model: dict, catalog, sources_index: dict) -> list[str]
         f"- Validation: hardware {validation.get('hardware', '?')}, "
         f"telemetry {validation.get('telemetry', '?')}, controls {validation.get('controls', '?')}"
     )
+    coverage = model.get("coverage", {})
+    lines.append(f"- Coverage: {_coverage_text(coverage)}")
+    coverage_notes = coverage.get("notes", []) if isinstance(coverage, dict) else []
+    if coverage_notes:
+        lines.append("  - Coverage notes:")
+        for note in coverage_notes:
+            lines.append(f"    - {note}")
     lines.append(f"- Summary: {model.get('knowledge_summary', '')}")
     lines.append("- Variants:")
     for variant in model.get("variants", []):

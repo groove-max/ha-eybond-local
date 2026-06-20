@@ -33,7 +33,7 @@ class CollectorCloudProxyTests(unittest.TestCase):
     def test_parse_restore_target_preserves_legacy_host_only_shape(self) -> None:
         target = parse_restore_target("ess.eybond.com")
 
-        self.assertEqual(target, RestoreTarget("ess.eybond.com", 18899, "TCP"))
+        self.assertEqual(target, RestoreTarget("ess.eybond.com", 502, "TCP"))
         self.assertEqual(target.endpoint, "ess.eybond.com")
 
     def test_build_restore_frames_preserves_host_only_restore_payload(self) -> None:

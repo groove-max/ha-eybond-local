@@ -143,7 +143,6 @@ def inspect_collector_server_endpoint(
         if require_explicit_port or not raw_parts[0]:
             raise ValueError("collector_server_endpoint_invalid")
         host = raw_parts[0]
-        port_text = DEFAULT_COLLECTOR_SERVER_PORT
         protocol_text = DEFAULT_COLLECTOR_SERVER_PROTOCOL
         has_explicit_port = False
         has_explicit_protocol = False
@@ -166,7 +165,13 @@ def inspect_collector_server_endpoint(
         raise ValueError("collector_server_endpoint_invalid")
 
     normalized_host = validate_collector_server_host(host)
-    normalized_port = validate_collector_server_port(port_text)
+    if has_explicit_port:
+        normalized_port = validate_collector_server_port(port_text)
+    else:
+        catalog = load_collector_cloud_profile_catalog()
+        normalized_port = default_collector_server_port(
+            cloud_family=catalog.families_by_host.get(normalized_host.lower(), "")
+        )
     normalized_protocol = validate_collector_server_protocol(
         protocol_text,
         require_tcp=require_tcp,

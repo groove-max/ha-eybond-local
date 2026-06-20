@@ -71,6 +71,10 @@ _ONBOARDING_RUNTIME_DETAIL_KEYS = {
     "collector_bridge_kind",
     "collector_bridge_version",
     "collector_bridge_features",
+    "collector_bridge_attributes",
+    "collector_bridge_uart",
+    "collector_bridge_spacing_ms",
+    "collector_bridge_queue",
 }
 
 _ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS = tuple(
@@ -843,6 +847,18 @@ class OnboardingDetector:
                 details["collector_bridge_version"] = bridge.version
             if bridge.features:
                 details["collector_bridge_features"] = ", ".join(bridge.features)
+            if bridge.attributes:
+                details["collector_bridge_attributes"] = ", ".join(
+                    f"{key}={value}" for key, value in bridge.attributes
+                )
+                bridge_attributes = dict(bridge.attributes)
+                for key, detail_key in (
+                    ("uart", "collector_bridge_uart"),
+                    ("spacing_ms", "collector_bridge_spacing_ms"),
+                    ("queue", "collector_bridge_queue"),
+                ):
+                    if bridge_attributes.get(key):
+                        details[detail_key] = bridge_attributes[key]
 
         try:
             runtime_values = await deadline.wait_for(

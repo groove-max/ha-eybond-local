@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_9_20260619_followup",
+  "kind": "support_archive",
+  "title": "Anenji ANJ-4000W-24V follow-up support archive",
+  "reference": "private:support-archive-issue-9-20260619-followup",
+  "captured_at": "2026-06-19",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Follow-up private support archive for the issue #9 ANJ-4000W-24V device after the user rebooted the setup. Runtime still resolves to modbus_smg/models/anenji_4200_protocol_1.json with layout 1, model code 13569, rated power 4200, and firmware 3501_A6251128v1. The archive shows controls enabled in full mode, 30 local write capabilities exposed, and SmartESS 0925 cloud settings evidence with 39 fields, 29 mapped fields, and the ctrlDevice write action known. It does not include a user-confirmed individual write/readback result.",
+  "assertions": [
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation",
+    "control_behavior"
+  ]
+}

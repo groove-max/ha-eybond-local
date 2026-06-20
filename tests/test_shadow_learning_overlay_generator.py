@@ -180,10 +180,10 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                 read_bindings={
                     "bindings": [
                         {
-                            "cloud_id": "bt_eybond_read_28",
-                            "title": "Battery Voltage",
+                            "cloud_id": "bt_eybond_read_404",
+                            "title": "Aux Learned Voltage",
                             "status": "unique",
-                            "candidates": [{"register": 215, "divisor": 10}],
+                            "candidates": [{"register": 404, "divisor": 10}],
                         }
                     ],
                     "unique_count": 1,
@@ -198,7 +198,15 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
 
         read_bindings = result.manifest["read_bindings"]
         self.assertEqual(read_bindings["unique_count"], 1)
-        self.assertEqual(read_bindings["bindings"][0]["title"], "Battery Voltage")
+        self.assertEqual(read_bindings["bindings"][0]["title"], "Aux Learned Voltage")
+        review_model = result.manifest["review_model"]
+        self.assertEqual(review_model["counts"]["learned_read_all"], 1)
+        self.assertEqual(
+            review_model["learned_read_all"][0]["key"], "learned_read_404"
+        )
+        self.assertEqual(
+            review_model["read_enabled_by_default"], ["learned_read_404"]
+        )
 
     def test_manifest_read_map_empty_when_session_had_no_reads(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

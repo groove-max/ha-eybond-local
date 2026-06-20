@@ -23,6 +23,14 @@
     "telemetry": "partial",
     "controls": "none"
   },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "not_applicable",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Runtime support is read-only and based on a private third-party SRNE-compatible Modbus map."
+    ]
+  },
   "known_limitations": [
     "Read-only first implementation; no write controls are exposed.",
     "Requires collector serial settings compatible with Modbus RTU 9600 8N1 and inverter slave address 1.",

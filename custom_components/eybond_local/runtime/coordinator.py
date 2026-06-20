@@ -1144,11 +1144,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return
         # HA-only normally disables steady reverse discovery, because a factory
         # collector reconnects to the persisted (param-21-written) endpoint on
-        # its own. A virtual bridge, however, refuses that write and does not
-        # persist the endpoint (until firmware Item 5): it relearns the HA server
-        # ONLY from UDP discovery broadcasts. So a detected bridge must keep
-        # reverse discovery ENABLED even when forced to HA-only, otherwise it
-        # cannot reconnect after a reboot.
+        # its own. A virtual bridge has no cloud fallback, and older bridge
+        # firmware may not persist that endpoint, so keep reverse discovery
+        # ENABLED even when forced to HA-only.
         keep_reverse_discovery = (
             not self.collector_home_assistant_primary
             or self._collector_is_virtual_bridge()
@@ -2382,6 +2380,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             session_id=f"{self.config_entry.entry_id}_{timestamp}",
             entry_id=self.config_entry.entry_id,
             collector_pn=self.smartess_collector_pn,
+            collector_cloud_family=self.collector_cloud_family,
             collector_cloud_profile_key=self.collector_cloud_profile_key,
             collector_cloud_profile_label=self.collector_cloud_profile_label,
             collector_cloud_profile_source=self.collector_cloud_profile_source,

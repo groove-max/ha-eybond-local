@@ -27,7 +27,10 @@ from .shadow_learning import (
     deterministic_evidence_hash,
     shadow_learning_slug as _slugify,
 )
-from .shadow_learning_review_model import build_learned_control_review_model
+from .shadow_learning_review_model import (
+    attach_learned_read_review_model,
+    build_learned_control_review_model,
+)
 
 
 _LEARNED_PROFILE_TITLE_SUFFIX = " (Local Shadow Learned Draft)"
@@ -121,8 +124,6 @@ def generate_shadow_learning_overlay_drafts(
         correlation=correlation,
         session_manifest=normalized_manifest,
     )
-    review_model = build_learned_control_review_model(capabilities)
-
     read_enum_bindings = match_enum_bindings(
         read_bindings=read_bindings,
         registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
@@ -132,6 +133,11 @@ def generate_shadow_learning_overlay_drafts(
         schema=schema,
         read_bindings=read_bindings,
         read_enum_bindings=read_enum_bindings,
+    )
+    review_model = attach_learned_read_review_model(
+        build_learned_control_review_model(capabilities),
+        learned_read_sensors=list(learned_read["generated"]),
+        skipped_read_sensors=list(learned_read["skipped"]),
     )
     generated_at = datetime.now(timezone.utc).isoformat()
     manifest = {

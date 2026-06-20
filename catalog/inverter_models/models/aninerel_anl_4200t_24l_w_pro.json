@@ -20,6 +20,14 @@
     "telemetry": "partial",
     "controls": "none"
   },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "Current runtime coverage is a read-only SMG family fallback."
+    ]
+  },
   "known_limitations": [
     "Read-only family-fallback surface; no model-specific profile and no confirmed controls."
   ],

@@ -2254,11 +2254,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 self._reset_collector_endpoint_binding_state()
                 try:
                     # For a bridge, writing the HA server endpoint is still how
-                    # the bridge is told where to connect — keep the bind. But
-                    # the bridge currently REFUSES the FC=3 param-21 write (until
-                    # firmware Item 5), so a refused write must be non-fatal:
-                    # treat it as applied, log at debug, and continue. A factory
-                    # collector keeps today's hard error on a refused write.
+                    # the bridge is told where to connect — keep the bind.
+                    # Modern bridge firmware accepts and persists the FC=3
+                    # param-21 endpoint write. Older bridge firmware may refuse
+                    # it; keep that refusal non-fatal for bridge upgrades, while
+                    # a factory collector keeps today's hard error.
                     await self._async_bind_selected_collector_to_home_assistant(
                         allow_refused_endpoint_write=is_bridge,
                     )
@@ -3161,11 +3161,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         try:
             set_response = await session.set_collector(SET_SERVER_ENDPOINT, target_endpoint)
             if set_response.status != 0 or set_response.parameter != SET_SERVER_ENDPOINT:
-                # A virtual bridge refuses the FC=3 param-21 endpoint write until
-                # firmware Item 5 ships. For a bridge this is expected and the
-                # mode is HA-only regardless, so treat a refused write as applied
-                # (log at debug, do not surface a hard error). A factory
-                # collector keeps the original hard failure.
+                # Modern virtual-bridge firmware accepts the FC=3 param-21
+                # endpoint write. Older bridge firmware may refuse it; for a
+                # detected bridge that refusal is non-fatal because the mode is
+                # HA-only regardless. A factory collector keeps the original hard
+                # failure.
                 if allow_refused_endpoint_write:
                     logger.debug(
                         "Collector endpoint write refused by a detected bridge "
@@ -3472,6 +3472,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             {"manufacturer_id": 0x3545, "connectable": True},
             {"local_name": "E50*", "connectable": False},
             {"local_name": "E50*", "connectable": True},
+            {"local_name": "V00*", "connectable": False},
+            {"local_name": "V00*", "connectable": True},
             {"connectable": False},
             {"connectable": True},
         ):
@@ -6384,32 +6386,43 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         new_controls = self._control_discovery_review_controls()
         already_controls = self._control_discovery_already_supported_controls()
+        new_reads = self._control_discovery_review_read_sensors()
+        already_reads = self._control_discovery_already_supported_read_sensors()
 
         # Nothing discovered at all (or discovery failed earlier): skip the
         # redundant "nothing found" page entirely and go straight to the detailed
         # result screen, which explains empty vs failed and offers retry / support
         # / return. Showing an intermediate empty page first was pure friction.
-        if not new_controls and not already_controls:
+        if not new_controls and not already_controls and not new_reads and not already_reads:
             return await self.async_step_shadow_learning_result()
 
         # Page one: read-only overview of everything found.
         if str(self._shadow_learning_state.get("review_phase") or "overview") != "edit":
             if user_input is not None:
-                if new_controls:
+                if new_controls or new_reads:
                     self._shadow_learning_state["review_phase"] = "edit"
                     return await self.async_step_shadow_learning_review()
                 return await self.async_step_shadow_learning_result()
             new_count = len(new_controls)
             existing_count = len(already_controls)
+            new_read_count = len(new_reads)
+            existing_read_count = len(already_reads)
             on_count = sum(1 for control in new_controls if bool(control.get("enabled_by_default")))
+            read_on_count = sum(1 for sensor in new_reads if bool(sensor.get("enabled_by_default")))
             overview_placeholders = {
-                "control_discovery_count": str(new_count + existing_count),
+                "control_discovery_count": str(
+                    new_count + existing_count + new_read_count + existing_read_count
+                ),
                 "control_discovery_new_count": str(new_count),
                 "control_discovery_existing_count": str(existing_count),
+                "control_discovery_new_read_count": str(new_read_count),
+                "control_discovery_existing_read_count": str(existing_read_count),
                 "control_discovery_on_count": str(on_count),
                 "control_discovery_off_count": str(new_count - on_count),
+                "control_discovery_read_on_count": str(read_on_count),
+                "control_discovery_read_off_count": str(new_read_count - read_on_count),
                 "control_discovery_overview": self._control_discovery_overview_markdown(
-                    new_controls, already_controls
+                    new_controls, already_controls, new_reads, already_reads
                 ),
             }
             return self.async_show_form(
@@ -6433,12 +6446,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # the control's friendly name (the entity is named that automatically —
         # there is no rename field), and the descriptions live on the overview.
         prior = self._control_discovery_prior_selections()
+        prior_reads = self._control_discovery_prior_read_selections()
         if user_input is not None:
-            self._store_control_discovery_selections(new_controls, user_input)
+            self._store_control_discovery_selections(new_controls, new_reads, user_input)
             self._shadow_learning_state.pop("review_phase", None)
             return await self.async_step_shadow_learning_result()
 
-        options = [
+        control_options = [
             SelectOptionDict(
                 value=str(control.get("key") or ""),
                 label=self._control_discovery_control_label(control),
@@ -6446,33 +6460,57 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             for control in new_controls
             if str(control.get("key") or "")
         ]
+        read_options = [
+            SelectOptionDict(
+                value=str(sensor.get("key") or ""),
+                label=self._control_discovery_read_sensor_label(sensor),
+            )
+            for sensor in new_reads
+            if str(sensor.get("key") or "")
+        ]
         default_enabled = self._control_discovery_default_enabled_keys(new_controls, prior)
+        default_enabled_reads = self._control_discovery_default_enabled_read_keys(
+            new_reads, prior_reads
+        )
         review_placeholders = {
             "control_discovery_count": str(len(new_controls)),
             "control_discovery_on_count": str(len(default_enabled)),
             "control_discovery_off_count": str(len(new_controls) - len(default_enabled)),
+            "control_discovery_read_count": str(len(new_reads)),
+            "control_discovery_read_on_count": str(len(default_enabled_reads)),
+            "control_discovery_read_off_count": str(len(new_reads) - len(default_enabled_reads)),
         }
+        schema_fields: dict[Any, Any] = {}
+        if control_options:
+            schema_fields[
+                vol.Optional("enabled_controls", default=default_enabled)
+            ] = SelectSelector(
+                SelectSelectorConfig(
+                    options=control_options,
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                )
+            )
+        if read_options:
+            schema_fields[
+                vol.Optional("enabled_read_sensors", default=default_enabled_reads)
+            ] = SelectSelector(
+                SelectSelectorConfig(
+                    options=read_options,
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                )
+            )
         return self.async_show_form(
             step_id="shadow_learning_review",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        "enabled_controls", default=default_enabled
-                    ): SelectSelector(
-                        SelectSelectorConfig(
-                            options=options,
-                            multiple=True,
-                            mode=SelectSelectorMode.LIST,
-                        )
-                    )
-                }
-            ),
+            data_schema=vol.Schema(schema_fields),
             errors={},
             description_placeholders=self._control_discovery_placeholders(
                 coordinator,
                 "common.dynamic.control_discovery_review_intro",
-                "Turn on the controls you want to add to Home Assistant. Risky "
-                "ones are left off — turn them on only if you know what they do.",
+                "Turn on the controls and read sensors you want to add to Home "
+                "Assistant. Risky controls are left off — turn them on only if "
+                "you know what they do.",
                 hint_placeholders=review_placeholders,
                 extra=review_placeholders,
             ),
@@ -6494,6 +6532,20 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         review_model = manifest.get("review_model")
         review_model = review_model if isinstance(review_model, dict) else {}
         learned_all = review_model.get("learned_all")
+        if not isinstance(learned_all, list):
+            return []
+        return [dict(entry) for entry in learned_all if isinstance(entry, dict)]
+
+    def _control_discovery_review_read_sensors(self) -> list[dict[str, Any]]:
+        """Return generated learned read sensors available for review."""
+
+        overlay = self._shadow_learning_state.get("overlay")
+        overlay = overlay if isinstance(overlay, dict) else {}
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        review_model = manifest.get("review_model")
+        review_model = review_model if isinstance(review_model, dict) else {}
+        learned_all = review_model.get("learned_read_all")
         if not isinstance(learned_all, list):
             return []
         return [dict(entry) for entry in learned_all if isinstance(entry, dict)]
@@ -6562,10 +6614,26 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return []
         return [dict(entry) for entry in skipped if isinstance(entry, dict)]
 
+    def _control_discovery_already_supported_read_sensors(self) -> list[dict[str, Any]]:
+        """Return learned read candidates skipped because they are already covered."""
+
+        overlay = self._shadow_learning_state.get("overlay")
+        overlay = overlay if isinstance(overlay, dict) else {}
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        review_model = manifest.get("review_model")
+        review_model = review_model if isinstance(review_model, dict) else {}
+        skipped = review_model.get("read_excluded_by_policy")
+        if not isinstance(skipped, list):
+            return []
+        return [dict(entry) for entry in skipped if isinstance(entry, dict)]
+
     def _control_discovery_overview_markdown(
         self,
         new_controls: list[dict[str, Any]],
         already_controls: list[dict[str, Any]],
+        new_reads: list[dict[str, Any]] | None = None,
+        already_reads: list[dict[str, Any]] | None = None,
     ) -> str:
         """Render a readable, non-technical overview of everything discovered.
 
@@ -6578,6 +6646,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return str(value or "").replace("\n", " ").strip()
 
         lines: list[str] = []
+        new_reads = list(new_reads or [])
+        already_reads = list(already_reads or [])
         if new_controls:
             heading = self._tr(
                 "common.dynamic.control_discovery_overview_new_heading",
@@ -6604,6 +6674,36 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             for control in already_controls:
                 name = clean(control.get("field_name") or control.get("field_id"))
                 lines.append(f"- {name}")
+        if new_reads:
+            if lines:
+                lines.append("")
+            heading = self._tr(
+                "common.dynamic.control_discovery_overview_new_reads_heading",
+                "New read sensors found ({count})",
+                {"count": str(len(new_reads))},
+            )
+            lines.append(f"**{heading}**")
+            for sensor in new_reads:
+                name = clean(self._control_discovery_read_sensor_label(sensor))
+                lines.append(f"- {name} — Sensor · Suggested on")
+        if already_reads:
+            if lines:
+                lines.append("")
+            heading = self._tr(
+                "common.dynamic.control_discovery_overview_existing_reads_heading",
+                "Read sensors already in Home Assistant ({count})",
+                {"count": str(len(already_reads))},
+            )
+            lines.append(f"**{heading}**")
+            for sensor in already_reads:
+                name = clean(
+                    sensor.get("field_name")
+                    or sensor.get("default_label")
+                    or sensor.get("title")
+                )
+                reason = clean(sensor.get("reason") or "")
+                suffix = f" · {reason}" if reason else ""
+                lines.append(f"- {name}{suffix}")
         return "\n".join(lines)
 
     def _control_discovery_prior_selections(self) -> dict[str, dict[str, Any]]:
@@ -6613,6 +6713,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         selections = selections if isinstance(selections, dict) else {}
         controls = selections.get("controls")
         return controls if isinstance(controls, dict) else {}
+
+    def _control_discovery_prior_read_selections(self) -> dict[str, dict[str, Any]]:
+        """Return previously stored per-read-sensor selections."""
+
+        selections = self._shadow_learning_state.get("review_selections")
+        selections = selections if isinstance(selections, dict) else {}
+        read_sensors = selections.get("read_sensors")
+        return read_sensors if isinstance(read_sensors, dict) else {}
 
     def _control_discovery_default_enabled_keys(
         self,
@@ -6641,9 +6749,32 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 enabled.append(key)
         return enabled
 
+    def _control_discovery_default_enabled_read_keys(
+        self,
+        read_sensors: list[dict[str, Any]],
+        prior: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        """Return read sensor keys pre-selected on the edit page."""
+
+        enabled: list[str] = []
+        for sensor in read_sensors:
+            key = str(sensor.get("key") or "")
+            if not key:
+                continue
+            saved = prior.get(key)
+            saved = saved if isinstance(saved, dict) else {}
+            if "enabled" in saved:
+                is_on = bool(saved.get("enabled"))
+            else:
+                is_on = bool(sensor.get("enabled_by_default"))
+            if is_on:
+                enabled.append(key)
+        return enabled
+
     def _store_control_discovery_selections(
         self,
         controls: list[dict[str, Any]],
+        read_sensors: list[dict[str, Any]],
         user_input: dict[str, Any],
     ) -> None:
         """Persist the user's per-control name + enable choices into flow state.
@@ -6659,6 +6790,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         selected = (
             {str(key) for key in selected_raw}
             if isinstance(selected_raw, (list, tuple, set))
+            else set()
+        )
+        selected_reads_raw = user_input.get("enabled_read_sensors")
+        selected_reads = (
+            {str(key) for key in selected_reads_raw}
+            if isinstance(selected_reads_raw, (list, tuple, set))
             else set()
         )
         stored: dict[str, dict[str, Any]] = {}
@@ -6687,10 +6824,36 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 enabled_by_user.append(key)
             else:
                 excluded_by_user.append(key)
+        stored_reads: dict[str, dict[str, Any]] = {}
+        read_enabled_by_user: list[str] = []
+        read_excluded_by_user: list[str] = []
+        for sensor in read_sensors:
+            key = str(sensor.get("key") or "")
+            if not key:
+                continue
+            label = self._control_discovery_read_sensor_label(sensor)
+            enabled = key in selected_reads
+            stored_reads[key] = {
+                "key": key,
+                "register": _coerce_int(sensor.get("register")) or 0,
+                "kind": str(sensor.get("kind") or ""),
+                "spec_set": str(sensor.get("spec_set") or ""),
+                "label": label,
+                "default_label": label,
+                "enabled": enabled,
+                "enabled_by_default": bool(sensor.get("enabled_by_default")),
+            }
+            if enabled:
+                read_enabled_by_user.append(key)
+            else:
+                read_excluded_by_user.append(key)
         self._shadow_learning_state["review_selections"] = {
             "controls": stored,
+            "read_sensors": stored_reads,
             "enabled_by_user": enabled_by_user,
             "excluded_by_user": excluded_by_user,
+            "read_enabled_by_user": read_enabled_by_user,
+            "read_excluded_by_user": read_excluded_by_user,
         }
 
     def _control_discovery_control_label(self, control: dict[str, Any]) -> str:
@@ -6704,6 +6867,20 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             field_id=str(control.get("field_id") or ""),
             register=_coerce_int(control.get("register")),
         )
+
+    def _control_discovery_read_sensor_label(self, sensor: dict[str, Any]) -> str:
+        """Return the discovered default label for one learned read sensor."""
+
+        default_label = str(sensor.get("default_label") or "").strip()
+        if default_label:
+            return default_label
+        field_name = str(sensor.get("field_name") or "").strip()
+        if field_name:
+            return field_name
+        register = _coerce_int(sensor.get("register"))
+        if register is not None and register > 0:
+            return f"Discovered sensor {register}"
+        return "Discovered sensor"
 
 
     def _control_discovery_type_label(self, value_kind: str) -> str:
@@ -6779,14 +6956,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         failed = self._control_discovery_failed()
         error_detail = self._control_discovery_error_detail() if failed else ""
         selected_count = self._control_discovery_enabled_selection_count()
-        read_count = int(
-            dict(self._shadow_learning_state.get("overlay") or {}).get(
-                "generated_read_count"
-            )
-            or 0
-        )
+        read_count = self._control_discovery_enabled_read_selection_count()
         # Learned read sensors are applied with the schema overlay regardless of
-        # control selection, so they make activation worthwhile on their own.
+        # control selection, so selected read sensors make activation worthwhile
+        # on their own.
         can_activate = (bool(controls) and selected_count > 0) or read_count > 0
 
         errors: dict[str, str] = {}
@@ -6992,6 +7165,23 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         enabled = selections.get("enabled_by_user")
         return len(enabled) if isinstance(enabled, list) else 0
 
+    def _control_discovery_enabled_read_selection_count(self) -> int:
+        """Return how many discovered read sensors the user has turned on."""
+
+        selections = self._shadow_learning_state.get("review_selections")
+        selections = selections if isinstance(selections, dict) else {}
+        enabled = selections.get("read_enabled_by_user")
+        if isinstance(enabled, list):
+            return len(enabled)
+        # Backward-compatible fallback for packages/runs created before read
+        # review selections existed.
+        return int(
+            dict(self._shadow_learning_state.get("overlay") or {}).get(
+                "generated_read_count"
+            )
+            or 0
+        )
+
     def _control_discovery_review_selection_payload(
         self,
         overlay: dict[str, Any],
@@ -7001,7 +7191,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         selections = self._shadow_learning_state.get("review_selections")
         selections = selections if isinstance(selections, dict) else {}
         selected_controls = selections.get("controls")
-        if not isinstance(selected_controls, dict) or not selected_controls:
+        selected_reads = selections.get("read_sensors")
+        if (
+            (not isinstance(selected_controls, dict) or not selected_controls)
+            and (not isinstance(selected_reads, dict) or not selected_reads)
+        ):
             return {}
 
         manifest = overlay.get("manifest")
@@ -7178,6 +7372,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return {
             "can_start": can_start,
             "blockers": effective_blockers,
+            "protocol_adapter_key": str(seed.protocol_adapter_key or ""),
+            "protocol_adapter_supported": bool(
+                seed.protocol_adapter_key and not any(
+                    str(blocker).startswith("unsupported_shadow_learning_protocol:")
+                    for blocker in effective_blockers
+                )
+            ),
             "collector_pn": coordinator.smartess_collector_pn,
             "profile_name": str(coordinator.effective_profile_name or ""),
             "schema_name": str(coordinator.effective_register_schema_name or ""),
@@ -8213,9 +8414,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         # Proxy capture redirects the collector's cloud callback (FC=3 param 21)
         # to record the SmartESS cloud's control reads. A virtual bridge has no
-        # SmartESS cloud side and refuses that redirect write, so the action has
-        # nothing to capture — omit it for a detected bridge. Fail-safe: factory
-        # collectors / unanswered probes keep proxy capture exactly as before.
+        # SmartESS cloud side, so the action has nothing to capture — omit it
+        # for a detected bridge. Fail-safe: factory collectors / unanswered
+        # probes keep proxy capture exactly as before.
         if not self._collector_is_virtual_bridge():
             menu_options.append("proxy_capture")
         return menu_options

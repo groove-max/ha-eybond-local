@@ -72,6 +72,12 @@ def _ok_model(key: str = "mdl_a", descriptor: str = "smg_6200", **overrides) -> 
         "lifecycle": "experimental",
         "variants": [{"variant_key": "v1", "label": "V1", "device_descriptor_keys": [descriptor]}],
         "validation": {"hardware": "reported", "telemetry": "partial", "controls": "none"},
+        "coverage": {
+            "runtime_control_surface": "available",
+            "smartess_control_surface": "unknown",
+            "vendor_register_map": "unknown",
+            "notes": [],
+        },
         "known_limitations": [],
         "knowledge_summary": "summary",
         "source_keys": [],
@@ -156,6 +162,17 @@ class RealCatalogTests(unittest.TestCase):
 
     def test_render_is_deterministic(self) -> None:
         self.assertEqual(render_markdown(runtime_catalog=RUNTIME), render_markdown(runtime_catalog=RUNTIME))
+
+    def test_model_detail_renders_control_surface_coverage(self) -> None:
+        journal = render_markdown(runtime_catalog=RUNTIME)
+        self.assertIn(
+            "- Coverage: runtime device_scoped_overlay, SmartESS device_scoped_overlay, vendor map unknown",
+            journal,
+        )
+        self.assertIn(
+            "- Coverage: runtime hardware_confirmed, SmartESS hardware_confirmed, vendor map extended",
+            journal,
+        )
 
     def test_generated_doc_is_in_sync(self) -> None:
         rendered = render_markdown(runtime_catalog=RUNTIME)
@@ -280,6 +297,21 @@ class SchemaEnforcementTests(unittest.TestCase):
             report.errors,
         )
 
+    def test_missing_coverage_rejected(self) -> None:
+        model = _ok_model()
+        del model["coverage"]
+        report = self._validate_model(model)
+        self.assertTrue(any("missing required field 'coverage'" in e for e in report.errors), report.errors)
+
+    def test_invalid_coverage_state_rejected(self) -> None:
+        model = _ok_model()
+        model["coverage"]["smartess_control_surface"] = "magic"
+        report = self._validate_model(model)
+        self.assertTrue(
+            any("smartess_control_surface" in e and "must be one of" in e for e in report.errors),
+            report.errors,
+        )
+
     def test_extra_field_in_variant_rejected(self) -> None:
         model = _ok_model()
         model["variants"][0]["note"] = "x"
@@ -339,6 +371,12 @@ class JournalGroupingTests(unittest.TestCase):
             "variants": [{"variant_key": "v", "label": "V",
                           "device_descriptor_keys": ["aninerel_anl_4200t_24l_w_pro"]}],
             "validation": {"hardware": "confirmed", "telemetry": "confirmed", "controls": "confirmed"},
+            "coverage": {
+                "runtime_control_surface": "read_only",
+                "smartess_control_surface": "unknown",
+                "vendor_register_map": "unknown",
+                "notes": [],
+            },
             "known_limitations": [], "knowledge_summary": "s", "source_keys": [],
         }
         self.assertFalse(_is_fully_supported(model, RUNTIME))
@@ -361,6 +399,12 @@ class JournalGroupingTests(unittest.TestCase):
                 {"variant_key": "v2", "label": "PI30 layout", "device_descriptor_keys": ["pi30_vmii_nxpw5kw"]},
             ],
             "validation": {"hardware": "reported", "telemetry": "partial", "controls": "none"},
+            "coverage": {
+                "runtime_control_surface": "available",
+                "smartess_control_surface": "unknown",
+                "vendor_register_map": "unknown",
+                "notes": [],
+            },
             "known_limitations": [], "knowledge_summary": "s", "source_keys": [],
         }
         rows = _table_rows(model, RUNTIME)

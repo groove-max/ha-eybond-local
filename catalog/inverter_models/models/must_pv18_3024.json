@@ -23,6 +23,14 @@
     "telemetry": "partial",
     "controls": "none"
   },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Runtime support uses a third-party MUST PV/PH18 Modbus map for read-only telemetry."
+    ]
+  },
   "known_limitations": [
     "Read-only first implementation; no write controls are exposed.",
     "Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.",

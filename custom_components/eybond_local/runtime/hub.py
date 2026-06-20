@@ -1372,6 +1372,7 @@ class EybondHub:
                 collector.collector_bridge_kind = bridge.kind
                 collector.collector_bridge_version = bridge.version
                 collector.collector_bridge_features = bridge.features
+                collector.collector_bridge_attributes = bridge.attributes
 
         if collector.remote_ip:
             values["collector_remote_ip"] = collector.remote_ip
@@ -1462,6 +1463,18 @@ class EybondHub:
                 values["collector_bridge_version"] = collector.collector_bridge_version
             if collector.collector_bridge_features:
                 values["collector_bridge_features"] = ", ".join(collector.collector_bridge_features)
+            if collector.collector_bridge_attributes:
+                values["collector_bridge_attributes"] = ", ".join(
+                    f"{key}={value}" for key, value in collector.collector_bridge_attributes
+                )
+                bridge_attributes = dict(collector.collector_bridge_attributes)
+                for key, value_key in (
+                    ("uart", "collector_bridge_uart"),
+                    ("spacing_ms", "collector_bridge_spacing_ms"),
+                    ("queue", "collector_bridge_queue"),
+                ):
+                    if bridge_attributes.get(key):
+                        values[value_key] = bridge_attributes[key]
 
         if self._inverter is not None:
             values["driver_key"] = self._inverter.driver_key

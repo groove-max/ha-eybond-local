@@ -493,7 +493,10 @@ def _load_shadow_events_from_trace(trace_path: Path) -> list[dict[str, Any]]:
 def _load_shadow_writes_from_trace(trace_path: Path) -> list[dict[str, Any]]:
     writes: list[dict[str, Any]] = []
     for line in _iter_jsonl_dicts(trace_path):
-        if str(line.get("kind") or "") != "shadow_modbus_write_observation":
+        if str(line.get("kind") or "") not in {
+            "shadow_modbus_write_observation",
+            "shadow_protocol_write_observation",
+        }:
             continue
         payload = line.get("payload")
         if isinstance(payload, dict):

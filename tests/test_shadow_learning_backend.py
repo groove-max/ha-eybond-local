@@ -247,6 +247,116 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertEqual(blockers, ())
         self.assertTrue(build_shadow_learning_preflight(seed).can_start)
 
+    def test_explicit_non_modbus_protocol_is_blocked_fail_closed(self) -> None:
+        snapshot = {
+            "effective_owner_key": "pi30_ascii",
+            "effective_owner_name": "PI30 ASCII",
+            "variant_key": "default",
+            "profile_name": "pi30_ascii/base.json",
+            "register_schema_name": "pi30_ascii/base.json",
+            "protocol_family": "pi30_ascii",
+            "confidence": "high",
+        }
+
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260615T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=snapshot,
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertEqual(seed.protocol_adapter_key, "unsupported")
+        self.assertIn("unsupported_shadow_learning_protocol:pi30_ascii", blockers)
+        self.assertFalse(build_shadow_learning_preflight(seed).can_start)
+
+    def test_modbus_protocol_resolves_learning_adapter(self) -> None:
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260615T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=_sample_snapshot(),
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertEqual(blockers, ())
+        self.assertEqual(seed.protocol_adapter_key, "modbus_rtu")
+
+    def test_must_register_protocol_resolves_modbus_learning_adapter(self) -> None:
+        snapshot = {
+            "effective_owner_key": "must_pv_ph18",
+            "effective_owner_name": "MUST PV/PH18",
+            "variant_key": "default",
+            "profile_name": "must_pv_ph18/base.json",
+            "register_schema_name": "must_pv_ph18/base.json",
+            "protocol_family": "must_pv_ph18",
+            "confidence": "high",
+        }
+
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260615T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=snapshot,
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertEqual(blockers, ())
+        self.assertEqual(seed.protocol_adapter_key, "modbus_rtu")
+
+    def test_legacy_binary_pi30_proxy_resolves_modbus_learning_adapter(self) -> None:
+        # A PI30 4200 collector proxy dump from 2026-06-19 showed the legacy
+        # Eybond cloud data plane carrying Modbus RTU-like FC_FORWARD_TO_DEVICE
+        # payloads (reads around 4501/4546/5001/6030 and writes at 5004/6030).
+        # Shadow learning observes the cloud-to-collector dialect, not the
+        # local HA-to-inverter protocol, so the cloud family must override the
+        # local pi30_ascii metadata for adapter selection.
+        snapshot = {
+            "effective_owner_key": "pi30",
+            "effective_owner_name": "PI30-family runtime",
+            "variant_key": "pi30_max",
+            "profile_name": "pi30_ascii/models/pi30_max.json",
+            "register_schema_name": "pi30_ascii/models/pi30_max.json",
+            "protocol_family": "pi30",
+            "confidence": "high",
+        }
+
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260619T210946Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_family="legacy_binary",
+            collector_cloud_profile_key="02ff_legacy_binary",
+            collector_cloud_profile_label="02FF legacy binary",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=snapshot,
+            raw_capture=_sample_raw_capture(),
+            write_response_mode="exception",
+        )
+
+        self.assertEqual(blockers, ())
+        self.assertEqual(seed.protocol_adapter_key, "modbus_rtu")
+
     def test_exception_mode_logs_write_without_mutating_register_bank(self) -> None:
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",
@@ -292,6 +402,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
             log_text = (Path(temp_dir) / "shadow.jsonl").read_text(encoding="utf-8")
             self.assertIn("shadow_modbus_write_observation", log_text)
             self.assertIn("shadow_modbus_write_response", log_text)
+            self.assertIn('"protocol_adapter_key": "modbus_rtu"', log_text)
 
     def test_read_requests_accumulate_into_session_read_map(self) -> None:
         seed = ShadowLearningSeed(

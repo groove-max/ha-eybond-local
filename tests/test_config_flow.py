@@ -254,6 +254,7 @@ from custom_components.eybond_local.support.package import (
     export_support_package,
 )
 from custom_components.eybond_local.support.shadow_learning_review_model import (
+    attach_learned_read_review_model,
     build_learned_control_review_model,
 )
 from custom_components.eybond_local.collector.smartess_ble import SmartEssBleCandidate
@@ -848,7 +849,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_bluetooth_setup()
 
         scanner_cls.assert_not_called()
-        self.assertEqual(bluetooth_module.async_register_callback.call_count, 6)
+        self.assertEqual(bluetooth_module.async_register_callback.call_count, 8)
+        registered_matchers = [
+            call.args[2] for call in bluetooth_module.async_register_callback.call_args_list
+        ]
+        self.assertIn({"local_name": "E50*", "connectable": False}, registered_matchers)
+        self.assertIn({"local_name": "E50*", "connectable": True}, registered_matchers)
+        self.assertIn({"local_name": "V00*", "connectable": False}, registered_matchers)
+        self.assertIn({"local_name": "V00*", "connectable": True}, registered_matchers)
         ble_selector = result["data_schema"].schema["ble_address"]
         options = ble_selector.config.kwargs["options"]
         self.assertEqual(
@@ -2836,8 +2844,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_confirm_step_bridge_refused_endpoint_write_does_not_hard_fail(self) -> None:
-        # Item 1: the bridge currently refuses the FC=3 param-21 endpoint write.
-        # For a detected bridge that refusal is non-fatal — the flow forces
+        # Older bridge firmware may refuse the FC=3 param-21 endpoint write.
+        # For a detected bridge that refusal remains non-fatal — the flow forces
         # HA-only and creates the entry instead of surfacing a hard error.
         flow = self._make_flow()
         flow._selected_result = self._bridge_confirm_result(is_bridge=True)
@@ -2882,6 +2890,51 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             call.args[0] for call in session.set_collector.await_args_list
         ]
         self.assertEqual(applied_parameters, [SET_SERVER_ENDPOINT])
+
+    async def test_confirm_step_bridge_successful_endpoint_write_is_applied(self) -> None:
+        # Current bridge firmware accepts and persists the FC=3 param-21 endpoint
+        # write, followed by the standard FC=3 param-29 apply command.
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result(is_bridge=True)
+
+        transport = AsyncMock()
+        session = AsyncMock()
+
+        async def set_collector(parameter: int, value: str):
+            return type("_SetResponse", (), {"status": 0, "parameter": parameter})()
+
+        async def query_collector(parameter: int):
+            text = "192.168.1.50,18899,TCP" if parameter == SET_SERVER_ENDPOINT else "0"
+            return type("_QueryResponse", (), {"code": 0, "parameter": parameter, "text": text})()
+
+        session.set_collector.side_effect = set_collector
+        session.query_collector.side_effect = query_collector
+
+        async def with_session():
+            return transport, session
+
+        async def read_endpoint():
+            flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
+            return "collector-cloud.smartess.example,18899,TCP"
+
+        flow._async_with_selected_collector_session = with_session
+        flow._async_read_selected_collector_server_endpoint = read_endpoint
+
+        result = await flow.async_step_confirm(
+            {
+                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
+                "poll_interval": 15,
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE], COLLECTOR_OPERATION_HA_ONLY
+        )
+        self.assertEqual(
+            [call.args[0] for call in session.set_collector.await_args_list],
+            [SET_SERVER_ENDPOINT, SET_REBOOT_OR_APPLY],
+        )
 
     async def test_confirm_step_factory_refused_endpoint_write_hard_fails(self) -> None:
         # Item 1 fail-safe: a factory collector keeps today's hard error on a
@@ -4175,9 +4228,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_diagnostics_menu_omits_proxy_capture_for_detected_bridge(self) -> None:
-        # Item 3: a detected bridge has no SmartESS cloud side and refuses the
-        # FC=3 param-21 redirect, so proxy capture (which has nothing to capture)
-        # is omitted from the diagnostics menu.
+        # Item 3: a detected bridge has no SmartESS cloud side, so proxy capture
+        # (which has nothing to capture) is omitted from the diagnostics menu.
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
@@ -5284,7 +5336,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ]
 
     def _seed_control_discovery_review(
-        self, options, capabilities=None, *, phase="edit", skipped=None
+        self,
+        options,
+        capabilities=None,
+        *,
+        phase="edit",
+        skipped=None,
+        learned_reads=None,
+        skipped_reads=None,
     ) -> dict[str, Any]:
         """Embed a real review model in flow state the way the runner would.
 
@@ -5293,8 +5352,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ``skipped`` to seed the already-supported control list.
         """
 
-        review_model = build_learned_control_review_model(
-            capabilities if capabilities is not None else self._review_capabilities()
+        review_model = attach_learned_read_review_model(
+            build_learned_control_review_model(
+                capabilities if capabilities is not None else self._review_capabilities()
+            ),
+            learned_read_sensors=list(learned_reads or []),
+            skipped_read_sensors=list(skipped_reads or []),
         )
         manifest: dict[str, Any] = {"review_model": review_model}
         if skipped is not None:
@@ -5407,6 +5470,75 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(controls["learned_reset_690"]["enabled"])
         self.assertEqual(selections["enabled_by_user"], ["learned_reset_690"])
         self.assertEqual(selections["excluded_by_user"], ["learned_backlight_700"])
+
+    async def test_control_discovery_review_lists_read_sensors_as_checkboxes(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(
+            options,
+            capabilities=[],
+            learned_reads=[
+                {
+                    "key": "learned_read_344",
+                    "register": 344,
+                    "title": "Output 2 Cut-Off SOC Status",
+                    "kind": "numeric",
+                    "spec_set": "config",
+                },
+                {
+                    "key": "learned_read_239",
+                    "register": 239,
+                    "title": "Output 2 Apparent Power",
+                    "kind": "numeric",
+                    "spec_set": "live",
+                },
+            ],
+        )
+
+        result = await options.async_step_shadow_learning_review()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_review")
+        schema = result["data_schema"].schema
+        self.assertEqual({str(key) for key in schema}, {"enabled_read_sensors"})
+        selector = next(
+            value for key, value in schema.items() if str(key) == "enabled_read_sensors"
+        )
+        labels = [option["label"] for option in selector.config.kwargs["options"]]
+        self.assertIn("Output 2 Cut-Off SOC Status", labels)
+        self.assertIn("Output 2 Apparent Power", labels)
+
+    async def test_control_discovery_review_stores_read_sensor_choices(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(
+            options,
+            capabilities=[],
+            learned_reads=[
+                {
+                    "key": "learned_read_344",
+                    "register": 344,
+                    "title": "Output 2 Cut-Off SOC Status",
+                    "kind": "numeric",
+                    "spec_set": "config",
+                },
+                {
+                    "key": "learned_read_239",
+                    "register": 239,
+                    "title": "Output 2 Apparent Power",
+                    "kind": "numeric",
+                    "spec_set": "live",
+                },
+            ],
+        )
+
+        await options.async_step_shadow_learning_review(
+            {"enabled_read_sensors": ["learned_read_344"]}
+        )
+
+        selections = options._shadow_learning_state["review_selections"]
+        self.assertEqual(selections["read_enabled_by_user"], ["learned_read_344"])
+        self.assertEqual(selections["read_excluded_by_user"], ["learned_read_239"])
+        self.assertTrue(selections["read_sensors"]["learned_read_344"]["enabled"])
+        self.assertFalse(selections["read_sensors"]["learned_read_239"]["enabled"])
 
     async def test_control_discovery_review_keeps_disabled_controls_in_evidence(self) -> None:
         options = self._wizard_options_flow()
@@ -5689,6 +5821,58 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "added to Home Assistant",
             done["description_placeholders"]["control_discovery_hint"],
         )
+
+    async def test_control_discovery_result_activates_selected_read_sensors(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(
+            options,
+            capabilities=[],
+            learned_reads=[
+                {
+                    "key": "learned_read_344",
+                    "register": 344,
+                    "title": "Output 2 Cut-Off SOC Status",
+                    "kind": "numeric",
+                    "spec_set": "config",
+                },
+                {
+                    "key": "learned_read_239",
+                    "register": 239,
+                    "title": "Output 2 Apparent Power",
+                    "kind": "numeric",
+                    "spec_set": "live",
+                },
+            ],
+        )
+        options._shadow_learning_state["overlay"].update(
+            {"profile_name": "learned/p.json", "schema_name": "learned/s.json"}
+        )
+        await options.async_step_shadow_learning_review(
+            {"enabled_read_sensors": ["learned_read_344"]}
+        )
+
+        recorded: dict[str, Any] = {}
+
+        async def _fake_activate(*, profile_name, register_schema_name, selection=None):
+            recorded["selection"] = selection
+            return {"scope": "device", "profile_name": profile_name, **(selection or {})}
+
+        options._config_entry.runtime_data.async_activate_device_scoped_overlay = (
+            _fake_activate
+        )
+
+        await options.async_step_shadow_learning_result(
+            {"result_action": "activate_selected"}
+        )
+
+        self.assertEqual(
+            recorded["selection"]["selected_read_sensor_keys"], ["learned_read_344"]
+        )
+        self.assertEqual(recorded["selection"]["selected_control_keys"], [])
+        excluded = {
+            item["key"] for item in recorded["selection"]["excluded_read_sensors"]
+        }
+        self.assertEqual(excluded, {"learned_read_239"})
 
     async def test_control_discovery_result_creates_support_package(self) -> None:
         # The secondary result action exports a support package without a live

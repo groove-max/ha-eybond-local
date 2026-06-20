@@ -22,6 +22,14 @@
     "telemetry": "confirmed",
     "controls": "confirmed"
   },
+  "coverage": {
+    "runtime_control_surface": "hardware_confirmed",
+    "smartess_control_surface": "not_applicable",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "PI30 runtime control surface is validated from the VMII-NXPW5KW live-capture fixture."
+    ]
+  },
   "known_limitations": [],
   "knowledge_summary": "PowMr 4.2KW on the PI30 ASCII protocol. The inverter reports raw model number VMII-NXPW5KW, which is used as the runtime detection anchor.",
   "source_keys": [

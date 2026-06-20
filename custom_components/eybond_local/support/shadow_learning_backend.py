@@ -16,15 +16,15 @@ from ..collector.protocol import (
 )
 from ..const import LOCAL_METADATA_DIR
 from ..fixtures.utils import build_command_fixture_responses
-from ..payload.modbus import crc16_modbus, decode_read_request, decode_write_request
+from ..payload.modbus import crc16_modbus
 from .collector_cloud_proxy import JsonLineWriter
 from .shadow_learning import (
     ShadowWriteObservation,
     coerce_optional_int as _maybe_int,
     shadow_learning_slug as _slugify,
     utc_now_iso,
-    write_observation_from_modbus_request,
 )
+from .shadow_learning_protocol import resolve_shadow_learning_protocol_adapter
 
 
 _SHADOW_TRACE_DIR = "shadow_learning_traces"
@@ -71,6 +71,8 @@ class ShadowLearningSessionManifest:
     collector_cloud_profile_source: str
     collector_cloud_profile_confidence: str
     collector_callback_endpoint: str
+    collector_cloud_family: str = ""
+    protocol_adapter_key: str = "modbus_rtu"
     write_response_mode: str = "exception"
     created_at: str = field(default_factory=utc_now_iso)
     schema_version: int = 1
@@ -81,11 +83,13 @@ class ShadowLearningSessionManifest:
             "session_id": str(self.session_id),
             "entry_id": str(self.entry_id),
             "collector_pn": str(self.collector_pn),
+            "collector_cloud_family": str(self.collector_cloud_family),
             "collector_cloud_profile_key": str(self.collector_cloud_profile_key),
             "collector_cloud_profile_label": str(self.collector_cloud_profile_label),
             "collector_cloud_profile_source": str(self.collector_cloud_profile_source),
             "collector_cloud_profile_confidence": str(self.collector_cloud_profile_confidence),
             "collector_callback_endpoint": str(self.collector_callback_endpoint),
+            "protocol_adapter_key": str(self.protocol_adapter_key),
             "write_response_mode": str(self.write_response_mode),
             "created_at": str(self.created_at),
         }
@@ -107,6 +111,8 @@ class ShadowLearningSeed:
     command_responses: dict[str, str]
     register_bank: dict[int, int]
     latest_support_evidence: dict[str, Any] | None = None
+    collector_cloud_family: str = ""
+    protocol_adapter_key: str = "modbus_rtu"
     write_response_mode: str = "exception"
     allow_ack_writes: bool = False
 
@@ -124,6 +130,7 @@ def build_shadow_learning_seed(
     session_id: str,
     entry_id: str,
     collector_pn: str,
+    collector_cloud_family: str = "",
     collector_cloud_profile_key: str,
     collector_cloud_profile_label: str,
     collector_cloud_profile_source: str,
@@ -149,11 +156,17 @@ def build_shadow_learning_seed(
         raw_capture=raw_capture,
         register_bank=register_bank,
     )
+    normalized_cloud_family = str(collector_cloud_family or "").strip()
+    adapter = resolve_shadow_learning_protocol_adapter(
+        normalized_snapshot,
+        collector_cloud_family=normalized_cloud_family,
+    )
     normalized_mode = "ack" if allow_ack_writes and str(write_response_mode or "").strip().lower() == "ack" else "exception"
     seed = ShadowLearningSeed(
         session_id=str(session_id or "").strip(),
         entry_id=str(entry_id or "").strip(),
         collector_pn=str(collector_pn or "").strip(),
+        collector_cloud_family=normalized_cloud_family,
         collector_cloud_profile_key=str(collector_cloud_profile_key or "").strip(),
         collector_cloud_profile_label=str(collector_cloud_profile_label or "").strip(),
         collector_cloud_profile_source=str(collector_cloud_profile_source or "").strip(),
@@ -163,6 +176,7 @@ def build_shadow_learning_seed(
         command_responses=normalized_responses,
         register_bank=normalized_register_bank,
         latest_support_evidence=raw_capture if isinstance(raw_capture, dict) else None,
+        protocol_adapter_key=str(adapter.key),
         write_response_mode=normalized_mode,
         allow_ack_writes=bool(allow_ack_writes),
     )
@@ -184,6 +198,12 @@ def build_shadow_learning_preflight(seed: ShadowLearningSeed) -> ShadowLearningP
     # gating the scan on it blocked perfectly learnable devices arbitrarily.
     if not _snapshot_is_valid(seed.effective_metadata_snapshot):
         blockers.append("missing_effective_metadata_snapshot")
+    adapter = resolve_shadow_learning_protocol_adapter(
+        seed.effective_metadata_snapshot,
+        collector_cloud_family=seed.collector_cloud_family,
+    )
+    if not adapter.supported:
+        blockers.append(adapter.blocker)
     if not seed.register_bank:
         blockers.append("missing_register_seed")
     return ShadowLearningPreflight(can_start=not blockers, blockers=tuple(blockers))
@@ -206,6 +226,10 @@ class InProcessShadowLearningHandler:
         self._running = False
         self._at_responses = dict(seed.command_responses)
         self._register_bank = dict(seed.register_bank)
+        self._protocol_adapter = resolve_shadow_learning_protocol_adapter(
+            seed.effective_metadata_snapshot,
+            collector_cloud_family=seed.collector_cloud_family,
+        )
         self._write_observations: list[ShadowWriteObservation] = []
         self._observation_condition = asyncio.Condition()
         self._read_block_counts: dict[tuple[int, int], int] = {}
@@ -324,11 +348,13 @@ class InProcessShadowLearningHandler:
                     session_id=self._seed.session_id,
                     entry_id=self._seed.entry_id,
                     collector_pn=self._seed.collector_pn,
+                    collector_cloud_family=self._seed.collector_cloud_family,
                     collector_cloud_profile_key=self._seed.collector_cloud_profile_key,
                     collector_cloud_profile_label=self._seed.collector_cloud_profile_label,
                     collector_cloud_profile_source=self._seed.collector_cloud_profile_source,
                     collector_cloud_profile_confidence=self._seed.collector_cloud_profile_confidence,
                     collector_callback_endpoint=self._seed.collector_callback_endpoint,
+                    protocol_adapter_key=self._protocol_adapter.key,
                     write_response_mode=self._seed.write_response_mode,
                 ).to_json_dict(),
             }
@@ -501,13 +527,15 @@ class InProcessShadowLearningHandler:
     async def _handle_frame(self, frame: bytes, *, remote: str) -> bytes | None:
         header = decode_header(frame[:HEADER_SIZE])
         payload = frame[HEADER_SIZE:]
-        read_request = decode_read_request(payload)
+        read_request = self._protocol_adapter.decode_read_request(payload)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
             self._record_read_observation(read_request.address, read_request.count, values)
-            response_payload = self._build_modbus_read_response(read_request, values)
+            response_payload = self._protocol_adapter.build_read_response(
+                read_request, values
+            )
             await self._append_event(
-                "shadow_modbus_read_request",
+                self._protocol_event_kind("read_request"),
                 "cloud_to_shadow",
                 {
                     "remote": remote,
@@ -521,7 +549,7 @@ class InProcessShadowLearningHandler:
                 },
             )
             await self._append_event(
-                "shadow_modbus_read_response",
+                self._protocol_event_kind("read_response"),
                 "shadow_to_cloud",
                 {
                     "remote": remote,
@@ -542,7 +570,7 @@ class InProcessShadowLearningHandler:
                 fcode=header.fcode,
             )
 
-        write_request = decode_write_request(payload)
+        write_request = self._protocol_adapter.decode_write_request(payload)
         if write_request is None:
             await self._append_event(
                 "shadow_unknown_frame",
@@ -551,7 +579,7 @@ class InProcessShadowLearningHandler:
             )
             return self._build_exception_frame(header, payload, exception_code=0x01)
 
-        observation = write_observation_from_modbus_request(
+        observation = self._protocol_adapter.write_observation(
             frame=payload,
             devcode=header.devcode,
             devaddr=header.devaddr,
@@ -563,13 +591,13 @@ class InProcessShadowLearningHandler:
             async with self._observation_condition:
                 self._observation_condition.notify_all()
             await self._append_event(
-                "shadow_modbus_write_observation",
+                self._protocol_event_kind("write_observation"),
                 "cloud_to_shadow",
                 observation.to_json_dict(),
             )
         else:
             await self._append_event(
-                "shadow_modbus_write_request",
+                self._protocol_event_kind("write_request"),
                 "cloud_to_shadow",
                 {
                     "remote": remote,
@@ -581,10 +609,14 @@ class InProcessShadowLearningHandler:
             )
 
         if self._seed.write_response_mode == "ack":
-            self._apply_write_request(write_request)
-            response_payload = self._build_modbus_write_ack_response(write_request)
+            self._protocol_adapter.apply_write_to_register_bank(
+                write_request, self._register_bank
+            )
+            response_payload = self._protocol_adapter.build_write_ack_response(
+                write_request
+            )
             await self._append_event(
-                "shadow_modbus_write_response",
+                self._protocol_event_kind("write_response"),
                 "shadow_to_cloud",
                 {
                     "remote": remote,
@@ -595,9 +627,11 @@ class InProcessShadowLearningHandler:
                 },
             )
         else:
-            response_payload = self._build_modbus_exception_response(write_request, exception_code=0x01)
+            response_payload = self._protocol_adapter.build_write_exception_response(
+                write_request, exception_code=0x01
+            )
             await self._append_event(
-                "shadow_modbus_write_response",
+                self._protocol_event_kind("write_response"),
                 "shadow_to_cloud",
                 {
                     "remote": remote,
@@ -627,12 +661,12 @@ class InProcessShadowLearningHandler:
         the physical inverter, and the response is returned as raw Modbus RTU.
         """
 
-        read_request = decode_read_request(frame)
+        read_request = self._protocol_adapter.decode_read_request(frame)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
             self._record_read_observation(read_request.address, read_request.count, values)
             await self._append_event(
-                "shadow_modbus_read_request",
+                self._protocol_event_kind("read_request"),
                 "cloud_to_shadow",
                 {
                     "remote": remote,
@@ -642,9 +676,9 @@ class InProcessShadowLearningHandler:
                     "values": values,
                 },
             )
-            response = self._build_modbus_read_response(read_request, values)
+            response = self._protocol_adapter.build_read_response(read_request, values)
             await self._append_event(
-                "shadow_modbus_read_response",
+                self._protocol_event_kind("read_response"),
                 "shadow_to_cloud",
                 {
                     "remote": remote,
@@ -656,19 +690,19 @@ class InProcessShadowLearningHandler:
             )
             return response
 
-        write_request = decode_write_request(frame)
+        write_request = self._protocol_adapter.decode_write_request(frame)
         if write_request is None:
             await self._append_event(
                 "shadow_unknown_frame",
                 "cloud_to_shadow",
                 {"remote": remote, "payload_hex": frame.hex()},
             )
-            return self._build_raw_modbus_exception(frame, exception_code=0x01)
+            return self._protocol_adapter.build_raw_exception(frame, exception_code=0x01)
 
-        observation = write_observation_from_modbus_request(
+        observation = self._protocol_adapter.write_observation(
             frame=frame,
             devcode=None,
-            devaddr=write_request.slave_id,
+            devaddr=write_request.unit,
             timestamp=utc_now_iso(),
             source="shadow_learning",
         )
@@ -677,13 +711,13 @@ class InProcessShadowLearningHandler:
             async with self._observation_condition:
                 self._observation_condition.notify_all()
             await self._append_event(
-                "shadow_modbus_write_observation",
+                self._protocol_event_kind("write_observation"),
                 "cloud_to_shadow",
                 observation.to_json_dict(),
             )
         else:
             await self._append_event(
-                "shadow_modbus_write_request",
+                self._protocol_event_kind("write_request"),
                 "cloud_to_shadow",
                 {
                     "remote": remote,
@@ -695,14 +729,18 @@ class InProcessShadowLearningHandler:
             )
 
         if self._seed.write_response_mode == "ack":
-            self._apply_write_request(write_request)
-            response = self._build_modbus_write_ack_response(write_request)
+            self._protocol_adapter.apply_write_to_register_bank(
+                write_request, self._register_bank
+            )
+            response = self._protocol_adapter.build_write_ack_response(write_request)
             response_mode = "ack"
         else:
-            response = self._build_modbus_exception_response(write_request, exception_code=0x01)
+            response = self._protocol_adapter.build_write_exception_response(
+                write_request, exception_code=0x01
+            )
             response_mode = "exception"
         await self._append_event(
-            "shadow_modbus_write_response",
+            self._protocol_event_kind("write_response"),
             "shadow_to_cloud",
             {
                 "remote": remote,
@@ -718,14 +756,29 @@ class InProcessShadowLearningHandler:
         writer = self._writer
         if writer is None:
             return
+        event_payload = dict(payload)
+        event_payload.setdefault("protocol_adapter_key", self._protocol_adapter.key)
         await writer.write(
             {
                 "kind": kind,
                 "timestamp": utc_now_iso(),
                 "direction": direction,
-                "payload": dict(payload),
+                "payload": event_payload,
             }
         )
+
+    def _protocol_event_kind(self, suffix: str) -> str:
+        """Return a trace event kind for the active protocol adapter.
+
+        Modbus keeps the historical ``shadow_modbus_*`` vocabulary so existing
+        support-package parsers and fixtures remain valid. Non-Modbus adapters
+        use the protocol-neutral prefix.
+        """
+
+        normalized_suffix = str(suffix or "").strip()
+        if self._protocol_adapter.key == "modbus_rtu":
+            return f"shadow_modbus_{normalized_suffix}"
+        return f"shadow_protocol_{normalized_suffix}"
 
     def should_forward_cloud_at(self, line: bytes) -> bool:
         """Return whether a cloud-issued AT line should be forwarded to the collector.
@@ -766,44 +819,6 @@ class InProcessShadowLearningHandler:
         for offset in range(max(0, int(count))):
             values.append(int(self._register_bank.get(int(address) + offset, 0)))
         return values
-
-    def _apply_write_request(self, request) -> None:
-        if request.function_code == 0x06 and request.values:
-            self._register_bank[request.address] = int(request.values[0])
-            return
-        for offset, value in enumerate(request.values):
-            self._register_bank[request.address + offset] = int(value)
-
-    def _build_modbus_read_response(self, request, values: list[int]) -> bytes:
-        payload = bytearray([request.slave_id, request.function_code, len(values) * 2])
-        for value in values:
-            payload.extend(int(value).to_bytes(2, "big", signed=False))
-        payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
-        return bytes(payload)
-
-    def _build_modbus_write_ack_response(self, request) -> bytes:
-        payload = bytearray([request.slave_id, request.function_code])
-        payload.extend(int(request.address).to_bytes(2, "big", signed=False))
-        if request.function_code == 0x06 and request.values:
-            payload.extend(int(request.values[0]).to_bytes(2, "big", signed=False))
-        else:
-            payload.extend(int(len(request.values)).to_bytes(2, "big", signed=False))
-        payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
-        return bytes(payload)
-
-    def _build_modbus_exception_response(self, request, *, exception_code: int) -> bytes:
-        payload = bytearray([request.slave_id, request.function_code | 0x80, exception_code])
-        payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
-        return bytes(payload)
-
-    def _build_raw_modbus_exception(self, frame: bytes, *, exception_code: int) -> bytes:
-        """Build a bare Modbus RTU exception for an undecodable raw frame."""
-
-        unit = frame[0] if len(frame) > 0 else 0
-        function = frame[1] if len(frame) > 1 else 0
-        payload = bytearray([unit, function | 0x80, exception_code])
-        payload.extend(crc16_modbus(payload).to_bytes(2, "little"))
-        return bytes(payload)
 
     def _build_exception_frame(self, header, inner_payload: bytes, *, exception_code: int) -> bytes:
         if header.fcode == FC_FORWARD_TO_DEVICE and len(inner_payload) >= 2:

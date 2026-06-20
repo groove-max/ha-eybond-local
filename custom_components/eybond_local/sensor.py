@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 
 from .collector.signal import is_legacy_disabled_signal_entity_key
 from .runtime.coordinator import EybondLocalCoordinator
+from .device_scoped_overlay import filter_learned_read_measurements_for_activation
 from .derived_energy import (
     DerivedEnergyCycleDescription,
     DerivedEnergyDescription,
@@ -196,6 +197,11 @@ async def async_setup_entry(
         write_capabilities=write_capabilities,
         include_all_drivers_when_unknown=False,
         collector_only_mode=not has_inverter_identity,
+    )
+    measurement_descriptions = filter_learned_read_measurements_for_activation(
+        measurement_descriptions,
+        entry_data=entry.data,
+        entry_options=entry.options,
     )
     measurement_descriptions = tuple(
         description

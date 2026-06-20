@@ -122,11 +122,52 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
             self.assertNotIn("secret_token", json.dumps(activation))
             parsed_write = json.loads(writes_lines[0])
             self.assertNotIn("session_token", parsed_write)
-
             parsed_trace = [json.loads(line) for line in trace_lines]
             serialized_trace = json.dumps(parsed_trace)
             self.assertNotIn("authorization", serialized_trace)
             self.assertNotIn("session_token", serialized_trace)
+
+    def test_exports_generic_protocol_write_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            trace_path = self._write_shadow_trace(
+                config_dir,
+                write_event_kind="shadow_protocol_write_observation",
+            )
+
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-shadow",
+                entry_title="Shadow Device",
+                connected=True,
+                collector={"collector_pn": "E5000020000000"},
+                inverter={"driver_key": "must_pv_ph18"},
+                values={"shadow_learning_trace_path": str(trace_path)},
+                data={},
+                options={},
+                profile_name="must_pv_ph18/base.json",
+                register_schema_name="must_pv_ph18/base.json",
+            )
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-shadow",
+                entry_title="Shadow Device",
+                support_bundle=support_bundle,
+                raw_capture={},
+                fixture={},
+                anonymized_fixture={},
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                writes_lines = (
+                    archive.read("evidence/shadow_learning/writes.jsonl")
+                    .decode("utf-8")
+                    .strip()
+                    .splitlines()
+                )
+
+            self.assertEqual(len(writes_lines), 1)
+            parsed_write = json.loads(writes_lines[0])
+            self.assertEqual(parsed_write["register"], 201)
 
     def test_runtime_artifact_publication_values_are_sanitized(self) -> None:
         values = build_shadow_learning_runtime_values(
@@ -618,7 +659,12 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
             self.assertFalse(discovery["activation"]["present"])
             self.assertFalse(discovery["activation"]["has_user_selection"])
 
-    def _write_shadow_trace(self, config_dir: Path) -> Path:
+    def _write_shadow_trace(
+        self,
+        config_dir: Path,
+        *,
+        write_event_kind: str = "shadow_modbus_write_observation",
+    ) -> Path:
         trace_root = config_dir / "eybond_local" / "shadow_learning_traces"
         trace_root.mkdir(parents=True, exist_ok=True)
         trace_path = trace_root / "entry_shadow_20260605T100000000000Z.jsonl"
@@ -639,7 +685,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 "payload": {"remote": "192.168.1.20:5555", "authorization": "Bearer nope"},
             },
             {
-                "kind": "shadow_modbus_write_observation",
+                "kind": write_event_kind,
                 "timestamp": "2026-06-05T10:00:02+00:00",
                 "direction": "cloud_to_shadow",
                 "payload": {

@@ -105,7 +105,7 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
         ),
         _ToolingButtonSpec(
             key="rediscover_collector",
-            name="Re-discover Collector",
+            name="Request Collector Callback",
             icon="mdi:radar",
             entity_category=EntityCategory.DIAGNOSTIC,
             enabled_default=True,
@@ -322,7 +322,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                     "Wait for the transition to finish."
                 )
             if overview_status == "running":
-                return "Stop proxy capture before triggering collector re-discovery."
+                return "Stop proxy capture before requesting collector callback."
             config_entry = getattr(self.coordinator, "config_entry", None)
             collector_ip = str(
                 getattr(config_entry, "data", {}).get("collector_ip", "")
@@ -530,7 +530,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 attributes["target_callback_owner"] = "home_assistant"
             elif self._spec.key == "rediscover_collector":
                 attributes["action_summary"] = (
-                    "Sends one bootstrap UDP re-discovery announcement so the collector can reconnect after a Home Assistant address change."
+                    "Sends one bootstrap UDP request asking the collector to connect back to the Home Assistant listener."
                 )
                 attributes["collector_redirect_expected"] = True
                 attributes["target_callback_owner"] = "bootstrap"
