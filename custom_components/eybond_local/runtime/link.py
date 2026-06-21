@@ -195,6 +195,77 @@ def resolve_server_ip(configured_ip: str, *, collector_ip: str = "") -> str:
     return configured_ip
 
 
+def _callback_identity_status_values(
+    *,
+    pending_count: int,
+    recent_count: int,
+    duplicate_peer_ip_count: int,
+    sessions: list[dict[str, object]],
+) -> dict[str, object]:
+    """Return compact, user-facing callback identity diagnostics."""
+
+    identified_count = 0
+    unresolved_count = 0
+    mismatch_count = 0
+    timeout_count = 0
+    waiting_count = 0
+    pending_states = {
+        "pending",
+        "waiting_for_identity",
+        "waiting_for_route_identity",
+    }
+    for session in sessions:
+        state = str(session.get("state") or "").strip()
+        if session.get("collector_identity_masked"):
+            identified_count += 1
+            continue
+        if state == "route_identity_mismatch":
+            mismatch_count += 1
+            unresolved_count += 1
+            continue
+        if state.endswith("_timeout"):
+            timeout_count += 1
+            unresolved_count += 1
+            continue
+        if state in pending_states:
+            waiting_count += 1
+            unresolved_count += 1
+
+    if pending_count <= 0:
+        status = "idle"
+        summary = "No unresolved collector callback sessions are pending."
+    elif mismatch_count:
+        status = "conflict"
+        summary = (
+            "A collector callback was identified, but it does not match the expected collector PN."
+        )
+    elif duplicate_peer_ip_count and unresolved_count:
+        status = "unresolved"
+        summary = (
+            "Multiple collector callbacks share the same peer IP and at least one session is still not safely identified."
+        )
+    elif timeout_count:
+        status = "unresolved"
+        summary = "A collector callback is pending, but the identity probe timed out."
+    elif waiting_count:
+        status = "unresolved"
+        summary = "A collector callback is pending, but the collector identity is not known yet."
+    else:
+        status = "ok"
+        summary = "Pending collector callbacks have a known collector identity."
+
+    return {
+        "collector_callback_identity_status": status,
+        "collector_callback_identity_summary": summary,
+        "collector_callback_identified_session_count": identified_count,
+        "collector_callback_unresolved_session_count": unresolved_count,
+        "collector_callback_identity_mismatch_count": mismatch_count,
+        "collector_callback_identity_timeout_count": timeout_count,
+        "collector_callback_identity_waiting_count": waiting_count,
+        "collector_callback_recent_session_count": recent_count,
+    }
+
+
 class RuntimeLinkManager(Protocol):
     """Minimal runtime lifecycle contract for one active physical link."""
 
@@ -449,13 +520,22 @@ class EybondRuntimeLinkManager:
                     sessions.append(dict(session))
 
         duplicate_peer_ip_count = len(duplicate_peer_ips)
-        return {
+        result: dict[str, object] = {
             "collector_callback_pending_session_count": pending_count,
             "collector_callback_recent_session_count": recent_count,
             "collector_callback_duplicate_peer_ip_count": duplicate_peer_ip_count,
             "collector_callback_duplicate_peer_ips": ", ".join(sorted(duplicate_peer_ips)),
             "collector_callback_session_inventory": sessions,
         }
+        result.update(
+            _callback_identity_status_values(
+                pending_count=pending_count,
+                recent_count=recent_count,
+                duplicate_peer_ip_count=duplicate_peer_ip_count,
+                sessions=sessions,
+            )
+        )
+        return result
 
     async def async_start(self) -> None:
         """Start the active link transport and its discovery loop."""

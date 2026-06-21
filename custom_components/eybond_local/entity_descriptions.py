@@ -215,6 +215,22 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
         live=False,
     ),
     MeasurementDescription(
+        key="collector_callback_identity_status",
+        name="Collector Callback Identity",
+        icon="mdi:identifier",
+        diagnostic=True,
+        enabled_default=True,
+        live=False,
+    ),
+    MeasurementDescription(
+        key="collector_callback_identity_summary",
+        name="Collector Callback Identity Summary",
+        icon="mdi:text-box-search-outline",
+        diagnostic=True,
+        enabled_default=False,
+        live=False,
+    ),
+    MeasurementDescription(
         key="collector_listener_bind_host",
         name="Collector Listener Bind Host",
         icon="mdi:server-network",

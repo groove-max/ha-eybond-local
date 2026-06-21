@@ -146,6 +146,16 @@ _SUMMARY_ATTRIBUTE_MAP: dict[str, tuple[tuple[str, str], ...]] = {
         ("protocol_profile_key", "smartess_protocol_profile_key"),
         ("collector_firmware", "smartess_collector_version"),
     ),
+    "collector_callback_identity_status": (
+        ("summary", "collector_callback_identity_summary"),
+        ("pending_sessions", "collector_callback_pending_session_count"),
+        ("recent_sessions", "collector_callback_recent_session_count"),
+        ("identified_sessions", "collector_callback_identified_session_count"),
+        ("unresolved_sessions", "collector_callback_unresolved_session_count"),
+        ("duplicate_peer_ips", "collector_callback_duplicate_peer_ip_count"),
+        ("session_protocol", "collector_callback_session_protocol"),
+        ("identity_strategy", "collector_callback_identity_strategy"),
+    ),
 }
 
 

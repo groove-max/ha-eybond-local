@@ -99,6 +99,25 @@ class EntityDescriptionsTests(unittest.TestCase):
         self.assertTrue(description.diagnostic)
         self.assertTrue(description.enabled_default)
 
+    def test_collector_callback_identity_status_is_enabled_diagnostic_sensor(self) -> None:
+        description = next(
+            item
+            for item in BASE_SENSOR_DESCRIPTIONS
+            if item.key == "collector_callback_identity_status"
+        )
+
+        self.assertTrue(description.diagnostic)
+        self.assertTrue(description.enabled_default)
+
+        summary = next(
+            item
+            for item in BASE_SENSOR_DESCRIPTIONS
+            if item.key == "collector_callback_identity_summary"
+        )
+        self.assertTrue(summary.diagnostic)
+        self.assertFalse(summary.enabled_default)
+
+    def test_collector_listener_details_are_hidden_diagnostic_sensors(self) -> None:
         hidden_keys = {
             "collector_listener_bind_host",
             "collector_listener_bind_endpoint",

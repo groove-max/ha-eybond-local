@@ -207,6 +207,12 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(diagnostics["collector_callback_pending_session_count"], 2)
         self.assertEqual(diagnostics["collector_callback_recent_session_count"], 3)
         self.assertEqual(diagnostics["collector_callback_duplicate_peer_ip_count"], 1)
+        self.assertEqual(diagnostics["collector_callback_identity_status"], "unresolved")
+        self.assertEqual(diagnostics["collector_callback_unresolved_session_count"], 1)
+        self.assertIn(
+            "Multiple collector callbacks share the same peer IP",
+            diagnostics["collector_callback_identity_summary"],
+        )
         self.assertEqual(
             diagnostics["collector_callback_duplicate_peer_ips"],
             "203.0.113.10",

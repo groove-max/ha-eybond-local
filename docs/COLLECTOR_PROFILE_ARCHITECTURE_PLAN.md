@@ -267,9 +267,6 @@ collector_pn -> observed_at
 
 ## Remaining work
 
-- Improve user-facing diagnostics for unresolved callback identity: the support
-  archive already contains the technical state, but the HA UI should summarize
-  it as a safe routing/identity problem rather than a generic offline state.
 - Validate the PN-routed callback behavior on a real multi-collector setup,
   especially during Home Assistant restart and route transitions.
 - Treat `smartvalue_at` as a catalog/profile candidate until real traffic
