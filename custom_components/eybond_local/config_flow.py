@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 import importlib
 import ipaddress
 import json
@@ -40,6 +40,7 @@ from homeassistant.helpers.selector import (
 from .collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     DEFAULT_COLLECTOR_SERVER_PROTOCOL,
+    format_collector_server_endpoint_for_cloud_profile,
     format_collector_server_endpoint,
     inspect_collector_server_endpoint,
     resolve_collector_server_endpoint,
@@ -57,6 +58,9 @@ from .const import (
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
@@ -175,6 +179,7 @@ from .smartess_cloud import (
     login_with_password,
 )
 from .support.cloud_evidence import fetch_and_export_smartess_device_bundle_cloud_evidence
+from .support.collector_registry import remember_collector_original_endpoint
 from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
 from .support.read_learning_binder import bind_cloud_labels_to_registers
 from .support.shadow_learning_orchestrator import (
@@ -2562,7 +2567,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             and remembered_endpoint
             and remembered_endpoint != target_endpoint
         ):
-            options[CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT] = remembered_endpoint
+            original_endpoint_options = self._collector_original_endpoint_options(
+                remembered_endpoint
+            )
+            options.update(original_endpoint_options)
+            with suppress(Exception):
+                await self._async_remember_collector_original_endpoint_in_registry(
+                    collector_pn=collector_pn,
+                    endpoint=remembered_endpoint,
+                    options=original_endpoint_options,
+                )
         return self.async_create_entry(
             title=title,
             data=data,
@@ -3129,8 +3143,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             or self._collector_original_server_endpoint
             or ""
         ).strip()
-        include_port = True
-        include_protocol = True
+        cloud_family = ""
         server_port = DEFAULT_COLLECTOR_SERVER_PORT
         server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
         if template_endpoint:
@@ -3143,20 +3156,86 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             except ValueError:
                 pass
             else:
-                include_port = parsed.has_explicit_port
-                include_protocol = parsed.has_explicit_protocol
+                host = str(parsed.host or "").strip().lower()
+                if parsed.has_explicit_port:
+                    cloud_family = resolve_collector_cloud_family_by_port(parsed.port)
+                else:
+                    cloud_family = resolve_collector_cloud_family_by_host(host)
                 _host, server_port, server_protocol = resolve_collector_server_endpoint(
                     template_endpoint,
                     require_explicit_port=False,
                     require_explicit_protocol=False,
+                    cloud_family=cloud_family,
                 )
-        return format_collector_server_endpoint(
+        return format_collector_server_endpoint_for_cloud_profile(
             server_host=spec.effective_advertised_server_ip,
+            cloud_family=cloud_family,
             server_port=server_port,
             server_protocol=server_protocol,
-            include_port=include_port,
-            include_protocol=include_protocol,
+            template_endpoint=template_endpoint,
             require_tcp=True,
+        )
+
+    def _collector_original_endpoint_options(self, endpoint: str) -> dict[str, str]:
+        """Return sticky option fields for a preserved original collector endpoint."""
+
+        normalized_endpoint = str(endpoint or "").strip()
+        if not normalized_endpoint:
+            return {}
+
+        profile_key = ""
+        try:
+            parsed = inspect_collector_server_endpoint(
+                normalized_endpoint,
+                require_explicit_port=False,
+                require_explicit_protocol=False,
+            )
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            host = str(parsed.host or "").strip().lower()
+            if parsed.has_explicit_port:
+                profile_key = resolve_collector_cloud_family_by_port(parsed.port)
+            else:
+                profile_key = resolve_collector_cloud_family_by_host(host)
+
+        return {
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: normalized_endpoint,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: profile_key,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE: "config_flow_pre_bind",
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT: datetime.now(
+                timezone.utc
+            ).isoformat(),
+        }
+
+    async def _async_remember_collector_original_endpoint_in_registry(
+        self,
+        *,
+        collector_pn: str,
+        endpoint: str,
+        options: dict[str, Any],
+    ) -> None:
+        """Persist the original collector endpoint outside the config entry."""
+
+        normalized_pn = str(collector_pn or "").strip()
+        normalized_endpoint = str(endpoint or "").strip()
+        if not normalized_pn or not normalized_endpoint:
+            return
+        config_dir = self._config_dir_path()
+        await self.hass.async_add_executor_job(
+            lambda: remember_collector_original_endpoint(
+                config_dir=config_dir,
+                collector_pn=normalized_pn,
+                original_endpoint_raw=normalized_endpoint,
+                cloud_profile_key=str(
+                    options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY) or ""
+                ),
+                source=str(options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE) or ""),
+                observed_at=str(
+                    options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT) or ""
+                ),
+                last_seen_ip=self._selected_collector_ip(),
+            )
         )
 
     async def _async_with_selected_collector_session(self):
@@ -5669,10 +5748,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input[
                     CONF_COLLECTOR_OPERATION_MODE
                 ]
-                if CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT in self._config_entry.options:
-                    persisted_options[CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT] = self._config_entry.options[
-                        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT
-                    ]
+                for key in (
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+                ):
+                    if key in self._config_entry.options:
+                        persisted_options[key] = self._config_entry.options[key]
                 return self.async_create_entry(data=persisted_options)
 
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)

@@ -18,9 +18,16 @@ class CollectorCloudProfileCatalogEntry:
     """One declarative collector cloud profile entry."""
 
     family: str
+    provider: str
+    label: str
     default_host: str
+    default_port: int
+    default_protocol: str
     known_hosts: tuple[str, ...]
     known_ports: tuple[int, ...]
+    endpoint_write_format: str
+    session_protocol: str
+    identity_strategy: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +38,9 @@ class CollectorCloudProfileCatalog:
     families_by_host: dict[str, str]
     families_by_port: dict[int, str]
     default_hosts: dict[str, str]
+    default_ports: dict[str, int]
+    default_protocols: dict[str, str]
+    endpoint_write_formats: dict[str, str]
 
 
 @lru_cache(maxsize=None)
@@ -48,6 +58,9 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
     families_by_host: dict[str, str] = {}
     families_by_port: dict[int, str] = {}
     default_hosts: dict[str, str] = {}
+    default_ports: dict[str, int] = {}
+    default_protocols: dict[str, str] = {}
+    endpoint_write_formats: dict[str, str] = {}
 
     for entry in entries:
         family = entry.family
@@ -57,6 +70,12 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
         profiles[family] = entry
         if entry.default_host:
             default_hosts[family] = entry.default_host
+        if entry.default_port:
+            default_ports[family] = entry.default_port
+        if entry.default_protocol:
+            default_protocols[family] = entry.default_protocol
+        if entry.endpoint_write_format:
+            endpoint_write_formats[family] = entry.endpoint_write_format
 
         for host in entry.known_hosts:
             if host:
@@ -70,6 +89,9 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
         families_by_host=families_by_host,
         families_by_port=families_by_port,
         default_hosts=default_hosts,
+        default_ports=default_ports,
+        default_protocols=default_protocols,
+        endpoint_write_formats=endpoint_write_formats,
     )
 
 
@@ -112,6 +134,39 @@ def resolve_collector_cloud_default_host(cloud_family: object) -> str:
     return catalog.default_hosts.get(normalized_family, "")
 
 
+def resolve_collector_cloud_default_port(cloud_family: object) -> int:
+    """Resolve one known default cloud port for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return 0
+
+    catalog = load_collector_cloud_profile_catalog()
+    return int(catalog.default_ports.get(normalized_family, 0) or 0)
+
+
+def resolve_collector_cloud_default_protocol(cloud_family: object) -> str:
+    """Resolve one known default cloud protocol for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.default_protocols.get(normalized_family, "")
+
+
+def resolve_collector_cloud_endpoint_write_format(cloud_family: object) -> str:
+    """Resolve the CLDSRVHOST1 write shape for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.endpoint_write_formats.get(normalized_family, "")
+
+
 def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalogEntry:
     known_hosts = tuple(
         str(item).strip().lower()
@@ -125,9 +180,16 @@ def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalog
     )
     return CollectorCloudProfileCatalogEntry(
         family=str(raw.get("family", "")).strip().lower(),
+        provider=str(raw.get("provider", "")).strip().lower(),
+        label=str(raw.get("label", "")).strip(),
         default_host=str(raw.get("default_host", "")).strip().lower(),
+        default_port=int(raw.get("default_port", 0) or 0) if _is_int_like(raw.get("default_port", 0)) else 0,
+        default_protocol=str(raw.get("default_protocol", "")).strip().upper(),
         known_hosts=known_hosts,
         known_ports=known_ports,
+        endpoint_write_format=str(raw.get("endpoint_write_format", "")).strip().lower(),
+        session_protocol=str(raw.get("session_protocol", "")).strip().lower(),
+        identity_strategy=str(raw.get("identity_strategy", "")).strip().lower(),
     )
 
 

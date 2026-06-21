@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 
@@ -98,6 +99,9 @@ def _install_coordinator_stubs() -> None:
     const.CONF_COLLECTOR_CLOUD_FAMILY = "collector_cloud_family"
     const.CONF_COLLECTOR_OPERATION_MODE = "collector_operation_mode"
     const.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT = "collector_original_server_endpoint"
+    const.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT = "collector_original_server_endpoint_observed_at"
+    const.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY = "collector_original_server_endpoint_profile_key"
+    const.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE = "collector_original_server_endpoint_source"
     const.CONF_COLLECTOR_PN = "collector_pn"
     const.CONF_CONNECTION_TYPE = "connection_type"
     const.CONF_CONNECTION_MODE = "connection_mode"
@@ -1229,10 +1233,179 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator.collector_server_endpoint_rollback_target,
             "47.91.67.66,18899,TCP",
         )
+        self.assertEqual(len(updated_options), 1)
         self.assertEqual(
-            updated_options,
-            [{"collector_original_server_endpoint": "47.91.67.66,18899,TCP"}],
+            updated_options[0]["collector_original_server_endpoint"],
+            "47.91.67.66,18899,TCP",
         )
+        self.assertEqual(
+            updated_options[0]["collector_original_server_endpoint_profile_key"],
+            "smartess_at",
+        )
+        self.assertEqual(
+            updated_options[0]["collector_original_server_endpoint_source"],
+            "runtime_observed",
+        )
+        self.assertTrue(updated_options[0]["collector_original_server_endpoint_observed_at"])
+
+    def test_remember_collector_server_endpoint_does_not_replace_existing_original(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        updated_options: list[dict[str, str]] = []
+        coordinator._async_update_entry_without_reload = lambda **kwargs: updated_options.append(
+            kwargs["options"]
+        )
+        coordinator._connection_spec = types.SimpleNamespace(
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=8899,
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            collector_server_endpoint_rollback_target="",
+        )
+        coordinator._remembered_collector_server_endpoint = "ess.eybond.com"
+        coordinator.config_entry = types.SimpleNamespace(
+            data={},
+            options={
+                "collector_original_server_endpoint": "ess.eybond.com",
+                "collector_original_server_endpoint_profile_key": "legacy_binary",
+            },
+        )
+
+        snapshot = self.RuntimeSnapshot(
+            values={"collector_server_endpoint": "dtu_ess.eybond.com,18899,TCP"}
+        )
+
+        import asyncio
+
+        asyncio.run(coordinator._async_remember_collector_server_endpoint(snapshot))
+
+        self.assertEqual(coordinator.collector_server_endpoint_rollback_target, "ess.eybond.com")
+        self.assertEqual(updated_options, [])
+
+    def test_restore_collector_original_endpoint_from_registry(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            remember_collector_original_endpoint,
+        )
+
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                remember_collector_original_endpoint(
+                    config_dir=Path(tmp),
+                    collector_pn="PN12345",
+                    original_endpoint_raw="ess.eybond.com",
+                    cloud_profile_key="legacy_binary",
+                    source="test_registry",
+                    observed_at="2026-06-22T10:00:00+00:00",
+                    last_seen_ip="192.168.1.55",
+                )
+                updated_options: list[dict[str, str]] = []
+
+                async def _async_add_executor_job(func, *args):
+                    return func(*args)
+
+                coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+                coordinator.hass = types.SimpleNamespace(
+                    config=types.SimpleNamespace(config_dir=tmp),
+                    async_add_executor_job=_async_add_executor_job,
+                )
+                coordinator._async_update_entry_without_reload = lambda **kwargs: updated_options.append(
+                    kwargs["options"]
+                )
+                coordinator._connection_spec = types.SimpleNamespace(
+                    effective_advertised_server_ip="192.168.1.50",
+                    effective_advertised_tcp_port=8899,
+                )
+                coordinator._runtime = types.SimpleNamespace(
+                    collector_server_endpoint_rollback_target="",
+                )
+                coordinator._remembered_collector_server_endpoint = ""
+                coordinator.config_entry = types.SimpleNamespace(
+                    data={"collector_pn": "PN12345"},
+                    options={},
+                )
+                snapshot = self.RuntimeSnapshot(values={})
+
+                await coordinator._async_restore_collector_original_endpoint_from_registry(
+                    snapshot
+                )
+
+                self.assertEqual(
+                    coordinator.collector_server_endpoint_rollback_target,
+                    "ess.eybond.com",
+                )
+                self.assertEqual(len(updated_options), 1)
+                self.assertEqual(
+                    updated_options[0]["collector_original_server_endpoint"],
+                    "ess.eybond.com",
+                )
+                self.assertEqual(
+                    updated_options[0]["collector_original_server_endpoint_profile_key"],
+                    "legacy_binary",
+                )
+                self.assertEqual(
+                    updated_options[0]["collector_original_server_endpoint_source"],
+                    "test_registry",
+                )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_remember_collector_server_endpoint_writes_registry_by_pn(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            get_collector_registry_record,
+        )
+
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                updated_options: list[dict[str, str]] = []
+
+                async def _async_add_executor_job(func, *args):
+                    return func(*args)
+
+                coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+                coordinator.hass = types.SimpleNamespace(
+                    config=types.SimpleNamespace(config_dir=tmp),
+                    async_add_executor_job=_async_add_executor_job,
+                )
+                coordinator._async_update_entry_without_reload = lambda **kwargs: updated_options.append(
+                    kwargs["options"]
+                )
+                coordinator._connection_spec = types.SimpleNamespace(
+                    effective_advertised_server_ip="192.168.1.50",
+                    effective_advertised_tcp_port=8899,
+                )
+                coordinator._runtime = types.SimpleNamespace(
+                    collector_server_endpoint_rollback_target="",
+                )
+                coordinator._remembered_collector_server_endpoint = ""
+                coordinator.config_entry = types.SimpleNamespace(
+                    data={},
+                    options={},
+                )
+                snapshot = self.RuntimeSnapshot(
+                    collector=types.SimpleNamespace(
+                        collector_pn="PN12345",
+                        remote_ip="192.168.1.55",
+                    ),
+                    values={"collector_server_endpoint": "dtu_ess.eybond.com,18899,TCP"},
+                )
+
+                await coordinator._async_remember_collector_server_endpoint(snapshot)
+
+                record = get_collector_registry_record(
+                    config_dir=Path(tmp),
+                    collector_pn="PN12345",
+                )
+                self.assertIsNotNone(record)
+                assert record is not None
+                self.assertEqual(record.original_endpoint_raw, "dtu_ess.eybond.com,18899,TCP")
+                self.assertEqual(record.cloud_profile_key, "smartess_at")
+                self.assertEqual(record.source, "runtime_observed")
+                self.assertEqual(record.last_seen_ip, "192.168.1.55")
+
+        import asyncio
+
+        asyncio.run(_run())
 
     def test_host_only_external_endpoint_is_preserved_for_rollback_and_bind_shape(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -3752,7 +3925,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         values = coordinator._collector_onboarding_values(coordinator.data)
 
-        self.assertEqual(values, {"collector_onboarding_status": "Pending confirmation"})
+        self.assertEqual(values["collector_onboarding_status"], "Pending confirmation")
+        self.assertTrue(values["collector_original_endpoint_known"])
+        self.assertEqual(values["collector_original_endpoint_profile_key"], "")
+        self.assertEqual(values["collector_original_endpoint_source"], "")
+        self.assertEqual(values["collector_original_endpoint_observed_at"], "")
 
     def test_async_set_collector_operation_mode_updates_runtime_endpoint_and_persists_mode(self) -> None:
         async def _run() -> None:

@@ -282,6 +282,9 @@ from custom_components.eybond_local.collector.smartess_local import (
 )
 from custom_components.eybond_local.const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_DRIVER_HINT,
     CONF_SMARTESS_COLLECTOR_VERSION,
     CONF_SMARTESS_DEVICE_ADDRESS,
@@ -2823,6 +2826,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT],
             "collector-cloud.smartess.example,18899,TCP",
         )
+        self.assertEqual(
+            result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY],
+            "smartess_at",
+        )
+        self.assertEqual(
+            result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE],
+            "config_flow_pre_bind",
+        )
+        self.assertTrue(result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT])
 
     def _bridge_confirm_result(self, *, is_bridge: bool) -> OnboardingResult:
         details = {"collector_virtual_bridge": True} if is_bridge else {}

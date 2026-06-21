@@ -24,6 +24,7 @@ from ..collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     DEFAULT_COLLECTOR_SERVER_PROTOCOL,
     default_collector_server_port,
+    format_collector_server_endpoint_for_cloud_profile,
     format_collector_server_endpoint as format_runtime_collector_server_endpoint,
     inspect_collector_server_endpoint,
     normalize_collector_server_endpoint as normalize_runtime_collector_server_endpoint,
@@ -41,6 +42,9 @@ from ..const import (
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
@@ -131,6 +135,10 @@ from ..support.bundle import build_support_bundle_payload, export_support_bundle
 from ..support.cloud_evidence import (
     fetch_and_export_smartess_device_bundle_cloud_evidence,
     load_latest_cloud_evidence,
+)
+from ..support.collector_registry import (
+    get_collector_registry_record,
+    remember_collector_original_endpoint,
 )
 from ..support.proxy_capture import build_proxy_capture_overview
 from ..support.proxy_session import (
@@ -392,20 +400,6 @@ def _normalize_preserved_collector_server_endpoint(endpoint: str) -> str:
     )
 
 
-def _collector_endpoint_format_flags(endpoint: str) -> tuple[bool, bool]:
-    """Return whether port/protocol were explicit in the original endpoint."""
-
-    try:
-        parsed = inspect_collector_server_endpoint(
-            endpoint,
-            require_explicit_port=False,
-            require_explicit_protocol=False,
-        )
-    except ValueError:
-        return True, True
-    return parsed.has_explicit_port, parsed.has_explicit_protocol
-
-
 def _known_collector_cloud_family(value: object) -> str:
     """Return a concrete collector cloud family, ignoring unknown placeholders."""
 
@@ -443,15 +437,38 @@ def _collector_cloud_family_from_endpoint_shape(endpoint: object) -> str:
     return ""
 
 
+def _collector_original_endpoint_source_options(
+    *,
+    endpoint: str,
+    profile_key: str,
+    source: str,
+    observed_at: str | None = None,
+) -> dict[str, str]:
+    """Return option metadata for one preserved original cloud endpoint."""
+
+    normalized_endpoint = str(endpoint or "").strip()
+    if not normalized_endpoint:
+        return {}
+
+    normalized_profile_key = str(profile_key or "").strip().lower()
+    normalized_source = str(source or "").strip() or "runtime_observed"
+    timestamp = str(observed_at or "").strip() or datetime.now(timezone.utc).isoformat()
+    return {
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: normalized_endpoint,
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: normalized_profile_key,
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE: normalized_source,
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT: timestamp,
+    }
+
+
 def _format_home_assistant_collector_endpoint(
     *,
     server_host: str,
     template_endpoint: str = "",
     cloud_family: str = "",
 ) -> str:
-    """Build the Home Assistant callback endpoint using the legacy default cloud port."""
+    """Build the Home Assistant callback endpoint using the cloud profile shape."""
 
-    include_port, include_protocol = _collector_endpoint_format_flags(template_endpoint)
     server_port = default_collector_server_port(cloud_family=cloud_family)
     server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
     if template_endpoint:
@@ -463,12 +480,13 @@ def _format_home_assistant_collector_endpoint(
         except ValueError:
             server_port = DEFAULT_COLLECTOR_SERVER_PORT
             server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
-    return _format_collector_server_endpoint(
+    return format_collector_server_endpoint_for_cloud_profile(
         server_host=server_host,
+        cloud_family=cloud_family,
         server_port=server_port,
         server_protocol=server_protocol,
-        include_port=include_port,
-        include_protocol=include_protocol,
+        template_endpoint=template_endpoint,
+        require_tcp=True,
     )
 
 
@@ -484,17 +502,13 @@ def _default_cloud_upstream_endpoint(
     if not default_host:
         return ""
 
-    include_port, include_protocol = _collector_endpoint_format_flags(template_endpoint)
-    if not template_endpoint and normalized_family == COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY:
-        include_port = False
-        include_protocol = False
-
-    return _format_collector_server_endpoint(
+    return format_collector_server_endpoint_for_cloud_profile(
         server_host=default_host,
-        server_port=default_collector_server_port(cloud_family=normalized_family),
+        cloud_family=normalized_family,
+        server_port=None,
         server_protocol=DEFAULT_COLLECTOR_SERVER_PROTOCOL,
-        include_port=include_port,
-        include_protocol=include_protocol,
+        template_endpoint=template_endpoint,
+        require_tcp=True,
     )
 
 
@@ -1245,13 +1259,120 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return
 
         remembered_endpoint = self._normalized_remembered_collector_server_endpoint()
+        if remembered_endpoint and normalized_endpoint != remembered_endpoint:
+            return
         if normalized_endpoint == remembered_endpoint:
+            return
+
+        profile_key = (
+            _collector_cloud_family_from_endpoint_shape(normalized_endpoint)
+            or _known_collector_cloud_family(snapshot.values.get("collector_cloud_family"))
+            or self.collector_cloud_family
+        )
+        self._remembered_collector_server_endpoint = normalized_endpoint
+        options = dict(self.config_entry.options)
+        options.update(
+            _collector_original_endpoint_source_options(
+                endpoint=normalized_endpoint,
+                profile_key=profile_key,
+                source="runtime_observed",
+            )
+        )
+        self._async_update_entry_without_reload(options=options)
+        await self._async_remember_collector_original_endpoint_in_registry(
+            snapshot=snapshot,
+            endpoint=normalized_endpoint,
+            profile_key=profile_key,
+            source="runtime_observed",
+            observed_at=str(
+                options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT) or ""
+            ),
+        )
+
+    async def _async_restore_collector_original_endpoint_from_registry(
+        self,
+        snapshot: RuntimeSnapshot,
+    ) -> None:
+        """Restore preserved original endpoint options from the PN registry when absent."""
+
+        if self._normalized_remembered_collector_server_endpoint():
+            return
+        collector_pn = self._preferred_collector_pn(snapshot)
+        if not collector_pn:
+            return
+
+        config_dir = Path(self.hass.config.config_dir)
+        try:
+            record = await self.hass.async_add_executor_job(
+                lambda: get_collector_registry_record(
+                    config_dir=config_dir,
+                    collector_pn=collector_pn,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Could not read collector registry: %s", exc)
+            return
+        if record is None or not record.original_endpoint_raw:
+            return
+        try:
+            normalized_endpoint = _normalize_preserved_collector_server_endpoint(
+                record.original_endpoint_raw
+            )
+        except ValueError:
+            return
+        if self._endpoint_looks_like_local_collector_callback(normalized_endpoint):
             return
 
         self._remembered_collector_server_endpoint = normalized_endpoint
         options = dict(self.config_entry.options)
-        options[CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT] = normalized_endpoint
+        options.update(
+            _collector_original_endpoint_source_options(
+                endpoint=normalized_endpoint,
+                profile_key=record.cloud_profile_key,
+                source=record.source or "collector_registry",
+                observed_at=record.observed_at,
+            )
+        )
         self._async_update_entry_without_reload(options=options)
+
+    async def _async_remember_collector_original_endpoint_in_registry(
+        self,
+        *,
+        snapshot: RuntimeSnapshot,
+        endpoint: str,
+        profile_key: str,
+        source: str,
+        observed_at: str = "",
+    ) -> None:
+        """Persist the original endpoint in the collector PN registry when possible."""
+
+        collector_pn = self._preferred_collector_pn(snapshot)
+        if not collector_pn:
+            return
+        try:
+            normalized_endpoint = _normalize_preserved_collector_server_endpoint(endpoint)
+        except ValueError:
+            return
+        if self._endpoint_looks_like_local_collector_callback(normalized_endpoint):
+            return
+
+        collector = getattr(snapshot, "collector", None)
+        last_seen_ip = str(getattr(collector, "remote_ip", "") or "").strip()
+        config_dir = Path(self.hass.config.config_dir)
+        try:
+            await self.hass.async_add_executor_job(
+                lambda: remember_collector_original_endpoint(
+                    config_dir=config_dir,
+                    collector_pn=collector_pn,
+                    original_endpoint_raw=normalized_endpoint,
+                    cloud_profile_key=profile_key,
+                    source=source,
+                    observed_at=observed_at,
+                    last_seen_ip=last_seen_ip,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Could not update collector registry: %s", exc)
 
     async def _async_remember_runtime_identity(self, snapshot: RuntimeSnapshot) -> None:
         """Persist stronger collector/inverter identity once runtime detection succeeds."""
@@ -1684,6 +1805,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         snapshot = await self._async_reconcile_proxy_capture_session(snapshot)
         snapshot = await self._async_reconcile_shadow_learning_session(snapshot)
+        await self._async_restore_collector_original_endpoint_from_registry(snapshot)
         await self._async_remember_collector_server_endpoint(snapshot)
         await self._async_remember_runtime_identity(snapshot)
         # Keep self.data aligned with the fresh snapshot before helpers that
@@ -4950,6 +5072,24 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "support_workflow_advanced_hint": workflow["advanced_hint"],
         }
 
+    def _collector_original_endpoint_runtime_values(self) -> dict[str, Any]:
+        """Return non-sensitive diagnostics for preserved original endpoint state."""
+
+        options = getattr(self.config_entry, "options", {}) or {}
+        remembered_endpoint = self._normalized_remembered_collector_server_endpoint()
+        return {
+            "collector_original_endpoint_known": bool(remembered_endpoint),
+            "collector_original_endpoint_profile_key": str(
+                options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY, "") or ""
+            ).strip(),
+            "collector_original_endpoint_source": str(
+                options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE, "") or ""
+            ).strip(),
+            "collector_original_endpoint_observed_at": str(
+                options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT, "") or ""
+            ).strip(),
+        }
+
     def _collector_onboarding_values(self, snapshot: RuntimeSnapshot | None = None) -> dict[str, Any]:
         """Return compact collector-side onboarding status helpers for entity UX."""
 
@@ -4957,6 +5097,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         support_label = str(snapshot.values.get("support_workflow_level_label") or "").strip()
         return {
             "collector_onboarding_status": support_label or "Unknown",
+            **self._collector_original_endpoint_runtime_values(),
         }
 
     async def _proxy_capture_values(self, snapshot: RuntimeSnapshot | None = None) -> dict[str, Any]:

@@ -12,6 +12,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loader import (  # noqa: E402
     load_collector_cloud_profile_catalog,
+    resolve_collector_cloud_default_port,
+    resolve_collector_cloud_default_protocol,
+    resolve_collector_cloud_endpoint_write_format,
     resolve_collector_cloud_default_host,
     resolve_collector_cloud_family_by_host,
     resolve_collector_cloud_family_by_port,
@@ -32,24 +35,45 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         legacy = catalog.profiles["legacy_binary"]
 
         self.assertEqual(legacy.default_host, "ess.eybond.com")
+        self.assertEqual(legacy.provider, "smartess")
+        self.assertEqual(legacy.label, "SmartESS legacy ESS")
+        self.assertEqual(legacy.default_port, 502)
+        self.assertEqual(legacy.default_protocol, "TCP")
         self.assertEqual(legacy.known_hosts, ("ess.eybond.com",))
         self.assertEqual(legacy.known_ports, (502,))
+        self.assertEqual(legacy.endpoint_write_format, "host_only")
+        self.assertEqual(legacy.session_protocol, "eybond_framed")
+        self.assertEqual(legacy.identity_strategy, "framed_heartbeat_then_fc2_pn")
 
     def test_loads_smartess_profile_details(self) -> None:
         catalog = load_collector_cloud_profile_catalog()
         smartess = catalog.profiles["smartess_at"]
 
         self.assertEqual(smartess.default_host, "dtu_ess.eybond.com")
+        self.assertEqual(smartess.provider, "smartess")
+        self.assertEqual(smartess.label, "SmartESS DTU ESS")
+        self.assertEqual(smartess.default_port, 18899)
+        self.assertEqual(smartess.default_protocol, "TCP")
         self.assertEqual(smartess.known_hosts, ("dtu_ess.eybond.com",))
         self.assertEqual(smartess.known_ports, (18899, 38899))
+        self.assertEqual(smartess.endpoint_write_format, "host_port_protocol")
+        self.assertEqual(smartess.session_protocol, "at_text")
+        self.assertEqual(smartess.identity_strategy, "at_dtupn")
 
     def test_loads_smartvalue_profile_details(self) -> None:
         catalog = load_collector_cloud_profile_catalog()
         smartvalue = catalog.profiles["smartvalue_at"]
 
         self.assertEqual(smartvalue.default_host, "m2m.eybond.com")
+        self.assertEqual(smartvalue.provider, "smartvalue")
+        self.assertEqual(smartvalue.label, "SmartValue AT")
+        self.assertEqual(smartvalue.default_port, 18899)
+        self.assertEqual(smartvalue.default_protocol, "TCP")
         self.assertEqual(smartvalue.known_hosts, ("m2m.eybond.com",))
         self.assertEqual(smartvalue.known_ports, ())
+        self.assertEqual(smartvalue.endpoint_write_format, "host_port_protocol")
+        self.assertEqual(smartvalue.session_protocol, "at_text")
+        self.assertEqual(smartvalue.identity_strategy, "at_dtupn")
 
     def test_resolves_known_families_by_host(self) -> None:
         self.assertEqual(resolve_collector_cloud_family_by_host("ess.eybond.com"), "legacy_binary")
@@ -67,11 +91,29 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(resolve_collector_cloud_family_by_port("not-a-port"), "")
         self.assertEqual(resolve_collector_cloud_default_host(""), "")
         self.assertEqual(resolve_collector_cloud_default_host("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_default_port("unknown"), 0)
+        self.assertEqual(resolve_collector_cloud_default_protocol("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_endpoint_write_format("unknown"), "")
 
     def test_resolves_known_default_hosts(self) -> None:
         self.assertEqual(resolve_collector_cloud_default_host("legacy_binary"), "ess.eybond.com")
         self.assertEqual(resolve_collector_cloud_default_host("SMARTESS_AT"), "dtu_ess.eybond.com")
         self.assertEqual(resolve_collector_cloud_default_host("smartvalue_at"), "m2m.eybond.com")
+
+    def test_resolves_known_default_ports_protocols_and_write_formats(self) -> None:
+        self.assertEqual(resolve_collector_cloud_default_port("legacy_binary"), 502)
+        self.assertEqual(resolve_collector_cloud_default_port("SMARTESS_AT"), 18899)
+        self.assertEqual(resolve_collector_cloud_default_port("smartvalue_at"), 18899)
+        self.assertEqual(resolve_collector_cloud_default_protocol("legacy_binary"), "TCP")
+        self.assertEqual(resolve_collector_cloud_default_protocol("smartess_at"), "TCP")
+        self.assertEqual(
+            resolve_collector_cloud_endpoint_write_format("legacy_binary"),
+            "host_only",
+        )
+        self.assertEqual(
+            resolve_collector_cloud_endpoint_write_format("smartess_at"),
+            "host_port_protocol",
+        )
 
 
 if __name__ == "__main__":
