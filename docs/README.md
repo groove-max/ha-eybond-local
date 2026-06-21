@@ -18,3 +18,7 @@ Ukrainian readers can also use the [Ukrainian README](../README.uk.md).
 ## For contributors
 
 If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CONTRIBUTING.md).
+
+Maintainer architecture notes:
+
+- [Collector Profile Architecture Plan](COLLECTOR_PROFILE_ARCHITECTURE_PLAN.md) — collector cloud profiles, endpoint preservation, ESP bridge capabilities, and future callback session identity routing.
