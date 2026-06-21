@@ -597,6 +597,55 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["recent_session_count"], 2)
         self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
 
+    async def test_listener_routes_many_simultaneous_at_collectors_from_same_peer_ip_by_pn(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_session_protocol_owner("at_text")
+        pns = tuple(f"E50000200000{index:02d}" for index in range(8))
+        for pn in pns:
+            listener.register_at_pn_owner(pn)
+
+        async def _run_pending(index: int, pn: str) -> _FakeWriter:
+            session_id = f"session-{index}"
+            listener._remember_session(
+                session_id=session_id,
+                remote_ip="203.0.113.10",
+                remote_port=41000 + index,
+            )
+            reader = asyncio.StreamReader()
+
+            class _ProbeWriter(_FakeWriter):
+                async def drain(self) -> None:
+                    await asyncio.sleep(0)
+                    reader.feed_data(f"AT+DTUPN:{pn}\r\n".encode("ascii"))
+                    reader.feed_eof()
+
+            writer = _ProbeWriter()
+            pending = _PendingCollectorSocket(
+                remote_ip="203.0.113.10",
+                remote_port=41000 + index,
+                session_id=session_id,
+                reader=reader,
+                writer=writer,  # type: ignore[arg-type]
+            )
+            listener._pending_sockets[session_id] = pending
+            await listener._sniff_pending_socket(pending)
+            return writer
+
+        writers = await asyncio.gather(
+            *(_run_pending(index, pn) for index, pn in enumerate(pns))
+        )
+
+        self.assertTrue(all(bytes(writer.buffer) == b"AT+DTUPN?\r\n" for writer in writers))
+        self.assertEqual(set(listener._at_connections_by_pn), set(pns))
+        self.assertEqual(
+            len({id(connection) for connection in listener._at_connections_by_pn.values()}),
+            len(pns),
+        )
+        diagnostics = listener.session_inventory_diagnostics()
+        self.assertEqual(diagnostics["pending_session_count"], 0)
+        self.assertEqual(diagnostics["recent_session_count"], len(pns))
+        self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
+
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
         transport = SharedEybondTransport(

@@ -267,11 +267,11 @@ collector_pn -> observed_at
 
 ## Remaining work
 
-- Add broader restart-style regression coverage with many simultaneous callback
-  sessions, not just the focused two-collector same-peer cases.
 - Improve user-facing diagnostics for unresolved callback identity: the support
   archive already contains the technical state, but the HA UI should summarize
   it as a safe routing/identity problem rather than a generic offline state.
+- Validate the PN-routed callback behavior on a real multi-collector setup,
+  especially during Home Assistant restart and route transitions.
 - Treat `smartvalue_at` as a catalog/profile candidate until real traffic
   evidence confirms its exact callback behavior.
 
