@@ -313,6 +313,70 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                     await writer.wait_closed()
             await transport.stop()
 
+    async def test_transport_can_select_connected_session_by_collector_pn(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        first = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        first._writer = _OpenWriter()  # type: ignore[assignment]
+        first._collector.remote_ip = "203.0.113.10"
+        first._collector.collector_pn = "PN-ONE"
+
+        second = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        second._writer = _OpenWriter()  # type: ignore[assignment]
+        second._collector.remote_ip = "203.0.113.10"
+        second._collector.collector_pn = "PN-TWO"
+
+        listener._connections["203.0.113.10:first"] = first
+        listener._connections["203.0.113.10:second"] = second
+        listener._connections_by_pn["PN-ONE"] = first
+        listener._connections_by_pn["PN-TWO"] = second
+
+        transport = SharedEybondTransport(
+            host="127.0.0.1",
+            port=listener._port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="",
+            collector_pn="PN-TWO",
+        )
+        transport._listener = listener
+
+        self.assertTrue(transport.connected)
+        self.assertEqual(transport.collector_info.collector_pn, "PN-TWO")
+
+    async def test_listener_indexes_passive_identity_for_pn_routing(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        listener._session_payload_connections["session-1"] = connection
+
+        listener._mark_session_identity("session-1", "E5000020000000", "framed_heartbeat")
+
+        self.assertIs(
+            listener.ensure_connection(
+                "",
+                heartbeat_interval=60.0,
+                write_timeout=0.5,
+                collector_pn="E5000020000000",
+            ),
+            connection,
+        )
+
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
         transport = SharedEybondTransport(

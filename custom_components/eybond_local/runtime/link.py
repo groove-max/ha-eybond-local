@@ -251,10 +251,12 @@ class EybondRuntimeLinkManager:
         heartbeat_interval: int,
         advertised_server_ip: str = "",
         advertised_tcp_port: int = 0,
+        collector_pn: str = "",
     ) -> None:
         self._configured_server_ip = server_ip
         self._configured_advertised_server_ip = advertised_server_ip.strip()
         self._collector_ip = collector_ip
+        self._collector_pn = str(collector_pn or "").strip()
         self._tcp_port = int(tcp_port)
         self._configured_advertised_tcp_port = int(advertised_tcp_port or 0)
         self._udp_port = int(udp_port)
@@ -974,6 +976,8 @@ class EybondRuntimeLinkManager:
     def _selected_connected_remote_ip(self) -> tuple[str, bool]:
         if self._collector_ip:
             return self._collector_ip, False
+        if self._collector_pn:
+            return "", False
 
         payload_ips = {
             str(transport.collector_info.remote_ip or "").strip()
@@ -1155,12 +1159,14 @@ class EybondRuntimeLinkManager:
             request_timeout=DEFAULT_REQUEST_TIMEOUT,
             heartbeat_interval=float(self._heartbeat_interval),
             collector_ip=self._collector_ip,
+            collector_pn=self._collector_pn,
         )
         at_transport = SharedCollectorAtTransport(
             host=bind_host,
             port=port,
             request_timeout=DEFAULT_REQUEST_TIMEOUT,
             collector_ip=self._collector_ip,
+            collector_pn=self._collector_pn,
         )
         return payload_transport, at_transport
 

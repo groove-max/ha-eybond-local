@@ -20,6 +20,7 @@ from custom_components.eybond_local.const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
+    CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
     CONF_DISCOVERY_TARGET,
     CONF_HEARTBEAT_INTERVAL,
@@ -75,6 +76,7 @@ class ConnectionModelsTests(unittest.TestCase):
                 CONF_ADVERTISED_TCP_PORT: 9889,
                 CONF_UDP_PORT: 58899,
                 CONF_COLLECTOR_IP: "192.168.1.14",
+                CONF_COLLECTOR_PN: "E5000020000000",
                 CONF_DISCOVERY_TARGET: "192.168.1.255",
                 CONF_HEARTBEAT_INTERVAL: 60,
             },
@@ -84,6 +86,7 @@ class ConnectionModelsTests(unittest.TestCase):
         self.assertIsInstance(spec, EybondConnectionSpec)
         self.assertEqual(spec.type, "eybond")
         self.assertEqual(spec.server_ip, "192.168.1.50")
+        self.assertEqual(spec.collector_pn, "E5000020000000")
         self.assertEqual(spec.effective_advertised_server_ip, "203.0.113.10")
         self.assertEqual(spec.effective_advertised_tcp_port, 9889)
 

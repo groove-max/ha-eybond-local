@@ -256,6 +256,29 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(collector.collector_pn_prefix, "E")
         self.assertEqual(collector.collector_pn_digits, "50000200000000001")
 
+    def test_collector_info_uses_pn_binding_without_remote_ip_ambiguity(self) -> None:
+        manager = self._build_manager(collector_ip="")
+        manager._collector_pn = "PN-TWO"
+
+        transport = _FakeTransport(connected=True, remote_ip="203.0.113.10")
+        transport.collector_info = CollectorInfo(
+            remote_ip="203.0.113.10",
+            collector_pn="PN-TWO",
+        )
+        at_transport = _FakeTransport(connected=True, remote_ip="203.0.113.10")
+        at_transport.collector_info = CollectorInfo(
+            remote_ip="203.0.113.10",
+            collector_pn="PN-TWO",
+        )
+        manager._transport = transport  # type: ignore[assignment]
+        manager._at_transport = at_transport  # type: ignore[assignment]
+        manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
+
+        collector = manager.collector_info
+
+        self.assertEqual(collector.remote_ip, "203.0.113.10")
+        self.assertEqual(collector.collector_pn, "PN-TWO")
+
     def test_async_try_connect_uses_discovery_then_stops_it(self) -> None:
         manager = self._build_manager()
         transport = _FakeTransport(connected=False, connect_result=True)

@@ -20,6 +20,7 @@ from ..const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
+    CONF_COLLECTOR_PN,
     CONF_DISCOVERY_INTERVAL,
     CONF_DISCOVERY_TARGET,
     CONF_HEARTBEAT_INTERVAL,
@@ -90,6 +91,7 @@ def _build_eybond_connection_spec(
         ),
         udp_port=int(options.get(CONF_UDP_PORT, data.get(CONF_UDP_PORT, DEFAULT_UDP_PORT))),
         collector_ip=str(options.get(CONF_COLLECTOR_IP, data.get(CONF_COLLECTOR_IP, DEFAULT_COLLECTOR_IP))),
+        collector_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
         discovery_target=str(
             options.get(
                 CONF_DISCOVERY_TARGET,

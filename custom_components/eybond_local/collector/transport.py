@@ -924,12 +924,18 @@ class _SharedEybondListener:
         self._ref_count = 0
         self._connections: dict[str, _CollectorConnection] = {}
         self._at_connections: dict[str, _CollectorAtConnection] = {}
+        self._connections_by_pn: dict[str, _CollectorConnection] = {}
+        self._at_connections_by_pn: dict[str, _CollectorAtConnection] = {}
+        self._session_payload_connections: dict[str, _CollectorConnection] = {}
+        self._session_at_connections: dict[str, _CollectorAtConnection] = {}
         self._pending_sockets: dict[str, _PendingCollectorSocket] = {}
         self._last_connection_ip = ""
         self._last_at_connection_ip = ""
         self._last_pending_ip = ""
         self._payload_owner_counts: dict[str, int] = {}
         self._at_owner_counts: dict[str, int] = {}
+        self._payload_pn_owner_counts: dict[str, int] = {}
+        self._at_pn_owner_counts: dict[str, int] = {}
         self._session_seq = 0
         self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
 
@@ -959,14 +965,20 @@ class _SharedEybondListener:
         for connection in self._unique_connections():
             await connection.disconnect()
         self._connections.clear()
+        self._connections_by_pn.clear()
         for connection in self._unique_at_connections():
             await connection.disconnect()
         self._at_connections.clear()
+        self._at_connections_by_pn.clear()
+        self._session_payload_connections.clear()
+        self._session_at_connections.clear()
         self._last_connection_ip = ""
         self._last_at_connection_ip = ""
         self._last_pending_ip = ""
         self._payload_owner_counts.clear()
         self._at_owner_counts.clear()
+        self._payload_pn_owner_counts.clear()
+        self._at_pn_owner_counts.clear()
         self._session_inventory.clear()
 
         if self._server is not None:
@@ -979,25 +991,49 @@ class _SharedEybondListener:
         owner = str(collector_ip or "").strip()
         self._payload_owner_counts[owner] = self._payload_owner_counts.get(owner, 0) + 1
 
+    def register_payload_pn_owner(self, collector_pn: str) -> None:
+        owner = str(collector_pn or "").strip()
+        if not owner:
+            return
+        self._payload_pn_owner_counts[owner] = self._payload_pn_owner_counts.get(owner, 0) + 1
+
     def unregister_payload_owner(self, collector_ip: str) -> None:
         self._decrement_owner_count(self._payload_owner_counts, collector_ip)
+
+    def unregister_payload_pn_owner(self, collector_pn: str) -> None:
+        self._decrement_owner_count(self._payload_pn_owner_counts, collector_pn)
 
     def register_at_owner(self, collector_ip: str) -> None:
         owner = str(collector_ip or "").strip()
         self._at_owner_counts[owner] = self._at_owner_counts.get(owner, 0) + 1
 
+    def register_at_pn_owner(self, collector_pn: str) -> None:
+        owner = str(collector_pn or "").strip()
+        if not owner:
+            return
+        self._at_pn_owner_counts[owner] = self._at_pn_owner_counts.get(owner, 0) + 1
+
     def unregister_at_owner(self, collector_ip: str) -> None:
         self._decrement_owner_count(self._at_owner_counts, collector_ip)
 
-    def _decrement_owner_count(self, owner_counts: dict[str, int], collector_ip: str) -> None:
-        owner = str(collector_ip or "").strip()
+    def unregister_at_pn_owner(self, collector_pn: str) -> None:
+        self._decrement_owner_count(self._at_pn_owner_counts, collector_pn)
+
+    def _decrement_owner_count(self, owner_counts: dict[str, int], owner_value: str) -> None:
+        owner = str(owner_value or "").strip()
         count = owner_counts.get(owner, 0)
         if count <= 1:
             owner_counts.pop(owner, None)
             return
         owner_counts[owner] = count - 1
 
-    def ensure_connection(self, collector_ip: str, heartbeat_interval: float, write_timeout: float) -> _CollectorConnection | None:
+    def ensure_connection(
+        self,
+        collector_ip: str,
+        heartbeat_interval: float,
+        write_timeout: float,
+        collector_pn: str = "",
+    ) -> _CollectorConnection | None:
         if collector_ip:
             connection = self._connections.get(collector_ip)
             if connection is None:
@@ -1008,6 +1044,16 @@ class _SharedEybondListener:
                 )
                 self._connections[collector_ip] = connection
             else:
+                connection.set_heartbeat_interval(heartbeat_interval)
+                connection.set_write_timeout(write_timeout)
+            return connection
+
+        if collector_pn:
+            connection = self._connection_by_collector_pn(
+                collector_pn,
+                self._connections_by_pn,
+            )
+            if connection is not None:
                 connection.set_heartbeat_interval(heartbeat_interval)
                 connection.set_write_timeout(write_timeout)
             return connection
@@ -1032,7 +1078,12 @@ class _SharedEybondListener:
         connection.set_write_timeout(write_timeout)
         return connection
 
-    def ensure_at_connection(self, collector_ip: str, write_timeout: float) -> _CollectorAtConnection | None:
+    def ensure_at_connection(
+        self,
+        collector_ip: str,
+        write_timeout: float,
+        collector_pn: str = "",
+    ) -> _CollectorAtConnection | None:
         if collector_ip:
             connection = self._at_connections.get(collector_ip)
             if connection is None:
@@ -1045,8 +1096,40 @@ class _SharedEybondListener:
                 connection.set_write_timeout(write_timeout)
             return connection
 
+        if collector_pn:
+            connection = self._connection_by_collector_pn(
+                collector_pn,
+                self._at_connections_by_pn,
+            )
+            if connection is not None:
+                connection.set_write_timeout(write_timeout)
+            return connection
+
         connection = self.current_at_connection(write_timeout=write_timeout)
         return connection
+
+    def _connection_by_collector_pn(
+        self,
+        collector_pn: str,
+        connections_by_pn: dict[str, object],
+    ) -> object | None:
+        normalized_pn = str(collector_pn or "").strip()
+        if not normalized_pn:
+            return None
+        exact = connections_by_pn.get(normalized_pn)
+        if exact is not None:
+            return exact
+
+        candidates: list[object] = []
+        for known_pn, connection in connections_by_pn.items():
+            if not known_pn:
+                continue
+            if known_pn.startswith(normalized_pn) or normalized_pn.startswith(known_pn):
+                candidates.append(connection)
+        unique_candidates = {id(candidate): candidate for candidate in candidates}
+        if len(unique_candidates) != 1:
+            return None
+        return next(iter(unique_candidates.values()))
 
     def current_at_connection(self, *, write_timeout: float) -> _CollectorAtConnection | None:
         connected = tuple(
@@ -1147,18 +1230,24 @@ class _SharedEybondListener:
         collector_pn: str,
         source: str,
     ) -> None:
-        entry = self._session_inventory.get(session_id)
-        if entry is None:
-            return
         normalized_pn = str(collector_pn or "").strip()
         if not normalized_pn:
             return
-        entry.collector_pn = _prefer_more_complete_identity(
-            entry.collector_pn,
-            normalized_pn,
-        )
-        if source:
-            entry.collector_identity_source = str(source)
+        entry = self._session_inventory.get(session_id)
+        if entry is not None:
+            entry.collector_pn = _prefer_more_complete_identity(
+                entry.collector_pn,
+                normalized_pn,
+            )
+            if source:
+                entry.collector_identity_source = str(source)
+
+        payload_connection = self._session_payload_connections.get(session_id)
+        if payload_connection is not None:
+            self._connections_by_pn[normalized_pn] = payload_connection
+        at_connection = self._session_at_connections.get(session_id)
+        if at_connection is not None:
+            self._at_connections_by_pn[normalized_pn] = at_connection
 
     def matching_callback_ips(self, collector_ip: str) -> tuple[str, ...]:
         if not collector_ip:
@@ -1350,6 +1439,34 @@ class _SharedEybondListener:
             if id(connection) in selected_ids
         )
 
+    def _connection_keys_for_collector_pn(
+        self,
+        collector_pn: str,
+        connections_by_pn: dict[str, object],
+        connections: dict[str, object],
+    ) -> tuple[str, ...]:
+        connection = self._connection_by_collector_pn(collector_pn, connections_by_pn)
+        if connection is None:
+            return ()
+        selected_id = id(connection)
+        return tuple(
+            key
+            for key, candidate in connections.items()
+            if id(candidate) == selected_id
+        )
+
+    def _drop_connection_pn_indexes(
+        self,
+        connections_by_pn: dict[str, object],
+        selected_connections: list[object],
+    ) -> None:
+        if not selected_connections:
+            return
+        selected_ids = {id(connection) for connection in selected_connections}
+        for collector_pn, connection in tuple(connections_by_pn.items()):
+            if id(connection) in selected_ids:
+                connections_by_pn.pop(collector_pn, None)
+
     async def _disconnect_connection_keys(
         self,
         connections: dict[str, object],
@@ -1374,25 +1491,33 @@ class _SharedEybondListener:
             disconnect = getattr(connection, "disconnect", None)
             if callable(disconnect):
                 await disconnect()
+        self._drop_connection_pn_indexes(self._connections_by_pn, selected_connections)
+        self._drop_connection_pn_indexes(self._at_connections_by_pn, selected_connections)
 
     async def release_collector_connections(
         self,
         collector_ip: str,
+        collector_pn: str = "",
         *,
         close_payload: bool = False,
         close_at: bool = False,
         close_pending: bool = False,
     ) -> None:
-        if not collector_ip:
+        if not collector_ip and not collector_pn:
             return
 
         if close_payload and self._has_owner_for_remote_ip(self._payload_owner_counts, collector_ip):
             close_payload = False
             close_pending = False
+        if close_payload and collector_pn and self._payload_pn_owner_counts.get(collector_pn, 0) > 0:
+            close_payload = False
+            close_pending = False
         if close_at and self._has_owner_for_remote_ip(self._at_owner_counts, collector_ip):
             close_at = False
+        if close_at and collector_pn and self._at_pn_owner_counts.get(collector_pn, 0) > 0:
+            close_at = False
 
-        if close_pending:
+        if close_pending and collector_ip:
             for remote_ip, pending in tuple(self._pending_sockets.items()):
                 if not self._callback_ip_matches_collector(collector_ip, remote_ip):
                     continue
@@ -1400,22 +1525,42 @@ class _SharedEybondListener:
                 await self._close_pending_socket(pending)
 
         if close_payload:
+            payload_keys = set(
+                self._connection_keys_for_collector(collector_ip, self._connections)
+            )
+            payload_keys.update(
+                self._connection_keys_for_collector_pn(
+                    collector_pn,
+                    self._connections_by_pn,
+                    self._connections,
+                )
+            )
             await self._disconnect_connection_keys(
                 self._connections,
-                self._connection_keys_for_collector(collector_ip, self._connections),
+                tuple(payload_keys),
             )
-            if self._callback_ip_matches_collector(collector_ip, self._last_connection_ip):
+            if collector_ip and self._callback_ip_matches_collector(collector_ip, self._last_connection_ip):
                 self._last_connection_ip = ""
 
         if close_at:
+            at_keys = set(
+                self._connection_keys_for_collector(collector_ip, self._at_connections)
+            )
+            at_keys.update(
+                self._connection_keys_for_collector_pn(
+                    collector_pn,
+                    self._at_connections_by_pn,
+                    self._at_connections,
+                )
+            )
             await self._disconnect_connection_keys(
                 self._at_connections,
-                self._connection_keys_for_collector(collector_ip, self._at_connections),
+                tuple(at_keys),
             )
-            if self._callback_ip_matches_collector(collector_ip, self._last_at_connection_ip):
+            if collector_ip and self._callback_ip_matches_collector(collector_ip, self._last_at_connection_ip):
                 self._last_at_connection_ip = ""
 
-        if close_pending and self._callback_ip_matches_collector(collector_ip, self._last_pending_ip):
+        if close_pending and collector_ip and self._callback_ip_matches_collector(collector_ip, self._last_pending_ip):
             self._last_pending_ip = ""
 
     async def activate_pending_at_connection(
@@ -1443,6 +1588,8 @@ class _SharedEybondListener:
         self._at_connections[remote_ip] = connection
         if collector_ip and collector_ip not in self._at_connections:
             self._at_connections[collector_ip] = connection
+        if pending.session_id:
+            self._session_at_connections[pending.session_id] = connection
         self._last_at_connection_ip = remote_ip
         self._mark_session_state(pending.session_id, "routed_at_text")
         asyncio.create_task(
@@ -1482,6 +1629,8 @@ class _SharedEybondListener:
         self._connections[remote_ip] = connection
         if collector_ip and collector_ip not in self._connections:
             self._connections[collector_ip] = connection
+        if pending.session_id:
+            self._session_payload_connections[pending.session_id] = connection
         self._last_connection_ip = remote_ip
         self._mark_session_state(pending.session_id, "routed_framed")
         asyncio.create_task(
@@ -1544,6 +1693,8 @@ class _SharedEybondListener:
             else:
                 connection.set_write_timeout(1.5)
             self._at_connections[pending.remote_ip] = connection
+            if pending.session_id:
+                self._session_at_connections[pending.session_id] = connection
             self._last_at_connection_ip = pending.remote_ip
             self._mark_session_state(pending.session_id, "routed_at_text")
             await connection.run(
@@ -1576,6 +1727,8 @@ class _SharedEybondListener:
             connection.set_heartbeat_interval(60.0)
             connection.set_write_timeout(1.5)
         self._connections[pending.remote_ip] = connection
+        if pending.session_id:
+            self._session_payload_connections[pending.session_id] = connection
         self._last_connection_ip = pending.remote_ip
         self._mark_session_state(pending.session_id, "routed_framed")
         await connection.run(
@@ -1680,17 +1833,29 @@ async def _acquire_shared_listener(host: str, port: int) -> _SharedEybondListene
         return await _acquire_listener_locked(host, port)
 
 
-async def _acquire_shared_payload_listener(host: str, port: int, collector_ip: str) -> _SharedEybondListener:
+async def _acquire_shared_payload_listener(
+    host: str,
+    port: int,
+    collector_ip: str,
+    collector_pn: str = "",
+) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
         listener = await _acquire_listener_locked(host, port)
         listener.register_payload_owner(collector_ip)
+        listener.register_payload_pn_owner(collector_pn)
         return listener
 
 
-async def _acquire_shared_at_listener(host: str, port: int, collector_ip: str) -> _SharedEybondListener:
+async def _acquire_shared_at_listener(
+    host: str,
+    port: int,
+    collector_ip: str,
+    collector_pn: str = "",
+) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
         listener = await _acquire_listener_locked(host, port)
         listener.register_at_owner(collector_ip)
+        listener.register_at_pn_owner(collector_pn)
         return listener
 
 
@@ -1698,21 +1863,29 @@ async def _release_shared_listener(
     listener: _SharedEybondListener,
     *,
     collector_ip: str = "",
+    collector_pn: str = "",
     close_payload: bool = False,
     close_at: bool = False,
     close_pending: bool = False,
     unregister_payload_owner: bool = False,
+    unregister_payload_pn_owner: bool = False,
     unregister_at_owner: bool = False,
+    unregister_at_pn_owner: bool = False,
 ) -> None:
     async def _release() -> None:
         async with _LISTENERS_LOCK:
             key = (listener._host, listener._port)
             if unregister_payload_owner:
                 listener.unregister_payload_owner(collector_ip)
+            if unregister_payload_pn_owner:
+                listener.unregister_payload_pn_owner(collector_pn)
             if unregister_at_owner:
                 listener.unregister_at_owner(collector_ip)
+            if unregister_at_pn_owner:
+                listener.unregister_at_pn_owner(collector_pn)
             await listener.release_collector_connections(
                 collector_ip,
+                collector_pn,
                 close_payload=close_payload,
                 close_at=close_at,
                 close_pending=close_pending,
@@ -1798,6 +1971,7 @@ class SharedEybondTransport:
         request_timeout: float,
         heartbeat_interval: float,
         collector_ip: str,
+        collector_pn: str = "",
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -1805,6 +1979,7 @@ class SharedEybondTransport:
         self._write_timeout = _bounded_write_timeout(request_timeout)
         self._heartbeat_interval = float(heartbeat_interval)
         self._collector_ip = collector_ip
+        self._collector_pn = str(collector_pn or "").strip()
         self._listener: _SharedEybondListener | None = None
 
     @property
@@ -1817,7 +1992,9 @@ class SharedEybondTransport:
         connection = self._connection(create_placeholder=False)
         if connection is not None:
             return connection.collector_info
-        return _copy_collector_info(CollectorInfo(remote_ip=self._collector_ip))
+        return _copy_collector_info(
+            CollectorInfo(remote_ip=self._collector_ip, collector_pn=self._collector_pn)
+        )
 
     async def start(self) -> None:
         if self._listener is not None:
@@ -1826,6 +2003,7 @@ class SharedEybondTransport:
             self._host,
             self._port,
             self._collector_ip,
+            self._collector_pn,
         )
         self._connection(create_placeholder=bool(self._collector_ip))
 
@@ -1837,19 +2015,27 @@ class SharedEybondTransport:
         await _release_shared_listener(
             listener,
             collector_ip=self._collector_ip,
+            collector_pn=self._collector_pn,
             close_payload=True,
             close_pending=True,
             unregister_payload_owner=True,
+            unregister_payload_pn_owner=True,
         )
 
     async def async_snapshot_shared_connection(self) -> _CollectorConnection | None:
-        if not self._collector_ip:
+        if not self._collector_ip and not self._collector_pn:
             return None
         async with _LISTENERS_LOCK:
             listener = _LISTENERS.get((self._host, self._port))
             if listener is None:
                 return None
-            connection = listener._connections.get(self._collector_ip)
+            if self._collector_ip:
+                connection = listener._connections.get(self._collector_ip)
+            else:
+                connection = listener._connection_by_collector_pn(
+                    self._collector_pn,
+                    listener._connections_by_pn,
+                )
             if connection is None or not connection.connected:
                 return None
             return connection
@@ -1869,13 +2055,19 @@ class SharedEybondTransport:
         self,
         snapshot: _CollectorConnection | None,
     ) -> None:
-        if not self._collector_ip:
+        if not self._collector_ip and not self._collector_pn:
             return
         async with _LISTENERS_LOCK:
             listener = _LISTENERS.get((self._host, self._port))
             if listener is None:
                 return
-            connection = listener._connections.get(self._collector_ip)
+            if self._collector_ip:
+                connection = listener._connections.get(self._collector_ip)
+            else:
+                connection = listener._connection_by_collector_pn(
+                    self._collector_pn,
+                    listener._connections_by_pn,
+                )
         if connection is None or connection is snapshot:
             return
         await connection.disconnect()
@@ -2010,14 +2202,15 @@ class SharedEybondTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        pending = self._listener.pop_pending_socket(self._collector_ip)
-        if pending is not None:
-            return await self._listener.activate_pending_connection(
-                pending,
-                collector_ip=self._collector_ip,
-                heartbeat_interval=self._heartbeat_interval,
-                write_timeout=self._write_timeout,
-            )
+        if self._collector_ip:
+            pending = self._listener.pop_pending_socket(self._collector_ip)
+            if pending is not None:
+                return await self._listener.activate_pending_connection(
+                    pending,
+                    collector_ip=self._collector_ip,
+                    heartbeat_interval=self._heartbeat_interval,
+                    write_timeout=self._write_timeout,
+                )
 
         if connection is None or not connection.connected:
             raise ConnectionError("collector_not_connected")
@@ -2032,12 +2225,21 @@ class SharedEybondTransport:
                 self._collector_ip,
                 self._heartbeat_interval,
                 self._write_timeout,
+                self._collector_pn,
             )
         if self._collector_ip:
             return self._listener.ensure_connection(
                 self._collector_ip,
                 self._heartbeat_interval,
                 self._write_timeout,
+                self._collector_pn,
+            )
+        if self._collector_pn:
+            return self._listener.ensure_connection(
+                "",
+                self._heartbeat_interval,
+                self._write_timeout,
+                self._collector_pn,
             )
         return self._listener.current_connection(
             heartbeat_interval=self._heartbeat_interval,
@@ -2055,12 +2257,14 @@ class SharedCollectorAtTransport:
         port: int,
         request_timeout: float,
         collector_ip: str,
+        collector_pn: str = "",
     ) -> None:
         self._host = host
         self._port = int(port)
         self._request_timeout = float(request_timeout)
         self._write_timeout = _bounded_write_timeout(request_timeout)
         self._collector_ip = collector_ip
+        self._collector_pn = str(collector_pn or "").strip()
         self._listener: _SharedEybondListener | None = None
 
     @property
@@ -2085,7 +2289,9 @@ class SharedCollectorAtTransport:
             pending = self._listener._select_pending_socket(self._collector_ip)
             if pending is not None:
                 return _copy_collector_info(CollectorInfo(remote_ip=pending.remote_ip))
-        return _copy_collector_info(CollectorInfo(remote_ip=self._collector_ip))
+        return _copy_collector_info(
+            CollectorInfo(remote_ip=self._collector_ip, collector_pn=self._collector_pn)
+        )
 
     async def start(self) -> None:
         if self._listener is not None:
@@ -2094,6 +2300,7 @@ class SharedCollectorAtTransport:
             self._host,
             self._port,
             self._collector_ip,
+            self._collector_pn,
         )
         self._at_connection(create_placeholder=bool(self._collector_ip))
 
@@ -2105,8 +2312,10 @@ class SharedCollectorAtTransport:
         await _release_shared_listener(
             listener,
             collector_ip=self._collector_ip,
+            collector_pn=self._collector_pn,
             close_at=True,
             unregister_at_owner=True,
+            unregister_at_pn_owner=True,
         )
 
     async def disconnect(self) -> None:
@@ -2157,15 +2366,16 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        pending = self._listener.pop_pending_socket(self._collector_ip)
-        if pending is not None:
-            framed = await self._listener.activate_pending_connection(
-                pending,
-                collector_ip=self._collector_ip,
-                heartbeat_interval=60.0,
-                write_timeout=self._write_timeout,
-            )
-            return await framed.async_query(command, request_timeout=self._request_timeout)
+        if self._collector_ip:
+            pending = self._listener.pop_pending_socket(self._collector_ip)
+            if pending is not None:
+                framed = await self._listener.activate_pending_connection(
+                    pending,
+                    collector_ip=self._collector_ip,
+                    heartbeat_interval=60.0,
+                    write_timeout=self._write_timeout,
+                )
+                return await framed.async_query(command, request_timeout=self._request_timeout)
 
         if connection is None:
             raise ConnectionError("collector_not_connected")
@@ -2182,11 +2392,19 @@ class SharedCollectorAtTransport:
             return self._listener.ensure_at_connection(
                 self._collector_ip,
                 self._write_timeout,
+                self._collector_pn,
             )
         if self._collector_ip:
             return self._listener.ensure_at_connection(
                 self._collector_ip,
                 self._write_timeout,
+                self._collector_pn,
+            )
+        if self._collector_pn:
+            return self._listener.ensure_at_connection(
+                "",
+                self._write_timeout,
+                self._collector_pn,
             )
         return self._listener.current_at_connection(write_timeout=self._write_timeout)
 
@@ -2198,12 +2416,21 @@ class SharedCollectorAtTransport:
                 self._collector_ip,
                 heartbeat_interval=60.0,
                 write_timeout=self._write_timeout,
+                collector_pn=self._collector_pn,
             )
         if self._collector_ip:
             return self._listener.ensure_connection(
                 self._collector_ip,
                 heartbeat_interval=60.0,
                 write_timeout=self._write_timeout,
+                collector_pn=self._collector_pn,
+            )
+        if self._collector_pn:
+            return self._listener.ensure_connection(
+                "",
+                heartbeat_interval=60.0,
+                write_timeout=self._write_timeout,
+                collector_pn=self._collector_pn,
             )
         return self._listener.current_connection(
             heartbeat_interval=60.0,
