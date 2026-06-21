@@ -381,6 +381,28 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             connection,
         )
 
+    async def test_release_collector_connections_drops_session_identity_indexes(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._writer = _FakeWriter()  # type: ignore[assignment]
+        listener._connections["203.0.113.10"] = connection
+        listener._connections_by_pn["PN-ONE"] = connection
+        listener._session_payload_connections["session-one"] = connection
+
+        await listener.release_collector_connections(
+            "",
+            "PN-ONE",
+            close_payload=True,
+        )
+
+        self.assertNotIn("203.0.113.10", listener._connections)
+        self.assertNotIn("PN-ONE", listener._connections_by_pn)
+        self.assertNotIn("session-one", listener._session_payload_connections)
+
     async def test_listener_routes_initial_framed_identity_to_pn_owner(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener.register_payload_pn_owner("E50000200000000001")
@@ -1395,10 +1417,16 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         class _FakeListener:
             def __init__(self, pending: _PendingCollectorSocket) -> None:
                 self._pending = pending
-                self.calls: list[str] = []
+                self.calls: list[tuple[str, str, str]] = []
 
-            def pop_pending_socket(self, collector_ip: str = "") -> _PendingCollectorSocket | None:
-                self.calls.append(collector_ip)
+            async def pop_pending_socket_for_route(
+                self,
+                *,
+                collector_ip: str = "",
+                collector_pn: str = "",
+                session_protocol: str = "",
+            ) -> _PendingCollectorSocket | None:
+                self.calls.append((collector_ip, collector_pn, session_protocol))
                 pending = self._pending
                 self._pending = None  # type: ignore[assignment]
                 return pending
@@ -1438,6 +1466,85 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handled_chunks, [b"ping"])
         self.assertEqual(bytes(writer.buffer), b"pong")
         self.assertTrue(writer.closed)
+
+    async def test_proxy_capture_route_selects_same_peer_pending_by_collector_pn(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="session-one",
+            remote_ip="203.0.113.10",
+            remote_port=41001,
+        )
+        listener._remember_session(
+            session_id="session-two",
+            remote_ip="203.0.113.10",
+            remote_port=41002,
+        )
+
+        first_reader = asyncio.StreamReader()
+        second_reader = asyncio.StreamReader()
+
+        class _ProbeWriter(_FakeWriter):
+            def __init__(self, reader: asyncio.StreamReader, pn: str) -> None:
+                super().__init__()
+                self._reader = reader
+                self._pn = pn
+
+            async def drain(self) -> None:
+                self._reader.feed_data(f"AT+DTUPN:{self._pn}\r\n".encode("ascii"))
+                self._reader.feed_eof()
+
+        first_pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41001,
+            session_id="session-one",
+            reader=first_reader,
+            writer=_ProbeWriter(first_reader, "PN-ONE"),  # type: ignore[arg-type]
+        )
+        second_pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41002,
+            session_id="session-two",
+            reader=second_reader,
+            writer=_ProbeWriter(second_reader, "PN-TWO"),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["session-one"] = first_pending
+        listener._pending_sockets["session-two"] = second_pending
+
+        handled = asyncio.Event()
+        handled_writer: _FakeWriter | None = None
+
+        async def _handler(
+            pending_reader: asyncio.StreamReader,
+            pending_writer: asyncio.StreamWriter,
+        ) -> None:
+            nonlocal handled_writer
+            handled_writer = pending_writer  # type: ignore[assignment]
+            route._running = False
+            handled.set()
+
+        route = SharedProxyCaptureRoute(
+            host="127.0.0.1",
+            port=8899,
+            collector_ip="203.0.113.10",
+            collector_pn="PN-TWO",
+            collector_session_protocol="at_text",
+            handler=_handler,
+        )
+        route._listener = listener
+        route._running = True
+
+        await route._route_loop()
+
+        self.assertTrue(handled.is_set())
+        self.assertIs(handled_writer, second_pending.writer)
+        self.assertIn("session-one", listener._pending_sockets)
+        self.assertNotIn("session-two", listener._pending_sockets)
+        self.assertEqual(first_pending.initial_bytes, b"")
+        self.assertEqual(second_pending.initial_bytes, b"")
+        self.assertEqual(
+            listener.session_inventory_diagnostics()["pending_session_count"],
+            1,
+        )
 
     async def test_at_transport_wait_until_connected_activates_pending_socket(self) -> None:
         port = _free_tcp_port()

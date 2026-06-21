@@ -488,6 +488,8 @@ class EybondHub:
         owner_id: str = "",
         entry_id: str = "",
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -499,6 +501,8 @@ class EybondHub:
 
         route_kwargs = {
             "collector_ip": collector_ip,
+            "collector_pn": collector_pn,
+            "collector_session_protocol": collector_session_protocol,
             "listen_port": listen_port,
             "upstream_host": upstream_host,
             "upstream_port": upstream_port,
@@ -541,6 +545,8 @@ class EybondHub:
         owner_id: str = "",
         entry_id: str = "",
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -551,6 +557,8 @@ class EybondHub:
 
         route_kwargs = {
             "collector_ip": collector_ip,
+            "collector_pn": collector_pn,
+            "collector_session_protocol": collector_session_protocol,
             "listen_port": listen_port,
             "upstream_host": upstream_host,
             "upstream_port": upstream_port,

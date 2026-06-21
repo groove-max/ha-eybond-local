@@ -951,6 +951,8 @@ class HubSnapshotTests(unittest.TestCase):
                 [
                     {
                         "collector_ip": "192.168.1.14",
+                        "collector_pn": "",
+                        "collector_session_protocol": "",
                         "listen_port": 18899,
                         "upstream_host": "dtu_ess.eybond.com",
                         "upstream_port": 18899,

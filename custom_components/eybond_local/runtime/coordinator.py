@@ -113,6 +113,9 @@ from ..metadata.local_metadata import (
     create_local_schema_draft,
     rollback_local_metadata_overrides,
 )
+from ..metadata.collector_cloud_profile_catalog_loader import (
+    resolve_collector_cloud_session_protocol,
+)
 from ..metadata.profile_loader import builtin_base_profile_name
 from ..metadata.register_schema_loader import builtin_base_schema_name
 from ..naming import collector_display_name
@@ -2240,6 +2243,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 owner_id=route_owner_id,
                 entry_id=self.config_entry.entry_id,
                 collector_ip=self._proxy_capture_collector_ip(),
+                collector_pn=self.smartess_collector_pn,
+                collector_session_protocol=self.collector_session_protocol,
                 listen_port=target_port,
                 upstream_host=upstream_host,
                 upstream_port=upstream_port,
@@ -2615,6 +2620,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 owner_id=state.route_owner_id,
                 entry_id=state.entry_id,
                 collector_ip=self._proxy_capture_collector_ip(),
+                collector_pn=self.smartess_collector_pn,
+                collector_session_protocol=self.collector_session_protocol,
                 listen_port=callback_port,
                 upstream_host=upstream_host,
                 upstream_port=upstream_port,
@@ -3067,6 +3074,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if family:
                 return family
         return ""
+
+    @property
+    def collector_session_protocol(self) -> str:
+        """Return the callback session protocol implied by the cloud profile."""
+
+        return resolve_collector_cloud_session_protocol(self.collector_cloud_family)
 
     @property
     def collector_cloud_profile_key(self) -> str:

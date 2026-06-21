@@ -185,14 +185,14 @@ collector_pn -> observed_at
 
 ## Implementation phases
 
-### Phase 1 — expand the collector cloud profile catalog
+### Phase 1 — expand the collector cloud profile catalog — implemented
 
 - Extend `collector_cloud_profiles.json` with provider, labels, endpoint write
   shape, default port/protocol, session protocol, and identity strategy.
 - Add schema/validation tests for required fields and known enum values.
 - Keep compatibility functions such as resolving family by host/port.
 
-### Phase 2 — profile-aware endpoint formatting
+### Phase 2 — profile-aware endpoint formatting — implemented
 
 - Route all endpoint formatting through the profile catalog.
 - Add tests:
@@ -202,14 +202,14 @@ collector_pn -> observed_at
   - local HA endpoint for `smartess_at` uses `host,port,TCP`;
   - unknown profile preserves exact raw endpoint or fails safe.
 
-### Phase 3 — sticky original endpoint preservation
+### Phase 3 — sticky original endpoint preservation — implemented
 
 - Save original cloud endpoint before HA-only/proxy writes.
 - Do not replace saved original with HA/local endpoints.
 - Add a persistent collector registry keyed by collector PN.
 - Surface “original endpoint unknown” clearly in runtime/support diagnostics.
 
-### Phase 4 — collector kind / capability profile
+### Phase 4 — collector kind / capability profile — implemented
 
 - Add a collector-kind profile layer.
 - Move ESP bridge special cases into capabilities:
@@ -221,7 +221,7 @@ collector_pn -> observed_at
     disables it).
 - Keep factory collector behavior unchanged by default.
 
-### Phase 5 — passive session inventory
+### Phase 5 — passive session inventory — implemented
 
 - Stop using remote IP as the only pending-session key internally.
 - Track incoming sessions by session id plus peer IP/port as diagnostics.
@@ -229,9 +229,8 @@ collector_pn -> observed_at
   - pending session count;
   - duplicate peer IP count;
   - first bytes / protocol shape, anonymized.
-- Do not change routing yet.
 
-### Phase 6 — session classifier
+### Phase 6 — session classifier — implemented
 
 - Implement passive classifiers:
   - AT text: detect `AT+DTUPN` response when present;
@@ -242,7 +241,7 @@ collector_pn -> observed_at
 - Do not inject active probes into an already-owned proxy/cloud stream unless
   the mode explicitly allows it.
 
-### Phase 7 — routing by collector identity
+### Phase 7 — routing by collector identity — implemented
 
 - Prefer `collector_pn -> entry` binding when PN is known.
 - Keep IP-based routing for normal LAN legacy entries.
@@ -252,6 +251,29 @@ collector_pn -> observed_at
   - two collectors behind the same NAT IP;
   - Home Assistant restart causing many simultaneous callbacks;
   - one unresolved session not replacing an already-owned session.
+
+### Phase 8 — proxy and shadow-learning route identity — implemented
+
+- Proxy capture and shadow-learning routes receive the same collector PN and
+  session-protocol context as the runtime transport.
+- A proxy route no longer has to claim a pending callback solely by peer IP. If
+  a collector PN is known, the route first tries to match an already-classified
+  pending session, then performs the profile-specific safe identity probe when
+  necessary.
+- Passive bytes consumed during route identity selection are replayed into the
+  proxy handler, so traces do not lose the beginning of the collector stream.
+- Session-id maps are cleaned up together with PN indexes when a collector
+  connection is released.
+
+## Remaining work
+
+- Add broader restart-style regression coverage with many simultaneous callback
+  sessions, not just the focused two-collector same-peer cases.
+- Improve user-facing diagnostics for unresolved callback identity: the support
+  archive already contains the technical state, but the HA UI should summarize
+  it as a safe routing/identity problem rather than a generic offline state.
+- Treat `smartvalue_at` as a catalog/profile candidate until real traffic
+  evidence confirms its exact callback behavior.
 
 ## Non-goals for the first iteration
 

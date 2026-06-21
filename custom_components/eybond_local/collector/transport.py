@@ -923,6 +923,7 @@ class _PendingCollectorSocket:
     session_id: str = ""
     remote_port: int | None = None
     sniff_task: asyncio.Task[None] | None = None
+    initial_bytes: bytes = b""
 
 
 @dataclass(slots=True)
@@ -1405,6 +1406,44 @@ class _SharedEybondListener:
         pending = self._select_pending_socket(collector_ip)
         if pending is None:
             return None
+        return self._claim_pending_socket(pending)
+
+    async def pop_pending_socket_for_route(
+        self,
+        *,
+        collector_ip: str = "",
+        collector_pn: str = "",
+        session_protocol: str = "",
+    ) -> _PendingCollectorSocket | None:
+        normalized_pn = str(collector_pn or "").strip()
+        if not normalized_pn:
+            return self.pop_pending_socket(collector_ip)
+
+        matched = self._select_pending_socket_by_collector_pn(normalized_pn)
+        if matched is not None:
+            return self._claim_pending_socket(matched)
+
+        candidates = self._route_identity_candidates(collector_ip)
+        if not candidates:
+            return None
+
+        for pending in candidates:
+            if not self._pending_socket_still_registered(pending):
+                continue
+            await self._pause_pending_sniff(pending)
+            pending_pn = await self._identify_pending_socket_for_route(
+                pending,
+                session_protocol=session_protocol,
+            )
+            if self._collector_pn_matches(normalized_pn, pending_pn):
+                return self._claim_pending_socket(pending)
+            if pending_pn:
+                self._mark_session_state(pending.session_id, "route_identity_mismatch")
+                continue
+            self._mark_session_state(pending.session_id, "waiting_for_route_identity")
+        return None
+
+    def _claim_pending_socket(self, pending: _PendingCollectorSocket) -> _PendingCollectorSocket:
         self._remove_pending_socket(pending)
         if self._last_pending_ip == pending.remote_ip:
             self._last_pending_ip = ""
@@ -1432,6 +1471,63 @@ class _SharedEybondListener:
             pending
             for pending in self._pending_sockets.values()
             if pending.remote_ip == remote_ip
+        )
+
+    def _select_pending_socket_by_collector_pn(
+        self,
+        collector_pn: str,
+    ) -> _PendingCollectorSocket | None:
+        normalized_pn = str(collector_pn or "").strip()
+        if not normalized_pn:
+            return None
+        candidates: list[_PendingCollectorSocket] = []
+        for pending in self._pending_sockets.values():
+            entry = self._session_inventory.get(pending.session_id)
+            pending_pn = str(getattr(entry, "collector_pn", "") or "").strip()
+            if self._collector_pn_matches(normalized_pn, pending_pn):
+                candidates.append(pending)
+        unique_candidates = {id(candidate): candidate for candidate in candidates}
+        if len(unique_candidates) != 1:
+            return None
+        return next(iter(unique_candidates.values()))
+
+    def _route_identity_candidates(self, collector_ip: str) -> tuple[_PendingCollectorSocket, ...]:
+        if not collector_ip:
+            return tuple(self._pending_sockets.values())
+
+        exact = self._pending_sockets_for_remote_ip(collector_ip)
+        if exact:
+            return exact
+
+        return tuple(
+            pending
+            for pending in self._pending_sockets.values()
+            if _is_hairpin_alias_candidate(collector_ip, pending.remote_ip)
+            or _is_default_broadcast_alias_candidate(collector_ip, pending.remote_ip)
+        )
+
+    async def _pause_pending_sniff(self, pending: _PendingCollectorSocket) -> None:
+        sniff_task = pending.sniff_task
+        pending.sniff_task = None
+        if sniff_task is None or sniff_task.done():
+            return
+        sniff_task.cancel()
+        try:
+            await sniff_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+    def _collector_pn_matches(self, expected_pn: str, observed_pn: str) -> bool:
+        expected = str(expected_pn or "").strip()
+        observed = str(observed_pn or "").strip()
+        if not expected or not observed:
+            return False
+        return bool(
+            expected == observed
+            or expected.startswith(observed)
+            or observed.startswith(expected)
         )
 
     def _select_pending_socket(self, collector_ip: str) -> _PendingCollectorSocket | None:
@@ -1576,6 +1672,18 @@ class _SharedEybondListener:
             if id(connection) in selected_ids:
                 connections_by_pn.pop(collector_pn, None)
 
+    def _drop_connection_session_indexes(
+        self,
+        session_connections: dict[str, object],
+        selected_connections: list[object],
+    ) -> None:
+        if not selected_connections:
+            return
+        selected_ids = {id(connection) for connection in selected_connections}
+        for session_id, connection in tuple(session_connections.items()):
+            if id(connection) in selected_ids:
+                session_connections.pop(session_id, None)
+
     async def _disconnect_connection_keys(
         self,
         connections: dict[str, object],
@@ -1602,6 +1710,14 @@ class _SharedEybondListener:
                 await disconnect()
         self._drop_connection_pn_indexes(self._connections_by_pn, selected_connections)
         self._drop_connection_pn_indexes(self._at_connections_by_pn, selected_connections)
+        self._drop_connection_session_indexes(
+            self._session_payload_connections,
+            selected_connections,
+        )
+        self._drop_connection_session_indexes(
+            self._session_at_connections,
+            selected_connections,
+        )
 
     async def release_collector_connections(
         self,
@@ -1761,6 +1877,11 @@ class _SharedEybondListener:
     ) -> tuple[bytes, bool]:
         """Return initial bytes and whether the socket is exhausted/closed."""
 
+        if pending.initial_bytes:
+            chunk = pending.initial_bytes
+            pending.initial_bytes = b""
+            return chunk, False
+
         try:
             chunk = await asyncio.wait_for(pending.reader.read(64), timeout=0.25)
         except asyncio.TimeoutError:
@@ -1788,6 +1909,63 @@ class _SharedEybondListener:
         except Exception:
             self._mark_session_state(pending.session_id, "identity_probe_failed")
             return b""
+
+    async def _identify_pending_socket_for_route(
+        self,
+        pending: _PendingCollectorSocket,
+        *,
+        session_protocol: str = "",
+    ) -> str:
+        if not self._pending_socket_still_registered(pending):
+            return ""
+
+        entry = self._session_inventory.get(pending.session_id)
+        known_pn = str(getattr(entry, "collector_pn", "") or "").strip()
+        if known_pn:
+            return known_pn
+
+        try:
+            chunk = await asyncio.wait_for(pending.reader.read(64), timeout=0.25)
+        except asyncio.TimeoutError:
+            chunk = b""
+        except Exception:
+            self._mark_session_state(pending.session_id, "route_identity_read_failed")
+            return ""
+
+        if chunk:
+            pending.initial_bytes += chunk
+            self._mark_session_first_bytes(pending.session_id, chunk)
+            collector_pn, source = _collector_pn_from_initial_chunk(chunk)
+            if collector_pn:
+                self._mark_session_identity(pending.session_id, collector_pn, source)
+                return collector_pn
+            return ""
+
+        protocol = str(session_protocol or "").strip().lower()
+        if not protocol:
+            protocol = self._single_registered_session_protocol()
+        probe = _identity_probe_payload_for_session_protocol(protocol)
+        if not probe:
+            return ""
+
+        self._mark_session_state(pending.session_id, f"probing_route_identity_{protocol}")
+        try:
+            pending.writer.write(probe)
+            await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
+            response = await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
+        except asyncio.TimeoutError:
+            self._mark_session_state(pending.session_id, "route_identity_probe_timeout")
+            return ""
+        except Exception:
+            self._mark_session_state(pending.session_id, "route_identity_probe_failed")
+            return ""
+
+        collector_pn, source = _collector_pn_from_initial_chunk(response)
+        if collector_pn:
+            self._mark_session_first_bytes(pending.session_id, response)
+            self._mark_session_identity(pending.session_id, collector_pn, source)
+            return collector_pn
+        return ""
 
     async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
         chunk, exhausted = await self._read_pending_initial_chunk(pending)
@@ -2100,11 +2278,15 @@ class SharedProxyCaptureRoute:
         host: str,
         port: int,
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]],
     ) -> None:
         self._host = str(host)
         self._port = int(port)
         self._collector_ip = str(collector_ip or "").strip()
+        self._collector_pn = str(collector_pn or "").strip()
+        self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
         self._handler = handler
         self._listener: _SharedEybondListener | None = None
         self._task: asyncio.Task[None] | None = None
@@ -2145,13 +2327,59 @@ class SharedProxyCaptureRoute:
                 listener = self._listener
                 if listener is None:
                     return
-                pending = listener.pop_pending_socket(self._collector_ip)
+                pending = await listener.pop_pending_socket_for_route(
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._collector_session_protocol,
+                )
                 if pending is None:
                     await asyncio.sleep(0.1)
                     continue
-                await self._handler(pending.reader, pending.writer)
+                reader, pump_task = _reader_with_initial_bytes(
+                    pending.initial_bytes,
+                    pending.reader,
+                )
+                pending.initial_bytes = b""
+                try:
+                    await self._handler(reader, pending.writer)
+                finally:
+                    if pump_task is not None:
+                        pump_task.cancel()
+                        try:
+                            await pump_task
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            pass
         except asyncio.CancelledError:
             raise
+
+
+def _reader_with_initial_bytes(
+    initial_bytes: bytes,
+    source: asyncio.StreamReader,
+) -> tuple[asyncio.StreamReader, asyncio.Task[None] | None]:
+    prefix = bytes(initial_bytes or b"")
+    if not prefix:
+        return source, None
+
+    replay = asyncio.StreamReader()
+    replay.feed_data(prefix)
+
+    async def _pump() -> None:
+        try:
+            while True:
+                chunk = await source.read(4096)
+                if not chunk:
+                    replay.feed_eof()
+                    return
+                replay.feed_data(chunk)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            replay.set_exception(exc)
+
+    return replay, asyncio.create_task(_pump(), name="collector_proxy_replay_reader")
 
 
 class SharedEybondTransport:

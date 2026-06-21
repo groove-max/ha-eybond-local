@@ -583,6 +583,8 @@ class EybondRuntimeLinkManager:
         owner_id: str = "",
         entry_id: str = "",
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -622,6 +624,8 @@ class EybondRuntimeLinkManager:
                 host=self._listener_bind_host,
                 port=int(listen_port),
                 collector_ip=collector_ip,
+                collector_pn=collector_pn,
+                collector_session_protocol=collector_session_protocol,
                 handler=handler.handle_client,
             )
             await route.start()
@@ -650,6 +654,8 @@ class EybondRuntimeLinkManager:
         owner_id: str = "",
         entry_id: str = "",
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -687,6 +693,8 @@ class EybondRuntimeLinkManager:
                 host=self._listener_bind_host,
                 port=int(listen_port),
                 collector_ip=collector_ip,
+                collector_pn=collector_pn,
+                collector_session_protocol=collector_session_protocol,
                 handler=handler.handle_client,
             )
             await route.start()
