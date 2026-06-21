@@ -403,6 +403,8 @@ class EybondHub:
             advertised_server_ip=connection.advertised_server_ip,
             collector_ip=connection.collector_ip,
             collector_pn=connection.collector_pn,
+            collector_session_protocol=connection.collector_session_protocol,
+            collector_identity_strategy=connection.collector_identity_strategy,
             tcp_port=connection.tcp_port,
             advertised_tcp_port=connection.advertised_tcp_port,
             udp_port=connection.udp_port,

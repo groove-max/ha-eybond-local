@@ -2061,6 +2061,8 @@ class SharedEybondTransport:
         heartbeat_interval: float,
         collector_ip: str,
         collector_pn: str = "",
+        collector_session_protocol: str = "",
+        collector_identity_strategy: str = "",
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -2069,6 +2071,8 @@ class SharedEybondTransport:
         self._heartbeat_interval = float(heartbeat_interval)
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
+        self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
+        self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
         self._listener: _SharedEybondListener | None = None
 
     @property
@@ -2347,6 +2351,8 @@ class SharedCollectorAtTransport:
         request_timeout: float,
         collector_ip: str,
         collector_pn: str = "",
+        collector_session_protocol: str = "",
+        collector_identity_strategy: str = "",
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -2354,6 +2360,8 @@ class SharedCollectorAtTransport:
         self._write_timeout = _bounded_write_timeout(request_timeout)
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
+        self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
+        self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
         self._listener: _SharedEybondListener | None = None
 
     @property

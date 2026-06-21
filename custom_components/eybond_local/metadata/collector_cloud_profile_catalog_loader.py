@@ -41,6 +41,8 @@ class CollectorCloudProfileCatalog:
     default_ports: dict[str, int]
     default_protocols: dict[str, str]
     endpoint_write_formats: dict[str, str]
+    session_protocols: dict[str, str]
+    identity_strategies: dict[str, str]
 
 
 @lru_cache(maxsize=None)
@@ -61,6 +63,8 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
     default_ports: dict[str, int] = {}
     default_protocols: dict[str, str] = {}
     endpoint_write_formats: dict[str, str] = {}
+    session_protocols: dict[str, str] = {}
+    identity_strategies: dict[str, str] = {}
 
     for entry in entries:
         family = entry.family
@@ -76,6 +80,10 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
             default_protocols[family] = entry.default_protocol
         if entry.endpoint_write_format:
             endpoint_write_formats[family] = entry.endpoint_write_format
+        if entry.session_protocol:
+            session_protocols[family] = entry.session_protocol
+        if entry.identity_strategy:
+            identity_strategies[family] = entry.identity_strategy
 
         for host in entry.known_hosts:
             if host:
@@ -92,6 +100,8 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
         default_ports=default_ports,
         default_protocols=default_protocols,
         endpoint_write_formats=endpoint_write_formats,
+        session_protocols=session_protocols,
+        identity_strategies=identity_strategies,
     )
 
 
@@ -165,6 +175,28 @@ def resolve_collector_cloud_endpoint_write_format(cloud_family: object) -> str:
 
     catalog = load_collector_cloud_profile_catalog()
     return catalog.endpoint_write_formats.get(normalized_family, "")
+
+
+def resolve_collector_cloud_session_protocol(cloud_family: object) -> str:
+    """Resolve the callback session protocol for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.session_protocols.get(normalized_family, "")
+
+
+def resolve_collector_cloud_identity_strategy(cloud_family: object) -> str:
+    """Resolve the collector identity strategy for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.identity_strategies.get(normalized_family, "")
 
 
 def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalogEntry:

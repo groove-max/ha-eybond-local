@@ -15,6 +15,8 @@ from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loa
     resolve_collector_cloud_default_port,
     resolve_collector_cloud_default_protocol,
     resolve_collector_cloud_endpoint_write_format,
+    resolve_collector_cloud_identity_strategy,
+    resolve_collector_cloud_session_protocol,
     resolve_collector_cloud_default_host,
     resolve_collector_cloud_family_by_host,
     resolve_collector_cloud_family_by_port,
@@ -94,6 +96,8 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(resolve_collector_cloud_default_port("unknown"), 0)
         self.assertEqual(resolve_collector_cloud_default_protocol("unknown"), "")
         self.assertEqual(resolve_collector_cloud_endpoint_write_format("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_session_protocol("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_identity_strategy("unknown"), "")
 
     def test_resolves_known_default_hosts(self) -> None:
         self.assertEqual(resolve_collector_cloud_default_host("legacy_binary"), "ess.eybond.com")
@@ -113,6 +117,22 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(
             resolve_collector_cloud_endpoint_write_format("smartess_at"),
             "host_port_protocol",
+        )
+        self.assertEqual(
+            resolve_collector_cloud_session_protocol("legacy_binary"),
+            "eybond_framed",
+        )
+        self.assertEqual(
+            resolve_collector_cloud_session_protocol("smartess_at"),
+            "at_text",
+        )
+        self.assertEqual(
+            resolve_collector_cloud_identity_strategy("legacy_binary"),
+            "framed_heartbeat_then_fc2_pn",
+        )
+        self.assertEqual(
+            resolve_collector_cloud_identity_strategy("smartess_at"),
+            "at_dtupn",
         )
 
 

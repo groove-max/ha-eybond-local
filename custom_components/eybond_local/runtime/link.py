@@ -252,11 +252,15 @@ class EybondRuntimeLinkManager:
         advertised_server_ip: str = "",
         advertised_tcp_port: int = 0,
         collector_pn: str = "",
+        collector_session_protocol: str = "",
+        collector_identity_strategy: str = "",
     ) -> None:
         self._configured_server_ip = server_ip
         self._configured_advertised_server_ip = advertised_server_ip.strip()
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
+        self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
+        self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
         self._tcp_port = int(tcp_port)
         self._configured_advertised_tcp_port = int(advertised_tcp_port or 0)
         self._udp_port = int(udp_port)
@@ -410,6 +414,8 @@ class EybondRuntimeLinkManager:
             ),
             "collector_listener_rebind_count": self._listener_rebind_count,
             "collector_listener_last_error": self._listener_last_error,
+            "collector_callback_session_protocol": self._collector_session_protocol,
+            "collector_callback_identity_strategy": self._collector_identity_strategy,
         }
         diagnostics.update(self._session_inventory_diagnostics())
         return diagnostics
@@ -1160,6 +1166,8 @@ class EybondRuntimeLinkManager:
             heartbeat_interval=float(self._heartbeat_interval),
             collector_ip=self._collector_ip,
             collector_pn=self._collector_pn,
+            collector_session_protocol=self._collector_session_protocol,
+            collector_identity_strategy=self._collector_identity_strategy,
         )
         at_transport = SharedCollectorAtTransport(
             host=bind_host,
@@ -1167,6 +1175,8 @@ class EybondRuntimeLinkManager:
             request_timeout=DEFAULT_REQUEST_TIMEOUT,
             collector_ip=self._collector_ip,
             collector_pn=self._collector_pn,
+            collector_session_protocol=self._collector_session_protocol,
+            collector_identity_strategy=self._collector_identity_strategy,
         )
         return payload_transport, at_transport
 

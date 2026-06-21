@@ -194,12 +194,16 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_listener_diagnostics_include_callback_session_inventory(self) -> None:
         manager = self._build_manager()
+        manager._collector_session_protocol = "at_text"
+        manager._collector_identity_strategy = "at_dtupn"
         transport = _FakeTransport(connected=False)
         transport._listener = object()  # type: ignore[attr-defined]
         manager._transport = transport  # type: ignore[assignment]
 
         diagnostics = manager.listener_diagnostics()
 
+        self.assertEqual(diagnostics["collector_callback_session_protocol"], "at_text")
+        self.assertEqual(diagnostics["collector_callback_identity_strategy"], "at_dtupn")
         self.assertEqual(diagnostics["collector_callback_pending_session_count"], 2)
         self.assertEqual(diagnostics["collector_callback_recent_session_count"], 3)
         self.assertEqual(diagnostics["collector_callback_duplicate_peer_ip_count"], 1)

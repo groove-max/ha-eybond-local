@@ -19,6 +19,7 @@ from custom_components.eybond_local.connection.models import (
 from custom_components.eybond_local.const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
+    CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
@@ -77,6 +78,7 @@ class ConnectionModelsTests(unittest.TestCase):
                 CONF_UDP_PORT: 58899,
                 CONF_COLLECTOR_IP: "192.168.1.14",
                 CONF_COLLECTOR_PN: "E5000020000000",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
                 CONF_DISCOVERY_TARGET: "192.168.1.255",
                 CONF_HEARTBEAT_INTERVAL: 60,
             },
@@ -87,6 +89,9 @@ class ConnectionModelsTests(unittest.TestCase):
         self.assertEqual(spec.type, "eybond")
         self.assertEqual(spec.server_ip, "192.168.1.50")
         self.assertEqual(spec.collector_pn, "E5000020000000")
+        self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_session_protocol, "at_text")
+        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
         self.assertEqual(spec.effective_advertised_server_ip, "203.0.113.10")
         self.assertEqual(spec.effective_advertised_tcp_port, 9889)
 
