@@ -1823,13 +1823,15 @@ class _SharedEybondListener:
             )
 
         if _looks_like_at_traffic(chunk):
-            connection = self._at_connections.get(pending.remote_ip)
-            if connection is None:
+            connection = None
+            if initial_pn:
                 connection = self._connection_by_collector_pn(
                     initial_pn,
                     self._at_connections_by_pn,
                 )
-            if connection is None:
+            if connection is None and not initial_pn:
+                connection = self._at_connections.get(pending.remote_ip)
+            if connection is None and not initial_pn:
                 connection = self._resolve_public_placeholder_alias(
                     pending.remote_ip,
                     connections=self._at_connections,
@@ -1877,13 +1879,15 @@ class _SharedEybondListener:
             )
             return
 
-        connection = self._connections.get(pending.remote_ip)
-        if connection is None:
+        connection = None
+        if initial_pn:
             connection = self._connection_by_collector_pn(
                 initial_pn,
                 self._connections_by_pn,
             )
-        if connection is None:
+        if connection is None and not initial_pn:
+            connection = self._connections.get(pending.remote_ip)
+        if connection is None and not initial_pn:
             connection = self._resolve_public_placeholder_alias(pending.remote_ip)
         if connection is None:
             has_ip_owner = self._has_owner_for_remote_ip(
