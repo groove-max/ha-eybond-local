@@ -718,6 +718,11 @@ class OnboardingDetector:
                     timeout=DEFAULT_ONBOARDING_TIMEOUT_POLICY.driver_detection_timeout,
                 )
             except TimeoutError:
+                if candidate.collector is not None:
+                    await self._async_enrich_collector_bridge_details(
+                        candidate.collector,
+                        collector_ip=candidate.ip,
+                    )
                 return OnboardingResult(
                     collector=candidate,
                     connection_type=CONNECTION_TYPE_EYBOND,
@@ -727,6 +732,11 @@ class OnboardingDetector:
                     last_error="target_detection_timeout",
                 )
             except RuntimeError as exc:
+                if candidate.collector is not None:
+                    await self._async_enrich_collector_bridge_details(
+                        candidate.collector,
+                        collector_ip=candidate.ip,
+                    )
                 return OnboardingResult(
                     collector=candidate,
                     connection_type=CONNECTION_TYPE_EYBOND,
@@ -782,6 +792,59 @@ class OnboardingDetector:
                     raise
                 await asyncio.sleep(0.35)
         raise last_error or RuntimeError("no_supported_driver_matched")
+
+    async def _async_enrich_collector_bridge_details(
+        self,
+        collector,
+        *,
+        collector_ip: str,
+    ) -> None:
+        """Best-effort AT+VDTU bridge detection for collector-only results."""
+
+        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
+        at_timeout = min(self._connection.request_timeout, policy.collector_query_timeout)
+        if at_timeout <= 0:
+            return
+
+        details: dict[str, object] = {}
+        try:
+            at_transport = SharedCollectorAtTransport(
+                host=_LISTENER_BIND_HOST,
+                port=self._connection.tcp_port,
+                request_timeout=at_timeout,
+                collector_ip=collector_ip,
+            )
+            await at_transport.start()
+            try:
+                details.update(
+                    await asyncio.wait_for(
+                        query_runtime_collector_at_values(at_transport),
+                        timeout=at_timeout,
+                    )
+                )
+            finally:
+                await at_transport.stop()
+        except Exception as exc:
+            logger.debug(
+                "Onboarding collector bridge AT query failed ip=%s error=%s",
+                collector_ip,
+                exc,
+            )
+            return
+
+        bridge = parse_collector_vdtu(details.get("collector_vdtu_raw"))
+        if not bridge.is_virtual_bridge:
+            return
+
+        collector.collector_virtual_bridge = True
+        if bridge.kind:
+            collector.collector_bridge_kind = bridge.kind
+        if bridge.version:
+            collector.collector_bridge_version = bridge.version
+        if bridge.features:
+            collector.collector_bridge_features = tuple(bridge.features)
+        if bridge.attributes:
+            collector.collector_bridge_attributes = tuple(bridge.attributes)
 
     async def _async_enrich_onboarding_runtime_details(
         self,

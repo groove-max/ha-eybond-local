@@ -59,6 +59,8 @@ class FixtureTransport:
 
         if function_code == 0x03:
             return self._handle_read_holding(payload)
+        if function_code == 0x06:
+            return self._handle_write_single(payload)
         if function_code == 0x10:
             return self._handle_write_multiple(payload)
         raise FixtureTransportError(f"unsupported_function:{function_code}")
@@ -135,6 +137,21 @@ class FixtureTransport:
         response = bytearray([self._probe_target.device_addr, 0x03, count * 2])
         for value in words:
             response.extend(value.to_bytes(2, "big", signed=False))
+        response_crc = crc16_modbus(response)
+        response.extend(response_crc.to_bytes(2, "little"))
+        return bytes(response)
+
+    def _handle_write_single(self, payload: bytes) -> bytes:
+        request_crc = int.from_bytes(payload[-2:], "little")
+        expected_crc = crc16_modbus(payload[:-2])
+        if request_crc != expected_crc:
+            raise FixtureTransportError("request_crc_mismatch")
+
+        address = int.from_bytes(payload[2:4], "big")
+        value = int.from_bytes(payload[4:6], "big")
+        self._registers[address] = value
+
+        response = bytearray(payload[:-2])
         response_crc = crc16_modbus(response)
         response.extend(response_crc.to_bytes(2, "little"))
         return bytes(response)

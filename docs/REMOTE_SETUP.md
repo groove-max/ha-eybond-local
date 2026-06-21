@@ -1,173 +1,128 @@
 # Remote / NAT Setup Guide
 
-This guide explains when the remote/NAT feature is needed, what problem it solves, and how to configure it without breaking normal local setups.
+Most users do not need this page.
 
-## What This Feature Is For
+Use remote setup only when the collector is not on the same local network as Home Assistant, for example through VPN, another router, or port forwarding.
 
-EyeBond collectors do not behave like a normal client that only talks outbound to Home Assistant.
+For a normal home network:
 
-The integration announces a callback endpoint in the EyeBond redirect payload:
+- use auto-discovery;
+- keep Home Assistant and the collector on the same subnet;
+- leave advanced callback fields empty.
 
-```text
-set>server=<ip>:<port>;
-```
+## When to use remote setup
 
-The collector then opens a reverse TCP connection back to that endpoint.
+Use these fields only if at least one is true:
 
-That is simple on one local subnet, but it becomes tricky when:
+- the collector is at another site;
+- Home Assistant and the collector are connected through VPN;
+- auto-discovery cannot cross your router;
+- the collector must connect back to Home Assistant through a public IP, DDNS name, or forwarded port;
+- you already know the collector IP and need manual setup.
 
-- the collector is on another site
-- broadcast discovery does not cross routers
-- Home Assistant listens on one local IP, but the collector must call back to a different VPN or public IP
-- the externally forwarded TCP port is different from the internal Home Assistant listener port
+If you are not sure, do not change these fields. Try normal scan first.
 
-The new feature splits those two concerns:
+## What the fields mean
 
-- `Local listener IP` / `Local TCP port`: where Home Assistant actually binds and waits for the collector
-- `Advertised callback IP` / `Advertised callback TCP port`: what Home Assistant tells the collector to call back to in `set>server=...`
+| Field | Plain meaning | Normal local setup |
+|---|---|---|
+| **Local listener IP** | The Home Assistant address that should wait for the collector connection. | Home Assistant LAN IP |
+| **Collector IP** | The collector address when you already know it. | Empty or collector LAN IP |
+| **Local TCP port** | The local Home Assistant port used for the collector connection. | Usually keep default |
+| **Advertised callback IP** | The address the collector should use to reach Home Assistant when local address is not enough. | Empty |
+| **Advertised callback TCP port** | The external or VPN port the collector should use. | Empty |
+| **UDP discovery port** | The discovery port used to wake/probe the collector. | Usually keep default |
+| **Discovery target** | Where Home Assistant sends the discovery/probe packet. | Local broadcast or collector IP |
 
-If you leave the advertised fields empty, the integration behaves exactly like the old local-only setup.
+The most common mistake is filling **Advertised callback IP** for a normal local setup. Leave it empty unless the collector really needs a different address to reach Home Assistant.
 
-## When You Need It
+## Recommended setups
 
-Use remote/NAT fields only if at least one of these is true:
+### Same LAN
 
-- the collector is not on the same subnet as Home Assistant
-- you must use unicast discovery to a known remote collector IP
-- the collector reaches Home Assistant through VPN
-- the collector reaches Home Assistant through a public IP or DDNS name that is forwarded to the HA host
-- the collector must connect to an external TCP port that differs from the local Home Assistant listener port
+Use this when Home Assistant and the collector are at the same location.
 
-Do not use these fields for a normal same-LAN installation. In that case, leave them empty.
+- Prefer auto-discovery.
+- In manual setup, enter the collector IP only if you know it.
+- Leave **Advertised callback IP** empty.
+- Leave **Advertised callback TCP port** empty.
 
-## Field Reference
+### VPN
 
-| Field | What it means | Typical local value | Typical remote/NAT value |
-|---|---|---|---|
-| `Local listener IP` | Local IPv4 address Home Assistant binds the TCP listener to | HA LAN IP on the collector subnet | HA LAN IP or VPN IP that exists on the HA host |
-| `Collector IP` | Direct IPv4 used for probing and unicast discovery | Empty or collector LAN IP | Public, VPN, or routed IPv4 that reaches the collector |
-| `Local TCP port` | TCP port Home Assistant listens on | `8899` | Usually `8899` |
-| `Advertised callback IP` | IPv4 written into `set>server=...` | Empty | VPN IP, public IP, or forwarded callback IP |
-| `Advertised callback TCP port` | TCP port written into `set>server=...` | Empty | Forwarded external TCP port if different |
-| `UDP discovery port` | Collector UDP redirect port | `58899` | Usually `58899` unless your collector uses a custom mapping |
-| `Discovery target` | IPv4 that receives discovery redirects | Subnet broadcast like `192.168.1.255` | Specific collector IP for unicast |
+Use this when both sides can reach each other through private VPN addresses.
 
-## Recommended Scenarios
+- **Local listener IP**: Home Assistant VPN IP, if Home Assistant listens on that interface.
+- **Collector IP**: collector VPN IP.
+- **Discovery target**: usually the collector VPN IP.
+- **Advertised callback IP**: leave empty if the collector can reach the local listener IP directly; otherwise use the Home Assistant VPN IP.
+- **Advertised callback TCP port**: leave empty unless your VPN or router changes the port.
 
-### 1. Same LAN, same subnet
+VPN is usually safer and more reliable than public port forwarding.
 
-This is the default case.
+### Public IP or DDNS with port forwarding
 
-- Use auto-discovery if possible.
-- If you go through Manual setup, leave `Advertised callback IP` empty.
-- Leave `Advertised callback TCP port` empty.
-- Keep `Discovery target` as subnet broadcast.
-
-Use the new feature here only if you have a very unusual network.
-
-### 2. Routed VPN between Home Assistant and the collector
-
-Use this when both sides can reach each other over private VPN addresses.
-
-- `Local listener IP`: the Home Assistant VPN IPv4 if Home Assistant binds on that interface
-- `Collector IP`: the collector VPN IPv4
-- `Discovery target`: usually the same collector VPN IPv4
-- `Advertised callback IP`: leave empty if the collector should call back to the same VPN IP that HA is bound to
-- `Advertised callback TCP port`: leave empty unless the VPN path rewrites ports
-
-This is usually more reliable than raw public NAT.
-
-### 3. Public IP or DDNS with port forwarding back to Home Assistant
-
-Use this when the collector is remote and must connect to Home Assistant through an externally reachable address.
-
-- `Local listener IP`: the actual local HA IPv4 that exists on the host
-- `Local TCP port`: the real local port on the HA host, usually `8899`
-- `Collector IP`: the remote collector public IP if you are probing it directly
-- `Discovery target`: the same remote collector public IP if you want unicast discovery
-- `Advertised callback IP`: the public IP or DDNS-resolved IPv4 that the collector can reach
-- `Advertised callback TCP port`: the externally forwarded TCP port if it differs from the local listener port
+Use this only when VPN is not available and the collector must reach Home Assistant from outside your network.
 
 Example:
 
-- HA host local IP: `192.168.1.50`
-- Router forwards public `203.0.113.10:50099` -> `192.168.1.50:8899`
-- Collector public IP: `198.51.100.44`
+- Home Assistant local IP: `192.168.1.50`
+- Router forwards public `203.0.113.10:50099` to `192.168.1.50`
+- Remote collector IP: `198.51.100.44`
 
-Then configure:
+Then use:
 
-- `Local listener IP` = `192.168.1.50`
-- `Local TCP port` = `8899`
-- `Collector IP` = `198.51.100.44`
-- `Discovery target` = `198.51.100.44`
-- `Advertised callback IP` = `203.0.113.10`
-- `Advertised callback TCP port` = `50099`
+- **Local listener IP**: `192.168.1.50`
+- **Collector IP**: `198.51.100.44`
+- **Discovery target**: `198.51.100.44`
+- **Advertised callback IP**: `203.0.113.10`
+- **Advertised callback TCP port**: `50099`
 
-## Step-By-Step In Home Assistant
+Your router/firewall must allow the collector to connect back to Home Assistant.
 
-1. Open `Settings -> Devices & Services -> EyeBond Local`.
-2. If the collector is local and discoverable, try auto-scan first.
-3. If the collector is remote or auto-scan cannot work across routers, choose `Manual setup`.
-4. Enter `Local listener IP` and, if known, `Collector IP`.
-5. Open `Advanced connection settings`.
-6. Keep `Advertised callback IP` and `Advertised callback TCP port` empty unless the collector must call back through VPN or NAT.
-7. For remote setups, change `Discovery target` from broadcast to the exact collector IP you want to probe.
-8. Save the entry and wait for the reverse TCP connection.
-9. If detection stays partial, create a Support Archive.
+## Step by step
 
-## Firewall And Port Notes
-
-- Home Assistant listens for inbound collector TCP on `Local TCP port`, default `8899`.
-- The collector receives discovery redirect packets on UDP `58899` unless configured otherwise.
-- For remote/NAT setups, the important direction is:
-
-  - UDP from Home Assistant to the collector discovery endpoint
-  - TCP from the collector back to the advertised callback IP/port
-
-- If the collector is behind NAT and you use direct public unicast discovery, the collector-side router must forward the UDP discovery port to the collector.
-- If Home Assistant is behind NAT and the collector must call back over the internet, the HA-side router must forward the advertised TCP port to the HA host.
+1. Open **Settings → Devices & Services → EyeBond Local**.
+2. Try normal scan first if the collector is local.
+3. If the collector is remote, choose **Manual setup**.
+4. Enter **Local listener IP**.
+5. Enter **Collector IP** if you know it.
+6. Open **Advanced connection settings**.
+7. Fill **Advertised callback IP** and **Advertised callback TCP port** only for VPN/NAT/port-forwarding cases.
+8. For remote setup, set **Discovery target** to the exact collector IP.
+9. Save and wait. Some collectors reconnect slowly.
+10. If setup stays partial, create a Support Archive.
 
 ## Troubleshooting
 
-### The collector never replies
+### The collector is not found
 
-Check these first:
+Check:
 
-- `Collector IP` or `Discovery target` points to the wrong address
-- UDP `58899` is not being forwarded to the collector
-- the collector is reachable only through VPN, not through raw public internet
+- the collector IP is correct;
+- Home Assistant can reach that network;
+- VPN is connected, if you use VPN;
+- the router/firewall is not blocking the probe.
 
-### The collector replies, but never opens TCP back to Home Assistant
+### The collector is found, but never connects back
 
-This usually means the callback endpoint is wrong.
+Check:
 
-Check these first:
+- **Advertised callback IP** is reachable from the collector side;
+- **Advertised callback TCP port** matches your forwarding/VPN setup;
+- your router forwards the connection to the Home Assistant host;
+- Home Assistant is listening on the selected local IP.
 
-- `Advertised callback IP` is not reachable from the collector
-- `Advertised callback TCP port` does not match the actual forwarded external TCP port
-- the HA-side router is not forwarding inbound TCP to the Home Assistant host
+### Local setup stopped working after changing advanced fields
 
-### Local installs stopped working after you edited advanced fields
+Return to the safe local configuration:
 
-Reset to the simplest configuration:
+- clear **Advertised callback IP**;
+- clear **Advertised callback TCP port**;
+- restore **Discovery target** to normal local discovery;
+- make sure **Local listener IP** is the Home Assistant LAN IP.
 
-- clear `Advertised callback IP`
-- clear `Advertised callback TCP port`
-- restore `Discovery target` to subnet broadcast
-- make sure `Local listener IP` is a real local IPv4 on the Home Assistant host
+## Safe default
 
-### It still does not work over the public internet
+If you are not sure whether you need remote setup, you probably do not.
 
-If either side is behind CGNAT or the routers do not support the needed forwarding cleanly, use VPN instead of raw NAT.
-
-## Safe Default Rule
-
-If you are not sure whether you need this feature, you probably do not.
-
-For a normal local SmartESS / EyeBond setup:
-
-- use auto-discovery
-- keep Home Assistant and the collector on the same subnet
-- leave all advertised callback fields empty
-
-That remains the recommended path for most users.
+Use the normal setup wizard and keep the collector on the same network as Home Assistant.

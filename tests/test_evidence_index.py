@@ -91,7 +91,7 @@ class EvidenceIndexTests(unittest.TestCase):
             expected,
             msg=(
                 "Generated evidence index is out of sync. Re-run:\n"
-                f"python3 {REPO_ROOT / 'tools' / 'export_evidence_index.py'} "
+                f"python3 {REPO_ROOT / '.local' / 'tools' / 'export_evidence_index.py'} "
                 "--format markdown "
                 f"--output {self.generated_markdown_path}"
             ),

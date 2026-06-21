@@ -62,7 +62,7 @@ custom_components/eybond_local/
 ├── protocol_catalogs/
 │   ├── profiles/           # capability metadata (JSON)
 │   └── register_schemas/   # register layouts (JSON)
-├── fixtures/               # offline replay helpers
+├── fixtures/               # runtime fixture/replay helper package
 ├── support/                # support exports and evidence indexes
 ├── metadata/               # profile/schema loaders and local drafts
 └── *.py                    # entity platforms, config flow, services
@@ -70,7 +70,7 @@ custom_components/eybond_local/
 docs/                       # public docs and generated reports
 catalog/inverter_models/    # commercial model and sanitized source records
 tools/                      # CLI utilities, validation scripts, and release helpers
-.local/                     # maintainer-only local notes, fixtures, generated reports, and release scratch files (gitignored)
+.local/                     # maintainer-only notes, fixtures, design history, generated reports, and release scratch files (gitignored)
 tests/                      # unit and regression tests
 ```
 
@@ -96,7 +96,9 @@ The quality gate checks profile validity, unit tests, and public generated-doc f
 
 Fixture replay and fixture-derived reports are local-only workflows. Keep those artifacts under `.local/` and run them manually when you need debugging evidence.
 
-A complete reference of CLI tools (probing, local fixtures, validation, doc generation) is in [tools/README.md](tools/README.md).
+A short reference for supported validation, catalog, release, and contribution
+tools is in [tools/README.md](tools/README.md). Low-level hardware probes and
+local fixture workflows are maintainer-only notes under `.local/`.
 
 ---
 
@@ -109,7 +111,7 @@ These are the hard rules — don't cross them without discussion:
 - **Fixture-first over live debugging** when feasible — but keep those fixtures local unless you intentionally sanitize them for sharing.
 - **JSON-first over Python** for new family additions.
 - **Local fixtures and maintainer-only notes belong under `.local/`** and are not part of the public repository.
-- **`tools/` is public project tooling** used by CI, release validation, and generated-doc checks.
+- **`tools/` is supported project tooling** for CI, release validation, generated-doc checks, hardware probing, and local fixture workflows.
 - **`.local/generated/`, `.local/release-notes/`, and raw research dumps** remain local-only artifacts and should stay out of git.
 
 ---

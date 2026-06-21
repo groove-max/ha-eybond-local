@@ -4,6 +4,12 @@
   "title": "SmartESS 0925 Profile",
   "driver_key": "smartess_local",
   "protocol_family": "smartess_local",
+  "capability_defaults": {
+    "enabled_default": true,
+    "tested": true,
+    "provenance": "verified",
+    "support_tier": "standard"
+  },
   "groups": [
     {
       "key": "output",
@@ -365,6 +371,9 @@
       "order": 530,
       "advanced": true,
       "enabled_default": true,
+      "tested": true,
+      "provenance": "verified",
+      "support_tier": "standard",
       "requires_confirm": true,
       "change_summary": "Enables or disables the LCD backlight.",
       "note": "Mapped from the SmartESS 0925 root-map entry `LCD backlight` at register 5004."
@@ -403,7 +412,6 @@
       "group": "system",
       "order": 560,
       "advanced": true,
-      "enabled_default": false,
       "requires_confirm": true,
       "change_summary": "Enables or disables the primary-source interrupt alarm.",
       "note": "Mapped from the SmartESS 0925 root-map entry `Beeps while primary source interupt` at register 5007."
@@ -416,7 +424,6 @@
       "group": "system",
       "order": 570,
       "advanced": true,
-      "enabled_default": false,
       "requires_confirm": true,
       "change_summary": "Enables or disables auto-return to the default LCD screen.",
       "note": "Mapped from the SmartESS 0925 root-map entry `Auto return to default display screen` at register 5008."
@@ -442,7 +449,6 @@
       "group": "system",
       "order": 590,
       "advanced": true,
-      "enabled_default": false,
       "requires_confirm": true,
       "change_summary": "Enables or disables recording fault codes in the inverter history.",
       "note": "Mapped from the SmartESS 0925 root-map entry `Record fault code` at register 5010."

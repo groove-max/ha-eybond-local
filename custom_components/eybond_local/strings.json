@@ -245,6 +245,11 @@
       "collector_wifi_password_required": "Enter the Wi-Fi password.",
       "collector_wifi_password_not_ascii": "This collector accepts only ASCII Wi-Fi passwords on the local management path.",
       "collector_wifi_apply_not_confirmed": "Confirm that applying Wi-Fi settings may temporarily disconnect the collector.",
+      "collector_uart_read_failed": "Could not read UART settings from the collector.",
+      "collector_uart_write_failed": "Could not write UART settings to the collector.",
+      "collector_uart_baudrate_invalid": "Choose a supported UART speed.",
+      "collector_uart_apply_not_confirmed": "Confirm that changing the UART speed may temporarily stop inverter communication.",
+      "collector_uart_runtime_unavailable": "This collector hardware cannot change UART speed at runtime.",
       "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details.",
       "diagnostic_commands_required": "Paste at least one diagnostic command.",
       "diagnostic_commands_unavailable": "The integration runtime is not loaded, so diagnostic commands cannot run.",
@@ -258,6 +263,7 @@
           "runtime": "Connection and polling",
           "shadow_learning": "Add controls (device learning)",
           "collector_wifi": "Change collector Wi-Fi",
+          "collector_uart": "Change inverter UART speed",
           "diagnostics": "Diagnostics and service tools"
         }
       },
@@ -273,6 +279,19 @@
         "data_description": {
           "wifi_password": "The current password is never read back from the collector. Enter it only when applying new settings.",
           "confirm_collector_wifi_apply": "After changing the network settings, it is recommended to remove this device from Home Assistant and add it again so the collector reconnects using its new IP address."
+        }
+      },
+      "collector_uart": {
+        "title": "Change inverter UART speed",
+        "description": "**Current status**\nCollector: {collector_ip}\nHardware: {hardware_version}\nCurrent UART: {current_uart}\n\nChoose the UART speed expected by the inverter, then apply it. This setting is available only for ESP EyeBond Collector bridges.{runtime_unavailable_note}{status_updates}",
+        "data": {
+          "collector_uart_baudrate": "UART speed",
+          "collector_uart_action": "What to do",
+          "confirm_collector_uart_apply": "I understand that changing the UART speed may temporarily stop inverter communication"
+        },
+        "data_description": {
+          "collector_uart_baudrate": "The bridge keeps the current framing and changes only the baud rate. PI30/Voltronic devices commonly use 2400; SMG/Modbus devices commonly use 9600.",
+          "confirm_collector_uart_apply": "If the speed is wrong, Home Assistant may keep seeing the collector but stop receiving inverter data until the speed is corrected."
         }
       },
       "runtime": {
@@ -577,6 +596,7 @@
         "modbus_smg": "SMG / Modbus",
         "srne_modbus": "SRNE / Modbus",
         "must_pv_ph18": "MUST PV/PH18",
+        "smartess_local": "SmartESS 0925 / Modbus",
         "pi30": "PI30",
         "pi18": "PI18"
       }

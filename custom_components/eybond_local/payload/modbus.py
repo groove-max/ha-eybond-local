@@ -187,6 +187,24 @@ def build_write_multiple_request(slave_id: int, address: int, values: list[int])
     return bytes(payload)
 
 
+def build_write_single_request(slave_id: int, address: int, value: int) -> bytes:
+    """Build a Modbus RTU write single holding register request."""
+
+    payload = bytearray(
+        [
+            slave_id,
+            0x06,
+            (address >> 8) & 0xFF,
+            address & 0xFF,
+            (int(value) >> 8) & 0xFF,
+            int(value) & 0xFF,
+        ]
+    )
+    crc = crc16_modbus(payload)
+    payload.extend(crc.to_bytes(2, "little"))
+    return bytes(payload)
+
+
 def parse_read_holding_response(frame: bytes, *, slave_id: int, count: int) -> list[int]:
     """Decode a Modbus RTU read holding registers response."""
 
@@ -219,8 +237,49 @@ def parse_read_holding_response(frame: bytes, *, slave_id: int, count: int) -> l
     registers: list[int] = []
     payload = frame[3:-2]
     for offset in range(0, len(payload), 2):
-        registers.append(int.from_bytes(payload[offset : offset + 2], "big"))
+            registers.append(int.from_bytes(payload[offset : offset + 2], "big"))
     return registers
+
+
+def parse_write_single_response(
+    frame: bytes,
+    *,
+    slave_id: int,
+    address: int,
+) -> int:
+    """Validate a Modbus RTU write-single response and return the echoed/status value.
+
+    Standard Modbus FC06 responses echo the requested value. Some legacy
+    SmartESS/EyeBond collectors have been observed returning a different
+    value while still acknowledging the written register with a valid CRC.
+    Callers that need strict value confirmation should read the register back
+    after this acknowledgement.
+    """
+
+    if len(frame) < 5:
+        raise ModbusError("response_too_short")
+    if frame[0] != slave_id:
+        raise ModbusError(f"unexpected_slave_id:{frame[0]}")
+    if frame[1] == 0x86:
+        crc_received = int.from_bytes(frame[-2:], "little")
+        crc_expected = crc16_modbus(frame[:-2])
+        if crc_received != crc_expected:
+            raise ModbusError("crc_mismatch")
+        raise ModbusError(f"exception_code:{frame[2]}")
+    if len(frame) != 8:
+        raise ModbusError(f"unexpected_length:{len(frame)}")
+    if frame[1] != 0x06:
+        raise ModbusError(f"unexpected_function:{frame[1]}")
+
+    crc_received = int.from_bytes(frame[-2:], "little")
+    crc_expected = crc16_modbus(frame[:-2])
+    if crc_received != crc_expected:
+        raise ModbusError("crc_mismatch")
+
+    address_received = int.from_bytes(frame[2:4], "big")
+    if address_received != address:
+        raise ModbusError(f"unexpected_address:{address_received}")
+    return int.from_bytes(frame[4:6], "big")
 
 
 def parse_write_multiple_response(
@@ -328,6 +387,24 @@ class ModbusSession:
             slave_id=self._slave_id,
             address=address,
             register_count=len(values),
+        )
+
+    async def write_single_holding(self, address: int, value: int) -> int:
+        """Write one holding register using Modbus function code 0x06."""
+
+        request = build_write_single_request(self._slave_id, address, value)
+        try:
+            response = await async_send_payload(
+                self._transport,
+                request,
+                route=self._route,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ModbusError("request_timeout") from exc
+        return parse_write_single_response(
+            response,
+            slave_id=self._slave_id,
+            address=address,
         )
 
 

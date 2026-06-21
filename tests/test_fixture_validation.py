@@ -76,7 +76,7 @@ class FixtureValidationTests(unittest.TestCase):
             expected,
             msg=(
                 "Generated fixture validation is out of sync. Re-run:\n"
-                f"python3 {REPO_ROOT / 'tools' / 'export_fixture_validation.py'} "
+                f"python3 {REPO_ROOT / '.local' / 'tools' / 'export_fixture_validation.py'} "
                 "--format markdown "
                 f"--output {self.generated_markdown_path}"
             ),

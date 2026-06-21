@@ -6,6 +6,38 @@
   "protocol_family": "modbus_smg",
   "capabilities": [
     {
+      "key": "charge_source_priority",
+      "template": "charge_source_priority",
+      "register": 331,
+      "note": "Charge source priority for the shared OP2 6200 / Aninerel 6.2KW runtime surface. Donor SmartESS cloud evidence and issue #7 shadow-learning evidence confirm values 1-3. Owner-supplied ESPHome YAML lists value 4, so it is exposed as an additional option; the inverter may still reject it on units that do not implement that mode. Generic SMG value 0 remains excluded after user-reported illegal_data_value rejection.",
+      "choices": [
+        {
+          "value": 1,
+          "label": "PV Priority",
+          "order": 1,
+          "description": "Prefer PV charging when solar power is available."
+        },
+        {
+          "value": 2,
+          "label": "PV and Utility",
+          "order": 2,
+          "description": "Allow both PV and utility charging."
+        },
+        {
+          "value": 3,
+          "label": "PV Only",
+          "order": 3,
+          "description": "Restrict charging to PV only."
+        },
+        {
+          "value": 4,
+          "label": "PV Priority With Load Reserve",
+          "order": 4,
+          "description": "Prefer PV charging while preserving remaining output charge when supported by the inverter."
+        }
+      ]
+    },
+    {
       "key": "output2_enable",
       "register": 354,
       "bitmask": "0x0001",

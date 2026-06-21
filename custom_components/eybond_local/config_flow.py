@@ -107,11 +107,14 @@ from .const import (
 from .control_policy import control_mode_options
 from .collector.discovery import async_probe_target
 from .collector.smartess_local import (
+    QUERY_HARDWARE_VERSION,
     QUERY_NETWORK_DIAGNOSTICS,
     QUERY_REBOOT_REQUIRED,
+    QUERY_SERIAL_BAUDRATE,
     QUERY_WIFI_SCAN_LIST,
     SET_REBOOT_OR_APPLY,
     SET_SERVER_ENDPOINT,
+    SET_SERIAL_BAUDRATE,
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
     SmartEssLocalSession,
@@ -189,6 +192,9 @@ CONF_RESULT_KEY = "result_key"
 CONF_COLLECTOR_NETWORK_STATUS = "collector_network_status"
 CONF_COLLECTOR_WIFI_ACTION = "collector_wifi_action"
 CONF_CONFIRM_COLLECTOR_WIFI_APPLY = "confirm_collector_wifi_apply"
+CONF_COLLECTOR_UART_ACTION = "collector_uart_action"
+CONF_COLLECTOR_UART_BAUDRATE = "collector_uart_baudrate"
+CONF_CONFIRM_COLLECTOR_UART_APPLY = "confirm_collector_uart_apply"
 CONF_SETUP_MODE = "setup_mode"
 CONF_BLE_ADDRESS = "ble_address"
 CONF_BLE_ACTION = "ble_action"
@@ -200,6 +206,9 @@ BLE_ACTION_REFRESH_WIFI = "refresh_wifi"
 BLE_ACTION_APPLY = "apply"
 COLLECTOR_WIFI_ACTION_REFRESH = "refresh"
 COLLECTOR_WIFI_ACTION_APPLY = "apply"
+COLLECTOR_UART_ACTION_REFRESH = "refresh"
+COLLECTOR_UART_ACTION_APPLY = "apply"
+COLLECTOR_UART_BAUDRATES = ("2400", "4800", "9600", "19200", "38400", "57600", "115200")
 CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE = "smartess_cloud_mode"
 SETUP_MODE_AUTO = "auto"
 SETUP_MODE_BLUETOOTH = "bluetooth"
@@ -511,6 +520,22 @@ def _apply_device_catalog_metadata(
     data[CONF_DEVICE_CATALOG_KIND] = str(catalog.get("kind") or "")
     data[CONF_DEVICE_CATALOG_TIER] = str(catalog.get("tier") or "")
     data[CONF_DEVICE_CATALOG_ENTRY] = str(catalog.get("entry_key") or "")
+
+
+def _result_is_virtual_bridge(result: OnboardingResult | None) -> bool:
+    """Return True when an onboarding result positively identified an ESP bridge."""
+
+    if result is None:
+        return False
+    collector = getattr(result, "collector", None)
+    collector_info = getattr(collector, "collector", None)
+    if collector_info is not None and getattr(collector_info, "collector_virtual_bridge", False):
+        return True
+    match = getattr(result, "match", None)
+    details = getattr(match, "details", None)
+    if isinstance(details, dict):
+        return bool(details.get("collector_virtual_bridge"))
+    return False
 
 
 def _apply_smartess_detection_metadata(
@@ -1074,6 +1099,32 @@ def _collector_wifi_action_selector(*, refresh_label: str, apply_label: str) -> 
                 SelectOptionDict(value=COLLECTOR_WIFI_ACTION_REFRESH, label=refresh_label),
                 SelectOptionDict(value=COLLECTOR_WIFI_ACTION_APPLY, label=apply_label),
             ],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _collector_uart_baudrate_selector() -> SelectSelector:
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[SelectOptionDict(value=value, label=value) for value in COLLECTOR_UART_BAUDRATES],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _collector_uart_action_selector(
+    *,
+    refresh_label: str,
+    apply_label: str,
+    include_apply: bool = True,
+) -> SelectSelector:
+    options = [SelectOptionDict(value=COLLECTOR_UART_ACTION_REFRESH, label=refresh_label)]
+    if include_apply:
+        options.append(SelectOptionDict(value=COLLECTOR_UART_ACTION_APPLY, label=apply_label))
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=options,
             mode=SelectSelectorMode.DROPDOWN,
         )
     )
@@ -2103,13 +2154,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             details = self._tr(
                 "common.dynamic.detection_tier_unidentified_details",
-                "The collector responds, but the inverter model is not in the "
-                "catalog. You can still add it and discover its sensors and "
-                "controls afterward.\n\n"
-                "Next step: after you finish here, open this integration and choose "
-                "**Configure → Add controls (device learning)**. For labeled "
-                "results this needs one session with the SmartESS app/cloud "
-                "reachable.",
+                "The collector responds, but no inverter was detected through the "
+                "selected driver/catalog path. This can mean the inverter is not "
+                "connected, is powered off, uses an unsupported protocol, or only "
+                "the collector is present.\n\n"
+                "You can still add a Pending Device to keep diagnostics available. "
+                "Device learning is useful only after an inverter has actually "
+                "been detected.\n\n"
+                "Next step: check the inverter connection, then create a Support "
+                "Archive if the device still cannot be identified.",
             )
 
         model = ""
@@ -2478,19 +2531,29 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             **connection_settings,
             CONF_CONNECTION_MODE: "known_ip" if collector_ip else result.connection_mode,
             CONF_CONTROL_MODE: DEFAULT_CONTROL_MODE,
-            CONF_COLLECTOR_OPERATION_MODE: self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE,
+            CONF_COLLECTOR_OPERATION_MODE: (
+                COLLECTOR_OPERATION_HA_ONLY
+                if _result_is_virtual_bridge(result)
+                else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
+            ),
             CONF_COLLECTOR_PN: collector_pn,
             CONF_DETECTION_CONFIDENCE: result.confidence,
             CONF_DETECTED_MODEL: result.match.model_name if result.match is not None else "",
             CONF_DETECTED_SERIAL: result.match.serial_number if result.match is not None else "",
         }
+        if _result_is_virtual_bridge(result):
+            data["collector_virtual_bridge"] = True
         _apply_smartess_detection_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         poll_interval = int((user_input or {}).get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
         options = {
             CONF_POLL_INTERVAL: poll_interval,
-            CONF_COLLECTOR_OPERATION_MODE: self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE,
+            CONF_COLLECTOR_OPERATION_MODE: (
+                COLLECTOR_OPERATION_HA_ONLY
+                if _result_is_virtual_bridge(result)
+                else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
+            ),
         }
         remembered_endpoint = str(self._collector_original_server_endpoint or "").strip()
         target_endpoint = str(self._collector_target_server_endpoint or self._collector_callback_target_endpoint()).strip()
@@ -2580,19 +2643,26 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else CONTROL_MODE_READ_ONLY
         )
         data.setdefault(CONF_CONTROL_MODE, default_control_mode)
-        data[CONF_COLLECTOR_OPERATION_MODE] = DEFAULT_COLLECTOR_OPERATION_MODE
+        is_bridge = _result_is_virtual_bridge(result)
+        data[CONF_COLLECTOR_OPERATION_MODE] = (
+            COLLECTOR_OPERATION_HA_ONLY if is_bridge else DEFAULT_COLLECTOR_OPERATION_MODE
+        )
         data[CONF_COLLECTOR_IP] = collector_ip
         data[CONF_DETECTION_CONFIDENCE] = result.confidence if result is not None else "none"
         data[CONF_CONNECTION_MODE] = connection_mode
         data[CONF_COLLECTOR_PN] = collector_pn
         data[CONF_DETECTED_MODEL] = detected_model
         data[CONF_DETECTED_SERIAL] = detected_serial
+        if is_bridge:
+            data["collector_virtual_bridge"] = True
         _apply_smartess_detection_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         options = {
             CONF_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
-            CONF_COLLECTOR_OPERATION_MODE: DEFAULT_COLLECTOR_OPERATION_MODE,
+            CONF_COLLECTOR_OPERATION_MODE: (
+                COLLECTOR_OPERATION_HA_ONLY if is_bridge else DEFAULT_COLLECTOR_OPERATION_MODE
+            ),
         }
         return self.async_create_entry(title=title, data=data, options=options)
 
@@ -2922,12 +2992,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         menu gating after the entry runs.
         """
 
-        result = self._selected_result
-        match = getattr(result, "match", None) if result is not None else None
-        details = getattr(match, "details", None)
-        if isinstance(details, dict):
-            return bool(details.get("collector_virtual_bridge"))
-        return False
+        return _result_is_virtual_bridge(self._selected_result)
 
     def _reset_scan_progress(self) -> None:
         """Reset scan-progress bookkeeping before one new scan attempt starts."""
@@ -4129,6 +4194,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         username: str,
         password: str,
     ) -> _SmartEssCloudAssistState:
+        if _result_is_virtual_bridge(result):
+            raise RuntimeError("smartess_cloud_unavailable_for_virtual_bridge")
+
         collector_pn = self._collector_pn_for_result(result)
         if not collector_pn:
             raise RuntimeError("smartess_collector_pn_not_available")
@@ -5297,6 +5365,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._collector_wifi_last_error = ""
         self._collector_wifi_last_result = ""
         self._collector_wifi_networks: tuple[SmartEssBleWifiNetwork, ...] = ()
+        self._collector_uart_current_settings = ""
+        self._collector_uart_current_baudrate = ""
+        self._collector_uart_hardware_version = ""
+        self._collector_uart_last_error = ""
+        self._collector_uart_last_result = ""
         self._shadow_learning_state: dict[str, Any] = {}
 
     def _server_ip_field(self) -> SelectSelector | TextSelector:
@@ -5344,7 +5417,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return True
         values = getattr(data, "values", None)
         if isinstance(values, dict):
-            return bool(values.get("collector_virtual_bridge"))
+            if bool(values.get("collector_virtual_bridge")):
+                return True
+        if bool(self._config_entry.data.get("collector_virtual_bridge")):
+            return True
+        if bool(self._config_entry.options.get("collector_virtual_bridge")):
+            return True
         return False
 
     @_with_translation_bundle
@@ -5358,13 +5436,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if is_bridge:
             # A local bridge has no SmartESS cloud side, so cloud-only control
             # discovery (shadow learning) is meaningless against it. Wi-Fi,
-            # runtime, and diagnostics stay — the bridge implements them.
-            menu_options = ["runtime", "collector_wifi", "diagnostics"]
+            # UART, runtime, and diagnostics stay — the bridge implements them.
+            menu_options = ["runtime", "collector_wifi", "collector_uart", "diagnostics"]
             bridge_note = self._tr(
                 "common.dynamic.collector_virtual_bridge_note",
                 "\n\nThis collector is a local ESP EyeBond Collector bridge with no "
                 "SmartESS cloud side. Cloud-only actions (control discovery / "
-                "shadow learning) are hidden; Wi-Fi and runtime settings remain "
+                "shadow learning) are hidden; Wi-Fi, UART, and runtime settings remain "
                 "available.",
             )
         return self.async_show_menu(
@@ -5455,6 +5533,98 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             errors=errors,
             description_placeholders=self._collector_wifi_placeholders(),
+        )
+
+    @_with_translation_bundle
+    async def async_step_collector_uart(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        if not self._collector_is_virtual_bridge():
+            return await self.async_step_init()
+
+        errors: dict[str, str] = {}
+        defaults = dict(user_input or {})
+        selected_action = str(
+            defaults.get(CONF_COLLECTOR_UART_ACTION, COLLECTOR_UART_ACTION_APPLY)
+            or COLLECTOR_UART_ACTION_APPLY
+        ).strip()
+        if selected_action not in {COLLECTOR_UART_ACTION_REFRESH, COLLECTOR_UART_ACTION_APPLY}:
+            selected_action = COLLECTOR_UART_ACTION_APPLY
+
+        refresh_requested = user_input is not None and selected_action == COLLECTOR_UART_ACTION_REFRESH
+        apply_requested = user_input is not None and selected_action == COLLECTOR_UART_ACTION_APPLY
+        submitted_baudrate = self._normalize_collector_uart_baudrate(
+            defaults.get(CONF_COLLECTOR_UART_BAUDRATE, "")
+        )
+
+        if user_input is None or refresh_requested:
+            try:
+                await self._async_refresh_collector_uart_status()
+            except Exception as exc:
+                self._collector_uart_last_error = _exception_detail(exc)
+                errors["base"] = "collector_uart_read_failed"
+            else:
+                self._collector_uart_last_error = ""
+                if refresh_requested:
+                    self._collector_uart_last_result = self._tr(
+                        "common.dynamic.collector_uart_refresh_done",
+                        "Collector UART status has been refreshed.",
+                    )
+                    selected_action = COLLECTOR_UART_ACTION_APPLY
+
+        if apply_requested:
+            if self._collector_uart_runtime_change_unavailable():
+                errors["base"] = "collector_uart_runtime_unavailable"
+            elif submitted_baudrate not in COLLECTOR_UART_BAUDRATES:
+                errors[CONF_COLLECTOR_UART_BAUDRATE] = "collector_uart_baudrate_invalid"
+            if not bool(defaults.get(CONF_CONFIRM_COLLECTOR_UART_APPLY)):
+                errors[CONF_CONFIRM_COLLECTOR_UART_APPLY] = "collector_uart_apply_not_confirmed"
+
+            if not errors:
+                try:
+                    await self._async_apply_collector_uart_baudrate(submitted_baudrate)
+                except Exception as exc:
+                    self._collector_uart_last_error = _exception_detail(exc)
+                    errors["base"] = "collector_uart_write_failed"
+                else:
+                    self._collector_uart_last_error = ""
+                    self._collector_uart_last_result = self._tr(
+                        "common.dynamic.collector_uart_apply_done",
+                        "The collector accepted the new UART speed.",
+                    )
+                    return self.async_create_entry(data=dict(self._config_entry.options))
+
+        default_baudrate = (
+            submitted_baudrate
+            or self._collector_uart_current_baudrate
+            or self._normalize_collector_uart_baudrate(self._runtime_collector_uart_settings())
+            or "2400"
+        )
+        runtime_change_unavailable = self._collector_uart_runtime_change_unavailable()
+        if runtime_change_unavailable:
+            selected_action = COLLECTOR_UART_ACTION_REFRESH
+            schema_fields = {
+                vol.Required(CONF_COLLECTOR_UART_ACTION, default=selected_action): _collector_uart_action_selector(
+                    refresh_label=self._collector_uart_refresh_action_label(),
+                    apply_label=self._collector_uart_apply_action_label(),
+                    include_apply=False,
+                ),
+            }
+        else:
+            schema_fields = {
+                vol.Required(CONF_COLLECTOR_UART_BAUDRATE, default=default_baudrate): _collector_uart_baudrate_selector(),
+                vol.Required(CONF_COLLECTOR_UART_ACTION, default=selected_action): _collector_uart_action_selector(
+                    refresh_label=self._collector_uart_refresh_action_label(),
+                    apply_label=self._collector_uart_apply_action_label(),
+                ),
+                vol.Required(CONF_CONFIRM_COLLECTOR_UART_APPLY, default=False): BooleanSelector(),
+            }
+        return self.async_show_form(
+            step_id="collector_uart",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+            description_placeholders=self._collector_uart_placeholders(),
         )
 
     @_with_translation_bundle
@@ -7945,11 +8115,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ),
             )
 
-        can_refresh_cloud_evidence = bool(
-            getattr(coordinator, "smartess_cloud_export_available", False)
+        is_bridge = self._collector_is_virtual_bridge()
+        can_refresh_cloud_evidence = (
+            bool(getattr(coordinator, "smartess_cloud_export_available", False))
+            and not is_bridge
         )
         saved_cloud_evidence_path = self._current_cloud_evidence_path(coordinator)
-        had_saved_cloud_evidence = bool(saved_cloud_evidence_path)
+        had_saved_cloud_evidence = bool(saved_cloud_evidence_path) and not is_bridge
 
         if user_input is None and can_refresh_cloud_evidence:
             return self._show_create_support_package_form(
@@ -7962,6 +8134,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
         smartess_username = ""
         smartess_password = ""
+        wants_inline_refresh = False
 
         if can_refresh_cloud_evidence:
             form_input = user_input or {}
@@ -8310,6 +8483,51 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         finally:
             await transport.stop()
 
+    async def _async_refresh_collector_uart_status(self) -> None:
+        transport, session = await self._async_with_options_collector_session()
+        try:
+            hardware_version = await self._async_query_options_collector_text(
+                session,
+                QUERY_HARDWARE_VERSION,
+            )
+            current_settings = await self._async_query_options_collector_text(
+                session,
+                QUERY_SERIAL_BAUDRATE,
+            )
+        finally:
+            await transport.stop()
+
+        if not hardware_version:
+            hardware_version = self._runtime_collector_hardware_version()
+        if not current_settings:
+            current_settings = self._runtime_collector_uart_settings()
+        self._collector_uart_hardware_version = hardware_version
+        self._collector_uart_current_settings = current_settings
+        self._collector_uart_current_baudrate = self._normalize_collector_uart_baudrate(
+            current_settings
+        )
+
+    async def _async_apply_collector_uart_baudrate(self, baudrate: str) -> None:
+        if self._collector_uart_runtime_change_unavailable():
+            raise RuntimeError("collector_uart_runtime_unavailable")
+
+        baudrate = self._normalize_collector_uart_baudrate(baudrate)
+        if baudrate not in COLLECTOR_UART_BAUDRATES:
+            raise ValueError(f"unsupported_collector_uart_baudrate:{baudrate}")
+
+        transport, session = await self._async_with_options_collector_session()
+        try:
+            response = await session.set_collector(SET_SERIAL_BAUDRATE, baudrate)
+            if response.status != 0 or response.parameter != SET_SERIAL_BAUDRATE:
+                raise RuntimeError(
+                    f"collector_set_failed:parameter={SET_SERIAL_BAUDRATE}:status={response.status}"
+                )
+        finally:
+            await transport.stop()
+
+        self._collector_uart_current_baudrate = baudrate
+        self._collector_uart_current_settings = baudrate
+
     @staticmethod
     def _collector_query_response_text(response) -> str:
         text = str(response.text or "").strip().strip("\x00")
@@ -8371,6 +8589,97 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return self._tr(
             "common.dynamic.collector_wifi_action_apply",
             "Apply Wi-Fi settings to the current collector",
+        )
+
+    def _runtime_collector_uart_settings(self) -> str:
+        coordinator = self._coordinator()
+        data = getattr(coordinator, "data", None)
+        values = getattr(data, "values", None)
+        if isinstance(values, dict):
+            return str(values.get("collector_bridge_uart") or values.get("collector_serial_baudrate") or "")
+        return ""
+
+    def _runtime_collector_hardware_version(self) -> str:
+        coordinator = self._coordinator()
+        data = getattr(coordinator, "data", None)
+        values = getattr(data, "values", None)
+        if isinstance(values, dict):
+            return str(values.get("collector_hardware_version") or "")
+        return ""
+
+    def _collector_uart_runtime_change_unavailable(self) -> bool:
+        hardware = (
+            self._collector_uart_hardware_version
+            or self._runtime_collector_hardware_version()
+        ).lower()
+        return any(marker in hardware for marker in ("bk72", "bk723", "rtl87", "libretiny"))
+
+    @staticmethod
+    def _normalize_collector_uart_baudrate(value: object) -> str:
+        text = str(value or "").strip().strip("\x00")
+        if not text:
+            return ""
+        baudrate = text.split(",", 1)[0].strip()
+        return baudrate if baudrate in COLLECTOR_UART_BAUDRATES else ""
+
+    def _collector_uart_placeholders(self) -> dict[str, str]:
+        raw_settings = self._collector_uart_current_settings or self._runtime_collector_uart_settings()
+        current_uart = raw_settings or self._collector_uart_current_baudrate
+        hardware_version = self._collector_uart_hardware_version or self._runtime_collector_hardware_version()
+        return {
+            "collector_ip": str(
+                self._config_entry.options.get(
+                    CONF_COLLECTOR_IP,
+                    self._config_entry.data.get(CONF_COLLECTOR_IP, ""),
+                )
+                or self._tr("common.dynamic.not_available", "Not available")
+            ),
+            "current_uart": current_uart or self._tr("common.dynamic.not_available", "Not available"),
+            "hardware_version": hardware_version or self._tr("common.dynamic.not_available", "Not available"),
+            "runtime_unavailable_note": self._collector_uart_runtime_unavailable_note(),
+            "status_updates": self._collector_uart_status_updates(),
+        }
+
+    def _collector_uart_status_updates(self) -> str:
+        lines: list[str] = []
+        if self._collector_uart_last_result:
+            lines.append(
+                self._tr(
+                    "common.dynamic.collector_uart_last_action_line",
+                    "**Last action:** {value}",
+                    {"value": self._collector_uart_last_result},
+                )
+            )
+        if self._collector_uart_last_error:
+            lines.append(
+                self._tr(
+                    "common.dynamic.collector_uart_last_error_line",
+                    "**Last error:** {value}",
+                    {"value": self._collector_uart_last_error},
+                )
+            )
+        if not lines:
+            return ""
+        return "\n\n" + "\n".join(lines)
+
+    def _collector_uart_refresh_action_label(self) -> str:
+        return self._tr(
+            "common.dynamic.collector_uart_action_refresh",
+            "Refresh UART status",
+        )
+
+    def _collector_uart_apply_action_label(self) -> str:
+        return self._tr(
+            "common.dynamic.collector_uart_action_apply",
+            "Apply UART speed to the current collector",
+        )
+
+    def _collector_uart_runtime_unavailable_note(self) -> str:
+        if not self._collector_uart_runtime_change_unavailable():
+            return ""
+        return self._tr(
+            "common.dynamic.collector_uart_runtime_unavailable_note",
+            "\n\nThis collector reports BK72xx/LibreTiny hardware. Runtime UART speed switching is not available on this platform. Change `baud_rate:` in the ESPHome YAML and reflash the collector.",
         )
 
     def _metadata_source_summary(self, metadata) -> str:
@@ -8460,6 +8769,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self,
         *,
         had_saved_cloud_evidence: bool,
+        can_refresh_cloud_evidence: bool = True,
     ) -> SelectSelector:
         options: list[SelectOptionDict] = []
         if had_saved_cloud_evidence:
@@ -8480,14 +8790,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     ),
                 )
             )
-        options.append(
-            SelectOptionDict(
-                value=SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
-                label=self._support_archive_cloud_mode_label(
-                    SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
-                ),
+        if can_refresh_cloud_evidence:
+            options.append(
+                SelectOptionDict(
+                    value=SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
+                    label=self._support_archive_cloud_mode_label(
+                        SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
+                    ),
+                )
             )
-        )
         return SelectSelector(
             SelectSelectorConfig(
                 options=options,
@@ -8551,9 +8862,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
         had_saved_cloud_evidence = bool(saved_cloud_evidence_path)
-        can_refresh_cloud_evidence = bool(
-            getattr(coordinator, "smartess_cloud_export_available", False)
+        is_bridge = self._collector_is_virtual_bridge()
+        can_refresh_cloud_evidence = (
+            bool(getattr(coordinator, "smartess_cloud_export_available", False))
+            and not is_bridge
         )
+        if is_bridge:
+            saved_cloud_evidence_path = ""
+            had_saved_cloud_evidence = False
         defaults = {
             CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE: str(
                 (user_input or {}).get(CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE)
@@ -8575,6 +8891,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         default=defaults[CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE],
                     ): self._support_archive_cloud_mode_selector(
                         had_saved_cloud_evidence=had_saved_cloud_evidence,
+                        can_refresh_cloud_evidence=can_refresh_cloud_evidence,
                     ),
                     **_smartess_credential_schema_fields(
                         required=False,
@@ -8601,7 +8918,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
     def _smartess_cloud_diagnostics_hint(self) -> str:
         coordinator = self._coordinator()
-        if coordinator is None or not bool(getattr(coordinator, "smartess_cloud_export_available", False)):
+        if (
+            coordinator is None
+            or self._collector_is_virtual_bridge()
+            or not bool(getattr(coordinator, "smartess_cloud_export_available", False))
+        ):
             return ""
 
         values = getattr(getattr(coordinator, "data", None), "values", {}) or {}

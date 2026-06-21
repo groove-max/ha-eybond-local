@@ -28,11 +28,16 @@ Do not add user-facing metadata to a Python driver if the same information can l
 
 ## Metadata Ownership Rule
 
-When one imported SmartESS asset and one runtime compatibility overlay both exist, keep them as separate metadata names.
+When imported SmartESS assets, runtime compatibility overlays, and dedicated
+local SmartESS runtime profiles all exist, keep their ownership explicit.
 
 - Raw imported SmartESS asset truth belongs under `custom_components/eybond_local/protocol_catalogs/profiles/smartess_local/models/` and `custom_components/eybond_local/protocol_catalogs/register_schemas/smartess_local/models/`.
-- Effective runtime compatibility overlays stay under the actual runtime family namespace, for example `pi30_ascii/models/smartess_0925_compat.json`.
-- Do not keep or introduce SmartESS-namespaced default aliases once the canonical runtime compatibility overlay exists.
+- Effective compatibility overlays stay under the runtime family that consumes
+  them, for example `pi30_ascii/models/smartess_0925_compat.json`.
+- Dedicated local SmartESS runtime profiles stay under `smartess_local/` and
+  should not be treated as commercial model names.
+- Do not blur SmartESS asset ids, raw inverter model strings, and commercial
+  model names. Store commercial support conclusions in `catalog/inverter_models/`.
 
 ## Key Project Paths
 
@@ -67,17 +72,11 @@ Fixtures and tests:
 
 ### 1. Capture Or Import A Fixture
 
-If the device can be reached live, capture a stable snapshot first.
+Start from a Support Archive whenever possible. It already contains raw capture
+evidence and replay-compatible fixture data from the Home Assistant UI.
 
-Example for Modbus-family devices:
-
-```bash
-python3 tools/modbus_dump.py \
-  --server-ip <ha_host_ip> \
-  --collector-ip <collector_ip> \
-  --range <start:count> \
-  --fixture-out /tmp/new_device_fixture.json
-```
+If a maintainer needs a custom live capture, keep that workflow local-only and
+store the resulting fixture outside git.
 
 If the fixture will be shared, anonymize it:
 

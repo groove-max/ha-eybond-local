@@ -76,7 +76,7 @@ class FixtureCoverageTests(unittest.TestCase):
             expected,
             msg=(
                 "Generated fixture coverage is out of sync. Re-run:\n"
-                f"python3 {REPO_ROOT / 'tools' / 'export_fixture_coverage.py'} "
+                f"python3 {REPO_ROOT / '.local' / 'tools' / 'export_fixture_coverage.py'} "
                 "--format markdown "
                 f"--output {self.generated_markdown_path}"
             ),

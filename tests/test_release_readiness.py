@@ -69,7 +69,7 @@ class ReleaseReadinessTests(unittest.TestCase):
             expected,
             msg=(
                 "Generated release readiness is out of sync. Re-run:\n"
-                f"python3 {REPO_ROOT / 'tools' / 'export_release_readiness.py'} "
+                f"python3 {REPO_ROOT / '.local' / 'tools' / 'export_release_readiness.py'} "
                 "--format markdown "
                 f"--output {self.generated_markdown_path}"
             ),

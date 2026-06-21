@@ -46,6 +46,11 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("input_voltage",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("smartess_local",),
+                source_keys=("ac_input_voltage",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -64,6 +69,11 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("input_frequency",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("smartess_local",),
+                source_keys=("ac_input_frequency",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -77,7 +87,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("pi18", "pi30"),
+                driver_keys=("pi18", "pi30", "smartess_local"),
                 source_keys=("output_active_power",),
                 compute="passthrough",
             ),
@@ -95,7 +105,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("pi18", "pi30"),
+                driver_keys=("pi18", "pi30", "smartess_local"),
                 source_keys=("pv_input_voltage",),
                 compute="passthrough",
             ),
@@ -130,7 +140,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("pi18", "pi30"),
+                driver_keys=("pi18", "pi30", "smartess_local"),
                 source_keys=("pv_input_power",),
                 compute="passthrough",
             ),
@@ -160,6 +170,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 ),
                 compute="signed_delta_multiply",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("smartess_local",),
+                source_keys=(
+                    "battery_voltage",
+                    "charging_current",
+                    "battery_discharge_current",
+                ),
+                compute="signed_delta_multiply",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -174,7 +193,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_home",
             ),
@@ -192,7 +211,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_battery",
             ),
@@ -210,7 +229,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_grid",
             ),
@@ -228,7 +247,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_battery_to_home",
             ),
@@ -246,7 +265,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_home",
             ),
@@ -264,7 +283,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_battery",
             ),

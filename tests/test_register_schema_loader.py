@@ -142,6 +142,18 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         config_registers = {spec.register: spec.key for spec in schema.spec_set("config")}
         self.assertEqual(config_registers[344], "output2_cutoff_soc")
         self.assertEqual(config_registers[353], "output2_overload_warning_percent")
+        charge_source_spec = next(
+            spec for spec in schema.spec_set("config") if spec.key == "charge_source_priority"
+        )
+        self.assertEqual(
+            charge_source_spec.enum_map,
+            {
+                1: "PV Priority",
+                2: "PV and Utility",
+                3: "PV Only",
+                4: "PV Priority With Load Reserve",
+            },
+        )
         # Base live telemetry still present alongside the OP2 additions.
         self.assertEqual(live_registers[202], "grid_voltage")
         self.assertEqual(

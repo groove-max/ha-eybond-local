@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-_PROBE_PATH = REPO_ROOT / "tools" / "smartess_cloud_probe.py"
+_PROBE_PATH = REPO_ROOT / ".local" / "tools" / "smartess_cloud_probe.py"
 if not _PROBE_PATH.is_file():
     raise unittest.SkipTest(f"smartess_cloud_probe not present at {_PROBE_PATH}")
 _spec = importlib.util.spec_from_file_location(

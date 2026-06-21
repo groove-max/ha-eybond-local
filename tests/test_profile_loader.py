@@ -139,7 +139,18 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.key, "modbus_smg_anenji_op2_6200")
         self.assertEqual(profile.title, "SMG OP2 6200 Dual Output")
         # The full SMG control set rides along from the default profile...
-        self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
+        charge_source_priority = profile.get_capability("charge_source_priority")
+        self.assertEqual(charge_source_priority.register, 331)
+        self.assertEqual(
+            charge_source_priority.enum_value_map,
+            {
+                1: "PV Priority",
+                2: "PV and Utility",
+                3: "PV Only",
+                4: "PV Priority With Load Reserve",
+            },
+        )
+        self.assertNotIn(0, charge_source_priority.enum_value_map)
         self.assertGreaterEqual(len(profile.capabilities), 28)
         # ...plus the OP2 switch as a masked single-bit field of register 354.
         capability = profile.get_capability("output2_enable")

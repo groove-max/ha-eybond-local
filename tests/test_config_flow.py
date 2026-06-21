@@ -217,6 +217,8 @@ from custom_components.eybond_local.config_flow import (
     BLE_ACTION_APPLY,
     BLE_ACTION_RESCAN,
     BLE_ACTION_REFRESH_WIFI,
+    COLLECTOR_UART_ACTION_APPLY,
+    COLLECTOR_UART_ACTION_REFRESH,
     COLLECTOR_WIFI_ACTION_APPLY,
     COLLECTOR_WIFI_ACTION_REFRESH,
     COLLECTOR_NETWORK_ALREADY_CONNECTED,
@@ -224,9 +226,12 @@ from custom_components.eybond_local.config_flow import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONF_BLE_ACTION,
+    CONF_COLLECTOR_UART_ACTION,
+    CONF_COLLECTOR_UART_BAUDRATE,
     CONF_COLLECTOR_WIFI_ACTION,
     CONF_COLLECTOR_NETWORK_STATUS,
     CONF_COLLECTOR_OPERATION_MODE,
+    CONF_CONFIRM_COLLECTOR_UART_APPLY,
     CONF_CONFIRM_COLLECTOR_WIFI_APPLY,
     CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE,
     CONF_SETUP_MODE,
@@ -267,8 +272,11 @@ from custom_components.eybond_local.collector.smartess_ble import (
     SmartEssBleWifiNetwork,
 )
 from custom_components.eybond_local.collector.smartess_local import (
+    QUERY_HARDWARE_VERSION,
+    QUERY_SERIAL_BAUDRATE,
     SET_REBOOT_OR_APPLY,
     SET_SERVER_ENDPOINT,
+    SET_SERIAL_BAUDRATE,
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
 )
@@ -2691,6 +2699,29 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Partial support", placeholders["tier_headline"])
         self.assertIn("learning", placeholders["tier_details"])
 
+    async def test_detection_summary_collector_only_does_not_suggest_learning(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="udp",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
+            ),
+            connection_mode="known_ip",
+            next_action="create_pending_entry",
+        )
+
+        result = await flow.async_step_detection_summary()
+
+        placeholders = result["description_placeholders"]
+        self.assertIn("Device not recognized", placeholders["tier_headline"])
+        self.assertIn("no inverter was detected", placeholders["tier_details"])
+        self.assertIn("Support Archive", placeholders["tier_details"])
+        self.assertNotIn("Add controls", placeholders["tier_details"])
+        self.assertNotIn("device learning", placeholders["tier_details"])
+
     async def test_detection_summary_without_catalog_details_uses_driver_text(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._result_with_catalog_details(None)
@@ -2814,6 +2845,24 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="known_ip",
         )
 
+    def _collector_only_bridge_result(self) -> OnboardingResult:
+        return OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="udp",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(
+                    collector_pn="ESP32COLLECTOR",
+                    collector_virtual_bridge=True,
+                    collector_bridge_kind="esp-collector",
+                    collector_bridge_version="dev",
+                ),
+            ),
+            connection_mode="known_ip",
+            next_action="create_pending_entry",
+        )
+
     async def test_confirm_step_hides_operation_mode_selector_for_detected_bridge(self) -> None:
         # Item 1: a detected bridge forces HA-only and hides the SmartESS+HA /
         # HA-only choice, showing an informational note instead.
@@ -2829,6 +2878,37 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             result["description_placeholders"]["collector_operation_mode_note"].strip()
         )
+
+    async def test_confirm_step_hides_operation_mode_selector_for_collector_only_bridge(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._collector_only_bridge_result()
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "confirm")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertTrue(
+            result["description_placeholders"]["collector_operation_mode_note"].strip()
+        )
+
+    async def test_confirm_step_persists_ha_only_for_collector_only_bridge(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._collector_only_bridge_result()
+        flow._collector_endpoint_bind_applied = True
+
+        result = await flow.async_step_confirm({"poll_interval": 15})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+        self.assertEqual(
+            result["options"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+        self.assertTrue(result["data"]["collector_virtual_bridge"])
 
     async def test_confirm_step_keeps_operation_mode_selector_for_factory_collector(self) -> None:
         # Item 1 fail-safe: a factory collector keeps the selector and an empty note.
@@ -3425,7 +3505,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         labels = [option["label"] for option in selector.config.kwargs["options"]]
         self.assertEqual(
             labels,
-            ["Авто", "SMG / Modbus", "SRNE / Modbus", "MUST PV/PH18", "PI30", "PI18"],
+            [
+                "Авто",
+                "SMG / Modbus",
+                "SRNE / Modbus",
+                "MUST PV/PH18",
+                "PI30",
+                "SmartESS 0925 / Modbus",
+                "PI18",
+            ],
         )
 
     async def test_manual_step_recovers_when_auto_config_is_missing(self) -> None:
@@ -3903,9 +3991,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             result["menu_options"],
-            ["runtime", "collector_wifi", "diagnostics"],
+            ["runtime", "collector_wifi", "collector_uart", "diagnostics"],
         )
         self.assertNotIn("shadow_learning", result["menu_options"])
+        self.assertIn("collector_uart", result["menu_options"])
         self.assertTrue(
             result["description_placeholders"]["bridge_note"].strip()
         )
@@ -3922,6 +4011,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_init()
 
         self.assertIn("shadow_learning", result["menu_options"])
+        self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
 
     async def test_options_collector_wifi_step_renders_current_status(self) -> None:
@@ -4055,6 +4145,177 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(reads, [SET_TARGET_SSID])
         transport.stop.assert_awaited_once()
+
+    async def test_options_collector_uart_step_renders_current_status_for_bridge(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        async def refresh_status() -> None:
+            options._collector_uart_current_settings = "2400"
+            options._collector_uart_current_baudrate = "2400"
+
+        options._async_refresh_collector_uart_status = refresh_status
+
+        result = await options.async_step_collector_uart()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "collector_uart")
+        self.assertEqual(result["description_placeholders"]["current_uart"], "2400")
+        self.assertIn(CONF_COLLECTOR_UART_BAUDRATE, result["data_schema"].schema)
+        self.assertIn(CONF_COLLECTOR_UART_ACTION, result["data_schema"].schema)
+        self.assertIn(CONF_CONFIRM_COLLECTOR_UART_APPLY, result["data_schema"].schema)
+
+    async def test_options_collector_uart_refresh_reads_parameter_34(self) -> None:
+        options = self._make_options_flow()
+        transport = AsyncMock()
+        session = AsyncMock()
+        reads: list[int] = []
+
+        async def query_collector(parameter: int):
+            reads.append(parameter)
+            return type(
+                "_QueryResponse",
+                (),
+                {
+                    "code": 0,
+                    "parameter": parameter,
+                    "text": "ESP32" if parameter == QUERY_HARDWARE_VERSION else "9600",
+                    "data": b"ESP32" if parameter == QUERY_HARDWARE_VERSION else b"9600",
+                },
+            )()
+
+        async def with_session():
+            return transport, session
+
+        session.query_collector.side_effect = query_collector
+        options._async_with_options_collector_session = with_session
+
+        await options._async_refresh_collector_uart_status()
+
+        self.assertEqual(reads, [QUERY_HARDWARE_VERSION, QUERY_SERIAL_BAUDRATE])
+        self.assertEqual(options._collector_uart_hardware_version, "ESP32")
+        self.assertEqual(options._collector_uart_current_baudrate, "9600")
+        self.assertEqual(options._collector_uart_current_settings, "9600")
+        transport.stop.assert_awaited_once()
+
+    async def test_options_collector_uart_step_blocks_runtime_change_for_bk72xx(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        async def refresh_status() -> None:
+            options._collector_uart_hardware_version = "BK72xx/RTL87xx"
+            options._collector_uart_current_settings = "2400"
+            options._collector_uart_current_baudrate = "2400"
+
+        options._async_refresh_collector_uart_status = refresh_status
+
+        result = await options.async_step_collector_uart()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "collector_uart")
+        self.assertEqual(result["description_placeholders"]["hardware_version"], "BK72xx/RTL87xx")
+        self.assertIn("BK72xx", result["description_placeholders"]["runtime_unavailable_note"])
+        self.assertIn(CONF_COLLECTOR_UART_ACTION, result["data_schema"].schema)
+        self.assertNotIn(CONF_COLLECTOR_UART_BAUDRATE, result["data_schema"].schema)
+        self.assertNotIn(CONF_CONFIRM_COLLECTOR_UART_APPLY, result["data_schema"].schema)
+
+    async def test_options_collector_uart_apply_writes_parameter_34_only(self) -> None:
+        options = self._make_options_flow()
+        transport = AsyncMock()
+        session = AsyncMock()
+        writes: list[tuple[int, str]] = []
+
+        async def set_collector(parameter: int, value: str):
+            writes.append((parameter, value))
+            return type("_SetResponse", (), {"status": 0, "parameter": parameter})()
+
+        async def with_session():
+            return transport, session
+
+        session.set_collector.side_effect = set_collector
+        options._async_with_options_collector_session = with_session
+
+        await options._async_apply_collector_uart_baudrate("9600")
+
+        self.assertEqual(writes, [(SET_SERIAL_BAUDRATE, "9600")])
+        self.assertEqual(options._collector_uart_current_baudrate, "9600")
+        transport.stop.assert_awaited_once()
+
+    async def test_options_collector_uart_apply_refuses_bk72xx_runtime_change(self) -> None:
+        options = self._make_options_flow()
+        options._collector_uart_hardware_version = "BK72xx/RTL87xx"
+        options._async_with_options_collector_session = AsyncMock()
+
+        with self.assertRaisesRegex(RuntimeError, "collector_uart_runtime_unavailable"):
+            await options._async_apply_collector_uart_baudrate("9600")
+
+        options._async_with_options_collector_session.assert_not_called()
+
+    async def test_options_collector_uart_apply_requires_confirmation(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+        options._async_apply_collector_uart_baudrate = AsyncMock()
+
+        result = await options.async_step_collector_uart(
+            {
+                CONF_COLLECTOR_UART_ACTION: COLLECTOR_UART_ACTION_APPLY,
+                CONF_COLLECTOR_UART_BAUDRATE: "9600",
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(
+            result["errors"],
+            {CONF_CONFIRM_COLLECTOR_UART_APPLY: "collector_uart_apply_not_confirmed"},
+        )
+        options._async_apply_collector_uart_baudrate.assert_not_called()
+
+    async def test_options_collector_uart_apply_preserves_existing_options(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.options = {"poll_interval": 15}
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+        options._async_apply_collector_uart_baudrate = AsyncMock()
+
+        result = await options.async_step_collector_uart(
+            {
+                CONF_COLLECTOR_UART_ACTION: COLLECTOR_UART_ACTION_APPLY,
+                CONF_COLLECTOR_UART_BAUDRATE: "9600",
+                CONF_CONFIRM_COLLECTOR_UART_APPLY: True,
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"], {"poll_interval": 15})
+        options._async_apply_collector_uart_baudrate.assert_awaited_once_with("9600")
+
+    async def test_options_collector_uart_step_returns_init_for_factory_collector(self) -> None:
+        options = self._make_options_flow()
+
+        result = await options.async_step_collector_uart()
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "init")
+        self.assertNotIn("collector_uart", result["menu_options"])
 
     async def test_options_runtime_step_preloads_translation_bundle_via_executor(self) -> None:
         options = self._make_options_flow()
@@ -4271,6 +4532,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 values={"collector_virtual_bridge": True},
             ),
         )
+
+        result = await options.async_step_runtime()
+
+        self.assertEqual(result["type"], "form")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertTrue(
+            result["description_placeholders"]["collector_operation_mode_note"].strip()
+        )
+
+    async def test_options_runtime_step_hides_operation_mode_selector_for_bridge_entry_data(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data = {
+            **dict(options._config_entry.data),
+            "collector_virtual_bridge": True,
+        }
+        options._config_entry.runtime_data = None
 
         result = await options.async_step_runtime()
 
@@ -4969,6 +5246,55 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "Fresh SmartESS cloud evidence was fetched",
+            result["description_placeholders"]["status"],
+        )
+
+    async def test_create_support_package_for_bridge_does_not_refresh_cloud_evidence(self) -> None:
+        options = self._make_options_flow()
+        captured: dict[str, object] = {}
+
+        async def _export_support_package_with_cloud_refresh(
+            *,
+            smartess_username: str,
+            smartess_password: str,
+            wants_refresh: bool | None = None,
+        ) -> str:
+            captured["username"] = smartess_username
+            captured["password"] = smartess_password
+            captured["wants_refresh"] = wants_refresh
+            return "/config/support/support_archive.zip"
+
+        options._config_entry.data = {
+            **dict(options._config_entry.data),
+            "collector_virtual_bridge": True,
+        }
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
+            smartess_cloud_export_available=True,
+            smartess_cloud_evidence_path="",
+            smartess_collector_pn="ESP32COLLECTOR",
+            data=types.SimpleNamespace(
+                values={
+                    "collector_virtual_bridge": True,
+                    "support_package_download_url": "/api/diagnostics/support_archive.zip",
+                }
+            ),
+        )
+
+        result = await options.async_step_create_support_package(
+            {
+                CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE: SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
+                "username": "should-not-be-used",
+                "password": "should-not-be-used",
+            }
+        )
+
+        self.assertEqual(result["step_id"], "diagnostics_result")
+        self.assertEqual(captured["username"], "")
+        self.assertEqual(captured["password"], "")
+        self.assertIs(captured["wants_refresh"], False)
+        self.assertIn(
+            "No SmartESS cloud evidence was included",
             result["description_placeholders"]["status"],
         )
 

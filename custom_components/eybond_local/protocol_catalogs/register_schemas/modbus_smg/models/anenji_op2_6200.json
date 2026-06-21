@@ -16,6 +16,17 @@
       {"key": "output2_voltage", "register": 244, "divisor": 10, "decimals": 1}
     ],
     "config": [
+      {
+        "key": "charge_source_priority",
+        "register": 331,
+        "enum_table": null,
+        "enum_map": {
+          "1": "PV Priority",
+          "2": "PV and Utility",
+          "3": "PV Only",
+          "4": "PV Priority With Load Reserve"
+        }
+      },
       {"key": "output2_cutoff_soc", "register": 344},
       {"key": "output2_overload_warning_percent", "register": 353}
     ]

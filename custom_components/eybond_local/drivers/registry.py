@@ -32,6 +32,7 @@ from .base import InverterDriver
 from .must import MustPvPh18Driver
 from .pi18 import Pi18Driver
 from .pi30 import Pi30Driver
+from .smartess_local import SmartEssLocalDriver
 from .smg import SmgModbusDriver
 from .srne import SrneModbusDriver
 
@@ -40,6 +41,7 @@ _DRIVERS: tuple[InverterDriver, ...] = (
     SrneModbusDriver(),
     MustPvPh18Driver(),
     Pi30Driver(),
+    SmartEssLocalDriver(),
     Pi18Driver(),
 )
 

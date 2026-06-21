@@ -245,6 +245,11 @@
       "collector_wifi_password_required": "Введіть пароль Wi-Fi.",
       "collector_wifi_password_not_ascii": "На локальному керівному шляху цей колектор приймає лише ASCII-паролі Wi-Fi.",
       "collector_wifi_apply_not_confirmed": "Підтвердьте, що застосування Wi-Fi параметрів може тимчасово відключити колектор.",
+      "collector_uart_read_failed": "Не вдалося прочитати параметри UART з колектора.",
+      "collector_uart_write_failed": "Не вдалося записати параметри UART у колектор.",
+      "collector_uart_baudrate_invalid": "Оберіть підтримувану швидкість UART.",
+      "collector_uart_apply_not_confirmed": "Підтвердьте, що зміна швидкості UART може тимчасово зупинити зв'язок з інвертором.",
+      "collector_uart_runtime_unavailable": "Цей колектор не може змінювати швидкість UART без перепрошивки.",
       "proxy_capture_action_failed": "Не вдалося виконати дію захоплення. Перевірте журнал Home Assistant.",
       "shadow_learning_failed": "Дія виявлення елементів керування завершилась помилкою. Перевірте деталі та підтвердження і повторіть спробу.",
       "diagnostic_commands_required": "Вставте хоча б одну діагностичну команду.",
@@ -259,6 +264,7 @@
           "runtime": "Підключення та опитування",
           "shadow_learning": "Додати керування (навчання пристрою)",
           "collector_wifi": "Змінити Wi-Fi колектора",
+          "collector_uart": "Змінити швидкість UART інвертора",
           "diagnostics": "Діагностика та сервісні інструменти"
         }
       },
@@ -274,6 +280,19 @@
         "data_description": {
           "wifi_password": "Поточний пароль ніколи не зчитується назад із колектора. Введіть його лише під час застосування нових параметрів.",
           "confirm_collector_wifi_apply": "Після зміни мережевих параметрів рекомендовано видалити цей пристрій з Home Assistant і додати його заново, щоб колектор перепідключився вже з новою IP-адресою."
+        }
+      },
+      "collector_uart": {
+        "title": "Змінити швидкість UART інвертора",
+        "description": "**Поточний стан**\nКолектор: {collector_ip}\nПлатформа: {hardware_version}\nПоточний UART: {current_uart}\n\nОберіть швидкість UART, яку очікує інвертор, і застосуйте її. Цей параметр доступний лише для мостів ESP EyeBond Collector.{runtime_unavailable_note}{status_updates}",
+        "data": {
+          "collector_uart_baudrate": "Швидкість UART",
+          "collector_uart_action": "Що зробити",
+          "confirm_collector_uart_apply": "Я розумію, що зміна швидкості UART може тимчасово зупинити зв'язок з інвертором"
+        },
+        "data_description": {
+          "collector_uart_baudrate": "Міст зберігає поточний формат кадру і змінює лише швидкість. PI30/Voltronic часто використовують 2400; SMG/Modbus часто використовують 9600.",
+          "confirm_collector_uart_apply": "Якщо швидкість вибрана неправильно, Home Assistant може продовжувати бачити колектор, але перестати отримувати дані інвертора до виправлення швидкості."
         }
       },
       "runtime": {
@@ -620,6 +639,7 @@
         "modbus_smg": "SMG / Modbus",
         "srne_modbus": "SRNE / Modbus",
         "must_pv_ph18": "MUST PV/PH18",
+        "smartess_local": "SmartESS 0925 / Modbus",
         "pi30": "PI30",
         "pi18": "PI18"
       }

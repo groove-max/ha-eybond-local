@@ -1,8 +1,8 @@
 # Collector Management
 
-This guide explains the collector side of EyeBond Local in plain terms: what the collector device is for, which mode to choose, and which collector actions are meant for everyday use.
+This guide explains the collector side of EyeBond Local: what the collector device is for, which mode to choose, and which actions are meant for normal use.
 
-## Collector And Inverter Devices
+## Collector and inverter devices
 
 EyeBond Local usually creates two devices in Home Assistant for one installation:
 
@@ -13,7 +13,23 @@ EyeBond Local usually creates two devices in Home Assistant for one installation
 
 If you are looking for Wi-Fi, reconnect, proxy capture, or collector mode settings, start with the collector device.
 
-## Collector Operation Mode
+## Getting the collector online
+
+The collector should be on the same network as Home Assistant before normal setup.
+
+Common ways to do this:
+
+- Use the SmartESS app to connect the collector to Wi-Fi.
+- Use EyeBond Local Bluetooth Wi-Fi setup, if your collector supports it.
+- Connect to the Wi-Fi access point broadcast by the collector, then run setup from there.
+
+The collector access point name usually contains the collector identifier. Some collectors use `12345678` as the default access-point password.
+
+After the device is added, you can change the collector Wi-Fi from the collector device page.
+
+If you change the collector network and it receives a new IP address, removing and adding the integration again can be the simplest way to pick up the new address cleanly.
+
+## Collector operation mode
 
 The most important collector setting is **Collector Operation Mode**.
 
@@ -37,7 +53,7 @@ You can choose the mode during setup and change it later from **Runtime settings
 
 <p align="center"><img src="images/runtime-settings.png" alt="Runtime settings dialog" width="480"></p>
 
-## Control Mode Is A Different Setting
+## Control mode is a different setting
 
 Do not confuse **Collector Operation Mode** with **Control Mode**.
 
@@ -48,15 +64,15 @@ The control modes are:
 
 - **`Read-only`** — monitoring only
 - **`Auto`** — verified controls appear automatically when detection confidence is high
-- **`Full Control`** — every available write command is exposed for advanced users who understand the risk
+- **`Full Control`** — expose available controls manually for advanced users who understand the risk
 
 For most people, `SmartESS + HA` plus `Auto` is the safest normal setup.
 
-## Everyday Collector Actions
+## Everyday collector actions
 
 The collector device can expose a few practical actions.
 
-### Change Collector Wi-Fi
+### Change collector Wi-Fi
 
 Use this when the collector must join a different SSID or when you are moving it to another router or access point.
 
@@ -68,40 +84,40 @@ After a Wi-Fi change, re-adding the device can be the easiest way to pick up the
 
 <p align="center"><img src="images/collector-wifi-settings.png" alt="Change collector Wi-Fi dialog" width="480"></p>
 
-### Restart Collector
+### Restart collector
 
 Use this after changing collector networking, or when the collector stopped responding and you want a quick reconnect without power-cycling hardware.
 
-### Start Proxy Capture
+### Start proxy capture
 
-This is a troubleshooting tool. Most users do not need it for normal operation.
+This is a support tool. Most users do not need it for normal operation.
 
-Use it only when you are collecting extra evidence for diagnostics, support, or bug reports.
+Use it only when a developer asks you to collect extra evidence.
 
 For the full user guide, see [Collector Proxy Capture](PROXY_CAPTURE.md).
 
-## Virtual Bridge Collectors (ESP EyeBond Collector)
+## Virtual bridge collectors
 
-EyeBond Local also works with the community **[ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector)** firmware — a local, transparent bridge that emulates an EyeBond collector on an ESP8266/ESP32 for inverters that have no factory collector.
+EyeBond Local also works with the community **[ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector)** firmware.
 
-The integration recognizes such a bridge automatically. Detection is done with a single additive, read-only AT query, `AT+VDTU`: a bridge answers with a reply that starts with `esp-collector,` (plus its firmware version and capability flags), while a factory collector returns an error, an empty value, or a reply without that prefix. Detection never relies on the collector PN, devcode, or firmware-version string, and the query is safe to send to any collector.
+This is useful when your inverter has no factory SmartESS / EyeBond collector. The ESP bridge connects to the inverter and presents itself to Home Assistant like a collector.
 
 When a bridge is detected:
 
-- It is shown as an **ESP EyeBond Collector** device (honest manufacturer, model, and firmware version), instead of the generic `EyeBond Collector` / `Wi-Fi.DTU` identity.
-- **Cloud-only actions are hidden**, because the bridge has no SmartESS cloud side and nothing to talk to: device learning / shadow learning and proxy capture are both removed from the menus. Proxy capture is hidden because it would only redirect the cloud callback (FC=3 param 21) to record SmartESS cloud reads, which cannot exist for a local-only bridge. (SmartESS cloud assist is not offered in this build at all, so it is vacuously absent for a bridge too.)
-- **The collector operation mode is forced to Home Assistant only** and the SmartESS + HA / HA-only selector is hidden (it is replaced with a short note), because a bridge has no SmartESS cloud side. The bridge is still told where to connect by writing the Home Assistant server endpoint. Modern bridge firmware accepts and persists that write; older bridge firmware may refuse it, and that refusal is treated as applied instead of surfacing an onboarding error.
-- **Local actions stay available**: runtime/connection settings, diagnostics, and **Change Collector Wi-Fi** all work normally — the bridge implements the real Wi-Fi parameter path.
+- It is shown as **ESP EyeBond Collector**.
+- SmartESS-only actions are hidden because the bridge does not talk to SmartESS cloud.
+- Collector mode is Home Assistant only.
+- Local actions still work: diagnostics, connection settings, and Wi-Fi change.
 
-If `AT+VDTU` is never answered (older bridge firmware, a factory collector, or a missed query), the collector behaves exactly as before — nothing is hidden or restricted.
+If the integration does not recognize the bridge, update the bridge firmware first.
 
-## When You Need Advanced Networking
+## When you need advanced networking
 
 If Home Assistant and the collector are on the same LAN, you usually do not need any advanced networking options.
 
 If the collector is remote, behind another router, or must call back through VPN or port forwarding, read the [Remote / NAT Setup Guide](REMOTE_SETUP.md).
 
-## Need Help?
+## Need help?
 
 If something still does not look right:
 

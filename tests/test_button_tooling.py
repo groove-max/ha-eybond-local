@@ -276,7 +276,7 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertFalse(entity.available)
         self.assertEqual(
             entity.extra_state_attributes["availability_reason"],
-            "Stop proxy capture before triggering collector re-discovery.",
+            "Stop proxy capture before requesting collector callback.",
         )
 
     def test_collector_tooling_button_routes_to_collector_device(self) -> None:
