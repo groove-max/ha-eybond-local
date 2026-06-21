@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import re
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
@@ -84,12 +85,38 @@ def _prefer_more_complete_identity(current: str, candidate: str) -> str:
     return normalized_current
 
 
+_AT_DTUPN_RE = re.compile(rb"AT\+DTUPN\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._-]{5,})")
+
+
 def _parse_fc2_collector_pn(payload: bytes) -> str:
     if len(payload) < 2:
         return ""
     if payload[1] != 2:
         return ""
     return payload[2:].decode("ascii", errors="ignore").strip("\x00").strip()
+
+
+def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
+    payload = bytes(chunk or b"")
+    if not payload:
+        return "", ""
+
+    match = _AT_DTUPN_RE.search(payload)
+    if match:
+        return match.group(1).decode("ascii", errors="ignore").strip(), "at_dtupn"
+
+    if len(payload) < HEADER_SIZE:
+        return "", ""
+    try:
+        header = decode_header(payload[:HEADER_SIZE])
+    except Exception:
+        return "", ""
+    available_payload = payload[HEADER_SIZE : HEADER_SIZE + max(header.payload_len, 0)]
+    if header.fcode == FC_HEARTBEAT:
+        return parse_heartbeat_pn(available_payload), "framed_heartbeat"
+    if header.fcode == FC_QUERY_COLLECTOR:
+        return _parse_fc2_collector_pn(available_payload), "fc2_parameter_2"
+    return "", ""
 
 
 def _bounded_write_timeout(request_timeout: float) -> float:
@@ -1417,6 +1444,23 @@ class _SharedEybondListener:
                 return True
         return False
 
+    def _has_owner_for_collector_pn(
+        self,
+        owner_counts: dict[str, int],
+        collector_pn: str,
+    ) -> bool:
+        normalized_pn = str(collector_pn or "").strip()
+        if not normalized_pn:
+            return False
+        for owner_pn, count in owner_counts.items():
+            if count <= 0:
+                continue
+            if owner_pn == normalized_pn:
+                return True
+            if owner_pn.startswith(normalized_pn) or normalized_pn.startswith(owner_pn):
+                return True
+        return False
+
     def _connection_keys_for_collector(
         self,
         collector_ip: str,
@@ -1647,7 +1691,7 @@ class _SharedEybondListener:
 
     async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
         try:
-            chunk = await pending.reader.read(16)
+            chunk = await pending.reader.read(64)
         except Exception:
             chunk = b""
 
@@ -1669,16 +1713,36 @@ class _SharedEybondListener:
             return
 
         self._mark_session_first_bytes(pending.session_id, chunk)
+        initial_pn, initial_pn_source = _collector_pn_from_initial_chunk(chunk)
+        if initial_pn:
+            self._mark_session_identity(
+                pending.session_id,
+                initial_pn,
+                initial_pn_source,
+            )
 
         if _looks_like_at_traffic(chunk):
             connection = self._at_connections.get(pending.remote_ip)
+            if connection is None:
+                connection = self._connection_by_collector_pn(
+                    initial_pn,
+                    self._at_connections_by_pn,
+                )
             if connection is None:
                 connection = self._resolve_public_placeholder_alias(
                     pending.remote_ip,
                     connections=self._at_connections,
                 )
             if connection is None:
-                if not self._has_owner_for_remote_ip(self._at_owner_counts, pending.remote_ip):
+                has_ip_owner = self._has_owner_for_remote_ip(
+                    self._at_owner_counts,
+                    pending.remote_ip,
+                )
+                has_pn_owner = self._has_owner_for_collector_pn(
+                    self._at_pn_owner_counts,
+                    initial_pn,
+                )
+                if not has_ip_owner and not has_pn_owner:
                     self._mark_session_state(pending.session_id, "closed_no_at_owner")
                     pending.writer.close()
                     try:
@@ -1695,6 +1759,12 @@ class _SharedEybondListener:
             self._at_connections[pending.remote_ip] = connection
             if pending.session_id:
                 self._session_at_connections[pending.session_id] = connection
+                if initial_pn:
+                    self._mark_session_identity(
+                        pending.session_id,
+                        initial_pn,
+                        initial_pn_source,
+                    )
             self._last_at_connection_ip = pending.remote_ip
             self._mark_session_state(pending.session_id, "routed_at_text")
             await connection.run(
@@ -1708,9 +1778,22 @@ class _SharedEybondListener:
 
         connection = self._connections.get(pending.remote_ip)
         if connection is None:
+            connection = self._connection_by_collector_pn(
+                initial_pn,
+                self._connections_by_pn,
+            )
+        if connection is None:
             connection = self._resolve_public_placeholder_alias(pending.remote_ip)
         if connection is None:
-            if not self._has_owner_for_remote_ip(self._payload_owner_counts, pending.remote_ip):
+            has_ip_owner = self._has_owner_for_remote_ip(
+                self._payload_owner_counts,
+                pending.remote_ip,
+            )
+            has_pn_owner = self._has_owner_for_collector_pn(
+                self._payload_pn_owner_counts,
+                initial_pn,
+            )
+            if not has_ip_owner and not has_pn_owner:
                 self._mark_session_state(pending.session_id, "closed_no_payload_owner")
                 pending.writer.close()
                 try:
@@ -1729,6 +1812,12 @@ class _SharedEybondListener:
         self._connections[pending.remote_ip] = connection
         if pending.session_id:
             self._session_payload_connections[pending.session_id] = connection
+            if initial_pn:
+                self._mark_session_identity(
+                    pending.session_id,
+                    initial_pn,
+                    initial_pn_source,
+                )
         self._last_connection_ip = pending.remote_ip
         self._mark_session_state(pending.session_id, "routed_framed")
         await connection.run(

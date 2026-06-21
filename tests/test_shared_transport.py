@@ -60,6 +60,11 @@ class _FakeWriter:
     async def wait_closed(self) -> None:
         self.closed = True
 
+    def get_extra_info(self, name: str, default=None):
+        if name == "peername":
+            return ("203.0.113.10", 41000)
+        return default
+
 
 class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_collector_connection_wait_until_heartbeat_requires_fresh_sample(self) -> None:
@@ -376,6 +381,45 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             ),
             connection,
         )
+
+    async def test_listener_routes_initial_framed_identity_to_pn_owner(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_payload_pn_owner("E50000200000000001")
+        listener._remember_session(
+            session_id="session-1",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                7,
+                b"E5000020000000",
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            )
+        )
+        reader.feed_eof()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="session-1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.remote_ip] = pending
+
+        await listener._sniff_pending_socket(pending)
+
+        diagnostics = listener.session_inventory_diagnostics()
+        self.assertEqual(diagnostics["pending_session_count"], 0)
+        self.assertEqual(diagnostics["sessions"][0]["collector_identity_source"], "framed_heartbeat")
+        self.assertEqual(
+            diagnostics["sessions"][0]["collector_identity_masked"],
+            "E50********000",
+        )
+        self.assertIn("E5000020000000", listener._connections_by_pn)
 
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
