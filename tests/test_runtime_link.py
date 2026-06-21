@@ -58,6 +58,23 @@ class _FakeTransport:
         self.disconnect_calls += 1
         self.connected = False
 
+    def session_inventory_diagnostics(self) -> dict[str, object]:
+        return {
+            "pending_session_count": 2,
+            "recent_session_count": 3,
+            "duplicate_peer_ip_count": 1,
+            "duplicate_peer_ips": ["203.0.113.10"],
+            "sessions": [
+                {
+                    "session_id": "listener-8899-1",
+                    "peer_ip": "203.0.113.10",
+                    "state": "pending",
+                    "protocol_shape": "unknown",
+                    "first_bytes_len": 0,
+                }
+            ],
+        }
+
 
 class _FakeAnnouncer:
     def __init__(self) -> None:
@@ -173,6 +190,34 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(
             diagnostics["collector_listener_advertised_endpoint"],
             "192.168.1.10:8899",
+        )
+
+    def test_listener_diagnostics_include_callback_session_inventory(self) -> None:
+        manager = self._build_manager()
+        transport = _FakeTransport(connected=False)
+        transport._listener = object()  # type: ignore[attr-defined]
+        manager._transport = transport  # type: ignore[assignment]
+
+        diagnostics = manager.listener_diagnostics()
+
+        self.assertEqual(diagnostics["collector_callback_pending_session_count"], 2)
+        self.assertEqual(diagnostics["collector_callback_recent_session_count"], 3)
+        self.assertEqual(diagnostics["collector_callback_duplicate_peer_ip_count"], 1)
+        self.assertEqual(
+            diagnostics["collector_callback_duplicate_peer_ips"],
+            "203.0.113.10",
+        )
+        self.assertEqual(
+            diagnostics["collector_callback_session_inventory"],
+            [
+                {
+                    "session_id": "listener-8899-1",
+                    "peer_ip": "203.0.113.10",
+                    "state": "pending",
+                    "protocol_shape": "unknown",
+                    "first_bytes_len": 0,
+                }
+            ],
         )
 
     def test_collector_info_merges_transport_and_discovery_state(self) -> None:

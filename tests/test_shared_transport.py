@@ -189,6 +189,48 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await runtime_like.stop()
         self.assertEqual(len(_LISTENERS), 0)
 
+    async def test_listener_session_inventory_keeps_replaced_same_ip_session(self) -> None:
+        port = _free_tcp_port()
+        transport = SharedEybondTransport(
+            host="127.0.0.1",
+            port=port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="",
+        )
+
+        first_writer = None
+        second_writer = None
+        await transport.start()
+        try:
+            listener = transport._listener
+            self.assertIsNotNone(listener)
+            assert listener is not None
+
+            _first_reader, first_writer = await asyncio.open_connection("127.0.0.1", port)
+            await asyncio.sleep(0.05)
+            _second_reader, second_writer = await asyncio.open_connection("127.0.0.1", port)
+            await asyncio.sleep(0.05)
+
+            diagnostics = listener.session_inventory_diagnostics()
+            self.assertEqual(diagnostics["pending_session_count"], 1)
+            self.assertEqual(diagnostics["recent_session_count"], 2)
+            self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
+            self.assertEqual(diagnostics["duplicate_peer_ips"], ["127.0.0.1"])
+            states = {
+                item["state"]
+                for item in diagnostics["sessions"]
+                if isinstance(item, dict)
+            }
+            self.assertIn("closed_replaced_by_new_connection", states)
+            self.assertIn("pending", states)
+        finally:
+            for writer in (first_writer, second_writer):
+                if writer is not None:
+                    writer.close()
+                    await writer.wait_closed()
+            await transport.stop()
+
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
         transport = SharedEybondTransport(

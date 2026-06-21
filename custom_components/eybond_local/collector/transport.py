@@ -808,10 +808,39 @@ class _PendingCollectorSocket:
     remote_ip: str
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
+    session_id: str = ""
+    remote_port: int | None = None
     sniff_task: asyncio.Task[None] | None = None
 
 
+@dataclass(slots=True)
+class _CollectorSessionInventoryEntry:
+    session_id: str
+    remote_ip: str
+    remote_port: int | None
+    state: str = "pending"
+    protocol_shape: str = "unknown"
+    first_bytes_len: int = 0
+    first_bytes_prefix_hex: str = ""
+
+    def diagnostics(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "session_id": self.session_id,
+            "peer_ip": self.remote_ip,
+            "state": self.state,
+            "protocol_shape": self.protocol_shape,
+            "first_bytes_len": self.first_bytes_len,
+        }
+        if self.remote_port is not None:
+            result["peer_port"] = self.remote_port
+        if self.first_bytes_prefix_hex:
+            result["first_bytes_prefix_hex"] = self.first_bytes_prefix_hex
+        return result
+
+
 class _SharedEybondListener:
+    _MAX_SESSION_INVENTORY = 20
+
     def __init__(self, *, host: str, port: int) -> None:
         self._host = host
         self._port = int(port)
@@ -825,6 +854,8 @@ class _SharedEybondListener:
         self._last_pending_ip = ""
         self._payload_owner_counts: dict[str, int] = {}
         self._at_owner_counts: dict[str, int] = {}
+        self._session_seq = 0
+        self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
 
     async def acquire(self) -> None:
         self._ref_count += 1
@@ -860,6 +891,7 @@ class _SharedEybondListener:
         self._last_pending_ip = ""
         self._payload_owner_counts.clear()
         self._at_owner_counts.clear()
+        self._session_inventory.clear()
 
         if self._server is not None:
             self._server.close()
@@ -975,6 +1007,64 @@ class _SharedEybondListener:
             unique.append(connection)
         return tuple(unique)
 
+    def session_inventory_diagnostics(self) -> dict[str, object]:
+        entries = tuple(self._session_inventory.values())
+        pending_ids = {pending.session_id for pending in self._pending_sockets.values()}
+        peer_counts: dict[str, int] = {}
+        for entry in entries:
+            if not entry.remote_ip:
+                continue
+            peer_counts[entry.remote_ip] = peer_counts.get(entry.remote_ip, 0) + 1
+        duplicate_peer_ips = sorted(
+            peer_ip for peer_ip, count in peer_counts.items() if count > 1
+        )
+        return {
+            "pending_session_count": len(pending_ids),
+            "recent_session_count": len(entries),
+            "duplicate_peer_ip_count": len(duplicate_peer_ips),
+            "duplicate_peer_ips": duplicate_peer_ips,
+            "sessions": [entry.diagnostics() for entry in entries],
+        }
+
+    def _next_session_id(self) -> str:
+        self._session_seq += 1
+        return f"listener-{self._port}-{self._session_seq}"
+
+    def _remember_session(
+        self,
+        *,
+        session_id: str,
+        remote_ip: str,
+        remote_port: int | None,
+    ) -> None:
+        self._session_inventory[session_id] = _CollectorSessionInventoryEntry(
+            session_id=session_id,
+            remote_ip=remote_ip,
+            remote_port=remote_port,
+        )
+        while len(self._session_inventory) > self._MAX_SESSION_INVENTORY:
+            oldest = next(iter(self._session_inventory))
+            self._session_inventory.pop(oldest, None)
+
+    def _mark_session_state(self, session_id: str, state: str) -> None:
+        entry = self._session_inventory.get(session_id)
+        if entry is not None:
+            entry.state = state
+
+    def _mark_session_first_bytes(self, session_id: str, chunk: bytes) -> None:
+        entry = self._session_inventory.get(session_id)
+        if entry is None:
+            return
+        entry.first_bytes_len = len(chunk)
+        entry.first_bytes_prefix_hex = chunk[:4].hex()
+        if _looks_like_at_traffic(chunk):
+            entry.protocol_shape = "at_text"
+            return
+        if len(chunk) >= 3:
+            entry.protocol_shape = "eybond_framed_or_binary"
+            return
+        entry.protocol_shape = "unknown"
+
     def matching_callback_ips(self, collector_ip: str) -> tuple[str, ...]:
         if not collector_ip:
             return ()
@@ -1073,6 +1163,7 @@ class _SharedEybondListener:
         pending.sniff_task = None
         if sniff_task is not None:
             sniff_task.cancel()
+        self._mark_session_state(pending.session_id, "claimed")
         return pending
 
     def _select_pending_socket(self, collector_ip: str) -> _PendingCollectorSocket | None:
@@ -1258,6 +1349,7 @@ class _SharedEybondListener:
         if collector_ip and collector_ip not in self._at_connections:
             self._at_connections[collector_ip] = connection
         self._last_at_connection_ip = remote_ip
+        self._mark_session_state(pending.session_id, "routed_at_text")
         asyncio.create_task(
             connection.run(pending.reader, pending.writer),
             name=f"collector_at_{remote_ip}",
@@ -1291,6 +1383,7 @@ class _SharedEybondListener:
         if collector_ip and collector_ip not in self._connections:
             self._connections[collector_ip] = connection
         self._last_connection_ip = remote_ip
+        self._mark_session_state(pending.session_id, "routed_framed")
         asyncio.create_task(
             connection.run(pending.reader, pending.writer),
             name=f"collector_framed_{remote_ip}",
@@ -1313,12 +1406,15 @@ class _SharedEybondListener:
             self._last_pending_ip = ""
 
         if not chunk:
+            self._mark_session_state(pending.session_id, "closed_no_payload")
             pending.writer.close()
             try:
                 await pending.writer.wait_closed()
             except Exception:
                 pass
             return
+
+        self._mark_session_first_bytes(pending.session_id, chunk)
 
         if _looks_like_at_traffic(chunk):
             connection = self._at_connections.get(pending.remote_ip)
@@ -1329,6 +1425,7 @@ class _SharedEybondListener:
                 )
             if connection is None:
                 if not self._has_owner_for_remote_ip(self._at_owner_counts, pending.remote_ip):
+                    self._mark_session_state(pending.session_id, "closed_no_at_owner")
                     pending.writer.close()
                     try:
                         await pending.writer.wait_closed()
@@ -1343,6 +1440,7 @@ class _SharedEybondListener:
                 connection.set_write_timeout(1.5)
             self._at_connections[pending.remote_ip] = connection
             self._last_at_connection_ip = pending.remote_ip
+            self._mark_session_state(pending.session_id, "routed_at_text")
             await connection.run(pending.reader, pending.writer, initial_bytes=chunk)
             return
 
@@ -1351,6 +1449,7 @@ class _SharedEybondListener:
             connection = self._resolve_public_placeholder_alias(pending.remote_ip)
         if connection is None:
             if not self._has_owner_for_remote_ip(self._payload_owner_counts, pending.remote_ip):
+                self._mark_session_state(pending.session_id, "closed_no_payload_owner")
                 pending.writer.close()
                 try:
                     await pending.writer.wait_closed()
@@ -1367,6 +1466,7 @@ class _SharedEybondListener:
             connection.set_write_timeout(1.5)
         self._connections[pending.remote_ip] = connection
         self._last_connection_ip = pending.remote_ip
+        self._mark_session_state(pending.session_id, "routed_framed")
         await connection.run(pending.reader, pending.writer, initial_bytes=chunk)
 
     async def _handle_connection(
@@ -1376,6 +1476,7 @@ class _SharedEybondListener:
     ) -> None:
         peer = writer.get_extra_info("peername") or ("", None)
         remote_ip = peer[0] or ""
+        remote_port = peer[1]
         if not remote_ip:
             writer.close()
             try:
@@ -1386,10 +1487,22 @@ class _SharedEybondListener:
 
         existing_pending = self._pending_sockets.get(remote_ip)
         if existing_pending is not None:
+            self._mark_session_state(
+                existing_pending.session_id,
+                "closed_replaced_by_new_connection",
+            )
             await self._close_pending_socket(existing_pending)
 
-        pending = _PendingCollectorSocket(
+        session_id = self._next_session_id()
+        self._remember_session(
+            session_id=session_id,
             remote_ip=remote_ip,
+            remote_port=remote_port if isinstance(remote_port, int) else None,
+        )
+        pending = _PendingCollectorSocket(
+            session_id=session_id,
+            remote_ip=remote_ip,
+            remote_port=remote_port if isinstance(remote_port, int) else None,
             reader=reader,
             writer=writer,
         )
@@ -1623,6 +1736,17 @@ class SharedEybondTransport:
             if connection is None or not connection.connected:
                 return None
             return connection
+
+    def session_inventory_diagnostics(self) -> dict[str, object]:
+        if self._listener is None:
+            return {
+                "pending_session_count": 0,
+                "recent_session_count": 0,
+                "duplicate_peer_ip_count": 0,
+                "duplicate_peer_ips": [],
+                "sessions": [],
+            }
+        return self._listener.session_inventory_diagnostics()
 
     async def async_disconnect_if_new_shared_connection(
         self,

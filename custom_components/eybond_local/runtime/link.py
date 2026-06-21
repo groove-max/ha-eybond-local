@@ -398,7 +398,7 @@ class EybondRuntimeLinkManager:
     def listener_diagnostics(self) -> dict[str, object]:
         """Return listener bind and advertised endpoint diagnostics."""
 
-        return {
+        diagnostics: dict[str, object] = {
             "collector_listener_status": self._listener_status,
             "collector_listener_bind_host": self._listener_bind_host,
             "collector_listener_bind_endpoint": f"{self._listener_bind_host}:{self._tcp_port}",
@@ -408,6 +408,45 @@ class EybondRuntimeLinkManager:
             ),
             "collector_listener_rebind_count": self._listener_rebind_count,
             "collector_listener_last_error": self._listener_last_error,
+        }
+        diagnostics.update(self._session_inventory_diagnostics())
+        return diagnostics
+
+    def _session_inventory_diagnostics(self) -> dict[str, object]:
+        """Return passive callback-session inventory diagnostics."""
+
+        summaries: list[dict[str, object]] = []
+        seen_listeners: set[int] = set()
+        for transport in self._payload_transports():
+            listener = getattr(transport, "_listener", None)
+            if listener is None:
+                continue
+            listener_id = id(listener)
+            if listener_id in seen_listeners:
+                continue
+            seen_listeners.add(listener_id)
+            diagnostics = transport.session_inventory_diagnostics()
+            summaries.append(diagnostics)
+
+        pending_count = sum(int(item.get("pending_session_count", 0) or 0) for item in summaries)
+        recent_count = sum(int(item.get("recent_session_count", 0) or 0) for item in summaries)
+        duplicate_peer_ips: set[str] = set()
+        sessions: list[dict[str, object]] = []
+        for item in summaries:
+            for peer_ip in item.get("duplicate_peer_ips", []) or []:
+                if isinstance(peer_ip, str) and peer_ip:
+                    duplicate_peer_ips.add(peer_ip)
+            for session in item.get("sessions", []) or []:
+                if isinstance(session, dict):
+                    sessions.append(dict(session))
+
+        duplicate_peer_ip_count = len(duplicate_peer_ips)
+        return {
+            "collector_callback_pending_session_count": pending_count,
+            "collector_callback_recent_session_count": recent_count,
+            "collector_callback_duplicate_peer_ip_count": duplicate_peer_ip_count,
+            "collector_callback_duplicate_peer_ips": ", ".join(sorted(duplicate_peer_ips)),
+            "collector_callback_session_inventory": sessions,
         }
 
     async def async_start(self) -> None:
