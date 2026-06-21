@@ -1344,8 +1344,8 @@ class _SharedEybondListener:
         _remember(self._last_pending_ip)
         _remember(self._last_at_connection_ip)
 
-        for remote_ip in self._pending_sockets:
-            _remember(remote_ip)
+        for pending in self._pending_sockets.values():
+            _remember(pending.remote_ip)
 
         for remote_ip, connection in self._connections.items():
             if connection.connected:
@@ -1405,7 +1405,7 @@ class _SharedEybondListener:
         pending = self._select_pending_socket(collector_ip)
         if pending is None:
             return None
-        self._pending_sockets.pop(pending.remote_ip, None)
+        self._remove_pending_socket(pending)
         if self._last_pending_ip == pending.remote_ip:
             self._last_pending_ip = ""
         sniff_task = pending.sniff_task
@@ -1415,14 +1415,36 @@ class _SharedEybondListener:
         self._mark_session_state(pending.session_id, "claimed")
         return pending
 
+    def _pending_socket_key(self, pending: _PendingCollectorSocket) -> str:
+        for key, candidate in self._pending_sockets.items():
+            if candidate is pending:
+                return key
+        return pending.session_id or pending.remote_ip
+
+    def _remove_pending_socket(self, pending: _PendingCollectorSocket) -> None:
+        self._pending_sockets.pop(self._pending_socket_key(pending), None)
+
+    def _pending_socket_still_registered(self, pending: _PendingCollectorSocket) -> bool:
+        return any(candidate is pending for candidate in self._pending_sockets.values())
+
+    def _pending_sockets_for_remote_ip(self, remote_ip: str) -> tuple[_PendingCollectorSocket, ...]:
+        return tuple(
+            pending
+            for pending in self._pending_sockets.values()
+            if pending.remote_ip == remote_ip
+        )
+
     def _select_pending_socket(self, collector_ip: str) -> _PendingCollectorSocket | None:
         if collector_ip:
-            pending = self._pending_sockets.get(collector_ip)
-            if pending is not None:
-                return pending
+            exact = self._pending_sockets_for_remote_ip(collector_ip)
+            if len({id(pending) for pending in exact}) == 1:
+                return exact[0]
+            if len(exact) > 1:
+                return None
 
             candidates: list[_PendingCollectorSocket] = []
-            for remote_ip, candidate in self._pending_sockets.items():
+            for candidate in self._pending_sockets.values():
+                remote_ip = candidate.remote_ip
                 if not (
                     _is_hairpin_alias_candidate(collector_ip, remote_ip)
                     or _is_default_broadcast_alias_candidate(collector_ip, remote_ip)
@@ -1434,9 +1456,14 @@ class _SharedEybondListener:
             if len(unique_candidates) == 1:
                 return next(iter(unique_candidates.values()))
             if unique_candidates and _is_ipv4_broadcast_placeholder(collector_ip):
-                preferred = self._pending_sockets.get(self._last_pending_ip)
-                if preferred in unique_candidates.values():
-                    return preferred
+                preferred = tuple(
+                    pending
+                    for pending in self._pending_sockets.values()
+                    if pending.remote_ip == self._last_pending_ip
+                    and id(pending) in unique_candidates
+                )
+                if len(preferred) == 1:
+                    return preferred[0]
                 return next(iter(unique_candidates.values()))
             return None
 
@@ -1600,10 +1627,11 @@ class _SharedEybondListener:
             close_at = False
 
         if close_pending and collector_ip:
-            for remote_ip, pending in tuple(self._pending_sockets.items()):
+            for pending in tuple(self._pending_sockets.values()):
+                remote_ip = pending.remote_ip
                 if not self._callback_ip_matches_collector(collector_ip, remote_ip):
                     continue
-                self._pending_sockets.pop(remote_ip, None)
+                self._remove_pending_socket(pending)
                 await self._close_pending_socket(pending)
 
         if close_payload:
@@ -1764,14 +1792,13 @@ class _SharedEybondListener:
     async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
         chunk, exhausted = await self._read_pending_initial_chunk(pending)
 
-        current = self._pending_sockets.get(pending.remote_ip)
-        if current is not pending:
+        if not self._pending_socket_still_registered(pending):
             return
 
         if not chunk:
             if not exhausted:
                 return
-            self._pending_sockets.pop(pending.remote_ip, None)
+            self._remove_pending_socket(pending)
             if self._last_pending_ip == pending.remote_ip:
                 self._last_pending_ip = ""
             self._mark_session_state(pending.session_id, "closed_no_payload")
@@ -1782,7 +1809,7 @@ class _SharedEybondListener:
                 pass
             return
 
-        self._pending_sockets.pop(pending.remote_ip, None)
+        self._remove_pending_socket(pending)
         if self._last_pending_ip == pending.remote_ip:
             self._last_pending_ip = ""
 
@@ -1918,14 +1945,6 @@ class _SharedEybondListener:
                 pass
             return
 
-        existing_pending = self._pending_sockets.get(remote_ip)
-        if existing_pending is not None:
-            self._mark_session_state(
-                existing_pending.session_id,
-                "closed_replaced_by_new_connection",
-            )
-            await self._close_pending_socket(existing_pending)
-
         session_id = self._next_session_id()
         self._remember_session(
             session_id=session_id,
@@ -1939,7 +1958,7 @@ class _SharedEybondListener:
             reader=reader,
             writer=writer,
         )
-        self._pending_sockets[remote_ip] = pending
+        self._pending_sockets[session_id] = pending
         self._last_pending_ip = remote_ip
         pending.sniff_task = asyncio.create_task(
             self._sniff_pending_socket(pending),

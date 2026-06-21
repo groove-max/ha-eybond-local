@@ -276,7 +276,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await runtime_like.stop()
         self.assertEqual(len(_LISTENERS), 0)
 
-    async def test_listener_session_inventory_keeps_replaced_same_ip_session(self) -> None:
+    async def test_listener_session_inventory_keeps_multiple_same_ip_pending_sessions(self) -> None:
         port = _free_tcp_port()
         transport = SharedEybondTransport(
             host="127.0.0.1",
@@ -300,7 +300,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
 
             diagnostics = listener.session_inventory_diagnostics()
-            self.assertEqual(diagnostics["pending_session_count"], 1)
+            self.assertEqual(diagnostics["pending_session_count"], 2)
             self.assertEqual(diagnostics["recent_session_count"], 2)
             self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
             self.assertEqual(diagnostics["duplicate_peer_ips"], ["127.0.0.1"])
@@ -309,8 +309,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 for item in diagnostics["sessions"]
                 if isinstance(item, dict)
             }
-            self.assertIn("closed_replaced_by_new_connection", states)
-            self.assertIn("pending", states)
+            self.assertEqual(states, {"pending"})
         finally:
             for writer in (first_writer, second_writer):
                 if writer is not None:
