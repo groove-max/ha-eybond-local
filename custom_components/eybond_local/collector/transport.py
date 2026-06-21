@@ -119,6 +119,21 @@ def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
     return "", ""
 
 
+def _identity_probe_payload_for_session_protocol(session_protocol: str) -> bytes:
+    normalized = str(session_protocol or "").strip().lower()
+    if normalized == "at_text":
+        return build_at_query("DTUPN")
+    if normalized == "eybond_framed":
+        return build_collector_request(
+            1,
+            b"\x02",
+            devcode=1,
+            collector_addr=1,
+            fcode=FC_QUERY_COLLECTOR,
+        )
+    return b""
+
+
 def _bounded_write_timeout(request_timeout: float) -> float:
     return max(0.5, min(float(request_timeout), 1.5))
 
@@ -963,6 +978,7 @@ class _SharedEybondListener:
         self._at_owner_counts: dict[str, int] = {}
         self._payload_pn_owner_counts: dict[str, int] = {}
         self._at_pn_owner_counts: dict[str, int] = {}
+        self._session_protocol_owner_counts: dict[str, int] = {}
         self._session_seq = 0
         self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
 
@@ -1006,6 +1022,7 @@ class _SharedEybondListener:
         self._at_owner_counts.clear()
         self._payload_pn_owner_counts.clear()
         self._at_pn_owner_counts.clear()
+        self._session_protocol_owner_counts.clear()
         self._session_inventory.clear()
 
         if self._server is not None:
@@ -1045,6 +1062,17 @@ class _SharedEybondListener:
 
     def unregister_at_pn_owner(self, collector_pn: str) -> None:
         self._decrement_owner_count(self._at_pn_owner_counts, collector_pn)
+
+    def register_session_protocol_owner(self, session_protocol: str) -> None:
+        owner = str(session_protocol or "").strip().lower()
+        if not owner:
+            return
+        self._session_protocol_owner_counts[owner] = (
+            self._session_protocol_owner_counts.get(owner, 0) + 1
+        )
+
+    def unregister_session_protocol_owner(self, session_protocol: str) -> None:
+        self._decrement_owner_count(self._session_protocol_owner_counts, session_protocol)
 
     def _decrement_owner_count(self, owner_counts: dict[str, int], owner_value: str) -> None:
         owner = str(owner_value or "").strip()
@@ -1157,6 +1185,16 @@ class _SharedEybondListener:
         if len(unique_candidates) != 1:
             return None
         return next(iter(unique_candidates.values()))
+
+    def _single_registered_session_protocol(self) -> str:
+        protocols = tuple(
+            protocol
+            for protocol, count in self._session_protocol_owner_counts.items()
+            if protocol and count > 0
+        )
+        if len(protocols) != 1:
+            return ""
+        return protocols[0]
 
     def current_at_connection(self, *, write_timeout: float) -> _CollectorAtConnection | None:
         connected = tuple(
@@ -1689,21 +1727,53 @@ class _SharedEybondListener:
         await connection.wait_until_connected(timeout=0.1)
         return connection
 
-    async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
+    async def _read_pending_initial_chunk(
+        self,
+        pending: _PendingCollectorSocket,
+    ) -> tuple[bytes, bool]:
+        """Return initial bytes and whether the socket is exhausted/closed."""
+
         try:
-            chunk = await pending.reader.read(64)
+            chunk = await asyncio.wait_for(pending.reader.read(64), timeout=0.25)
+        except asyncio.TimeoutError:
+            chunk = await self._async_probe_pending_identity(pending)
+            return chunk, False
         except Exception:
-            chunk = b""
+            return b"", True
+        return chunk, not chunk
+
+    async def _async_probe_pending_identity(self, pending: _PendingCollectorSocket) -> bytes:
+        session_protocol = self._single_registered_session_protocol()
+        probe = _identity_probe_payload_for_session_protocol(session_protocol)
+        if not probe:
+            self._mark_session_state(pending.session_id, "waiting_for_identity")
+            return b""
+
+        self._mark_session_state(pending.session_id, f"probing_identity_{session_protocol}")
+        try:
+            pending.writer.write(probe)
+            await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
+            return await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
+        except asyncio.TimeoutError:
+            self._mark_session_state(pending.session_id, "identity_probe_timeout")
+            return b""
+        except Exception:
+            self._mark_session_state(pending.session_id, "identity_probe_failed")
+            return b""
+
+    async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
+        chunk, exhausted = await self._read_pending_initial_chunk(pending)
 
         current = self._pending_sockets.get(pending.remote_ip)
         if current is not pending:
             return
 
-        self._pending_sockets.pop(pending.remote_ip, None)
-        if self._last_pending_ip == pending.remote_ip:
-            self._last_pending_ip = ""
-
         if not chunk:
+            if not exhausted:
+                return
+            self._pending_sockets.pop(pending.remote_ip, None)
+            if self._last_pending_ip == pending.remote_ip:
+                self._last_pending_ip = ""
             self._mark_session_state(pending.session_id, "closed_no_payload")
             pending.writer.close()
             try:
@@ -1711,6 +1781,10 @@ class _SharedEybondListener:
             except Exception:
                 pass
             return
+
+        self._pending_sockets.pop(pending.remote_ip, None)
+        if self._last_pending_ip == pending.remote_ip:
+            self._last_pending_ip = ""
 
         self._mark_session_first_bytes(pending.session_id, chunk)
         initial_pn, initial_pn_source = _collector_pn_from_initial_chunk(chunk)
@@ -1927,11 +2001,13 @@ async def _acquire_shared_payload_listener(
     port: int,
     collector_ip: str,
     collector_pn: str = "",
+    collector_session_protocol: str = "",
 ) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
         listener = await _acquire_listener_locked(host, port)
         listener.register_payload_owner(collector_ip)
         listener.register_payload_pn_owner(collector_pn)
+        listener.register_session_protocol_owner(collector_session_protocol)
         return listener
 
 
@@ -1940,11 +2016,13 @@ async def _acquire_shared_at_listener(
     port: int,
     collector_ip: str,
     collector_pn: str = "",
+    collector_session_protocol: str = "",
 ) -> _SharedEybondListener:
     async with _LISTENERS_LOCK:
         listener = await _acquire_listener_locked(host, port)
         listener.register_at_owner(collector_ip)
         listener.register_at_pn_owner(collector_pn)
+        listener.register_session_protocol_owner(collector_session_protocol)
         return listener
 
 
@@ -1953,6 +2031,7 @@ async def _release_shared_listener(
     *,
     collector_ip: str = "",
     collector_pn: str = "",
+    collector_session_protocol: str = "",
     close_payload: bool = False,
     close_at: bool = False,
     close_pending: bool = False,
@@ -1960,6 +2039,7 @@ async def _release_shared_listener(
     unregister_payload_pn_owner: bool = False,
     unregister_at_owner: bool = False,
     unregister_at_pn_owner: bool = False,
+    unregister_session_protocol_owner: bool = False,
 ) -> None:
     async def _release() -> None:
         async with _LISTENERS_LOCK:
@@ -1972,6 +2052,8 @@ async def _release_shared_listener(
                 listener.unregister_at_owner(collector_ip)
             if unregister_at_pn_owner:
                 listener.unregister_at_pn_owner(collector_pn)
+            if unregister_session_protocol_owner:
+                listener.unregister_session_protocol_owner(collector_session_protocol)
             await listener.release_collector_connections(
                 collector_ip,
                 collector_pn,
@@ -2097,6 +2179,7 @@ class SharedEybondTransport:
             self._port,
             self._collector_ip,
             self._collector_pn,
+            self._collector_session_protocol,
         )
         self._connection(create_placeholder=bool(self._collector_ip))
 
@@ -2109,10 +2192,12 @@ class SharedEybondTransport:
             listener,
             collector_ip=self._collector_ip,
             collector_pn=self._collector_pn,
+            collector_session_protocol=self._collector_session_protocol,
             close_payload=True,
             close_pending=True,
             unregister_payload_owner=True,
             unregister_payload_pn_owner=True,
+            unregister_session_protocol_owner=True,
         )
 
     async def async_snapshot_shared_connection(self) -> _CollectorConnection | None:
@@ -2398,6 +2483,7 @@ class SharedCollectorAtTransport:
             self._port,
             self._collector_ip,
             self._collector_pn,
+            self._collector_session_protocol,
         )
         self._at_connection(create_placeholder=bool(self._collector_ip))
 
@@ -2410,9 +2496,11 @@ class SharedCollectorAtTransport:
             listener,
             collector_ip=self._collector_ip,
             collector_pn=self._collector_pn,
+            collector_session_protocol=self._collector_session_protocol,
             close_at=True,
             unregister_at_owner=True,
             unregister_at_pn_owner=True,
+            unregister_session_protocol_owner=True,
         )
 
     async def disconnect(self) -> None:

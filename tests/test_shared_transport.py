@@ -421,6 +421,114 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("E5000020000000", listener._connections_by_pn)
 
+    async def test_listener_active_probe_routes_silent_at_session_to_pn_owner(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_session_protocol_owner("at_text")
+        listener.register_at_pn_owner("E5000020000000")
+        listener._remember_session(
+            session_id="session-1",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        reader = asyncio.StreamReader()
+
+        class _ProbeWriter(_FakeWriter):
+            async def drain(self) -> None:
+                reader.feed_data(b"AT+DTUPN:E5000020000000\r\n")
+                reader.feed_eof()
+
+        writer = _ProbeWriter()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="session-1",
+            reader=reader,
+            writer=writer,  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.remote_ip] = pending
+
+        await listener._sniff_pending_socket(pending)
+
+        self.assertEqual(bytes(writer.buffer), b"AT+DTUPN?\r\n")
+        diagnostics = listener.session_inventory_diagnostics()
+        self.assertEqual(diagnostics["pending_session_count"], 0)
+        self.assertEqual(diagnostics["sessions"][0]["collector_identity_source"], "at_dtupn")
+        self.assertIn("E5000020000000", listener._at_connections_by_pn)
+
+    async def test_listener_active_probe_routes_silent_framed_session_to_pn_owner(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_session_protocol_owner("eybond_framed")
+        listener.register_payload_pn_owner("E5000020000000")
+        listener._remember_session(
+            session_id="session-1",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        reader = asyncio.StreamReader()
+
+        class _ProbeWriter(_FakeWriter):
+            async def drain(self) -> None:
+                reader.feed_data(
+                    build_collector_request(
+                        1,
+                        b"\x00\x02E5000020000000",
+                        devcode=2376,
+                        collector_addr=1,
+                        fcode=2,
+                    )
+                )
+                reader.feed_eof()
+
+        writer = _ProbeWriter()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="session-1",
+            reader=reader,
+            writer=writer,  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.remote_ip] = pending
+
+        await listener._sniff_pending_socket(pending)
+
+        written = bytes(writer.buffer)
+        header = decode_header(written[:HEADER_SIZE])
+        self.assertEqual(header.fcode, 2)
+        self.assertEqual(written[HEADER_SIZE:header.total_len], b"\x02")
+        diagnostics = listener.session_inventory_diagnostics()
+        self.assertEqual(diagnostics["pending_session_count"], 0)
+        self.assertEqual(diagnostics["sessions"][0]["collector_identity_source"], "fc2_parameter_2")
+        self.assertIn("E5000020000000", listener._connections_by_pn)
+
+    async def test_listener_does_not_active_probe_when_registered_protocols_are_mixed(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_session_protocol_owner("at_text")
+        listener.register_session_protocol_owner("eybond_framed")
+        listener._remember_session(
+            session_id="session-1",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="session-1",
+            reader=reader,
+            writer=writer,  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.remote_ip] = pending
+
+        await listener._sniff_pending_socket(pending)
+
+        self.assertEqual(bytes(writer.buffer), b"")
+        self.assertIn(pending.remote_ip, listener._pending_sockets)
+        self.assertEqual(
+            listener.session_inventory_diagnostics()["sessions"][0]["state"],
+            "waiting_for_identity",
+        )
+
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
         transport = SharedEybondTransport(
