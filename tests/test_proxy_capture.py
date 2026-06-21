@@ -44,6 +44,20 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         self.assertFalse(overview.can_start)
         self.assertTrue(overview.redirect_required)
 
+    def test_blocks_when_collector_has_no_proxy_capture_capability(self) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_proxy_capture_allowed=False,
+            collector_connected=True,
+            current_endpoint="192.168.1.50,18899,TCP",
+            upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+        )
+
+        self.assertEqual(overview.status, "blocked")
+        self.assertEqual(overview.blocking_reason, "collector_proxy_capture_unavailable")
+        self.assertFalse(overview.can_start)
+
     def test_ready_when_no_redirect_is_required(self) -> None:
         overview = build_proxy_capture_overview(
             control_mode="auto",

@@ -37,6 +37,10 @@ from ..collector.cloud_family import (
     collector_cloud_family_observation_from_endpoint,
     default_collector_cloud_host,
 )
+from ..collector.capabilities import (
+    CollectorCapabilityProfile,
+    collector_capability_profile_from_runtime,
+)
 from ..const import (
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -1143,8 +1147,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         collector behaves exactly as before.
         """
 
-        collector = getattr(self.data, "collector", None)
-        return bool(getattr(collector, "collector_virtual_bridge", False))
+        return self.collector_capabilities.virtual_bridge
+
+    @property
+    def collector_capabilities(self) -> CollectorCapabilityProfile:
+        """Return collector kind/capability profile for the current runtime."""
+
+        snapshot = getattr(self, "data", RuntimeSnapshot())
+        collector = getattr(snapshot, "collector", None)
+        values = getattr(snapshot, "values", None)
+        config_entry = getattr(self, "config_entry", None)
+        return collector_capability_profile_from_runtime(
+            collector=collector,
+            values=values if isinstance(values, dict) else {},
+            data=dict(getattr(config_entry, "data", {}) or {}),
+            options=dict(getattr(config_entry, "options", {}) or {}),
+        )
 
     def _configure_reverse_discovery_mode(self) -> None:
         """Control steady reverse discovery according to the collector ownership mode."""
@@ -3744,6 +3762,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
+            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
             collector_connected=bool(snapshot.connected),
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(
@@ -4913,6 +4932,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         overview = build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
+            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
             collector_connected=bool(snapshot.connected),
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(
@@ -5126,6 +5146,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         overview = build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
+            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
             collector_connected=bool(snapshot.connected),
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(snapshot.values.get("collector_server_endpoint") or ""),

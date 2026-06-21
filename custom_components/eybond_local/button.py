@@ -342,6 +342,8 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 return None
             if overview.blocking_reason == "collector_control_disabled":
                 return "Proxy capture needs Auto or Full Control to redirect the callback endpoint."
+            if overview.blocking_reason == "collector_proxy_capture_unavailable":
+                return "Proxy capture is not available for this collector."
             if overview.blocking_reason == "collector_not_connected":
                 return "Collector is not connected."
             if overview.blocking_reason == "upstream_endpoint_unavailable":

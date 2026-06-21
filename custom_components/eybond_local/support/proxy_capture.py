@@ -32,6 +32,7 @@ def build_proxy_capture_overview(
     *,
     control_mode: str,
     collector_control_allowed: bool = True,
+    collector_proxy_capture_allowed: bool = True,
     collector_connected: bool,
     collector_cloud_family: str = "",
     current_endpoint: str,
@@ -99,6 +100,25 @@ def build_proxy_capture_overview(
             status_label=_status_label("blocked"),
             summary="The current collector callback endpoint is not available yet.",
             blocking_reason="current_endpoint_unavailable",
+            can_start=False,
+            can_stop=False,
+            critical_phase=False,
+            redirect_required=redirect_required,
+            collector_connected=collector_connected,
+            current_endpoint=normalized_current,
+            upstream_endpoint=normalized_upstream,
+            target_endpoint=normalized_target,
+            masked_endpoint=masked_endpoint,
+            latest_trace_path=normalized_trace_path,
+            latest_manifest_path=normalized_manifest_path,
+        )
+
+    if not collector_proxy_capture_allowed:
+        return ProxyCaptureOverview(
+            status="blocked",
+            status_label=_status_label("blocked"),
+            summary="This collector has no SmartESS cloud callback side, so proxy capture is not available.",
+            blocking_reason="collector_proxy_capture_unavailable",
             can_start=False,
             can_stop=False,
             critical_phase=False,

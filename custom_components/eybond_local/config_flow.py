@@ -110,6 +110,10 @@ from .const import (
 )
 from .control_policy import control_mode_options
 from .collector.discovery import async_probe_target
+from .collector.capabilities import (
+    CollectorCapabilityProfile,
+    collector_capability_profile_from_runtime,
+)
 from .collector.smartess_local import (
     QUERY_HARDWARE_VERSION,
     QUERY_NETWORK_DIAGNOSTICS,
@@ -530,17 +534,27 @@ def _apply_device_catalog_metadata(
 def _result_is_virtual_bridge(result: OnboardingResult | None) -> bool:
     """Return True when an onboarding result positively identified an ESP bridge."""
 
+    return _result_collector_capabilities(result).virtual_bridge
+
+
+def _result_collector_capabilities(
+    result: OnboardingResult | None,
+) -> CollectorCapabilityProfile:
+    """Return collector capabilities inferred from one onboarding result."""
+
     if result is None:
-        return False
+        return collector_capability_profile_from_runtime()
     collector = getattr(result, "collector", None)
     collector_info = getattr(collector, "collector", None)
-    if collector_info is not None and getattr(collector_info, "collector_virtual_bridge", False):
-        return True
     match = getattr(result, "match", None)
     details = getattr(match, "details", None)
-    if isinstance(details, dict):
-        return bool(details.get("collector_virtual_bridge"))
-    return False
+    values = details if isinstance(details, dict) else {}
+    return collector_capability_profile_from_runtime(
+        collector=collector_info,
+        values=values,
+        data={},
+        options={},
+    )
 
 
 def _apply_smartess_detection_metadata(
@@ -2293,7 +2307,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # comes from Item 2 (the onboarding AT+VDTU probe), so the confirm step
         # can gate before the entry exists. Fail-safe: factory collectors and
         # unanswered probes keep today's SmartESS+HA default and the selector.
-        is_bridge = self._selected_result_is_virtual_bridge()
+        selected_capabilities = _result_collector_capabilities(self._selected_result)
+        is_bridge = selected_capabilities.virtual_bridge
 
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -2531,6 +2546,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
             driver_hint=driver_hint,
         )
+        collector_capabilities = _result_collector_capabilities(result)
         data = {
             CONF_CONNECTION_TYPE: connection_type,
             **connection_settings,
@@ -2538,7 +2554,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             CONF_CONTROL_MODE: DEFAULT_CONTROL_MODE,
             CONF_COLLECTOR_OPERATION_MODE: (
                 COLLECTOR_OPERATION_HA_ONLY
-                if _result_is_virtual_bridge(result)
+                if collector_capabilities.ha_only_required
                 else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
             ),
             CONF_COLLECTOR_PN: collector_pn,
@@ -2546,7 +2562,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             CONF_DETECTED_MODEL: result.match.model_name if result.match is not None else "",
             CONF_DETECTED_SERIAL: result.match.serial_number if result.match is not None else "",
         }
-        if _result_is_virtual_bridge(result):
+        if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
         _apply_smartess_detection_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
@@ -2556,7 +2572,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             CONF_POLL_INTERVAL: poll_interval,
             CONF_COLLECTOR_OPERATION_MODE: (
                 COLLECTOR_OPERATION_HA_ONLY
-                if _result_is_virtual_bridge(result)
+                if collector_capabilities.ha_only_required
                 else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
             ),
         }
@@ -2657,9 +2673,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else CONTROL_MODE_READ_ONLY
         )
         data.setdefault(CONF_CONTROL_MODE, default_control_mode)
-        is_bridge = _result_is_virtual_bridge(result)
+        collector_capabilities = _result_collector_capabilities(result)
         data[CONF_COLLECTOR_OPERATION_MODE] = (
-            COLLECTOR_OPERATION_HA_ONLY if is_bridge else DEFAULT_COLLECTOR_OPERATION_MODE
+            COLLECTOR_OPERATION_HA_ONLY
+            if collector_capabilities.ha_only_required
+            else DEFAULT_COLLECTOR_OPERATION_MODE
         )
         data[CONF_COLLECTOR_IP] = collector_ip
         data[CONF_DETECTION_CONFIDENCE] = result.confidence if result is not None else "none"
@@ -2667,7 +2685,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         data[CONF_COLLECTOR_PN] = collector_pn
         data[CONF_DETECTED_MODEL] = detected_model
         data[CONF_DETECTED_SERIAL] = detected_serial
-        if is_bridge:
+        if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
         _apply_smartess_detection_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
@@ -2675,7 +2693,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         options = {
             CONF_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
             CONF_COLLECTOR_OPERATION_MODE: (
-                COLLECTOR_OPERATION_HA_ONLY if is_bridge else DEFAULT_COLLECTOR_OPERATION_MODE
+                COLLECTOR_OPERATION_HA_ONLY
+                if collector_capabilities.ha_only_required
+                else DEFAULT_COLLECTOR_OPERATION_MODE
             ),
         }
         return self.async_create_entry(title=title, data=data, options=options)
@@ -5489,34 +5509,38 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         cloud-only options, never adds restrictions to factory collectors.
         """
 
+        return self._collector_capabilities().virtual_bridge
+
+    def _collector_capabilities(self) -> CollectorCapabilityProfile:
+        """Return current collector capability profile for options-flow gating."""
+
         coordinator = self._coordinator()
         data = getattr(coordinator, "data", None)
         collector = getattr(data, "collector", None)
-        if collector is not None and getattr(collector, "collector_virtual_bridge", False):
-            return True
         values = getattr(data, "values", None)
-        if isinstance(values, dict):
-            if bool(values.get("collector_virtual_bridge")):
-                return True
-        if bool(self._config_entry.data.get("collector_virtual_bridge")):
-            return True
-        if bool(self._config_entry.options.get("collector_virtual_bridge")):
-            return True
-        return False
+        return collector_capability_profile_from_runtime(
+            collector=collector,
+            values=values if isinstance(values, dict) else {},
+            data=dict(getattr(self._config_entry, "data", {}) or {}),
+            options=dict(getattr(self._config_entry, "options", {}) or {}),
+            hardware_version=self._collector_uart_hardware_version,
+        )
 
     @_with_translation_bundle
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        is_bridge = self._collector_is_virtual_bridge()
+        capabilities = self._collector_capabilities()
         menu_options = ["runtime", "shadow_learning", "collector_wifi", "diagnostics"]
         bridge_note = ""
-        if is_bridge:
+        if capabilities.virtual_bridge:
             # A local bridge has no SmartESS cloud side, so cloud-only control
             # discovery (shadow learning) is meaningless against it. Wi-Fi,
             # UART, runtime, and diagnostics stay — the bridge implements them.
-            menu_options = ["runtime", "collector_wifi", "collector_uart", "diagnostics"]
+            menu_options = ["runtime", "collector_wifi", "diagnostics"]
+            if capabilities.uart_management:
+                menu_options.insert(2, "collector_uart")
             bridge_note = self._tr(
                 "common.dynamic.collector_virtual_bridge_note",
                 "\n\nThis collector is a local ESP EyeBond Collector bridge with no "
@@ -5619,7 +5643,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        if not self._collector_is_virtual_bridge():
+        if not self._collector_capabilities().uart_management:
             return await self.async_step_init()
 
         errors: dict[str, str] = {}
@@ -5716,7 +5740,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # A detected bridge is inherently Home Assistant only and the operation-mode
         # selector is hidden for it, so the submitted form carries no mode value.
         # Fail-safe: factory collectors / unanswered probes keep today's selector.
-        is_bridge = self._collector_is_virtual_bridge()
+        capabilities = self._collector_capabilities()
+        is_bridge = capabilities.virtual_bridge
         errors: dict[str, str] = {}
         if user_input is not None:
             flat_input = _flatten_sections(user_input)
@@ -8198,13 +8223,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ),
             )
 
-        is_bridge = self._collector_is_virtual_bridge()
+        capabilities = self._collector_capabilities()
+        is_bridge = capabilities.virtual_bridge
         can_refresh_cloud_evidence = (
             bool(getattr(coordinator, "smartess_cloud_export_available", False))
-            and not is_bridge
+            and capabilities.cloud_evidence
         )
         saved_cloud_evidence_path = self._current_cloud_evidence_path(coordinator)
-        had_saved_cloud_evidence = bool(saved_cloud_evidence_path) and not is_bridge
+        had_saved_cloud_evidence = bool(saved_cloud_evidence_path) and capabilities.cloud_evidence
 
         if user_input is None and can_refresh_cloud_evidence:
             return self._show_create_support_package_form(
@@ -8691,6 +8717,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return ""
 
     def _collector_uart_runtime_change_unavailable(self) -> bool:
+        capabilities = self._collector_capabilities()
+        if capabilities.uart_management:
+            return not capabilities.uart_runtime_speed_change
         hardware = (
             self._collector_uart_hardware_version
             or self._runtime_collector_hardware_version()
@@ -8809,7 +8838,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # SmartESS cloud side, so the action has nothing to capture — omit it
         # for a detected bridge. Fail-safe: factory collectors / unanswered
         # probes keep proxy capture exactly as before.
-        if not self._collector_is_virtual_bridge():
+        if self._collector_capabilities().proxy_capture:
             menu_options.append("proxy_capture")
         return menu_options
 
@@ -8944,13 +8973,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         user_input: dict[str, Any] | None = None,
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
-        had_saved_cloud_evidence = bool(saved_cloud_evidence_path)
-        is_bridge = self._collector_is_virtual_bridge()
+        capabilities = self._collector_capabilities()
+        had_saved_cloud_evidence = bool(saved_cloud_evidence_path) and capabilities.cloud_evidence
         can_refresh_cloud_evidence = (
             bool(getattr(coordinator, "smartess_cloud_export_available", False))
-            and not is_bridge
+            and capabilities.cloud_evidence
         )
-        if is_bridge:
+        if not capabilities.cloud_evidence:
             saved_cloud_evidence_path = ""
             had_saved_cloud_evidence = False
         defaults = {
