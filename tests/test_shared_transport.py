@@ -91,6 +91,88 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.collector_info.heartbeat_fresh)
         self.assertIsNotNone(connection.collector_info.heartbeat_age_seconds)
 
+    async def test_collector_connection_passively_reports_at_dtupn_identity(self) -> None:
+        seen: list[tuple[str, str, str]] = []
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._session_id = "session-1"
+        connection._session_identity_callback = lambda session_id, pn, source: seen.append(
+            (session_id, pn, source)
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"AT+DTUPN:E5000020000000\r\n")
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual(
+            seen,
+            [("session-1", "E5000020000000", "at_dtupn")],
+        )
+
+    async def test_collector_connection_passively_reports_heartbeat_identity(self) -> None:
+        seen: list[tuple[str, str, str]] = []
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._session_id = "session-2"
+        connection._session_identity_callback = lambda session_id, pn, source: seen.append(
+            (session_id, pn, source)
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                7,
+                b"E5000020000000",
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual(
+            seen,
+            [("session-2", "E5000020000000", "framed_heartbeat")],
+        )
+
+    async def test_collector_connection_passively_reports_fc2_parameter_2_identity(self) -> None:
+        seen: list[tuple[str, str, str]] = []
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._session_id = "session-3"
+        connection._session_identity_callback = lambda session_id, pn, source: seen.append(
+            (session_id, pn, source)
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                8,
+                b"\x00\x02E50000200000000001",
+                devcode=2376,
+                collector_addr=1,
+                fcode=2,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual(
+            seen,
+            [("session-3", "E50000200000000001", "fc2_parameter_2")],
+        )
+
     async def test_collector_connection_write_timeout_raises_connection_error(self) -> None:
         connection = _CollectorConnection(
             remote_ip_hint="127.0.0.1",

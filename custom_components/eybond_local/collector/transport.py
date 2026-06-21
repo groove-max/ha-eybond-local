@@ -18,6 +18,7 @@ from .protocol import (
     EybondHeader,
     FC_FORWARD_TO_DEVICE,
     FC_HEARTBEAT,
+    FC_QUERY_COLLECTOR,
     HEADER_SIZE,
     TIDCounter,
     build_collector_request,
@@ -58,6 +59,37 @@ async def _finish_cleanup_on_cancel(awaitable: Awaitable[Any]) -> Any:
 
 def _looks_like_at_traffic(chunk: bytes) -> bool:
     return chunk.lstrip().startswith(b"AT+")
+
+
+def _mask_identity_token(value: str) -> str:
+    token = str(value or "").strip()
+    if len(token) <= 6:
+        return "*" * len(token)
+    return f"{token[:3]}{'*' * max(len(token) - 6, 3)}{token[-3:]}"
+
+
+def _prefer_more_complete_identity(current: str, candidate: str) -> str:
+    normalized_current = str(current or "").strip()
+    normalized_candidate = str(candidate or "").strip()
+    if not normalized_candidate:
+        return normalized_current
+    if not normalized_current:
+        return normalized_candidate
+    if normalized_candidate == normalized_current:
+        return normalized_candidate
+    if normalized_candidate.startswith(normalized_current):
+        return normalized_candidate
+    if normalized_current.startswith(normalized_candidate):
+        return normalized_current
+    return normalized_current
+
+
+def _parse_fc2_collector_pn(payload: bytes) -> str:
+    if len(payload) < 2:
+        return ""
+    if payload[1] != 2:
+        return ""
+    return payload[2:].decode("ascii", errors="ignore").strip("\x00").strip()
 
 
 def _bounded_write_timeout(request_timeout: float) -> float:
@@ -271,6 +303,8 @@ class _CollectorConnection:
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._last_heartbeat_monotonic: float | None = None
+        self._session_id = ""
+        self._session_identity_callback: Callable[[str, str, str], None] | None = None
 
     @property
     def connected(self) -> bool:
@@ -409,6 +443,8 @@ class _CollectorConnection:
         writer: asyncio.StreamWriter,
         *,
         initial_bytes: bytes = b"",
+        session_id: str = "",
+        session_identity_callback: Callable[[str, str, str], None] | None = None,
     ) -> None:
         if self.connected:
             self._collector.connection_replace_count += 1
@@ -423,6 +459,8 @@ class _CollectorConnection:
         self._last_heartbeat_monotonic = None
         self._reader = reader
         self._writer = writer
+        self._session_id = str(session_id or "").strip()
+        self._session_identity_callback = session_identity_callback
         self._connected.set()
 
         logger.info("Collector connected from %s:%s", self._collector.remote_ip, self._collector.remote_port)
@@ -464,8 +502,16 @@ class _CollectorConnection:
     def _apply_at_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
             self._collector.collector_pn = response.value
+            self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
+
+    def _record_session_identity(self, collector_pn: str, source: str) -> None:
+        callback = self._session_identity_callback
+        session_id = self._session_id
+        if callback is None or not session_id or not collector_pn:
+            return
+        callback(session_id, collector_pn, source)
 
     def _handle_at_response(self, payload: bytes) -> None:
         try:
@@ -521,9 +567,15 @@ class _CollectorConnection:
                     pn = parse_heartbeat_pn(payload)
                     if pn:
                         self._collector.collector_pn = pn
+                        self._record_session_identity(pn, "framed_heartbeat")
                     self._collector.heartbeat_devcode = header.devcode
                     self._collector.heartbeat_payload_hex = payload.hex()
                     self._last_heartbeat_monotonic = monotonic()
+                elif header.fcode == FC_QUERY_COLLECTOR:
+                    pn = _parse_fc2_collector_pn(payload)
+                    if pn:
+                        self._collector.collector_pn = pn
+                        self._record_session_identity(pn, "fc2_parameter_2")
                 future = self._pending.get(header.tid)
                 if future and not future.done():
                     future.set_result((header, payload))
@@ -602,6 +654,8 @@ class _CollectorConnection:
         self._writer = None
         self._connected.clear()
         self._last_heartbeat_monotonic = None
+        self._session_id = ""
+        self._session_identity_callback = None
 
         if writer:
             writer.close()
@@ -632,6 +686,8 @@ class _CollectorAtConnection:
         self._write_lock = asyncio.Lock()
         self._pending_response: asyncio.Future[CollectorAtResponse] | None = None
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
+        self._session_id = ""
+        self._session_identity_callback: Callable[[str, str, str], None] | None = None
 
     @property
     def connected(self) -> bool:
@@ -676,6 +732,8 @@ class _CollectorAtConnection:
         writer: asyncio.StreamWriter,
         *,
         initial_bytes: bytes = b"",
+        session_id: str = "",
+        session_identity_callback: Callable[[str, str, str], None] | None = None,
     ) -> None:
         if self.connected:
             self._collector.connection_replace_count += 1
@@ -689,6 +747,8 @@ class _CollectorAtConnection:
         self._collector.last_disconnect_reason = ""
         self._reader = reader
         self._writer = writer
+        self._session_id = str(session_id or "").strip()
+        self._session_identity_callback = session_identity_callback
         self._connected.set()
 
         logger.info("Collector AT connection from %s:%s", self._collector.remote_ip, self._collector.remote_port)
@@ -756,8 +816,16 @@ class _CollectorAtConnection:
     def _apply_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
             self._collector.collector_pn = response.value
+            self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
+
+    def _record_session_identity(self, collector_pn: str, source: str) -> None:
+        callback = self._session_identity_callback
+        session_id = self._session_id
+        if callback is None or not session_id or not collector_pn:
+            return
+        callback(session_id, collector_pn, source)
 
     async def _disconnect(
         self,
@@ -789,6 +857,8 @@ class _CollectorAtConnection:
         self._reader = None
         self._writer = None
         self._connected.clear()
+        self._session_id = ""
+        self._session_identity_callback = None
 
         if writer:
             writer.close()
@@ -822,6 +892,8 @@ class _CollectorSessionInventoryEntry:
     protocol_shape: str = "unknown"
     first_bytes_len: int = 0
     first_bytes_prefix_hex: str = ""
+    collector_pn: str = ""
+    collector_identity_source: str = ""
 
     def diagnostics(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -835,6 +907,10 @@ class _CollectorSessionInventoryEntry:
             result["peer_port"] = self.remote_port
         if self.first_bytes_prefix_hex:
             result["first_bytes_prefix_hex"] = self.first_bytes_prefix_hex
+        if self.collector_pn:
+            result["collector_identity_masked"] = _mask_identity_token(self.collector_pn)
+        if self.collector_identity_source:
+            result["collector_identity_source"] = self.collector_identity_source
         return result
 
 
@@ -1064,6 +1140,25 @@ class _SharedEybondListener:
             entry.protocol_shape = "eybond_framed_or_binary"
             return
         entry.protocol_shape = "unknown"
+
+    def _mark_session_identity(
+        self,
+        session_id: str,
+        collector_pn: str,
+        source: str,
+    ) -> None:
+        entry = self._session_inventory.get(session_id)
+        if entry is None:
+            return
+        normalized_pn = str(collector_pn or "").strip()
+        if not normalized_pn:
+            return
+        entry.collector_pn = _prefer_more_complete_identity(
+            entry.collector_pn,
+            normalized_pn,
+        )
+        if source:
+            entry.collector_identity_source = str(source)
 
     def matching_callback_ips(self, collector_ip: str) -> tuple[str, ...]:
         if not collector_ip:
@@ -1351,7 +1446,12 @@ class _SharedEybondListener:
         self._last_at_connection_ip = remote_ip
         self._mark_session_state(pending.session_id, "routed_at_text")
         asyncio.create_task(
-            connection.run(pending.reader, pending.writer),
+            connection.run(
+                pending.reader,
+                pending.writer,
+                session_id=pending.session_id,
+                session_identity_callback=self._mark_session_identity,
+            ),
             name=f"collector_at_{remote_ip}",
         )
         await connection.wait_until_connected(timeout=0.1)
@@ -1385,7 +1485,12 @@ class _SharedEybondListener:
         self._last_connection_ip = remote_ip
         self._mark_session_state(pending.session_id, "routed_framed")
         asyncio.create_task(
-            connection.run(pending.reader, pending.writer),
+            connection.run(
+                pending.reader,
+                pending.writer,
+                session_id=pending.session_id,
+                session_identity_callback=self._mark_session_identity,
+            ),
             name=f"collector_framed_{remote_ip}",
         )
         await connection.wait_until_connected(timeout=0.1)
@@ -1441,7 +1546,13 @@ class _SharedEybondListener:
             self._at_connections[pending.remote_ip] = connection
             self._last_at_connection_ip = pending.remote_ip
             self._mark_session_state(pending.session_id, "routed_at_text")
-            await connection.run(pending.reader, pending.writer, initial_bytes=chunk)
+            await connection.run(
+                pending.reader,
+                pending.writer,
+                initial_bytes=chunk,
+                session_id=pending.session_id,
+                session_identity_callback=self._mark_session_identity,
+            )
             return
 
         connection = self._connections.get(pending.remote_ip)
@@ -1467,7 +1578,13 @@ class _SharedEybondListener:
         self._connections[pending.remote_ip] = connection
         self._last_connection_ip = pending.remote_ip
         self._mark_session_state(pending.session_id, "routed_framed")
-        await connection.run(pending.reader, pending.writer, initial_bytes=chunk)
+        await connection.run(
+            pending.reader,
+            pending.writer,
+            initial_bytes=chunk,
+            session_id=pending.session_id,
+            session_identity_callback=self._mark_session_identity,
+        )
 
     async def _handle_connection(
         self,
