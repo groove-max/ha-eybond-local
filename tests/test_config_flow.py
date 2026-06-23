@@ -281,6 +281,7 @@ from custom_components.eybond_local.collector.smartess_local import (
     SET_TARGET_SSID,
 )
 from custom_components.eybond_local.const import (
+    CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
@@ -2318,7 +2319,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "confirm")
         self.assertIn("poll_interval", result["data_schema"].schema)
-        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
 
     async def test_confirm_step_placeholders_render_split_collector_and_inverter_tables(self) -> None:
         flow = self._make_flow()
@@ -2583,6 +2584,48 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["title"], "Collector 192.168.1.14")
         self.assertEqual(result["data"]["collector_ip"], "192.168.1.14")
         self.assertEqual(result["data"]["connection_mode"], "known_ip")
+
+    async def test_create_entry_persists_collector_cloud_family_from_onboarding(self) -> None:
+        flow = self._make_flow()
+        flow._auto_config = {
+            "server_ip": "192.168.1.104",
+            "collector_ip": "",
+            "driver_hint": "auto",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.14",
+                source="broadcast",
+                ip="192.168.1.14",
+                connected=True,
+                collector=CollectorInfo(
+                    collector_pn="E5000099990001",
+                    collector_cloud_family="valuecloud_at",
+                    collector_cloud_family_source="endpoint_host",
+                    collector_cloud_family_confidence="high",
+                    collector_server_endpoint="iot.eybond.com,18899,TCP",
+                ),
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632500000001",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x01, device_addr=1),
+                details={},
+            ),
+            connection_mode="known_ip",
+        )
+
+        result = await flow._async_create_entry_from_result({"poll_interval": 30})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"][CONF_COLLECTOR_CLOUD_FAMILY], "valuecloud_at")
 
     async def test_choose_step_link_down_result_shows_retryable_error(self) -> None:
         flow = self._make_flow()
@@ -2857,6 +2900,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="known_ip",
         )
 
+    def _bridge_confirm_result_from_collector_info(self) -> OnboardingResult:
+        result = self._bridge_confirm_result(is_bridge=False)
+        result.collector.collector.collector_virtual_bridge = True
+        result.collector.collector.collector_bridge_kind = "esp-collector"
+        return result
+
+    def _bridge_confirm_result_from_raw_vdtu(self) -> OnboardingResult:
+        result = self._bridge_confirm_result(is_bridge=False)
+        result.match.details["collector_vdtu_raw"] = (
+            "esp-collector,0.1.2;features=local_only,no_cloud;"
+            "uart=2400,8,1,NONE"
+        )
+        return result
+
     def _collector_only_bridge_result(self) -> OnboardingResult:
         return OnboardingResult(
             collector=CollectorCandidate(
@@ -2891,6 +2948,24 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["collector_operation_mode_note"].strip()
         )
 
+    async def test_confirm_step_hides_operation_mode_selector_for_bridge_collector_info(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result_from_collector_info()
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+
+    async def test_confirm_step_hides_operation_mode_selector_for_raw_vdtu_bridge(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._bridge_confirm_result_from_raw_vdtu()
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+
     async def test_confirm_step_hides_operation_mode_selector_for_collector_only_bridge(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._collector_only_bridge_result()
@@ -2903,6 +2978,138 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             result["description_placeholders"]["collector_operation_mode_note"].strip()
         )
+
+    async def test_confirm_step_refreshes_collector_only_bridge_capability_from_vdtu(self) -> None:
+        flow = self._make_flow()
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="udp",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
+            ),
+            connection_mode="known_ip",
+            next_action="create_pending_entry",
+        )
+        flow._auto_config = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+        flow._autodetect_results = {"0": result}
+        flow._selected_result = result
+
+        class _FakeAtTransport:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+                self.started = False
+
+            async def start(self) -> None:
+                self.started = True
+
+            async def stop(self) -> None:
+                self.started = False
+
+        with (
+            patch(
+                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                _FakeAtTransport,
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                new=AsyncMock(
+                    return_value={
+                        "collector_vdtu_raw": (
+                            "esp-collector,0.1.2;features=local_only,no_cloud;"
+                            "uart=2400,8,1,NONE"
+                        ),
+                        "collector_server_endpoint": "192.168.1.50,8899,TCP",
+                    }
+                ),
+            ),
+        ):
+            form = await flow.async_step_confirm()
+
+        self.assertEqual(form["type"], "form")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, form["data_schema"].schema)
+        assert flow._selected_result is not None
+        assert flow._selected_result.collector is not None
+        assert flow._selected_result.collector.collector is not None
+        self.assertTrue(flow._selected_result.collector.collector.collector_virtual_bridge)
+
+    async def test_confirm_step_refreshes_bridge_capability_for_merged_auto_result(self) -> None:
+        flow = self._make_flow()
+        scanned_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="udp",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
+            ),
+            connection_mode="known_ip",
+            next_action="create_pending_entry",
+        )
+        selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="udp",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
+            ),
+            connection_mode="known_ip",
+            next_action="create_pending_entry",
+        )
+        flow._auto_config = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+        flow._autodetect_results = {"0": scanned_result}
+        flow._selected_result = selected_result
+
+        class _FakeAtTransport:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+        with (
+            patch(
+                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                _FakeAtTransport,
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                new=AsyncMock(
+                    return_value={
+                        "collector_vdtu_raw": "esp-collector,0.1.2;features=local_only,no_cloud",
+                    }
+                ),
+            ),
+        ):
+            form = await flow.async_step_confirm()
+
+        self.assertEqual(form["type"], "form")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, form["data_schema"].schema)
+        assert flow._selected_result is not None
+        assert flow._selected_result.collector is not None
+        assert flow._selected_result.collector.collector is not None
+        self.assertTrue(flow._selected_result.collector.collector.collector_virtual_bridge)
 
     async def test_confirm_step_persists_ha_only_for_collector_only_bridge(self) -> None:
         flow = self._make_flow()
@@ -2922,15 +3129,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result["data"]["collector_virtual_bridge"])
 
-    async def test_confirm_step_keeps_operation_mode_selector_for_factory_collector(self) -> None:
-        # Item 1 fail-safe: a factory collector keeps the selector and an empty note.
+    async def test_confirm_step_hides_operation_mode_selector_for_factory_collector(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._bridge_confirm_result(is_bridge=False)
 
         result = await flow.async_step_confirm()
 
         self.assertEqual(result["type"], "form")
-        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertEqual(
             result["description_placeholders"]["collector_operation_mode_note"], ""
         )
@@ -3028,9 +3234,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [SET_SERVER_ENDPOINT, SET_REBOOT_OR_APPLY],
         )
 
-    async def test_confirm_step_factory_refused_endpoint_write_hard_fails(self) -> None:
-        # Item 1 fail-safe: a factory collector keeps today's hard error on a
-        # refused HA-only endpoint write.
+    async def test_confirm_step_ignores_stale_operation_mode_for_factory_collector(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._bridge_confirm_result(is_bridge=False)
 
@@ -3060,8 +3264,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["errors"]["base"], "collector_endpoint_write_failed")
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_SMARTESS_AND_HA,
+        )
+        session.set_collector.assert_not_awaited()
 
     async def test_collector_callback_target_uses_legacy_cloud_port(self) -> None:
         flow = self._make_flow()
@@ -3081,10 +3289,38 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "192.168.1.50",
         )
 
+    async def test_collector_callback_target_uses_valuecloud_host_profile_before_18899_port_fallback(self) -> None:
+        flow = self._make_flow()
+        flow._collector_current_server_endpoint = "iot.eybond.com,18899,TCP"
+
+        self.assertEqual(
+            flow._collector_callback_target_endpoint(),
+            "192.168.1.50,18899,TCP",
+        )
+
+    async def test_collector_original_endpoint_options_use_valuecloud_host_profile_before_18899_port_fallback(self) -> None:
+        flow = self._make_flow()
+
+        options = flow._collector_original_endpoint_options(
+            "iot.eybond.com,18899,TCP"
+        )
+
+        self.assertEqual(
+            options["collector_original_server_endpoint_profile_key"],
+            "valuecloud_at",
+        )
+
     async def test_endpoint_originality_hint_uses_catalog_host_match(self) -> None:
         flow = self._make_flow()
 
         hint = flow._endpoint_originality_hint("dtu_ess.eybond.com")
+
+        self.assertIn("original cloud endpoint", hint)
+
+    async def test_endpoint_originality_hint_uses_valuecloud_host_match_before_18899_port_fallback(self) -> None:
+        flow = self._make_flow()
+
+        hint = flow._endpoint_originality_hint("iot.eybond.com,18899,TCP")
 
         self.assertIn("original cloud endpoint", hint)
 
@@ -3238,6 +3474,94 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             {result.collector.ip for result in flow._available_autodetect_results().values() if result.collector is not None},
             {"192.168.1.193"},
         )
+
+    async def test_do_scan_collapses_prefix_and_full_collector_pn_duplicates(self) -> None:
+        flow = self._make_flow()
+        matched_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="Q0000000000001"),
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632500000001",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=1),
+            ),
+            connection_mode="broadcast",
+        )
+        collector_only_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="Q00000000000010001"),
+            ),
+            connection_mode="broadcast",
+            next_action="manual_driver_selection",
+            last_error="collector_detected_without_driver",
+        )
+
+        class _FakeDetector:
+            async def async_auto_detect(self, **kwargs):
+                return (collector_only_result, matched_result)
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(len(flow._autodetect_results), 1)
+        result = next(iter(flow._autodetect_results.values()))
+        self.assertIsNotNone(result.match)
+        self.assertEqual(result.match.model_name, "SMG 6200")
+
+    async def test_existing_entry_does_not_claim_different_collector_pn_on_same_nat_ip(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
+        existing.data.update(
+            {
+                "collector_ip": "192.168.1.193",
+                "collector_pn": "E5000099990001",
+            }
+        )
+        existing.unique_id = "collector:E5000099990001"
+        flow = self._make_flow(entries=[existing])
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.193",
+                connected=True,
+                collector=CollectorInfo(collector_pn="E5000099990002"),
+            ),
+            connection_mode="broadcast",
+        )
+
+        self.assertIsNone(flow._existing_entry_for_result(result))
+
+    async def test_existing_entry_matches_prefix_and_full_collector_pn(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
+        existing.data.update({"collector_pn": "Q00000000000010001"})
+        existing.unique_id = "collector:Q00000000000010001"
+        flow = self._make_flow(entries=[existing])
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.51",
+                connected=True,
+                collector=CollectorInfo(collector_pn="Q0000000000001"),
+            ),
+            connection_mode="broadcast",
+        )
+
+        self.assertIs(flow._existing_entry_for_result(result), existing)
 
     async def test_do_scan_publishes_determinate_progress_updates(self) -> None:
         flow = self._make_flow()
@@ -4243,6 +4567,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_options_collector_uart_apply_writes_parameter_34_only(self) -> None:
         options = self._make_options_flow()
+        snapshot = types.SimpleNamespace(
+            values={
+                "collector_virtual_bridge": True,
+                "collector_serial_baudrate": "2400,8,1,NONE",
+                "collector_bridge_uart": "2400,8,1,NONE",
+            }
+        )
+        coordinator = types.SimpleNamespace(
+            data=snapshot,
+            async_set_updated_data=Mock(),
+        )
+        options._config_entry.runtime_data = coordinator
         transport = AsyncMock()
         session = AsyncMock()
         writes: list[tuple[int, str]] = []
@@ -4261,6 +4597,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(writes, [(SET_SERIAL_BAUDRATE, "9600")])
         self.assertEqual(options._collector_uart_current_baudrate, "9600")
+        self.assertEqual(options._collector_uart_current_settings, "9600,8,1,NONE")
+        self.assertEqual(snapshot.values["collector_serial_baudrate"], "9600,8,1,NONE")
+        self.assertEqual(snapshot.values["collector_bridge_uart"], "9600,8,1,NONE")
+        coordinator.async_set_updated_data.assert_called_once_with(snapshot)
         transport.stop.assert_awaited_once()
 
     async def test_options_collector_uart_apply_refuses_bk72xx_runtime_change(self) -> None:

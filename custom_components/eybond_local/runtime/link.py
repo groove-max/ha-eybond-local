@@ -371,6 +371,8 @@ class EybondRuntimeLinkManager:
     def active_transport(self) -> CollectorTransport | None:
         """Return the connected payload transport selected for the active collector."""
 
+        if self._uses_at_text_payload():
+            return None
         return self._connected_payload_transport()
 
     @property
@@ -383,6 +385,8 @@ class EybondRuntimeLinkManager:
     def transport(self) -> CollectorTransport:
         """Return the active payload-capable transport."""
 
+        if self._uses_at_text_payload():
+            return self.active_collector_at_transport or self._at_transport
         return self.active_transport or self._transport
 
     @property
@@ -395,6 +399,8 @@ class EybondRuntimeLinkManager:
     def connected(self) -> bool:
         """Return whether the physical link is currently connected."""
 
+        if self._uses_at_text_payload():
+            return self.active_collector_at_transport is not None
         return self.active_transport is not None
 
     @property
@@ -584,6 +590,62 @@ class EybondRuntimeLinkManager:
             await self._announcer.stop()
         return True
 
+    async def async_reconcile_collector_session_profile(
+        self,
+        *,
+        collector_session_protocol: str,
+        collector_identity_strategy: str,
+        reason: str = "collector_session_profile_change",
+    ) -> bool:
+        """Rebuild transports when the resolved callback session profile changes."""
+
+        normalized_protocol = str(collector_session_protocol or "").strip().lower()
+        normalized_strategy = str(collector_identity_strategy or "").strip().lower()
+        if (
+            normalized_protocol == self._collector_session_protocol
+            and normalized_strategy == self._collector_identity_strategy
+        ):
+            return False
+
+        logger.warning(
+            "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s; rebuilding transport",
+            reason or "collector_session_profile_change",
+            self._collector_session_protocol or "unknown",
+            normalized_protocol or "unknown",
+            self._collector_identity_strategy or "unknown",
+            normalized_strategy or "unknown",
+        )
+        was_started = self._started
+        if was_started:
+            await self._announcer.stop()
+            await self._stop_all_transports()
+
+        self._collector_session_protocol = normalized_protocol
+        self._collector_identity_strategy = normalized_strategy
+        self._rebuild_link(self._effective_server_ip)
+        self._listener_rebind_count += 1
+
+        if not was_started:
+            return True
+
+        self._listener_status = "starting"
+        try:
+            await self._start_all_transports()
+        except Exception as exc:
+            self._started = False
+            self._record_listener_error(exc)
+            await self._stop_all_transports()
+            raise
+
+        self._listener_status = "listening"
+        self._listener_last_error = ""
+        self._started = True
+        if self._reverse_discovery_enabled:
+            await self._ensure_discovery(reason=reason or "collector_session_profile_change")
+        else:
+            await self._announcer.stop()
+        return True
+
     async def async_stop(self) -> None:
         """Stop discovery and the active link transport."""
 
@@ -655,7 +717,21 @@ class EybondRuntimeLinkManager:
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:
         """Control whether UDP reverse discovery may redirect the collector."""
 
+        was_enabled = self._reverse_discovery_enabled
         self._reverse_discovery_enabled = bool(enabled)
+        if was_enabled and not self._reverse_discovery_enabled:
+            announcer = self._announcer
+            announcer.last_reply = ""
+            announcer.last_reply_from = ""
+            if getattr(announcer, "running", False):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                loop.create_task(
+                    announcer.stop(),
+                    name="eybond_stop_reverse_discovery_announcer",
+                )
 
     async def async_start_proxy_capture_route(
         self,
@@ -1000,6 +1076,17 @@ class EybondRuntimeLinkManager:
     ) -> bool:
         """Try to ensure a live collector connection without raising on timeout."""
 
+        if self._uses_at_text_payload():
+            if self.active_collector_at_transport is None:
+                if self._reverse_discovery_enabled:
+                    await self._ensure_discovery(reason="waiting_for_callback")
+                ok = await self._async_wait_for_at_connection(timeout=timeout)
+                if not ok:
+                    return False
+
+            await self._announcer.stop()
+            return self.connected
+
         if not self.connected:
             if self._reverse_discovery_enabled:
                 await self._ensure_discovery(reason="waiting_for_callback")
@@ -1126,6 +1213,29 @@ class EybondRuntimeLinkManager:
                 continue
             return transport
         return None
+
+    def _uses_at_text_payload(self) -> bool:
+        return str(self._collector_session_protocol or "").strip().lower() == "at_text"
+
+    async def _async_wait_for_at_connection(self, *, timeout: float) -> bool:
+        transports = self._at_transports()
+        if len(transports) == 1:
+            return await transports[0].wait_until_connected(timeout=timeout) and transports[0].connected
+
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            if self.active_collector_at_transport is not None:
+                return True
+
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+
+            wait_timeout = min(0.1, remaining)
+            for transport in transports:
+                ok = await transport.wait_until_connected(timeout=wait_timeout)
+                if ok and self._connected_at_transport() is not None:
+                    return True
 
     async def _async_wait_for_payload_connection(self, *, timeout: float) -> bool:
         transports = self._payload_transports()

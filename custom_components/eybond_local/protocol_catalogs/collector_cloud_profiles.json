@@ -38,6 +38,19 @@
       "endpoint_write_format": "host_port_protocol",
       "session_protocol": "at_text",
       "identity_strategy": "at_dtupn"
+    },
+    {
+      "family": "valuecloud_at",
+      "provider": "valuecloud",
+      "label": "ValueCloud AT",
+      "default_host": "iot.eybond.com",
+      "default_port": 18899,
+      "default_protocol": "TCP",
+      "known_hosts": ["iot.eybond.com"],
+      "known_ports": [],
+      "endpoint_write_format": "host_port_protocol",
+      "session_protocol": "at_text",
+      "identity_strategy": "at_dtupn"
     }
   ]
 }

@@ -561,6 +561,41 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.collector.collector_pn_digits, "50000200000000001")
         self.assertEqual(snapshot.values["collector_pn"], "E50000200000000001")
 
+    def test_support_evidence_skips_generic_scan_for_bridge_probe_timeout(self) -> None:
+        async def _run() -> dict[str, object]:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._link_manager.collector_info.collector_virtual_bridge = True
+            hub._driver = None
+            hub._inverter = None
+
+            async def _detect_driver() -> str:
+                return "smartess_local:probe_timeout"
+
+            async def _generic_support_evidence(_detect_error: str) -> dict[str, object]:
+                raise AssertionError("generic register scan must be skipped")
+
+            hub._async_detect_driver = _detect_driver
+            hub._async_capture_generic_support_evidence = _generic_support_evidence
+            return await hub.async_capture_support_evidence()
+
+        evidence = asyncio.run(_run())
+
+        self.assertEqual(evidence["capture_kind"], "collector_only")
+        self.assertEqual(evidence["detection_error"], "smartess_local:probe_timeout")
+        self.assertEqual(evidence["captures"], [])
+
     def test_build_snapshot_recomputes_smg_canonical_battery_power(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(
@@ -1041,6 +1076,77 @@ class HubSnapshotTests(unittest.TestCase):
             self.assertEqual(result["current_endpoint"], "47.91.67.66,18899,TCP")
             self.assertEqual(result["reboot_required_before"], "1")
             self.assertEqual(hub._collector_runtime_values["collector_reboot_required"], "0")
+            self.assertEqual(
+                transport.requests,
+                [
+                    (2, b"\x15"),
+                    (2, b"\x1e"),
+                    (3, b"\x1d1"),
+                ],
+            )
+
+        asyncio.run(_run())
+
+    def test_async_reboot_collector_rejects_virtual_bridge_without_reboot_feature(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            link_manager = _FakeLinkManager()
+            transport = _CollectorManagementTransport()
+            link_manager.transport = transport
+            link_manager.collector_info.collector_virtual_bridge = True
+            link_manager.collector_info.collector_bridge_kind = "esp-collector"
+            link_manager.collector_info.collector_bridge_features = (
+                "local_only",
+                "no_cloud",
+                "wifi_params",
+                "endpoint_write",
+            )
+            hub._link_manager = link_manager
+
+            with self.assertRaisesRegex(RuntimeError, "collector_reboot_not_supported"):
+                await hub.async_reboot_collector()
+
+            self.assertEqual(transport.requests, [])
+
+        asyncio.run(_run())
+
+    def test_async_reboot_collector_allows_virtual_bridge_with_reboot_feature(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            link_manager = _FakeLinkManager()
+            transport = _CollectorManagementTransport()
+            link_manager.transport = transport
+            link_manager.collector_info.collector_virtual_bridge = True
+            link_manager.collector_info.collector_bridge_kind = "esp-collector"
+            link_manager.collector_info.collector_bridge_features = ("local_only", "reboot")
+            hub._link_manager = link_manager
+
+            result = await hub.async_reboot_collector()
+
+            self.assertEqual(result["status"], "reboot_triggered")
+            self.assertEqual(result["action"], "reboot")
             self.assertEqual(
                 transport.requests,
                 [

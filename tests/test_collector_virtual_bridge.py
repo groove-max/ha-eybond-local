@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch  # noqa: E402
 from custom_components.eybond_local.collector.at import CollectorAtResponse  # noqa: E402
 from custom_components.eybond_local.collector.at_runtime import (  # noqa: E402
     CollectorVirtualBridgeInfo,
+    collector_bridge_features_support_reboot,
     parse_collector_vdtu,
     query_runtime_collector_at_values,
 )
@@ -49,6 +50,14 @@ class _FakeLinkManager:
         self.collector_info = CollectorInfo(remote_ip="192.0.2.14")
         self.transport = object()
         self.collector_at_transport = None
+
+    async def async_try_connect(
+        self,
+        *,
+        timeout: float,
+        require_heartbeat: bool = False,
+    ) -> bool:
+        return True
 
 
 def _make_hub() -> EybondHub:
@@ -87,6 +96,15 @@ class ParseCollectorVdtuTests(unittest.TestCase):
                 ("spacing_ms", "100"),
                 ("queue", "4"),
             ),
+        )
+
+    def test_reboot_feature_helper_accepts_future_restart_tokens(self) -> None:
+        self.assertTrue(collector_bridge_features_support_reboot(("local_only", "reboot")))
+        self.assertTrue(collector_bridge_features_support_reboot("local_only,collector-restart"))
+        self.assertFalse(
+            collector_bridge_features_support_reboot(
+                "local_only,no_cloud,wifi_params,endpoint_write"
+            )
         )
 
     def test_empty_value_is_not_a_bridge(self) -> None:
@@ -209,6 +227,42 @@ class SnapshotDetectionFlagTests(unittest.TestCase):
         self.assertFalse(snapshot.collector.collector_virtual_bridge)
         self.assertNotIn("collector_virtual_bridge", snapshot.values)
 
+    def test_refresh_publishes_collector_snapshot_while_waiting_for_inverter(self) -> None:
+        async def _run() -> None:
+            hub = _make_hub()
+            hub._link_manager.collector_info.collector_virtual_bridge = True
+            hub._link_manager.collector_info.collector_bridge_kind = "esp-collector"
+            observed_snapshots = []
+            detect_calls = 0
+
+            async def _detect_driver() -> str:
+                nonlocal detect_calls
+                detect_calls += 1
+                return "no_supported_driver_matched"
+
+            hub.set_runtime_snapshot_observer(observed_snapshots.append)
+            hub._async_detect_driver = _detect_driver
+
+            snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertEqual(detect_calls, 1)
+            self.assertEqual(len(observed_snapshots), 1)
+            self.assertTrue(observed_snapshots[0].connected)
+            self.assertIsNone(observed_snapshots[0].last_error)
+            self.assertEqual(
+                observed_snapshots[0].values["runtime_detection_status"],
+                "detecting_inverter",
+            )
+            self.assertTrue(observed_snapshots[0].values["collector_virtual_bridge"])
+            self.assertTrue(snapshot.connected)
+            self.assertEqual(snapshot.last_error, "no_supported_driver_matched")
+            self.assertTrue(snapshot.values["collector_virtual_bridge"])
+            self.assertEqual(snapshot.values["collector_bridge_kind"], "esp-collector")
+
+        import asyncio
+
+        asyncio.run(_run())
+
 
 class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):
     """Item 2: the onboarding AT+VDTU probe carries the bridge verdict to confirm."""
@@ -248,7 +302,12 @@ class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):
         async def stop(self) -> None:
             return None
 
-    async def _run_enrich(self, at_values: dict[str, object]) -> DetectedDriverContext:
+    async def _run_enrich(
+        self,
+        at_values: dict[str, object],
+        *,
+        collector: CollectorInfo | None = None,
+    ) -> DetectedDriverContext:
         detector = OnboardingDetector(server_ip="192.0.2.10")
         context = self._make_context()
         # No async_send_collector on the transport -> the FC query path is skipped,
@@ -268,6 +327,7 @@ class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):
                 transport,
                 context,
                 collector_ip="192.0.2.14",
+                collector=collector,
             )
         return context
 
@@ -286,6 +346,28 @@ class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.match.details["collector_bridge_queue"], "4")
         # The raw VDTU string is intentionally not carried into match details.
         self.assertNotIn("collector_vdtu_raw", context.match.details)
+
+    async def test_bridge_vdtu_carries_verdict_to_collector_info(self) -> None:
+        collector = CollectorInfo(collector_pn="ESP32COLLECTOR")
+
+        await self._run_enrich({"collector_vdtu_raw": _VALID_VDTU}, collector=collector)
+
+        self.assertTrue(collector.collector_virtual_bridge)
+        self.assertEqual(collector.collector_bridge_kind, "esp-collector")
+        self.assertEqual(collector.collector_bridge_version, "0.4.0")
+        self.assertEqual(
+            collector.collector_bridge_features,
+            ("local_only", "no_cloud", "wifi_params"),
+        )
+        self.assertEqual(
+            collector.collector_bridge_attributes,
+            (
+                ("features", "local_only,no_cloud,wifi_params"),
+                ("uart", "2400,8,1,NONE"),
+                ("spacing_ms", "100"),
+                ("queue", "4"),
+            ),
+        )
 
     async def test_factory_collector_carries_no_bridge_verdict(self) -> None:
         context = await self._run_enrich({"collector_vdtu_raw": "ERROR"})

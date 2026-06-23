@@ -12,6 +12,10 @@ from typing import Any, Sequence
 
 from ..canonical_telemetry import apply_canonical_measurements
 from ..collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
+from ..collector.cloud_family import (
+    apply_collector_cloud_family_observation,
+    collector_cloud_family_observation_from_endpoint,
+)
 from ..collector.discovery import async_probe_target, async_probe_target_replies
 from ..collector.parameter_registry import RUNTIME_COLLECTOR_PARAMETERS, query_runtime_collector_values
 from ..collector.smartess_local import SmartEssLocalSession, SmartEssProtocolDescriptor
@@ -34,7 +38,7 @@ from ..const import (
 from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
 from .driver_detection import DetectedDriverContext, async_detect_inverter
 from .timeouts import DEFAULT_ONBOARDING_TIMEOUT_POLICY, OnboardingDeadline
-from ..models import CollectorCandidate, OnboardingResult
+from ..models import CollectorCandidate, CollectorInfo, OnboardingResult
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +65,10 @@ _ONBOARDING_RUNTIME_DETAIL_KEYS = {
     "collector_signal_strength",
     "collector_signal_strength_raw",
     "collector_signal_strength_source",
+    "collector_server_endpoint",
+    "collector_cloud_family",
+    "collector_cloud_family_source",
+    "collector_cloud_family_confidence",
     "output_rating_active_power",
     "rated_power",
     # Virtual-bridge verdict carried from the AT+VDTU probe so the confirm step
@@ -82,6 +90,65 @@ _ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS = tuple(
     for definition in RUNTIME_COLLECTOR_PARAMETERS
     if definition.parameter != 41
 )
+
+
+def _collector_identity_matches(left: str, right: str) -> bool:
+    """Return whether two collector PN values look like the same collector."""
+
+    normalized_left = str(left or "").strip()
+    normalized_right = str(right or "").strip()
+    if not normalized_left or not normalized_right:
+        return False
+    if normalized_left == normalized_right:
+        return True
+    if min(len(normalized_left), len(normalized_right)) < 10:
+        return False
+    return bool(
+        normalized_left.startswith(normalized_right)
+        or normalized_right.startswith(normalized_left)
+    )
+
+
+def _apply_virtual_bridge_info_to_collector(collector: Any, bridge: Any) -> None:
+    """Carry a positive AT+VDTU bridge verdict into CollectorInfo."""
+
+    if collector is None or not bridge.is_virtual_bridge:
+        return
+    collector.collector_virtual_bridge = True
+    if bridge.kind:
+        collector.collector_bridge_kind = bridge.kind
+    if bridge.version:
+        collector.collector_bridge_version = bridge.version
+    if bridge.features:
+        collector.collector_bridge_features = tuple(bridge.features)
+    if bridge.attributes:
+        collector.collector_bridge_attributes = tuple(bridge.attributes)
+
+
+def _apply_collector_cloud_endpoint_details_to_collector(
+    collector: Any,
+    details: dict[str, object],
+) -> None:
+    """Carry an observed CLDSRVHOST1 endpoint/family verdict into CollectorInfo."""
+
+    if collector is None:
+        return
+    endpoint = str(details.get("collector_server_endpoint") or "").strip()
+    if endpoint:
+        collector.collector_server_endpoint = endpoint
+        apply_collector_cloud_family_observation(
+            collector,
+            collector_cloud_family_observation_from_endpoint(endpoint),
+        )
+    family = str(details.get("collector_cloud_family") or "").strip()
+    if family:
+        collector.collector_cloud_family = family
+        collector.collector_cloud_family_source = str(
+            details.get("collector_cloud_family_source") or ""
+        ).strip()
+        collector.collector_cloud_family_confidence = str(
+            details.get("collector_cloud_family_confidence") or ""
+        ).strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +520,14 @@ class OnboardingDetector:
                         )
                     )
 
+                aggregated.extend(
+                    self._session_inventory_results(
+                        listener=listener,
+                        discovery_targets=targets,
+                        results=aggregated,
+                    )
+                )
+
                 deduped = self._dedupe_results(aggregated)
                 best = deduped[0] if deduped else None
                 if best is not None and best.match is not None:
@@ -483,6 +558,14 @@ class OnboardingDetector:
                         )
                     )
                     deduped = self._dedupe_results(aggregated)
+            aggregated.extend(
+                self._session_inventory_results(
+                    listener=listener,
+                    discovery_targets=targets,
+                    results=aggregated,
+                )
+            )
+            deduped = self._dedupe_results(aggregated)
             return tuple(deduped)
         finally:
             if listener is not None:
@@ -754,6 +837,7 @@ class OnboardingDetector:
                     transport,
                     context,
                     collector_ip=candidate.ip,
+                    collector=candidate.collector,
                 )
 
             return OnboardingResult(
@@ -833,18 +917,11 @@ class OnboardingDetector:
             return
 
         bridge = parse_collector_vdtu(details.get("collector_vdtu_raw"))
+        _apply_collector_cloud_endpoint_details_to_collector(collector, details)
         if not bridge.is_virtual_bridge:
             return
 
-        collector.collector_virtual_bridge = True
-        if bridge.kind:
-            collector.collector_bridge_kind = bridge.kind
-        if bridge.version:
-            collector.collector_bridge_version = bridge.version
-        if bridge.features:
-            collector.collector_bridge_features = tuple(bridge.features)
-        if bridge.attributes:
-            collector.collector_bridge_attributes = tuple(bridge.attributes)
+        _apply_virtual_bridge_info_to_collector(collector, bridge)
 
     async def _async_enrich_onboarding_runtime_details(
         self,
@@ -852,6 +929,7 @@ class OnboardingDetector:
         context: DetectedDriverContext,
         *,
         collector_ip: str,
+        collector: CollectorInfo | None = None,
     ) -> None:
         """Best-effort collector/inverter reads used only to enrich onboarding UI data."""
 
@@ -902,7 +980,9 @@ class OnboardingDetector:
         # unanswered probe leaves no carrier keys, so onboarding behaves exactly
         # as before. The raw VDTU string is intentionally dropped here.
         bridge = parse_collector_vdtu(details.pop("collector_vdtu_raw", None))
+        _apply_collector_cloud_endpoint_details_to_collector(collector, details)
         if bridge.is_virtual_bridge:
+            _apply_virtual_bridge_info_to_collector(collector, bridge)
             details["collector_virtual_bridge"] = True
             if bridge.kind:
                 details["collector_bridge_kind"] = bridge.kind
@@ -1130,8 +1210,88 @@ class OnboardingDetector:
         return tuple(fanout_targets)
 
     @staticmethod
+    def _session_inventory_results(
+        *,
+        listener: Any,
+        discovery_targets: Sequence[DiscoveryTarget],
+        results: Sequence[OnboardingResult],
+    ) -> tuple[OnboardingResult, ...]:
+        if listener is None:
+            return ()
+
+        inventory_provider = getattr(listener, "discovered_collector_sessions", None)
+        if not callable(inventory_provider):
+            return ()
+
+        broadcast_target = next(
+            (target for target in discovery_targets if target.source == "broadcast"),
+            None,
+        )
+        if broadcast_target is None:
+            return ()
+
+        known_pns: set[str] = set()
+        for result in results:
+            collector = result.collector
+            if collector is None:
+                continue
+            collector_info = collector.collector
+            collector_pn = str(
+                (collector_info.collector_pn if collector_info is not None else "")
+                or (result.match.details.get("collector_pn", "") if result.match is not None else "")
+            ).strip()
+            if collector_pn:
+                known_pns.add(collector_pn)
+
+        try:
+            sessions = tuple(inventory_provider())
+        except Exception as exc:
+            logger.debug("Failed to read onboarding callback session inventory: %s", exc)
+            return ()
+
+        materialized: list[OnboardingResult] = []
+        for session in sessions:
+            collector_pn = str(session.get("collector_pn") or "").strip()
+            peer_ip = str(session.get("peer_ip") or "").strip()
+            if (
+                not collector_pn
+                or not peer_ip
+                or any(_collector_identity_matches(known_pn, collector_pn) for known_pn in known_pns)
+            ):
+                continue
+
+            state = str(session.get("state") or "").strip()
+            if state in {"route_identity_mismatch", "waiting_for_route_identity"}:
+                continue
+
+            peer_port_raw = session.get("peer_port")
+            peer_port = peer_port_raw if isinstance(peer_port_raw, int) else None
+            materialized.append(
+                OnboardingResult(
+                    collector=CollectorCandidate(
+                        target_ip=broadcast_target.ip,
+                        source=broadcast_target.source,
+                        ip=peer_ip,
+                        connected=state in {"claimed", "routed_framed", "routed_at_text"},
+                        collector=CollectorInfo(
+                            remote_ip=peer_ip,
+                            remote_port=peer_port,
+                            collector_pn=collector_pn,
+                        ),
+                    ),
+                    connection_type=CONNECTION_TYPE_EYBOND,
+                    connection_mode=broadcast_target.source,
+                    next_action="manual_driver_selection",
+                    last_error="collector_detected_without_driver",
+                )
+            )
+            known_pns.add(collector_pn)
+
+        return tuple(materialized)
+
+    @staticmethod
     def _dedupe_results(results: Sequence[OnboardingResult]) -> list[OnboardingResult]:
-        deduped: dict[tuple[str, str], OnboardingResult] = {}
+        deduped: dict[str, OnboardingResult] = {}
         for result in results:
             collector_key = ""
             if result.collector is not None:
@@ -1143,8 +1303,12 @@ class OnboardingDetector:
                 )
             if not collector_key:
                 collector_key = "unknown_target"
-            match_key = result.match.driver_key if result.match is not None else ""
-            key = (collector_key, match_key)
+
+            key = collector_key
+            for existing_key in deduped:
+                if _collector_identity_matches(existing_key, collector_key):
+                    key = existing_key
+                    break
             existing = deduped.get(key)
             if existing is None or _result_priority(result) > _result_priority(existing):
                 deduped[key] = result

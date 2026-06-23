@@ -52,3 +52,23 @@ async def async_send_payload(
             )
 
     raise TypeError(f"unsupported_link_transport:{type(transport).__name__}:{route.family}")
+
+
+def select_payload_route(
+    transport: Any,
+    route: LinkRoute,
+    *,
+    payload_family: str = "",
+) -> LinkRoute:
+    """Let a concrete transport map a logical route to its wire route.
+
+    Driver code starts with the catalog/default route. Transports whose wire
+    format differs from that default can return a more precise route type.
+    """
+
+    selector = getattr(transport, "select_payload_route", None)
+    if callable(selector):
+        selected = selector(route, payload_family=payload_family)
+        if isinstance(selected, LinkRoute):
+            return selected
+    return route

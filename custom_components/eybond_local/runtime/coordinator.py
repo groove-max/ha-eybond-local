@@ -41,6 +41,10 @@ from ..collector.capabilities import (
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
 )
+from ..collector.transport_profile import (
+    collector_cloud_family_from_entry_context,
+    resolve_collector_transport_profile,
+)
 from ..const import (
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -112,9 +116,6 @@ from ..metadata.local_metadata import (
     create_local_profile_draft,
     create_local_schema_draft,
     rollback_local_metadata_overrides,
-)
-from ..metadata.collector_cloud_profile_catalog_loader import (
-    resolve_collector_cloud_session_protocol,
 )
 from ..metadata.profile_loader import builtin_base_profile_name
 from ..metadata.register_schema_loader import builtin_base_schema_name
@@ -592,6 +593,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         set_overlay_applier = getattr(self._runtime, "set_inverter_overlay_applier", None)
         if callable(set_overlay_applier):
             set_overlay_applier(self._apply_device_overlay_to_inverter)
+        set_snapshot_observer = getattr(
+            self._runtime,
+            "set_runtime_snapshot_observer",
+            None,
+        )
+        if callable(set_snapshot_observer):
+            set_snapshot_observer(self._publish_runtime_intermediate_snapshot)
         super().__init__(
             hass,
             logger,
@@ -952,6 +960,35 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         return changed
 
+    async def _async_reconcile_collector_session_profile(self, *, reason: str) -> bool:
+        """Align the runtime link with the best known collector cloud profile."""
+
+        protocol = self.collector_session_protocol
+        identity_strategy = self.collector_identity_strategy
+        if not protocol and not identity_strategy:
+            return False
+
+        reconcile = getattr(self._runtime, "async_reconcile_collector_session_profile", None)
+        if reconcile is None:
+            return False
+
+        changed = bool(
+            await reconcile(
+                collector_session_protocol=protocol,
+                collector_identity_strategy=identity_strategy,
+                reason=reason,
+            )
+        )
+        if changed:
+            logger.warning(
+                "Reconciled EyeBond collector session profile for entry %s after %s: protocol=%s identity=%s",
+                self.config_entry.entry_id,
+                reason or "collector_session_profile_change",
+                protocol or "unknown",
+                identity_strategy or "unknown",
+            )
+        return changed
+
     def mark_entity_platforms_initialized(
         self,
         *,
@@ -1122,6 +1159,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def collector_operation_mode(self) -> str:
         """Return the persisted collector callback ownership mode."""
 
+        if self.collector_capabilities.ha_only_required:
+            return COLLECTOR_OPERATION_HA_ONLY
+
         mode = str(
             self.config_entry.options.get(
                 CONF_COLLECTOR_OPERATION_MODE,
@@ -1141,6 +1181,31 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Return whether Home Assistant owns the collector callback endpoint."""
 
         return self.collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
+
+    def _sync_forced_collector_operation_mode(self) -> None:
+        """Persist forced HA-only mode once runtime proves the collector requires it."""
+
+        capabilities = self.collector_capabilities
+        if not capabilities.ha_only_required:
+            return
+
+        data = dict(self.config_entry.data)
+        options = dict(self.config_entry.options)
+        changed = False
+        if data.get(CONF_COLLECTOR_OPERATION_MODE) != COLLECTOR_OPERATION_HA_ONLY:
+            data[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
+            changed = True
+        if options.get(CONF_COLLECTOR_OPERATION_MODE) != COLLECTOR_OPERATION_HA_ONLY:
+            options[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
+            changed = True
+        if capabilities.virtual_bridge and not data.get("collector_virtual_bridge"):
+            data["collector_virtual_bridge"] = True
+            changed = True
+        if capabilities.virtual_bridge and not options.get("collector_virtual_bridge"):
+            options["collector_virtual_bridge"] = True
+            changed = True
+        if changed:
+            self._async_update_entry_without_reload(data=data, options=options)
 
     def _collector_is_virtual_bridge(self) -> bool:
         """Return True when the running collector is a detected virtual bridge.
@@ -1177,14 +1242,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         if set_reverse_discovery_enabled is None:
             return
+        current_endpoint = ""
+        snapshot = getattr(self, "data", None)
+        values = getattr(snapshot, "values", None)
+        if isinstance(values, dict):
+            current_endpoint = str(values.get("collector_server_endpoint") or "").strip()
+        endpoint_already_targets_ha = bool(
+            current_endpoint
+            and self._endpoint_host_targets_this_home_assistant(current_endpoint)
+        )
         # HA-only normally disables steady reverse discovery, because a factory
         # collector reconnects to the persisted (param-21-written) endpoint on
         # its own. A virtual bridge has no cloud fallback, and older bridge
         # firmware may not persist that endpoint, so keep reverse discovery
-        # ENABLED even when forced to HA-only.
+        # ENABLED even when forced to HA-only unless its live endpoint already
+        # points at this HA host. For any collector mode, once CLDSRVHOST1 is
+        # already local, repeated UDP redirects are redundant.
         keep_reverse_discovery = (
-            not self.collector_home_assistant_primary
-            or self._collector_is_virtual_bridge()
+            not endpoint_already_targets_ha
+            and (
+                not self.collector_home_assistant_primary
+                or self._collector_is_virtual_bridge()
+            )
         )
         set_reverse_discovery_enabled(keep_reverse_discovery)
 
@@ -1236,6 +1315,27 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return str(
             getattr(self._connection_spec, "effective_advertised_server_ip", "") or ""
         ).strip()
+
+    def _endpoint_host_targets_this_home_assistant(self, endpoint: str) -> bool:
+        """Return whether one collector endpoint is explicitly aimed at this HA host."""
+
+        try:
+            host, _port, _protocol = _parse_collector_server_endpoint(endpoint)
+        except ValueError:
+            return False
+
+        normalized_host = str(host or "").strip().lower()
+        if not normalized_host:
+            return False
+
+        candidate_hosts = {
+            str(self._effective_callback_server_host or "").strip().lower(),
+            str(getattr(self._runtime, "effective_advertised_server_ip", "") or "").strip().lower(),
+            str(getattr(self._connection_spec, "effective_advertised_server_ip", "") or "").strip().lower(),
+            str(getattr(self._connection_spec, "server_ip", "") or "").strip().lower(),
+        }
+        candidate_hosts.discard("")
+        return normalized_host in candidate_hosts
 
     async def _async_prepare_home_assistant_callback_listener(self, endpoint: str) -> None:
         ensure_listener = getattr(self._runtime, "async_ensure_callback_listener", None)
@@ -1819,6 +1919,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Refresh runtime data while holding the shared transport operation lock."""
 
         await self._async_reconcile_network(reason="refresh")
+        await self._async_reconcile_collector_session_profile(reason="refresh")
         snapshot = await self._runtime.async_refresh(
             poll_interval=float(
                 self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
@@ -1832,6 +1933,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # Keep self.data aligned with the fresh snapshot before helpers that
         # inspect coordinator state instead of the local snapshot argument.
         self.data = snapshot
+        self._sync_forced_collector_operation_mode()
+        self._configure_reverse_discovery_mode()
         await self._async_warm_effective_metadata_cache()
         collector_cloud_family = self.collector_cloud_family
         if collector_cloud_family:
@@ -1922,6 +2025,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         await _async_self_heal_sensor_display_precision(self.hass, self.config_entry)
         self.async_sync_device_registry(snapshot)
         return snapshot
+
+    def _publish_runtime_intermediate_snapshot(self, snapshot: RuntimeSnapshot) -> None:
+        """Publish collector state while the runtime is still probing the inverter."""
+
+        snapshot.values["connection_type"] = self.config_entry.data.get(
+            CONF_CONNECTION_TYPE,
+            "eybond",
+        )
+        snapshot.values["collector_operation_mode"] = self.collector_operation_mode
+        snapshot.values["detection_confidence"] = self.detection_confidence
+        snapshot.values["control_mode"] = self.control_mode
+        snapshot.values["controls_enabled"] = self.controls_enabled
+        snapshot.values["control_policy_reason"] = self.controls_reason
+        snapshot.values["control_policy_summary"] = self.controls_summary
+        self.data = snapshot
+        self.async_set_updated_data(snapshot)
 
     async def async_write_capability(self, capability_key: str, value: Any) -> Any:
         """Write one inverter capability and refresh coordinator state."""
@@ -2031,7 +2150,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             apply_changes=apply_changes,
         )
         if not apply_changes:
+            self._publish_snapshot_values(
+                collector_callback_endpoint_pending=normalized_endpoint,
+                collector_callback_endpoint_pending_apply_required=True,
+            )
             await self.async_request_refresh()
+        else:
+            self._publish_snapshot_values(
+                collector_callback_endpoint_pending=None,
+                collector_callback_endpoint_pending_apply_required=None,
+            )
         return result
 
     async def async_bind_collector_to_home_assistant(
@@ -2048,6 +2176,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         target_endpoint = self.collector_callback_target_endpoint
         current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
         if current_endpoint == target_endpoint:
+            self._publish_snapshot_values(
+                collector_callback_endpoint_pending=None,
+                collector_callback_endpoint_pending_apply_required=None,
+            )
             return {
                 "status": "already_bound",
                 "requested_endpoint": target_endpoint,
@@ -2061,6 +2193,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             apply_changes=True,
         )
         result["target_role"] = "home_assistant"
+        self._publish_snapshot_values(
+            collector_callback_endpoint_pending=None,
+            collector_callback_endpoint_pending_apply_required=None,
+        )
         return result
 
     async def async_apply_collector_changes(
@@ -2073,7 +2209,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._raise_if_high_level_collector_actions_disabled()
         if not confirm_restart:
             raise ValueError("collector_apply_requires_confirmation")
-        return await self._runtime.async_apply_collector_changes()
+        result = await self._runtime.async_apply_collector_changes()
+        self._publish_snapshot_values(
+            collector_callback_endpoint_pending=None,
+            collector_callback_endpoint_pending_apply_required=None,
+        )
+        return result
 
     async def async_trigger_collector_rediscovery(self) -> dict[str, object]:
         """Send one explicit bootstrap discovery probe to recover collector connectivity."""
@@ -2141,7 +2282,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         result["rollback_endpoint"] = rollback_endpoint
         result.setdefault("target_role", "smartess")
         if not apply_changes:
+            self._publish_snapshot_values(
+                collector_callback_endpoint_pending=rollback_endpoint,
+                collector_callback_endpoint_pending_apply_required=True,
+            )
             await self.async_request_refresh()
+        else:
+            self._publish_snapshot_values(
+                collector_callback_endpoint_pending=None,
+                collector_callback_endpoint_pending_apply_required=None,
+            )
         return result
 
     async def async_start_proxy_capture(
@@ -3057,19 +3207,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return family
         config_entry = getattr(self, "config_entry", None)
         config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
-        family = _known_collector_cloud_family(
-            config_data.get(CONF_COLLECTOR_CLOUD_FAMILY, "")
+        config_options = getattr(config_entry, "options", {}) if config_entry is not None else {}
+
+        endpoint_candidates = (
+            self.data.values.get("collector_server_endpoint"),
+            self.collector_server_endpoint_rollback_target,
+            getattr(self, "_remembered_collector_server_endpoint", ""),
+        )
+        family = collector_cloud_family_from_entry_context(
+            config_data,
+            config_options,
+            extra_endpoints=endpoint_candidates,
         )
         if family:
             return family
 
-        config_options = getattr(config_entry, "options", {}) if config_entry is not None else {}
-        for endpoint in (
-            self.data.values.get("collector_server_endpoint"),
-            self.collector_server_endpoint_rollback_target,
-            getattr(self, "_remembered_collector_server_endpoint", ""),
-            config_options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, ""),
-        ):
+        for endpoint in (*endpoint_candidates, config_options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, "")):
             family = _collector_cloud_family_from_endpoint_shape(endpoint)
             if family:
                 return family
@@ -3079,7 +3232,37 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def collector_session_protocol(self) -> str:
         """Return the callback session protocol implied by the cloud profile."""
 
-        return resolve_collector_cloud_session_protocol(self.collector_cloud_family)
+        return self.collector_transport_profile.session_protocol
+
+    @property
+    def collector_identity_strategy(self) -> str:
+        """Return the collector identity strategy implied by the cloud profile."""
+
+        return self.collector_transport_profile.identity_strategy
+
+    @property
+    def collector_transport_profile(self):
+        """Return the resolved callback transport profile for this runtime."""
+
+        return resolve_collector_transport_profile(
+            cloud_family=self.collector_cloud_family,
+            runtime_owner_key=self._collector_runtime_owner_key(),
+        )
+
+    def _collector_runtime_owner_key(self) -> str:
+        """Return the best known local inverter runtime owner for transport choice."""
+
+        for source in (self.config_entry.options, self.config_entry.data):
+            driver_hint = str(
+                source.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO) or DRIVER_HINT_AUTO
+            ).strip().lower()
+            if driver_hint and driver_hint != DRIVER_HINT_AUTO:
+                return driver_hint
+
+        owner_key = str(self.effective_metadata_snapshot.effective_owner_key or "").strip().lower()
+        if owner_key:
+            return owner_key
+        return str(self.effective_owner_key or "").strip().lower()
 
     @property
     def collector_cloud_profile_key(self) -> str:
@@ -3230,6 +3413,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         mode_apply_lock_code = self.collector_operation_mode_apply_lock_code()
         if mode_apply_lock_code is not None:
             return mode_apply_lock_code
+        if (
+            self.collector_capabilities.ha_only_required
+            and str(target_mode or "").strip() == COLLECTOR_OPERATION_SMARTESS_AND_HA
+        ):
+            return "collector_operation_mode_target_unavailable"
         if not self.data.connected:
             return "collector_operation_mode_collector_not_connected"
 

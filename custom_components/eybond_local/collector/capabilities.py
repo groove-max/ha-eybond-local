@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .at_runtime import parse_collector_vdtu
 from ..const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
@@ -104,9 +105,11 @@ def collector_capability_profile_from_runtime(
     runtime_values = values or {}
     entry_data = data or {}
     entry_options = options or {}
+    bridge_from_vdtu = parse_collector_vdtu(runtime_values.get("collector_vdtu_raw"))
     is_bridge = bool(
         getattr(collector, "collector_virtual_bridge", False)
         or runtime_values.get("collector_virtual_bridge")
+        or bridge_from_vdtu.is_virtual_bridge
         or entry_data.get("collector_virtual_bridge")
         or entry_options.get("collector_virtual_bridge")
     )
@@ -123,4 +126,3 @@ def collector_capability_profile_from_runtime(
         cloud_profile_key=profile_key,
         hardware_version=resolved_hardware,
     )
-

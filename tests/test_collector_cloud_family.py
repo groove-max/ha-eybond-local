@@ -43,6 +43,28 @@ class CollectorCloudFamilyTests(unittest.TestCase):
         self.assertEqual(observation.source, COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST)
         self.assertEqual(observation.confidence, "low")
 
+    def test_classifies_host_only_valuecloud_endpoint(self) -> None:
+        observation = collector_cloud_family_observation_from_endpoint("iot.eybond.com")
+
+        self.assertEqual(observation.family, "valuecloud_at")
+        self.assertEqual(observation.source, COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST)
+        self.assertEqual(observation.confidence, "low")
+
+    def test_explicit_known_host_wins_over_shared_18899_port(self) -> None:
+        smartvalue = collector_cloud_family_observation_from_endpoint(
+            "m2m.eybond.com,18899,TCP"
+        )
+        valuecloud = collector_cloud_family_observation_from_endpoint(
+            "iot.eybond.com,18899,TCP"
+        )
+
+        self.assertEqual(smartvalue.family, "smartvalue_at")
+        self.assertEqual(valuecloud.family, "valuecloud_at")
+        self.assertEqual(smartvalue.source, COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST)
+        self.assertEqual(valuecloud.source, COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST)
+        self.assertEqual(smartvalue.confidence, "high")
+        self.assertEqual(valuecloud.confidence, "high")
+
     def test_classifies_explicit_legacy_port(self) -> None:
         observation = collector_cloud_family_observation_from_endpoint("collector.local,502,TCP")
 
@@ -70,6 +92,7 @@ class CollectorCloudFamilyTests(unittest.TestCase):
         self.assertEqual(default_collector_cloud_host("legacy_binary"), "ess.eybond.com")
         self.assertEqual(default_collector_cloud_host("smartess_at"), "dtu_ess.eybond.com")
         self.assertEqual(default_collector_cloud_host("smartvalue_at"), "m2m.eybond.com")
+        self.assertEqual(default_collector_cloud_host("valuecloud_at"), "iot.eybond.com")
         self.assertEqual(default_collector_cloud_host("unknown"), "")
 
 

@@ -453,6 +453,7 @@ class CollectorInfo:
     collector_cloud_family: str = ""
     collector_cloud_family_source: str = ""
     collector_cloud_family_confidence: str = ""
+    collector_server_endpoint: str = ""
     collector_cloud_profile_key: str = ""
     collector_cloud_profile_label: str = ""
     collector_cloud_profile_source: str = ""

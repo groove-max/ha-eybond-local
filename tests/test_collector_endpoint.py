@@ -182,6 +182,19 @@ class CollectorEndpointTests(unittest.TestCase):
         self.assertEqual(parsed.protocol, "TCP")
         self.assertEqual(resolve_collector_cloud_family_by_host(parsed.host), "smartvalue_at")
 
+    def test_parse_preserves_valuecloud_endpoint_shape_for_host_based_family_resolution(self) -> None:
+        parsed = inspect_collector_server_endpoint(
+            "iot.eybond.com,18899,TCP",
+            require_explicit_port=True,
+            require_explicit_protocol=True,
+            require_tcp=True,
+        )
+
+        self.assertEqual(parsed.host, "iot.eybond.com")
+        self.assertEqual(parsed.port, 18899)
+        self.assertEqual(parsed.protocol, "TCP")
+        self.assertEqual(resolve_collector_cloud_family_by_host(parsed.host), "valuecloud_at")
+
     def test_resolve_uses_family_default_for_host_only_legacy_endpoint(self) -> None:
         self.assertEqual(default_collector_server_port(cloud_family="legacy_binary"), 502)
         self.assertEqual(default_collector_server_port(cloud_family="smartess_at"), 18899)

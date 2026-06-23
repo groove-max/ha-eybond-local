@@ -11,8 +11,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.link_models import EybondLinkRoute
-from custom_components.eybond_local.link_transport import async_send_payload
+from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.link_transport import async_send_payload, select_payload_route
 from custom_components.eybond_local.models import ProbeTarget
 
 
@@ -38,6 +38,11 @@ class _NativeRouteTransport:
     async def async_send_payload(self, payload: bytes, *, route) -> bytes:
         self.calls.append((payload, route.family))
         return b"native"
+
+
+class _SelectingTransport:
+    def select_payload_route(self, route, *, payload_family: str = ""):
+        return RawSerialLinkRoute(protocol=payload_family)
 
 
 class LinkTransportTests(unittest.TestCase):
@@ -67,6 +72,20 @@ class LinkTransportTests(unittest.TestCase):
 
         self.assertEqual(response, b"native")
         self.assertEqual(transport.calls, [(b"ping", "eybond")])
+
+    def test_select_payload_route_uses_transport_selector(self) -> None:
+        selected = select_payload_route(
+            _SelectingTransport(),
+            EybondLinkRoute(devcode=0x0994, collector_addr=0x01),
+            payload_family="pi30_ascii",
+        )
+
+        self.assertEqual(selected, RawSerialLinkRoute(protocol="pi30_ascii"))
+
+    def test_select_payload_route_keeps_default_without_selector(self) -> None:
+        route = EybondLinkRoute(devcode=0x0994, collector_addr=0x01)
+
+        self.assertIs(select_payload_route(object(), route, payload_family="pi30_ascii"), route)
 
 
 if __name__ == "__main__":

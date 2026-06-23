@@ -6,12 +6,21 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 from .at import CollectorAtResponse
+from .cloud_family import collector_cloud_family_observation_from_endpoint
 from .signal import merge_collector_signal_values, normalize_signal_strength
 
 # Literal prefix every virtual bridge (e.g. ESP EyeBond Collector) emits as the
 # first token of its ``AT+VDTU?`` reply. Factory collectors return an error,
 # empty value, or a reply without this prefix — absence means "factory/unknown".
 VIRTUAL_BRIDGE_PREFIX = "esp-collector,"
+VIRTUAL_BRIDGE_REBOOT_FEATURES = frozenset(
+    {
+        "reboot",
+        "restart",
+        "collector_reboot",
+        "collector_restart",
+    }
+)
 
 
 class CollectorAtQueryTransport(Protocol):
@@ -52,6 +61,19 @@ def _decode_signal_strength(response: CollectorAtResponse) -> dict[str, object]:
     return values
 
 
+def _decode_collector_server_endpoint(response: CollectorAtResponse) -> dict[str, object]:
+    endpoint = str(response.value or "").strip()
+    values: dict[str, object] = {
+        "collector_server_endpoint": endpoint,
+    }
+    observation = collector_cloud_family_observation_from_endpoint(endpoint)
+    if observation.known:
+        values["collector_cloud_family"] = observation.family
+        values["collector_cloud_family_source"] = observation.source
+        values["collector_cloud_family_confidence"] = observation.confidence
+    return values
+
+
 RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
     CollectorAtQueryDefinition("DTUPN", "Collector PN / serial.", _decode_text_value("collector_pn")),
     CollectorAtQueryDefinition(
@@ -88,7 +110,7 @@ RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
     CollectorAtQueryDefinition(
         "CLDSRVHOST1",
         "Collector cloud callback endpoint.",
-        _decode_text_value("collector_server_endpoint"),
+        _decode_collector_server_endpoint,
     ),
     CollectorAtQueryDefinition(
         "HTBT",
@@ -122,6 +144,24 @@ class CollectorVirtualBridgeInfo:
     version: str = ""
     features: tuple[str, ...] = ()
     attributes: tuple[tuple[str, str], ...] = ()
+
+
+def collector_bridge_features_support_reboot(features: object) -> bool:
+    """Return whether a parsed virtual-bridge feature set advertises restart support."""
+
+    if isinstance(features, str):
+        tokens = features.split(",")
+    else:
+        try:
+            tokens = tuple(features or ())
+        except TypeError:
+            tokens = ()
+    normalized = {
+        str(token or "").strip().lower().replace("-", "_")
+        for token in tokens
+        if str(token or "").strip()
+    }
+    return bool(normalized & VIRTUAL_BRIDGE_REBOOT_FEATURES)
 
 
 def parse_collector_vdtu(raw: object) -> CollectorVirtualBridgeInfo:

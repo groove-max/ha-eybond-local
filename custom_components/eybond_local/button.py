@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .collector_endpoint import normalize_collector_server_endpoint
+from .collector.at_runtime import collector_bridge_features_support_reboot
 from .collector.entity_scope import is_collector_tooling_key
 from .metadata.collector_cloud_profile_catalog_loader import load_collector_cloud_profile_catalog
 from .runtime.coordinator import EybondLocalCoordinator
@@ -199,6 +200,35 @@ def _callback_owner_label_from_family(
     return normalized
 
 
+def _collector_bridge_values(coordinator: EybondLocalCoordinator) -> tuple[bool, str, object]:
+    snapshot = coordinator.data
+    values = snapshot.values
+    collector = snapshot.collector
+    virtual_bridge = bool(values.get("collector_virtual_bridge")) or bool(
+        getattr(collector, "collector_virtual_bridge", False)
+    )
+    kind = str(
+        values.get("collector_bridge_kind")
+        or getattr(collector, "collector_bridge_kind", "")
+        or ""
+    ).strip()
+    features = (
+        values.get("collector_bridge_features")
+        or getattr(collector, "collector_bridge_features", ())
+        or ()
+    )
+    if kind.lower() == "esp-collector":
+        virtual_bridge = True
+    return virtual_bridge, kind, features
+
+
+def _collector_bridge_reboot_supported(coordinator: EybondLocalCoordinator) -> bool:
+    virtual_bridge, _, features = _collector_bridge_values(coordinator)
+    if not virtual_bridge:
+        return True
+    return collector_bridge_features_support_reboot(features)
+
+
 class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity):
     """One preset button backed by the declarative preset schema."""
 
@@ -378,6 +408,14 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return "Requires Auto or Full Control."
         if not self.coordinator.data.connected:
             return "Collector is not connected."
+        if (
+            self._spec.key == "reboot_collector"
+            and not _collector_bridge_reboot_supported(self.coordinator)
+        ):
+            return (
+                "Collector restart is not advertised by this virtual collector firmware. "
+                "Update the firmware to a build that exposes the reboot capability."
+            )
         if self._spec.key == "bind_collector_to_home_assistant":
             current_endpoint = _normalize_collector_endpoint(
                 self.coordinator.data.values.get("collector_server_endpoint")

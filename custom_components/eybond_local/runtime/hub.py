@@ -16,7 +16,12 @@ from ..const import (
     DRIVER_HINT_AUTO,
 )
 from ..connection.models import EybondConnectionSpec
-from ..collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
+from ..collector.at_runtime import (
+    collector_bridge_features_support_reboot,
+    parse_collector_vdtu,
+    query_runtime_collector_at_values,
+)
+from ..collector.capabilities import collector_capability_profile_from_runtime
 from ..collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     inspect_collector_server_endpoint,
@@ -417,6 +422,7 @@ class EybondHub:
         self._inverter_overlay_applier: (
             Callable[[DetectedInverter, Any], DetectedInverter] | None
         ) = None
+        self._snapshot_observer: Callable[[RuntimeSnapshot], None] | None = None
         self._last_snapshot = RuntimeSnapshot()
         self._runtime_read_state: dict[str, Any] = {}
         self._collector_runtime_values: dict[str, object] = {}
@@ -447,6 +453,21 @@ class EybondHub:
 
         return await self._link_manager.async_reconcile_network(reason=reason)
 
+    async def async_reconcile_collector_session_profile(
+        self,
+        *,
+        collector_session_protocol: str,
+        collector_identity_strategy: str,
+        reason: str = "collector_session_profile_change",
+    ) -> bool:
+        """Rebuild link transports after a runtime-learned collector profile change."""
+
+        return await self._link_manager.async_reconcile_collector_session_profile(
+            collector_session_protocol=collector_session_protocol,
+            collector_identity_strategy=collector_identity_strategy,
+            reason=reason,
+        )
+
     def set_inverter_overlay_applier(
         self, applier: Callable[[DetectedInverter, Any], DetectedInverter] | None
     ) -> None:
@@ -458,6 +479,14 @@ class EybondHub:
         """
 
         self._inverter_overlay_applier = applier
+
+    def set_runtime_snapshot_observer(
+        self,
+        observer: Callable[[RuntimeSnapshot], None] | None,
+    ) -> None:
+        """Install a best-effort observer for intermediate runtime snapshots."""
+
+        self._snapshot_observer = observer
 
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:
         """Pass reverse-discovery policy changes through to the runtime link layer."""
@@ -667,6 +696,10 @@ class EybondHub:
         collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
 
         if self._driver is None or self._inverter is None:
+            self._publish_intermediate_snapshot(
+                collector_values,
+                status="detecting_inverter",
+            )
             detect_error = await self._async_detect_driver()
             if self._driver is None or self._inverter is None:
                 logger.warning("Driver detection failed: %s", detect_error)
@@ -824,6 +857,28 @@ class EybondHub:
         values = dict(self._collector_runtime_values)
         values.update(self._collector_at_runtime_values)
         return values
+
+    def _publish_intermediate_snapshot(
+        self,
+        collector_values: dict[str, object],
+        *,
+        status: str,
+    ) -> None:
+        """Publish known collector state before a potentially slow inverter probe."""
+
+        if self._snapshot_observer is None:
+            return
+        snapshot = self._build_snapshot(
+            extra_values={
+                **collector_values,
+                "runtime_detection_status": status,
+            }
+        )
+        self._last_snapshot = snapshot
+        try:
+            self._snapshot_observer(snapshot)
+        except Exception:
+            logger.debug("Runtime intermediate snapshot observer failed", exc_info=True)
 
     async def async_write_capability(
         self,
@@ -1099,6 +1154,11 @@ class EybondHub:
         if self._driver is None or self._inverter is None:
             detect_error = await self._async_detect_driver()
             if self._driver is None or self._inverter is None:
+                if (
+                    self._collector_capabilities().virtual_bridge
+                    and "probe_timeout" in str(detect_error or "")
+                ):
+                    return self._collector_only_support_evidence(detect_error)
                 return await self._async_capture_generic_support_evidence(detect_error)
 
         try:
@@ -1121,6 +1181,30 @@ class EybondHub:
                 raise
 
         return evidence
+
+    def _collector_capabilities(self):
+        """Return collector capabilities from current hub runtime evidence."""
+
+        return collector_capability_profile_from_runtime(
+            collector=getattr(self._link_manager, "collector_info", None),
+            values=self._combined_collector_runtime_values(),
+        )
+
+    def _collector_only_support_evidence(self, detect_error: str) -> dict[str, object]:
+        """Return bounded support evidence when a local bridge has no inverter link."""
+
+        return {
+            "capture_kind": "collector_only",
+            "driver_hint": self._driver_hint,
+            "connection_mode": self._connection_mode,
+            "detection_error": detect_error or "collector_link_probe_timeout",
+            "captures": [],
+            "range_failures": [],
+            "note": (
+                "Local bridge was detected, but no downstream inverter replied during "
+                "driver detection; generic register scans were skipped."
+            ),
+        }
 
     async def _async_capture_generic_support_evidence(
         self,
@@ -1218,6 +1302,19 @@ class EybondHub:
         """Run collector parameter 29 for apply/reboot intent without changing endpoint state."""
 
         await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
+
+        collector = getattr(self._link_manager, "collector_info", None)
+        is_virtual_bridge = bool(getattr(collector, "collector_virtual_bridge", False))
+        bridge_kind = str(getattr(collector, "collector_bridge_kind", "") or "").strip()
+        if bridge_kind.lower() == "esp-collector":
+            is_virtual_bridge = True
+        bridge_features = getattr(collector, "collector_bridge_features", ()) or ()
+        if (
+            action == "reboot"
+            and is_virtual_bridge
+            and not collector_bridge_features_support_reboot(bridge_features)
+        ):
+            raise RuntimeError("collector_reboot_not_supported")
 
         transport = self._link_manager.transport
         if not hasattr(transport, "async_send_collector"):

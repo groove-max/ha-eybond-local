@@ -28,8 +28,11 @@ from custom_components.eybond_local.collector.transport import (
 from custom_components.eybond_local.collector.protocol import (
     HEADER_SIZE,
     build_collector_request,
+    build_heartbeat_request,
     decode_header,
 )
+from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.payload.pi30 import build_request, crc16_xmodem
 
 
 def _free_tcp_port() -> int:
@@ -402,6 +405,106 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("203.0.113.10", listener._connections)
         self.assertNotIn("PN-ONE", listener._connections_by_pn)
         self.assertNotIn("session-one", listener._session_payload_connections)
+
+    async def test_release_collector_connections_closes_target_pn_on_shared_peer_ip(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_payload_owner("203.0.113.10")
+        listener.register_payload_pn_owner("PN-TWO")
+
+        removed_connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        removed_writer = _FakeWriter()
+        removed_connection._writer = removed_writer  # type: ignore[assignment]
+        remaining_connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        remaining_writer = _FakeWriter()
+        remaining_connection._writer = remaining_writer  # type: ignore[assignment]
+        listener._connections["203.0.113.10:one"] = removed_connection
+        listener._connections["203.0.113.10:two"] = remaining_connection
+        listener._connections_by_pn["PN-ONE"] = removed_connection
+        listener._connections_by_pn["PN-TWO"] = remaining_connection
+        listener._session_payload_connections["session-one"] = removed_connection
+        listener._session_payload_connections["session-two"] = remaining_connection
+
+        await listener.release_collector_connections(
+            "203.0.113.10",
+            "PN-ONE",
+            close_payload=True,
+            close_pending=True,
+        )
+
+        self.assertTrue(removed_writer.closed)
+        self.assertFalse(remaining_writer.closed)
+        self.assertNotIn("203.0.113.10:one", listener._connections)
+        self.assertIn("203.0.113.10:two", listener._connections)
+        self.assertNotIn("PN-ONE", listener._connections_by_pn)
+        self.assertIn("PN-TWO", listener._connections_by_pn)
+        self.assertNotIn("session-one", listener._session_payload_connections)
+        self.assertIn("session-two", listener._session_payload_connections)
+
+    async def test_release_collector_connections_keeps_connection_when_pn_prefix_owner_remains(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_payload_pn_owner("E5000020000000")
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        writer = _FakeWriter()
+        connection._writer = writer  # type: ignore[assignment]
+        listener._connections["203.0.113.10"] = connection
+        listener._connections_by_pn["E50000200000009777"] = connection
+
+        await listener.release_collector_connections(
+            "",
+            "E50000200000009777",
+            close_payload=True,
+        )
+
+        self.assertFalse(writer.closed)
+        self.assertIn("203.0.113.10", listener._connections)
+        self.assertIn("E50000200000009777", listener._connections_by_pn)
+
+    async def test_release_at_connections_closes_target_pn_on_shared_peer_ip(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_at_owner("203.0.113.10")
+        listener.register_at_pn_owner("PN-TWO")
+
+        removed_connection = _CollectorAtConnection(
+            remote_ip_hint="203.0.113.10",
+            write_timeout=0.5,
+        )
+        removed_writer = _FakeWriter()
+        removed_connection._writer = removed_writer  # type: ignore[assignment]
+        remaining_connection = _CollectorAtConnection(
+            remote_ip_hint="203.0.113.10",
+            write_timeout=0.5,
+        )
+        remaining_writer = _FakeWriter()
+        remaining_connection._writer = remaining_writer  # type: ignore[assignment]
+        listener._at_connections["203.0.113.10:one"] = removed_connection
+        listener._at_connections["203.0.113.10:two"] = remaining_connection
+        listener._at_connections_by_pn["PN-ONE"] = removed_connection
+        listener._at_connections_by_pn["PN-TWO"] = remaining_connection
+
+        await listener.release_collector_connections(
+            "203.0.113.10",
+            "PN-ONE",
+            close_at=True,
+        )
+
+        self.assertTrue(removed_writer.closed)
+        self.assertFalse(remaining_writer.closed)
+        self.assertNotIn("203.0.113.10:one", listener._at_connections)
+        self.assertIn("203.0.113.10:two", listener._at_connections)
+        self.assertNotIn("PN-ONE", listener._at_connections_by_pn)
+        self.assertIn("PN-TWO", listener._at_connections_by_pn)
 
     async def test_listener_routes_initial_framed_identity_to_pn_owner(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -1683,6 +1786,180 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 await client_task
                 await at_transport.stop()
                 await framed.stop()
+
+    async def test_at_connection_skips_binary_heartbeat_before_at_response(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_mixed_heartbeat",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            query_task = asyncio.create_task(connection.async_query("VDTU", request_timeout=1.0))
+            await asyncio.sleep(0)
+            self.assertEqual(bytes(writer.buffer), b"AT+VDTU?\r\n")
+
+            reader.feed_data(build_heartbeat_request(7, 60))
+            reader.feed_data(
+                b"AT+VDTU:esp-collector,0.1.2;features=local_only,no_cloud;"
+                b"uart=2400,8,1,NONE\r\n"
+            )
+
+            response = await query_task
+
+            self.assertEqual(response.command, "VDTU")
+            self.assertTrue(response.value.startswith("esp-collector,0.1.2"))
+            self.assertEqual(connection.collector_info.heartbeat_devcode, 0)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_connection_supports_raw_pi30_payload_response(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_pi30_raw_payload",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            request = build_request("QPI")
+            query_task = asyncio.create_task(
+                connection.async_send_raw_payload(request, request_timeout=1.0)
+            )
+            await asyncio.sleep(0)
+            self.assertEqual(bytes(writer.buffer), request)
+
+            reader.feed_data(b"(PI30\x8f\x0b\r")
+            response = await query_task
+
+            self.assertEqual(response, b"(PI30\x8f\x0b\r")
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_connection_supports_raw_pi18_payload_response(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_pi18_raw_payload",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            request = b"^P005PI\xde\xad\r"
+            query_task = asyncio.create_task(
+                connection.async_send_raw_payload(request, request_timeout=1.0)
+            )
+            await asyncio.sleep(0)
+            self.assertEqual(bytes(writer.buffer), request)
+
+            body = b"^D00518"
+            crc = crc16_xmodem(body)
+            response_frame = body + bytes(((crc >> 8) & 0xFF, crc & 0xFF)) + b"\r"
+            reader.feed_data(response_frame)
+            response = await query_task
+
+            self.assertEqual(response, response_frame)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_transport_sends_payload_as_raw_ascii(self) -> None:
+        port = _free_tcp_port()
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=port,
+            request_timeout=1.0,
+            collector_ip="127.0.0.1",
+            collector_session_protocol="at_text",
+            collector_identity_strategy="at_dtupn",
+        )
+        connected = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _collector_client() -> None:
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            try:
+                connected.set()
+                data = await asyncio.wait_for(reader.readuntil(b"\r"), timeout=1.0)
+                self.assertEqual(data, build_request("QPI"))
+                writer.write(b"(PI30\x8f\x0b\r")
+                await writer.drain()
+                await asyncio.wait_for(release.wait(), timeout=1.0)
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        await transport.start()
+        client_task = asyncio.create_task(_collector_client())
+        try:
+            await asyncio.wait_for(connected.wait(), timeout=1.0)
+            self.assertTrue(await transport.wait_until_connected(1.0))
+            selected_route = transport.select_payload_route(
+                EybondLinkRoute(devcode=0x0994, collector_addr=0xFF),
+                payload_family="pi30_ascii",
+            )
+            self.assertEqual(
+                selected_route,
+                RawSerialLinkRoute(protocol="pi30_ascii"),
+            )
+            response = await transport.async_send_payload(
+                build_request("QPI"),
+                route=selected_route,
+            )
+            self.assertEqual(response, b"(PI30\x8f\x0b\r")
+        finally:
+            release.set()
+            await client_task
+            await transport.stop()
+
+    async def test_at_connection_records_valuecloud_endpoint_metadata(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_endpoint",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            query_task = asyncio.create_task(
+                connection.async_query("CLDSRVHOST1", request_timeout=1.0)
+            )
+            await asyncio.sleep(0)
+            self.assertEqual(bytes(writer.buffer), b"AT+CLDSRVHOST1?\r\n")
+
+            reader.feed_data(b"AT+CLDSRVHOST1:iot.eybond.com,18899,TCP\r\n")
+            response = await query_task
+
+            self.assertEqual(response.command, "CLDSRVHOST1")
+            collector = connection.collector_info
+            self.assertEqual(collector.collector_server_endpoint, "iot.eybond.com,18899,TCP")
+            self.assertEqual(collector.collector_cloud_family, "valuecloud_at")
+            self.assertEqual(collector.collector_cloud_family_source, "endpoint_host")
+            self.assertEqual(collector.collector_cloud_family_confidence, "high")
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
 
 
 if __name__ == "__main__":

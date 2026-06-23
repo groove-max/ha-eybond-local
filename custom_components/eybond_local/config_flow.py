@@ -56,6 +56,7 @@ from .connection.models import build_connection_spec, build_connection_spec_from
 from .connection.ui import ConnectionFormField
 from .const import (
     CONF_ADVERTISED_TCP_PORT,
+    CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
@@ -141,17 +142,15 @@ from .collector.smartess_ble import (
     normalize_discovered_candidate,
     parse_wifi_scan_response,
 )
-from .collector.transport import SharedEybondTransport, _finish_cleanup_on_cancel
+from .collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
+from .collector.transport import SharedCollectorAtTransport, SharedEybondTransport, _finish_cleanup_on_cancel
+from .collector.cloud_family import collector_cloud_family_observation_from_endpoint
 from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
 from .drivers.registry import driver_options
 from .metadata.local_metadata import (
     local_profile_override_details,
     local_register_schema_override_details,
     resolve_local_metadata_rollback_paths,
-)
-from .metadata.collector_cloud_profile_catalog_loader import (
-    resolve_collector_cloud_family_by_host,
-    resolve_collector_cloud_family_by_port,
 )
 from .naming import installation_title
 from .metadata.profile_loader import load_driver_profile
@@ -460,6 +459,23 @@ def _merge_translation_bundle(base: dict[str, Any], extra: dict[str, Any]) -> di
     return merged
 
 
+def _collector_identity_matches(left: str, right: str) -> bool:
+    """Return whether two collector PN values look like the same collector."""
+
+    normalized_left = str(left or "").strip()
+    normalized_right = str(right or "").strip()
+    if not normalized_left or not normalized_right:
+        return False
+    if normalized_left == normalized_right:
+        return True
+    if min(len(normalized_left), len(normalized_right)) < 10:
+        return False
+    return bool(
+        normalized_left.startswith(normalized_right)
+        or normalized_right.startswith(normalized_left)
+    )
+
+
 @lru_cache(maxsize=16)
 def _load_translation_bundle(language: str) -> dict[str, Any]:
     """Load one translation bundle for the requested language."""
@@ -590,6 +606,22 @@ def _apply_smartess_detection_metadata(
         value = _pick(detail_key, collector_attr)
         if value is not None:
             data[config_key] = value
+
+
+def _apply_collector_cloud_family_metadata(
+    data: dict[str, Any],
+    result: OnboardingResult | None,
+) -> None:
+    """Persist the collector cloud family learned from CLDSRVHOST1/onboarding."""
+
+    if result is None:
+        return
+    match_details = result.match.details if result.match is not None else {}
+    family = str(match_details.get("collector_cloud_family") or "").strip()
+    if not family and result.collector is not None and result.collector.collector is not None:
+        family = str(result.collector.collector.collector_cloud_family or "").strip()
+    if family:
+        data[CONF_COLLECTOR_CLOUD_FAMILY] = family
 
 
 def _smartess_collector_firmware_version_for_result(result: OnboardingResult | None) -> str:
@@ -1441,6 +1473,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._autodetect_results: dict[str, OnboardingResult] = {}
         self._selected_result: OnboardingResult | None = None
         self._selected_result_runtime_details_attempted = False
+        self._selected_result_collector_capabilities_attempted = False
         self._scan_task: asyncio.Task | None = None
         self._scan_error: bool = False
         self._scan_mode = SETUP_MODE_AUTO
@@ -2301,28 +2334,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if self._selected_result is None:
             return await self.async_step_auto()
 
-        # A detected virtual bridge has no SmartESS cloud side: it is inherently
-        # Home Assistant only. Force the mode and hide the SmartESS+HA / HA-only
-        # selector instead of offering a meaningless choice. The bridge verdict
-        # comes from Item 2 (the onboarding AT+VDTU probe), so the confirm step
-        # can gate before the entry exists. Fail-safe: factory collectors and
-        # unanswered probes keep today's SmartESS+HA default and the selector.
+        await self._async_refresh_selected_result_collector_capabilities()
+
+        # First add is intentionally not the place to choose Cloud+HA vs HA-only.
+        # Discovery evidence can be partial at this point, especially for local
+        # bridges and collector-only candidates. Keep the confirm form stable:
+        # only collect the poll interval here. Runtime/options flow owns the
+        # operation-mode UX once the entry has had a chance to read endpoint and
+        # capability metadata. A detected virtual bridge is still forced HA-only
+        # internally because it has no SmartESS cloud side.
         selected_capabilities = _result_collector_capabilities(self._selected_result)
         is_bridge = selected_capabilities.virtual_bridge
 
         errors: dict[str, str] = {}
         if user_input is not None:
             if is_bridge:
-                # Ignore any (hidden) selector value: a bridge is always HA-only.
                 mode = COLLECTOR_OPERATION_HA_ONLY
             else:
-                mode = str(
-                    user_input.get(CONF_COLLECTOR_OPERATION_MODE, DEFAULT_COLLECTOR_OPERATION_MODE)
-                    or DEFAULT_COLLECTOR_OPERATION_MODE
-                )
-            if mode not in COLLECTOR_OPERATION_MODES:
-                errors[CONF_COLLECTOR_OPERATION_MODE] = "invalid_selection"
-            elif mode == COLLECTOR_OPERATION_HA_ONLY and not self._collector_endpoint_bind_applied:
+                # Ignore any stale/hidden operation-mode value posted by an old
+                # form. The mode can be changed later in the options flow.
+                mode = self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
+            if mode == COLLECTOR_OPERATION_HA_ONLY and not self._collector_endpoint_bind_applied:
                 self._collector_operation_mode = mode
                 self._reset_collector_endpoint_binding_state()
                 try:
@@ -2330,8 +2362,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     # the bridge is told where to connect — keep the bind.
                     # Modern bridge firmware accepts and persists the FC=3
                     # param-21 endpoint write. Older bridge firmware may refuse
-                    # it; keep that refusal non-fatal for bridge upgrades, while
-                    # a factory collector keeps today's hard error.
+                    # it; keep that refusal non-fatal for bridge upgrades.
                     await self._async_bind_selected_collector_to_home_assistant(
                         allow_refused_endpoint_write=is_bridge,
                     )
@@ -2345,27 +2376,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 self._collector_operation_mode = mode
                 return await self._async_create_entry_from_result(user_input)
 
-        description_placeholders = self._collector_operation_placeholders()
+        description_placeholders = dict(self._collector_operation_placeholders())
         if is_bridge:
-            description_placeholders = dict(description_placeholders)
             description_placeholders["collector_operation_mode_note"] = self._tr(
                 "common.dynamic.collector_operation_mode_bridge_note",
                 "Local bridge — always Home Assistant only; it has no SmartESS "
                 "cloud side.",
             )
-            schema: dict[Any, Any] = {
-                vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
-            }
         else:
-            description_placeholders = dict(description_placeholders)
             description_placeholders.setdefault("collector_operation_mode_note", "")
-            schema = {
-                vol.Required(
-                    CONF_COLLECTOR_OPERATION_MODE,
-                    default=self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE,
-                ): self._collector_operation_mode_selector(),
-                vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
-            }
+        schema: dict[Any, Any] = {
+            vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
+        }
         return self.async_show_form(
             step_id=step_id,
             data_schema=vol.Schema(schema),
@@ -2565,6 +2587,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
         _apply_smartess_detection_metadata(data, result)
+        _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         poll_interval = int((user_input or {}).get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
@@ -2688,6 +2711,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
         _apply_smartess_detection_metadata(data, result)
+        _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         options = {
@@ -3045,6 +3069,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._selected_result = result
         self._selected_result_runtime_details_attempted = False
+        self._selected_result_collector_capabilities_attempted = False
 
     def _selected_collector_ip(self) -> str:
         result = self._selected_result
@@ -3155,6 +3180,85 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             refreshed_result,
         )
 
+    async def _async_refresh_selected_result_collector_capabilities(self) -> None:
+        """Fetch missing collector capability evidence before rendering confirm."""
+
+        selected_result = self._selected_result
+        if selected_result is None or selected_result.collector is None:
+            return
+        if self._selected_result_collector_capabilities_attempted:
+            return
+        if not self._autodetect_results or selected_result is self._manual_result:
+            return
+        if _result_collector_capabilities(selected_result).virtual_bridge:
+            return
+
+        collector_ip = self._selected_collector_ip()
+        if not collector_ip:
+            return
+
+        self._selected_result_collector_capabilities_attempted = True
+
+        values = dict(self._auto_connection_defaults(), **self._auto_config)
+        spec = build_connection_spec_from_values(self._current_connection_type(), values)
+        at_transport = SharedCollectorAtTransport(
+            host="0.0.0.0",
+            port=getattr(spec, "tcp_port", DEFAULT_TCP_PORT),
+            request_timeout=min(float(getattr(spec, "request_timeout", DEFAULT_REQUEST_TIMEOUT)), 3.0),
+            collector_ip=collector_ip,
+            collector_pn=self._collector_pn_for_result(selected_result),
+        )
+        try:
+            await at_transport.start()
+            async with _async_timeout(4.0):
+                details = await query_runtime_collector_at_values(at_transport)
+        except TimeoutError:
+            logger.debug(
+                "Selected-result collector capability refresh timed out collector_ip=%s",
+                collector_ip,
+            )
+            return
+        except Exception as exc:
+            logger.debug(
+                "Selected-result collector capability refresh failed collector_ip=%s error=%s",
+                collector_ip,
+                exc,
+            )
+            return
+        finally:
+            with suppress(Exception):
+                await at_transport.stop()
+
+        bridge = parse_collector_vdtu(details.get("collector_vdtu_raw"))
+        if not bridge.is_virtual_bridge:
+            return
+
+        collector = selected_result.collector
+        collector_info = collector.collector
+        if collector_info is None:
+            collector_info = CollectorInfo(remote_ip=collector.ip or collector.target_ip)
+            collector.collector = collector_info
+        collector_info.collector_virtual_bridge = True
+        if bridge.kind:
+            collector_info.collector_bridge_kind = bridge.kind
+        if bridge.version:
+            collector_info.collector_bridge_version = bridge.version
+        if bridge.features:
+            collector_info.collector_bridge_features = tuple(bridge.features)
+        if bridge.attributes:
+            collector_info.collector_bridge_attributes = tuple(bridge.attributes)
+        endpoint = str(details.get("collector_server_endpoint") or "").strip()
+        if endpoint:
+            collector_info.collector_server_endpoint = endpoint
+        for detail_key, attr_name in (
+            ("collector_cloud_family", "collector_cloud_family"),
+            ("collector_cloud_family_source", "collector_cloud_family_source"),
+            ("collector_cloud_family_confidence", "collector_cloud_family_confidence"),
+        ):
+            value = str(details.get(detail_key) or "").strip()
+            if value:
+                setattr(collector_info, attr_name, value)
+
     def _collector_callback_target_endpoint(self) -> str:
         values = dict(self._auto_connection_defaults(), **self._auto_config)
         spec = build_connection_spec_from_values(self._current_connection_type(), values)
@@ -3176,11 +3280,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             except ValueError:
                 pass
             else:
-                host = str(parsed.host or "").strip().lower()
-                if parsed.has_explicit_port:
-                    cloud_family = resolve_collector_cloud_family_by_port(parsed.port)
-                else:
-                    cloud_family = resolve_collector_cloud_family_by_host(host)
+                cloud_family = collector_cloud_family_observation_from_endpoint(
+                    template_endpoint
+                ).family
+                if cloud_family == "unknown":
+                    cloud_family = ""
                 _host, server_port, server_protocol = resolve_collector_server_endpoint(
                     template_endpoint,
                     require_explicit_port=False,
@@ -3213,11 +3317,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         except ValueError:
             parsed = None
         if parsed is not None:
-            host = str(parsed.host or "").strip().lower()
-            if parsed.has_explicit_port:
-                profile_key = resolve_collector_cloud_family_by_port(parsed.port)
-            else:
-                profile_key = resolve_collector_cloud_family_by_host(host)
+            profile_key = collector_cloud_family_observation_from_endpoint(
+                normalized_endpoint
+            ).family
+            if profile_key == "unknown":
+                profile_key = ""
 
         return {
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: normalized_endpoint,
@@ -4616,10 +4720,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             parsed = None
         if parsed is not None:
             host = str(parsed.host or "").strip().lower()
-            if parsed.has_explicit_port:
-                family = resolve_collector_cloud_family_by_port(parsed.port)
-            else:
-                family = resolve_collector_cloud_family_by_host(host)
+            family = collector_cloud_family_observation_from_endpoint(normalized).family
+            if family == "unknown":
+                family = ""
 
         if family or "eybond" in host or "smartess" in host:
             return self._tr(
@@ -5085,11 +5188,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             entry_collector_pn = entry.data.get(CONF_COLLECTOR_PN, "")
             entry_serial = entry.data.get(CONF_DETECTED_SERIAL, "")
             entry_collector_ip = entry.data.get(CONF_COLLECTOR_IP, "")
-            if collector_pn and entry_collector_pn == collector_pn:
+            if collector_pn and _collector_identity_matches(entry_collector_pn, collector_pn):
                 return entry
             if serial_number and entry_serial == serial_number:
                 return entry
-            if collector_ip and entry_collector_ip == collector_ip:
+            if not collector_pn and not serial_number and collector_ip and entry_collector_ip == collector_ip:
                 return entry
         return None
 
@@ -5122,16 +5225,26 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return True
         if collector is None:
             return False
-        return bool(collector.connected or collector.udp_reply)
+        collector_info = collector.collector
+        return bool(
+            collector.connected
+            or collector.udp_reply
+            or (collector_info is not None and collector_info.collector_pn)
+        )
 
     @staticmethod
     def _is_addable_scan_result(result: OnboardingResult) -> bool:
         collector = result.collector
+        collector_info = collector.collector if collector is not None else None
         return bool(
             result.match is not None
             or (
                 collector is not None
-                and (collector.connected or bool(collector.udp_reply))
+                and (
+                    collector.connected
+                    or bool(collector.udp_reply)
+                    or (collector_info is not None and collector_info.collector_pn)
+                )
             )
         )
 
@@ -5204,6 +5317,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collapsed: dict[str, OnboardingResult] = {}
         for result in results:
             key = self._scan_result_key(result)
+            collector_pn = self._collector_pn_for_result(result)
+            if collector_pn:
+                for existing_key, existing in collapsed.items():
+                    existing_pn = self._collector_pn_for_result(existing)
+                    if _collector_identity_matches(existing_pn, collector_pn):
+                        key = existing_key
+                        break
             current = collapsed.get(key)
             if current is None or self._scan_result_priority(result) > self._scan_result_priority(current):
                 collapsed[key] = result
@@ -8634,8 +8754,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         finally:
             await transport.stop()
 
+        runtime_value = self._collector_uart_runtime_value_for_baudrate(baudrate)
         self._collector_uart_current_baudrate = baudrate
-        self._collector_uart_current_settings = baudrate
+        self._collector_uart_current_settings = runtime_value
+        self._publish_collector_uart_runtime_value(runtime_value)
 
     @staticmethod
     def _collector_query_response_text(response) -> str:
@@ -8707,6 +8829,52 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if isinstance(values, dict):
             return str(values.get("collector_bridge_uart") or values.get("collector_serial_baudrate") or "")
         return ""
+
+    def _publish_collector_uart_runtime_value(self, baudrate: str) -> None:
+        """Publish an accepted UART speed into live entities immediately."""
+
+        normalized = self._normalize_collector_uart_baudrate(baudrate)
+        if not normalized:
+            return
+        runtime_value = self._collector_uart_runtime_value_for_baudrate(normalized)
+
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return
+
+        publish_snapshot_values = getattr(coordinator, "_publish_snapshot_values", None)
+        if callable(publish_snapshot_values):
+            publish_snapshot_values(
+                collector_serial_baudrate=runtime_value,
+                collector_bridge_uart=runtime_value,
+            )
+            return
+
+        data = getattr(coordinator, "data", None)
+        values = getattr(data, "values", None)
+        if not isinstance(values, dict):
+            return
+        values["collector_serial_baudrate"] = runtime_value
+        values["collector_bridge_uart"] = runtime_value
+        publish = getattr(coordinator, "async_set_updated_data", None)
+        if callable(publish):
+            publish(data)
+
+    def _collector_uart_runtime_value_for_baudrate(self, baudrate: str) -> str:
+        """Return display/runtime UART settings after changing only baud rate."""
+
+        normalized = self._normalize_collector_uart_baudrate(baudrate)
+        if not normalized:
+            return ""
+
+        current = (
+            self._collector_uart_current_settings
+            or self._runtime_collector_uart_settings()
+        )
+        text = str(current or "").strip()
+        if "," not in text:
+            return normalized
+        return f"{normalized},{text.split(',', 1)[1]}"
 
     def _runtime_collector_hardware_version(self) -> str:
         coordinator = self._coordinator()

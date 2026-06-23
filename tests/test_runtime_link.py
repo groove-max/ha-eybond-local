@@ -77,16 +77,19 @@ class _FakeTransport:
 
 
 class _FakeAnnouncer:
-    def __init__(self) -> None:
+    def __init__(self, *, running: bool = False) -> None:
         self.last_reply = "set>server=192.168.1.10:8899;"
         self.last_reply_from = "192.168.1.14:58899"
+        self.running = running
         self.start_calls = 0
         self.stop_calls = 0
 
     async def start(self) -> None:
+        self.running = True
         self.start_calls += 1
 
     async def stop(self) -> None:
+        self.running = False
         self.stop_calls += 1
 
 
@@ -230,6 +233,56 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             ],
         )
 
+    def test_at_text_connect_uses_at_transport_without_payload_heartbeat(self) -> None:
+        async def _run() -> None:
+            manager = self._build_manager()
+            manager._collector_session_protocol = "at_text"
+            payload = _FakeTransport(connected=False, connect_result=False)
+            at_transport = _FakeTransport(connected=False, connect_result=True)
+            manager._transport = payload  # type: ignore[assignment]
+            manager._at_transport = at_transport  # type: ignore[assignment]
+            manager._announcer = _FakeAnnouncer()
+
+            ok = await manager.async_try_connect(timeout=0.5, require_heartbeat=True)
+
+            self.assertTrue(ok)
+            self.assertTrue(manager.connected)
+            self.assertIs(manager.transport, at_transport)
+            self.assertEqual(payload.connected_waits, [])
+            self.assertEqual(at_transport.connected_waits, [0.5])
+            self.assertEqual(at_transport.heartbeat_waits, [])
+
+        asyncio.run(_run())
+
+    def test_reconcile_collector_session_profile_rebuilds_started_link(self) -> None:
+        async def _run() -> None:
+            manager = self._build_manager()
+            manager._started = True
+            manager._listener_status = "listening"
+            manager._announcer = _FakeAnnouncer(running=True)  # type: ignore[assignment]
+            manager._reverse_discovery_enabled = False
+
+            with patch.object(manager, "_stop_all_transports", new=AsyncMock()) as stop_all, patch.object(
+                manager,
+                "_start_all_transports",
+                new=AsyncMock(),
+            ) as start_all:
+                changed = await manager.async_reconcile_collector_session_profile(
+                    collector_session_protocol="at_text",
+                    collector_identity_strategy="at_dtupn",
+                    reason="test",
+                )
+
+            self.assertTrue(changed)
+            stop_all.assert_awaited_once()
+            start_all.assert_awaited_once()
+            self.assertEqual(manager.listener_diagnostics()["collector_callback_session_protocol"], "at_text")
+            self.assertEqual(manager.listener_diagnostics()["collector_callback_identity_strategy"], "at_dtupn")
+            self.assertTrue(manager._started)
+            self.assertEqual(manager.listener_status, "listening")
+
+        asyncio.run(_run())
+
     def test_collector_info_merges_transport_and_discovery_state(self) -> None:
         manager = self._build_manager()
         manager._transport = _FakeTransport(connected=True)  # type: ignore[assignment]
@@ -319,6 +372,24 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(announcer.stop_calls, 1)
         self.assertEqual(transport.connected_waits, [5.0])
         self.assertEqual(transport.heartbeat_waits, [1.5])
+
+    def test_disabling_reverse_discovery_stops_running_announcer(self) -> None:
+        async def _run() -> _FakeAnnouncer:
+            manager = self._build_manager()
+            announcer = _FakeAnnouncer(running=True)
+            manager._announcer = announcer  # type: ignore[assignment]
+
+            manager.set_reverse_discovery_enabled(False)
+            await asyncio.sleep(0)
+
+            return announcer
+
+        announcer = asyncio.run(_run())
+
+        self.assertFalse(announcer.running)
+        self.assertEqual(announcer.stop_calls, 1)
+        self.assertEqual(announcer.last_reply, "")
+        self.assertEqual(announcer.last_reply_from, "")
 
     def test_transport_prefers_connected_auxiliary_listener(self) -> None:
         manager = self._build_manager()

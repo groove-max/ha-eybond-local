@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ..link_models import EybondLinkRoute
-from ..link_transport import PayloadLinkTransport, async_send_payload
+from ..link_models import EybondLinkRoute, LinkRoute
+from ..link_transport import PayloadLinkTransport, async_send_payload, select_payload_route
 from .pi30 import crc16_xmodem
 
 
@@ -55,7 +55,7 @@ class Pi18Session:
         self,
         transport: PayloadLinkTransport,
         *,
-        route: EybondLinkRoute | None = None,
+        route: LinkRoute | None = None,
         devcode: int | None = None,
         collector_addr: int | None = None,
     ) -> None:
@@ -67,14 +67,19 @@ class Pi18Session:
                 devcode=devcode,
                 collector_addr=collector_addr,
             )
-        self._route = route
+        self._route: LinkRoute = route
 
     async def request(self, command: str) -> str:
         try:
+            route = select_payload_route(
+                self._transport,
+                self._route,
+                payload_family="pi18_ascii",
+            )
             response = await async_send_payload(
                 self._transport,
                 build_request(command),
-                route=self._route,
+                route=route,
             )
         except asyncio.TimeoutError as exc:
             raise Pi18Error("request_timeout") from exc

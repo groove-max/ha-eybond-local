@@ -23,7 +23,8 @@ Known collector cloud families use different endpoint shapes:
 |---|---:|---:|---|---|
 | `legacy_binary` | `ess.eybond.com` | `502` | host only, for example `ess.eybond.com` | framed EyeBond binary |
 | `smartess_at` | `dtu_ess.eybond.com` | `18899` | `host,port,protocol`, for example `dtu_ess.eybond.com,18899,TCP` | text AT |
-| `smartvalue_at` | `m2m.eybond.com` | unknown / catalog-defined later | profile-defined | likely SmartESS-like, not confirmed here |
+| `smartvalue_at` | `m2m.eybond.com` | `18899` | `host,port,protocol`, for example `m2m.eybond.com,18899,TCP` | text AT |
+| `valuecloud_at` | `iot.eybond.com` | `18899` | `host,port,protocol`, for example `iot.eybond.com,18899,TCP` | text AT |
 
 Formatting the endpoint generically can break restore. A known regression class:
 legacy collectors that originally stored `ess.eybond.com` must be restored as
@@ -98,7 +99,7 @@ Factory collectors usually combine:
 
 ```text
 collector_kind = factory_eybond
-cloud_profile = legacy_binary | smartess_at | smartvalue_at | unknown
+cloud_profile = legacy_binary | smartess_at | smartvalue_at | valuecloud_at | unknown
 ```
 
 The community ESP bridge is different:
@@ -269,13 +270,13 @@ collector_pn -> observed_at
 
 - Validate the PN-routed callback behavior on a real multi-collector setup,
   especially during Home Assistant restart and route transitions.
-- Treat `smartvalue_at` as a catalog/profile candidate until real traffic
-  evidence confirms its exact callback behavior.
+- Treat `smartvalue_at` and `valuecloud_at` as catalog/profile candidates until
+  real traffic evidence confirms their exact callback behavior.
 
 ## Non-goals for the first iteration
 
 - Do not add a heuristic that maps any private gateway callback to a configured
   collector IP.
 - Do not silently reconstruct unknown original cloud endpoints.
-- Do not make SmartValue assumptions beyond the catalog/profile layer until
-  traffic evidence confirms its exact session behavior.
+- Do not make SmartValue/ValueCloud assumptions beyond the catalog/profile
+  layer until traffic evidence confirms exact session behavior.

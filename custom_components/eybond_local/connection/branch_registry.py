@@ -19,7 +19,6 @@ from .ui import (
 from ..const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
-    CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_PN,
     CONF_DISCOVERY_INTERVAL,
@@ -37,9 +36,8 @@ from ..const import (
     DEFAULT_TCP_PORT,
     DEFAULT_UDP_PORT,
 )
-from ..metadata.collector_cloud_profile_catalog_loader import (
-    resolve_collector_cloud_identity_strategy,
-    resolve_collector_cloud_session_protocol,
+from ..collector.transport_profile import (
+    resolve_collector_transport_profile_from_entry_context,
 )
 from ..onboarding.eybond import OnboardingDetector
 from ..runtime.hub import EybondHub
@@ -78,7 +76,10 @@ def _build_eybond_connection_spec(
     data: Mapping[str, object],
     options: Mapping[str, object],
 ) -> EybondConnectionSpec:
-    collector_cloud_family = str(data.get(CONF_COLLECTOR_CLOUD_FAMILY, "") or "").strip().lower()
+    transport_profile = resolve_collector_transport_profile_from_entry_context(
+        data,
+        options,
+    )
     return EybondConnectionSpec(
         server_ip=str(options.get(CONF_SERVER_IP, data.get(CONF_SERVER_IP, ""))),
         advertised_server_ip=str(
@@ -98,13 +99,9 @@ def _build_eybond_connection_spec(
         udp_port=int(options.get(CONF_UDP_PORT, data.get(CONF_UDP_PORT, DEFAULT_UDP_PORT))),
         collector_ip=str(options.get(CONF_COLLECTOR_IP, data.get(CONF_COLLECTOR_IP, DEFAULT_COLLECTOR_IP))),
         collector_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
-        collector_cloud_family=collector_cloud_family,
-        collector_session_protocol=resolve_collector_cloud_session_protocol(
-            collector_cloud_family
-        ),
-        collector_identity_strategy=resolve_collector_cloud_identity_strategy(
-            collector_cloud_family
-        ),
+        collector_cloud_family=transport_profile.cloud_family,
+        collector_session_protocol=transport_profile.session_protocol,
+        collector_identity_strategy=transport_profile.identity_strategy,
         discovery_target=str(
             options.get(
                 CONF_DISCOVERY_TARGET,

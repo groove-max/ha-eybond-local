@@ -11,7 +11,11 @@ from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
 
 from .at import CollectorAtResponse, build_at_query, parse_at_response
-from ..link_models import EybondLinkRoute, LinkRoute
+from .cloud_family import (
+    apply_collector_cloud_family_observation,
+    collector_cloud_family_observation_from_endpoint,
+)
+from ..link_models import EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ..link_transport import PayloadLinkTransport
 from ..models import CollectorInfo
 from .profile import apply_collector_profile
@@ -213,6 +217,14 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             collector_pn_digits=collector.collector_pn_digits,
             heartbeat_age_seconds=collector.heartbeat_age_seconds,
             heartbeat_fresh=collector.heartbeat_fresh,
+            collector_cloud_family=collector.collector_cloud_family,
+            collector_cloud_family_source=collector.collector_cloud_family_source,
+            collector_cloud_family_confidence=collector.collector_cloud_family_confidence,
+            collector_server_endpoint=collector.collector_server_endpoint,
+            collector_cloud_profile_key=collector.collector_cloud_profile_key,
+            collector_cloud_profile_label=collector.collector_cloud_profile_label,
+            collector_cloud_profile_source=collector.collector_cloud_profile_source,
+            collector_cloud_profile_confidence=collector.collector_cloud_profile_confidence,
             smartess_collector_version=collector.smartess_collector_version,
             smartess_protocol_raw_id=collector.smartess_protocol_raw_id,
             smartess_protocol_asset_id=collector.smartess_protocol_asset_id,
@@ -221,6 +233,11 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             smartess_protocol_profile_key=collector.smartess_protocol_profile_key,
             smartess_protocol_name=collector.smartess_protocol_name,
             smartess_device_address=collector.smartess_device_address,
+            collector_virtual_bridge=collector.collector_virtual_bridge,
+            collector_bridge_kind=collector.collector_bridge_kind,
+            collector_bridge_version=collector.collector_bridge_version,
+            collector_bridge_features=collector.collector_bridge_features,
+            collector_bridge_attributes=collector.collector_bridge_attributes,
         )
     )
 
@@ -547,6 +564,12 @@ class _CollectorConnection:
             self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
+        elif response.command == "CLDSRVHOST1" and response.value:
+            self._collector.collector_server_endpoint = response.value
+            apply_collector_cloud_family_observation(
+                self._collector,
+                collector_cloud_family_observation_from_endpoint(response.value),
+            )
 
     def _record_session_identity(self, collector_pn: str, source: str) -> None:
         callback = self._session_identity_callback
@@ -727,6 +750,7 @@ class _CollectorAtConnection:
         self._request_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._pending_response: asyncio.Future[CollectorAtResponse] | None = None
+        self._pending_raw_response: asyncio.Future[bytes] | None = None
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
@@ -767,6 +791,28 @@ class _CollectorAtConnection:
                     self._pending_response = None
             self._apply_response_metadata(response)
             return response
+
+    async def async_send_raw_payload(self, payload: bytes, *, request_timeout: float) -> bytes:
+        """Send one raw inverter payload over a plain AT callback stream.
+
+        Some DTU/AT collectors do not wrap inverter traffic in the legacy EyeBond
+        FC=4 tunnel. The cloud writes PI-style ASCII commands directly to the same
+        TCP stream after the AT bootstrap and receives raw ``(...\r`` responses.
+        """
+
+        if not self.connected or not self._writer:
+            raise ConnectionError("collector_not_connected")
+
+        async with self._request_lock:
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[bytes] = loop.create_future()
+            self._pending_raw_response = future
+            try:
+                await self._async_write(payload)
+                return await asyncio.wait_for(future, timeout=request_timeout)
+            finally:
+                if self._pending_raw_response is future:
+                    self._pending_raw_response = None
 
     async def run(
         self,
@@ -823,7 +869,48 @@ class _CollectorAtConnection:
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
         try:
             while True:
-                line = await reader.readuntil(b"\n")
+                prefix = await reader.readexactly(3)
+                if prefix.startswith((b"(", b"^")):
+                    line = prefix + await reader.readuntil(b"\r")
+                    future = self._pending_raw_response
+                    if future is not None and not future.done():
+                        future.set_result(line)
+                        continue
+                    logger.debug(
+                        "Unhandled collector raw ASCII payload remote=%s payload=%r",
+                        self._collector.remote_ip,
+                        line,
+                    )
+                    continue
+
+                if prefix != b"AT+":
+                    header_bytes = prefix + await reader.readexactly(HEADER_SIZE - len(prefix))
+                    header = decode_header(header_bytes)
+                    payload = b""
+                    if header.payload_len > 0:
+                        payload = await reader.readexactly(header.payload_len)
+                    if header.fcode == FC_HEARTBEAT:
+                        pn = parse_heartbeat_pn(payload)
+                        if pn:
+                            self._collector.collector_pn = pn
+                            self._record_session_identity(pn, "framed_heartbeat")
+                        self._collector.heartbeat_devcode = header.devcode
+                        self._collector.heartbeat_payload_hex = payload.hex()
+                    elif header.fcode == FC_QUERY_COLLECTOR:
+                        pn = _parse_fc2_collector_pn(payload)
+                        if pn:
+                            self._collector.collector_pn = pn
+                            self._record_session_identity(pn, "fc2_parameter_2")
+                    else:
+                        logger.debug(
+                            "Unhandled collector mixed frame on AT connection remote=%s fc=%d payload=%s",
+                            self._collector.remote_ip,
+                            header.fcode,
+                            payload.hex(),
+                        )
+                    continue
+
+                line = prefix + await reader.readuntil(b"\n")
                 try:
                     response = parse_at_response(line)
                 except Exception:
@@ -833,7 +920,6 @@ class _CollectorAtConnection:
                         line,
                     )
                     continue
-
                 future = self._pending_response
                 if future is not None and not future.done():
                     future.set_result(response)
@@ -861,6 +947,12 @@ class _CollectorAtConnection:
             self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
+        elif response.command == "CLDSRVHOST1" and response.value:
+            self._collector.collector_server_endpoint = response.value
+            apply_collector_cloud_family_observation(
+                self._collector,
+                collector_cloud_family_observation_from_endpoint(response.value),
+            )
 
     def _record_session_identity(self, collector_pn: str, source: str) -> None:
         callback = self._session_identity_callback
@@ -1250,6 +1342,34 @@ class _SharedEybondListener:
             "duplicate_peer_ips": duplicate_peer_ips,
             "sessions": [entry.diagnostics() for entry in entries],
         }
+
+    def discovered_collector_sessions(self) -> tuple[dict[str, object], ...]:
+        """Return raw collector identities observed by this listener.
+
+        This is intentionally separate from ``session_inventory_diagnostics``:
+        diagnostics mask collector PN values for support bundles, while onboarding
+        needs the raw PN to materialize multiple collectors that call back from
+        the same NAT peer IP.
+        """
+
+        sessions: list[dict[str, object]] = []
+        for entry in self._session_inventory.values():
+            collector_pn = str(entry.collector_pn or "").strip()
+            remote_ip = str(entry.remote_ip or "").strip()
+            if not collector_pn or not remote_ip:
+                continue
+            sessions.append(
+                {
+                    "session_id": entry.session_id,
+                    "peer_ip": remote_ip,
+                    "peer_port": entry.remote_port,
+                    "state": entry.state,
+                    "protocol_shape": entry.protocol_shape,
+                    "collector_pn": collector_pn,
+                    "collector_identity_source": entry.collector_identity_source,
+                }
+            )
+        return tuple(sessions)
 
     def _next_session_id(self) -> str:
         self._session_seq += 1
@@ -1731,15 +1851,29 @@ class _SharedEybondListener:
         if not collector_ip and not collector_pn:
             return
 
-        if close_payload and self._has_owner_for_remote_ip(self._payload_owner_counts, collector_ip):
+        if (
+            close_payload
+            and not collector_pn
+            and self._has_owner_for_remote_ip(self._payload_owner_counts, collector_ip)
+        ):
             close_payload = False
             close_pending = False
-        if close_payload and collector_pn and self._payload_pn_owner_counts.get(collector_pn, 0) > 0:
+        if close_payload and self._has_owner_for_collector_pn(
+            self._payload_pn_owner_counts,
+            collector_pn,
+        ):
             close_payload = False
             close_pending = False
-        if close_at and self._has_owner_for_remote_ip(self._at_owner_counts, collector_ip):
+        if (
+            close_at
+            and not collector_pn
+            and self._has_owner_for_remote_ip(self._at_owner_counts, collector_ip)
+        ):
             close_at = False
-        if close_at and collector_pn and self._at_pn_owner_counts.get(collector_pn, 0) > 0:
+        if close_at and self._has_owner_for_collector_pn(
+            self._at_pn_owner_counts,
+            collector_pn,
+        ):
             close_at = False
 
         if close_pending and collector_ip:
@@ -1751,16 +1885,19 @@ class _SharedEybondListener:
                 await self._close_pending_socket(pending)
 
         if close_payload:
-            payload_keys = set(
-                self._connection_keys_for_collector(collector_ip, self._connections)
-            )
-            payload_keys.update(
-                self._connection_keys_for_collector_pn(
-                    collector_pn,
-                    self._connections_by_pn,
-                    self._connections,
+            payload_keys = set()
+            if collector_pn:
+                payload_keys.update(
+                    self._connection_keys_for_collector_pn(
+                        collector_pn,
+                        self._connections_by_pn,
+                        self._connections,
+                    )
                 )
-            )
+            if not payload_keys:
+                payload_keys.update(
+                    self._connection_keys_for_collector(collector_ip, self._connections)
+                )
             await self._disconnect_connection_keys(
                 self._connections,
                 tuple(payload_keys),
@@ -1769,16 +1906,19 @@ class _SharedEybondListener:
                 self._last_connection_ip = ""
 
         if close_at:
-            at_keys = set(
-                self._connection_keys_for_collector(collector_ip, self._at_connections)
-            )
-            at_keys.update(
-                self._connection_keys_for_collector_pn(
-                    collector_pn,
-                    self._at_connections_by_pn,
-                    self._at_connections,
+            at_keys = set()
+            if collector_pn:
+                at_keys.update(
+                    self._connection_keys_for_collector_pn(
+                        collector_pn,
+                        self._at_connections_by_pn,
+                        self._at_connections,
+                    )
                 )
-            )
+            if not at_keys:
+                at_keys.update(
+                    self._connection_keys_for_collector(collector_ip, self._at_connections)
+                )
             await self._disconnect_connection_keys(
                 self._at_connections,
                 tuple(at_keys),
@@ -2776,14 +2916,23 @@ class SharedCollectorAtTransport:
             if self._collector_ip:
                 pending = self._listener.pop_pending_socket(self._collector_ip)
                 if pending is not None:
-                    framed = await self._listener.activate_pending_connection(
-                        pending,
-                        collector_ip=self._collector_ip,
-                        heartbeat_interval=60.0,
-                        write_timeout=self._write_timeout,
-                    )
-                    if framed.connected:
-                        return True
+                    if self._uses_at_text_session():
+                        connection = await self._listener.activate_pending_at_connection(
+                            pending,
+                            collector_ip=self._collector_ip,
+                            write_timeout=self._write_timeout,
+                        )
+                        if connection.connected:
+                            return True
+                    else:
+                        framed = await self._listener.activate_pending_connection(
+                            pending,
+                            collector_ip=self._collector_ip,
+                            heartbeat_interval=60.0,
+                            write_timeout=self._write_timeout,
+                        )
+                        if framed.connected:
+                            return True
 
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
@@ -2805,6 +2954,13 @@ class SharedCollectorAtTransport:
         if self._collector_ip:
             pending = self._listener.pop_pending_socket(self._collector_ip)
             if pending is not None:
+                if self._uses_at_text_session():
+                    connection = await self._listener.activate_pending_at_connection(
+                        pending,
+                        collector_ip=self._collector_ip,
+                        write_timeout=self._write_timeout,
+                    )
+                    return await connection.async_query(command, request_timeout=self._request_timeout)
                 framed = await self._listener.activate_pending_connection(
                     pending,
                     collector_ip=self._collector_ip,
@@ -2820,6 +2976,57 @@ class SharedCollectorAtTransport:
             raise ConnectionError("collector_not_connected")
 
         return await connection.async_query(command, request_timeout=self._request_timeout)
+
+    async def async_send_payload(
+        self,
+        payload: bytes,
+        *,
+        route: LinkRoute,
+    ) -> bytes:
+        """Send one raw inverter payload over the active AT stream."""
+
+        if not isinstance(route, RawSerialLinkRoute):
+            raise TypeError(f"unsupported_link_route:{route.family}")
+        if not self._uses_at_text_session():
+            raise TypeError("raw_serial_route_requires_at_text_session")
+
+        connection = self._at_connection(create_placeholder=bool(self._collector_ip))
+        if connection is not None and connection.connected:
+            return await connection.async_send_raw_payload(
+                payload,
+                request_timeout=self._request_timeout,
+            )
+
+        if self._listener is None:
+            raise ConnectionError("collector_not_connected")
+
+        if self._collector_ip:
+            pending = self._listener.pop_pending_socket(self._collector_ip)
+            if pending is not None:
+                connection = await self._listener.activate_pending_at_connection(
+                    pending,
+                    collector_ip=self._collector_ip,
+                    write_timeout=self._write_timeout,
+                )
+                return await connection.async_send_raw_payload(
+                    payload,
+                    request_timeout=self._request_timeout,
+                )
+
+        raise ConnectionError("collector_not_connected")
+
+    def select_payload_route(
+        self,
+        route: LinkRoute,
+        *,
+        payload_family: str = "",
+    ) -> LinkRoute:
+        if self._uses_at_text_session():
+            return RawSerialLinkRoute(protocol=payload_family)
+        return route
+
+    def _uses_at_text_session(self) -> bool:
+        return self._collector_session_protocol == "at_text"
 
     def _at_connection(self, *, create_placeholder: bool) -> _CollectorAtConnection | None:
         if self._listener is None:

@@ -77,11 +77,20 @@ async def async_setup_entry(
     capabilities = (
         inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
     )
+    collector_capabilities = coordinator.collector_capabilities
+    runtime_specs = tuple(
+        spec
+        for spec in _runtime_select_specs(has_inverter_identity=has_inverter_identity)
+        if not (
+            spec.key == "collector_operation_mode"
+            and collector_capabilities.ha_only_required
+        )
+    )
     async_add_entities(
         [
             *[
                 EybondRuntimeSettingSelect(coordinator, spec)
-                for spec in _runtime_select_specs(has_inverter_identity=has_inverter_identity)
+                for spec in runtime_specs
             ],
             *[
                 EybondCapabilitySelect(coordinator, capability)

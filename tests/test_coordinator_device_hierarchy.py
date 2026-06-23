@@ -18,7 +18,7 @@ class _FakeInverter:
     capabilities: tuple = ()
     capability_groups: tuple = ()
     register_schema_name: str = ""
-from unittest.mock import PropertyMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1743,6 +1743,44 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(reverse_discovery_flags, [False])
 
+    def test_collector_operation_mode_forces_ha_only_for_runtime_bridge(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={},
+            collector=types.SimpleNamespace(collector_virtual_bridge=True),
+        )
+
+        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        self.assertTrue(coordinator.collector_home_assistant_primary)
+
+    def test_runtime_bridge_syncs_persisted_operation_mode_to_ha_only(self) -> None:
+        updates: list[dict[str, object]] = []
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={},
+            collector=types.SimpleNamespace(collector_virtual_bridge=True),
+        )
+        coordinator._async_update_entry_without_reload = lambda **kwargs: updates.append(kwargs)
+
+        coordinator._sync_forced_collector_operation_mode()
+
+        self.assertEqual(len(updates), 1)
+        data = updates[0]["data"]
+        options = updates[0]["options"]
+        self.assertEqual(data["collector_operation_mode"], "home_assistant_only")
+        self.assertEqual(options["collector_operation_mode"], "home_assistant_only")
+        self.assertTrue(data["collector_virtual_bridge"])
+        self.assertTrue(options["collector_virtual_bridge"])
+
     def test_configure_reverse_discovery_stays_on_for_ha_only_bridge(self) -> None:
         # Item 1: a detected bridge refuses the param-21 endpoint write and does
         # not persist the endpoint, so it relearns the HA server only from UDP
@@ -1767,6 +1805,58 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(
             values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
             collector=types.SimpleNamespace(collector_virtual_bridge=True),
+        )
+
+        coordinator._configure_reverse_discovery_mode()
+
+        self.assertEqual(reverse_discovery_flags, [True])
+
+    def test_configure_reverse_discovery_turns_off_when_endpoint_already_targets_ha(self) -> None:
+        reverse_discovery_flags: list[bool] = []
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._connection_spec = types.SimpleNamespace(
+            server_ip="192.168.1.50",
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=8899,
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            effective_advertised_server_ip="192.168.1.50",
+            collector_server_endpoint_rollback_target="",
+            set_reverse_discovery_enabled=reverse_discovery_flags.append,
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"collector_server_endpoint": "192.168.1.50,18899,TCP"}
+        )
+
+        coordinator._configure_reverse_discovery_mode()
+
+        self.assertEqual(reverse_discovery_flags, [False])
+
+    def test_configure_reverse_discovery_keeps_on_when_endpoint_targets_cloud(self) -> None:
+        reverse_discovery_flags: list[bool] = []
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._connection_spec = types.SimpleNamespace(
+            server_ip="192.168.1.50",
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=8899,
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            effective_advertised_server_ip="192.168.1.50",
+            collector_server_endpoint_rollback_target="",
+            set_reverse_discovery_enabled=reverse_discovery_flags.append,
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"collector_server_endpoint": "dtu_ess.eybond.com,18899,TCP"}
         )
 
         coordinator._configure_reverse_discovery_mode()
@@ -3996,6 +4086,233 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertGreaterEqual(len(updates), 3)
 
         import asyncio
+
+        asyncio.run(_run())
+
+    def test_bridge_rejects_smartess_operation_mode_target(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_operation_mode": "home_assistant_only",
+                "collector_virtual_bridge": True,
+            },
+            options={"collector_operation_mode": "home_assistant_only"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            connected=True,
+            values={"collector_server_endpoint": "192.168.1.50,8899,TCP"},
+        )
+
+        with patch.object(
+            self.coordinator_module.EybondLocalCoordinator,
+            "proxy_capture_overview",
+            new_callable=PropertyMock,
+            return_value=types.SimpleNamespace(status="ready"),
+        ):
+            reason = coordinator.collector_operation_mode_change_reason(
+                target_mode="smartess_cloud_home_assistant"
+            )
+
+        self.assertEqual(reason, "collector_operation_mode_target_unavailable")
+
+    def test_raw_collector_endpoint_stage_publishes_pending_override(self) -> None:
+        async def _run() -> None:
+            calls: list[tuple[str, bool]] = []
+            refresh_calls: list[bool] = []
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                calls.append((endpoint, apply_changes))
+                return {"requested_endpoint": endpoint, "status": "staged"}
+
+            async def _async_request_refresh() -> None:
+                refresh_calls.append(True)
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"control_mode": "full"},
+                options={"control_mode": "full"},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=True,
+                values={"collector_server_endpoint": "192.168.1.50,8899,TCP"},
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+            )
+            coordinator._async_prepare_home_assistant_callback_listener = AsyncMock()
+            coordinator.async_request_refresh = _async_request_refresh
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_overview",
+                new_callable=PropertyMock,
+                return_value=types.SimpleNamespace(status="ready"),
+            ):
+                await coordinator.async_set_raw_collector_server_endpoint(
+                    endpoint="10.0.0.25,18899",
+                    apply_changes=False,
+                    confirm_redirect=True,
+                )
+
+            self.assertEqual(calls, [("10.0.0.25,18899", False)])
+            self.assertEqual(refresh_calls, [True])
+            self.assertEqual(
+                coordinator.data.values["collector_callback_endpoint_pending"],
+                "10.0.0.25,18899",
+            )
+            self.assertTrue(
+                coordinator.data.values["collector_callback_endpoint_pending_apply_required"]
+            )
+
+        asyncio.run(_run())
+
+    def test_raw_collector_endpoint_apply_clears_pending_override(self) -> None:
+        async def _run() -> None:
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                return {"requested_endpoint": endpoint, "status": "applied"}
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"control_mode": "full"},
+                options={"control_mode": "full"},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=True,
+                values={
+                    "collector_server_endpoint": "192.168.1.50,8899,TCP",
+                    "collector_callback_endpoint_pending": "10.0.0.25,18899",
+                    "collector_callback_endpoint_pending_apply_required": True,
+                },
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+            )
+            coordinator._async_prepare_home_assistant_callback_listener = AsyncMock()
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_overview",
+                new_callable=PropertyMock,
+                return_value=types.SimpleNamespace(status="ready"),
+            ):
+                await coordinator.async_set_raw_collector_server_endpoint(
+                    endpoint="10.0.0.25,18899",
+                    apply_changes=True,
+                    confirm_redirect=True,
+                )
+
+            self.assertNotIn("collector_callback_endpoint_pending", coordinator.data.values)
+            self.assertNotIn(
+                "collector_callback_endpoint_pending_apply_required",
+                coordinator.data.values,
+            )
+
+        asyncio.run(_run())
+
+    def test_bind_collector_to_home_assistant_clears_pending_endpoint_override(self) -> None:
+        async def _run() -> None:
+            calls: list[tuple[str, bool]] = []
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                calls.append((endpoint, apply_changes))
+                return {"requested_endpoint": endpoint, "status": "applied"}
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"control_mode": "full"},
+                options={"control_mode": "full"},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=True,
+                values={
+                    "collector_server_endpoint": "47.91.67.66,18899,TCP",
+                    "collector_callback_endpoint_pending": "10.0.0.25,18899",
+                    "collector_callback_endpoint_pending_apply_required": True,
+                },
+            )
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+                collector_server_endpoint_rollback_target="47.91.67.66,18899,TCP",
+            )
+            coordinator._async_prepare_home_assistant_callback_listener = AsyncMock()
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_overview",
+                new_callable=PropertyMock,
+                return_value=types.SimpleNamespace(status="ready"),
+            ):
+                await coordinator.async_bind_collector_to_home_assistant(
+                    confirm_redirect=True,
+                )
+
+            self.assertEqual(calls, [("192.168.1.50,18899,TCP", True)])
+            self.assertNotIn("collector_callback_endpoint_pending", coordinator.data.values)
+            self.assertNotIn(
+                "collector_callback_endpoint_pending_apply_required",
+                coordinator.data.values,
+            )
+
+        asyncio.run(_run())
+
+    def test_rollback_collector_endpoint_stage_publishes_pending_override(self) -> None:
+        async def _run() -> None:
+            refresh_calls: list[bool] = []
+
+            async def _async_set_collector_server_endpoint(
+                endpoint: str, *, apply_changes: bool = True
+            ) -> dict[str, object]:
+                return {"requested_endpoint": endpoint, "status": "rollback_staged"}
+
+            async def _async_request_refresh() -> None:
+                refresh_calls.append(True)
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"control_mode": "full"},
+                options={"control_mode": "full"},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                connected=True,
+                values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
+            )
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+                collector_server_endpoint_rollback_target="47.91.67.66,18899,TCP",
+            )
+            coordinator.async_request_refresh = _async_request_refresh
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "proxy_capture_overview",
+                new_callable=PropertyMock,
+                return_value=types.SimpleNamespace(status="ready"),
+            ):
+                await coordinator.async_rollback_collector_server_endpoint(
+                    apply_changes=False,
+                    confirm_redirect=True,
+                )
+
+            self.assertEqual(refresh_calls, [True])
+            self.assertEqual(
+                coordinator.data.values["collector_callback_endpoint_pending"],
+                "47.91.67.66,18899,TCP",
+            )
+            self.assertTrue(
+                coordinator.data.values["collector_callback_endpoint_pending_apply_required"]
+            )
 
         asyncio.run(_run())
 

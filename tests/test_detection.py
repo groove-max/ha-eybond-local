@@ -306,6 +306,122 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             {"192.168.1.55", "192.168.1.14"},
         )
 
+    async def test_auto_detect_materializes_nat_peer_sessions_from_inventory(self) -> None:
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        primary_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.193",
+                connected=True,
+                collector=CollectorInfo(
+                    remote_ip="192.168.1.193",
+                    collector_pn="E5000099990003",
+                ),
+            ),
+            match=DriverMatch(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="SMG11K240001",
+                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
+            ),
+            connection_mode="broadcast",
+        )
+
+        class FakeListener:
+            def matching_callback_ips(self, collector_ip: str) -> tuple[str, ...]:
+                return ("192.168.1.193",)
+
+            def discovered_collector_sessions(self) -> tuple[dict[str, object], ...]:
+                return (
+                    {
+                        "session_id": "listener-8899-1",
+                        "peer_ip": "192.168.1.193",
+                        "peer_port": 51001,
+                        "state": "routed_framed",
+                        "collector_pn": "E5000099990001",
+                        "collector_identity_source": "framed_heartbeat",
+                    },
+                    {
+                        "session_id": "listener-8899-2",
+                        "peer_ip": "192.168.1.193",
+                        "peer_port": 51002,
+                        "state": "routed_framed",
+                        "collector_pn": "E5000099990002",
+                        "collector_identity_source": "framed_heartbeat",
+                    },
+                    {
+                        "session_id": "listener-8899-3",
+                        "peer_ip": "192.168.1.193",
+                        "peer_port": 51003,
+                        "state": "closed_no_payload_owner",
+                        "collector_pn": "E5000099990003",
+                        "collector_identity_source": "framed_heartbeat",
+                    },
+                )
+
+        fake_listener = FakeListener()
+
+        with (
+            patch.object(
+                detector,
+                "async_detect_targets",
+                new=AsyncMock(return_value=(primary_result,)),
+            ) as detect_targets,
+            patch(
+                "custom_components.eybond_local.onboarding.eybond._acquire_shared_listener",
+                new=AsyncMock(return_value=fake_listener),
+                create=True,
+            ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond._release_shared_listener",
+                new=AsyncMock(),
+                create=True,
+            ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                new=AsyncMock(
+                    return_value=(
+                        DiscoveryProbeResult(
+                            target_ip="192.168.1.255",
+                            message="set>server=192.168.1.50:8899;",
+                            local_port=40000,
+                            reply="rsp>server=1;",
+                            reply_from="192.168.1.193:40000",
+                        ),
+                    )
+                ),
+            ),
+        ):
+            results = await detector.async_auto_detect(
+                discovery_target="192.168.1.255",
+                attempts=1,
+            )
+
+        self.assertEqual(detect_targets.await_count, 1)
+        self.assertEqual(
+            {
+                result.collector.collector.collector_pn
+                for result in results
+                if result.collector is not None and result.collector.collector is not None
+            },
+            {"E5000099990001", "E5000099990002", "E5000099990003"},
+        )
+        self.assertEqual(
+            {
+                result.next_action
+                for result in results
+                if (
+                    result.collector is not None
+                    and result.collector.collector is not None
+                    and result.collector.collector.collector_pn
+                    in {"E5000099990001", "E5000099990002"}
+                )
+            },
+            {"manual_driver_selection"},
+        )
+
     async def test_auto_detect_accepts_total_timeout_kwarg(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
 
@@ -957,6 +1073,10 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.eybond_local.onboarding.eybond.query_runtime_collector_at_values",
                 new=AsyncMock(
                     return_value={
+                        "collector_server_endpoint": "iot.eybond.com,18899,TCP",
+                        "collector_cloud_family": "valuecloud_at",
+                        "collector_cloud_family_source": "endpoint_host",
+                        "collector_cloud_family_confidence": "high",
                         "collector_signal_strength": -67,
                         "collector_signal_strength_source": "wifi_rssi",
                         "collector_signal_strength_raw": "-67",
@@ -994,6 +1114,14 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.match.details["collector_signal_strength"], -67)
         self.assertEqual(result.match.details["collector_signal_strength_source"], "wifi_rssi")
         self.assertEqual(result.match.details["collector_signal_strength_raw"], "-67")
+        self.assertEqual(result.match.details["collector_server_endpoint"], "iot.eybond.com,18899,TCP")
+        self.assertEqual(result.match.details["collector_cloud_family"], "valuecloud_at")
+        self.assertEqual(result.match.details["collector_cloud_family_source"], "endpoint_host")
+        self.assertEqual(result.match.details["collector_cloud_family_confidence"], "high")
+        assert result.collector is not None
+        assert result.collector.collector is not None
+        self.assertEqual(result.collector.collector.collector_server_endpoint, "iot.eybond.com,18899,TCP")
+        self.assertEqual(result.collector.collector.collector_cloud_family, "valuecloud_at")
         self.assertIs(result.match.details["battery_connected"], True)
         self.assertEqual(result.match.details["battery_connection_state"], "Connected")
         self.assertEqual(result.match.details["battery_percent"], 78)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..link_transport import PayloadLinkTransport, async_send_payload
+from ..link_transport import PayloadLinkTransport, async_send_payload, select_payload_route
 from ..models import ProbeTarget
 from ..payload import pi18 as pi18_payload
 from ..payload import pi30 as pi30_payload
@@ -121,7 +121,12 @@ class AsciiDiagnosticTarget:
 
     async def send_ascii(self, command: str) -> AsciiOutcome:
         request = self._build_request(command)
-        raw = await async_send_payload(self._transport, request, route=self._route)
+        route = select_payload_route(
+            self._transport,
+            self._route,
+            payload_family=f"{self.driver_key}_ascii",
+        )
+        raw = await async_send_payload(self._transport, request, route=route)
         payload: str | None = None
         decode_error: str | None = None
         try:

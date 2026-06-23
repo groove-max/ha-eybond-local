@@ -77,7 +77,20 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         self.assertTrue(profile.virtual_bridge)
         self.assertTrue(profile.uart_runtime_speed_change)
 
+    def test_collector_pn_alone_keeps_factory_capabilities(self) -> None:
+        profile = collector_capability_profile_from_runtime(
+            collector=types.SimpleNamespace(
+                collector_virtual_bridge=False,
+                collector_pn="E5000020000000",
+            ),
+            values={},
+            data={},
+            options={},
+        )
+
+        self.assertFalse(profile.virtual_bridge)
+        self.assertEqual(profile.collector_kind, COLLECTOR_KIND_FACTORY_EYBOND)
+
 
 if __name__ == "__main__":
     unittest.main()
-

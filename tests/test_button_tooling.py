@@ -527,6 +527,58 @@ class ToolingButtonTests(unittest.TestCase):
             "Stop proxy capture before changing collector callback actions.",
         )
 
+    def test_reboot_collector_button_is_disabled_for_virtual_bridge_without_reboot_feature(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data = RuntimeSnapshot(
+            connected=True,
+            values={
+                **coordinator.data.values,
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+                "collector_bridge_features": "local_only, no_cloud, wifi_params, endpoint_write",
+            },
+        )
+        entity = EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(
+                key="reboot_collector",
+                name="Restart Collector",
+                icon="mdi:restart",
+                entity_category="config",
+            ),
+        )
+
+        self.assertFalse(entity.available)
+        self.assertEqual(
+            entity.extra_state_attributes["availability_reason"],
+            "Collector restart is not advertised by this virtual collector firmware. "
+            "Update the firmware to a build that exposes the reboot capability.",
+        )
+
+    def test_reboot_collector_button_is_available_for_virtual_bridge_with_reboot_feature(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data = RuntimeSnapshot(
+            connected=True,
+            values={
+                **coordinator.data.values,
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+                "collector_bridge_features": "local_only, no_cloud, reboot",
+            },
+        )
+        entity = EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(
+                key="reboot_collector",
+                name="Restart Collector",
+                icon="mdi:restart",
+                entity_category="config",
+            ),
+        )
+
+        self.assertTrue(entity.available)
+        self.assertEqual(entity.extra_state_attributes["availability_reason"], "Ready")
+
     def test_apply_collector_changes_button_is_disabled_while_mode_change_applies(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.collector_configuration_lock_reason = lambda: (

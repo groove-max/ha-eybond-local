@@ -81,14 +81,15 @@ def collector_cloud_family_observation_from_endpoint(
 
     normalized_host = str(parsed.host or "").strip().lower()
 
+    family = resolve_collector_cloud_family_by_host(normalized_host)
+    if family:
+        return CollectorCloudFamilyObservation(
+            family=family,
+            source=COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
+            confidence="high" if parsed.has_explicit_port else "low",
+        )
+
     if not parsed.has_explicit_port:
-        family = resolve_collector_cloud_family_by_host(normalized_host)
-        if family:
-            return CollectorCloudFamilyObservation(
-                family=family,
-                source=COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
-                confidence="low",
-            )
         return CollectorCloudFamilyObservation()
 
     family = resolve_collector_cloud_family_by_port(parsed.port)

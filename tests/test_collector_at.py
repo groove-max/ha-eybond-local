@@ -21,6 +21,7 @@ from custom_components.eybond_local.collector.at import (
     parse_at_command,
     parse_at_response,
 )
+from custom_components.eybond_local.collector.at_runtime import query_runtime_collector_at_values
 
 
 class _FakeWriter:
@@ -86,6 +87,23 @@ class CollectorAtTests(unittest.TestCase):
             self.assertEqual(bytes(writer.buffer), b"AT+WFSS?\r\n")
             self.assertEqual(response.command, "WFSS")
             self.assertEqual(response.value, "-55")
+
+        asyncio.run(_run())
+
+    def test_runtime_query_decodes_valuecloud_endpoint_family(self) -> None:
+        class _Transport:
+            async def async_query(self, command: str):
+                if command == "CLDSRVHOST1":
+                    return parse_at_response("AT+CLDSRVHOST1:iot.eybond.com,18899,TCP")
+                return parse_at_response(f"AT+{command}:")
+
+        async def _run() -> None:
+            values = await query_runtime_collector_at_values(_Transport())
+
+            self.assertEqual(values["collector_server_endpoint"], "iot.eybond.com,18899,TCP")
+            self.assertEqual(values["collector_cloud_family"], "valuecloud_at")
+            self.assertEqual(values["collector_cloud_family_source"], "endpoint_host")
+            self.assertEqual(values["collector_cloud_family_confidence"], "high")
 
         asyncio.run(_run())
 
