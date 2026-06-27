@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "schema_key": "eybond_g_ascii_base",
+  "protocol_id": "EYBOND_G_ASCII",
+  "title": "EyeBond/JsdSolar G-command ASCII command schema",
+  "notes": [
+    "This schema describes read-only/query commands used for runtime decoding and support-package evidence capture.",
+    "Write/control commands are intentionally excluded until hardware write behavior is validated.",
+    "Indexed sweeps are bounded in the schema so support-package captures remain predictable."
+  ],
+  "commands": [
+    {
+      "command": "GMOD",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Operating mode",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "eybond_g_ascii_operating_mode_code", "kind": "status"}
+      ]
+    },
+    {
+      "command": "GPDAT0",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Parallel/live aggregate data",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 5, "key": "inverter_voltage", "unit": "V"},
+        {"index": 6, "key": "inverter_frequency", "unit": "Hz"},
+        {"index": 7, "key": "grid_voltage", "unit": "V"},
+        {"index": 8, "key": "grid_frequency", "unit": "Hz"},
+        {"index": 9, "key": "output_voltage", "unit": "V"},
+        {"index": 10, "key": "output_frequency", "unit": "Hz"},
+        {"index": 11, "key": "output_current", "unit": "A"},
+        {"index": 12, "key": "battery_voltage", "unit": "V"},
+        {"index": 13, "key": "battery_current", "unit": "A"},
+        {"index": 14, "key": "output_load_percentage", "unit": "%"},
+        {"index": 15, "key": "output_apparent_power", "unit": "VA"},
+        {"index": 16, "key": "output_active_power", "unit": "W"},
+        {"index": 17, "key": "battery_capacity", "unit": "%"},
+        {"index": 18, "key": "pv_input_voltage", "unit": "V"},
+        {"index": 19, "key": "pv_charging_current", "unit": "A"},
+        {"index": 20, "key": "pv_power", "unit": "W"},
+        {"index": 21, "key": "mainboard_temperature", "unit": "°C"}
+      ]
+    },
+    {
+      "command": "GPV",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "PV telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "pv_input_voltage", "unit": "V"},
+        {"index": 1, "key": "battery_voltage", "unit": "V"},
+        {"index": 2, "key": "pv_charging_current", "unit": "A"},
+        {"index": 3, "key": "pv_current", "unit": "A"},
+        {"index": 4, "key": "pv_power", "unit": "W"},
+        {"index": 5, "key": "pv_tracking_status", "kind": "status"},
+        {"index": 6, "key": "pv_chargeable_status", "kind": "status"},
+        {"index": 20, "key": "pv_energy_today", "unit": "kWh", "divisor": 100},
+        {"index": [21, 22], "key": "pv_energy_total", "unit": "kWh", "divisor": 100},
+        {"index": 23, "key": "warning_status_1", "kind": "status"}
+      ]
+    },
+    {
+      "command": "GBAT",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Battery telemetry/settings",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "battery_voltage", "unit": "V"},
+        {"index": 1, "key": "battery_current", "unit": "A"},
+        {"index": 2, "key": "battery_cell_count"},
+        {"index": 3, "key": "battery_discharge_cutoff_voltage", "unit": "V"},
+        {"index": 4, "key": "battery_discharge_alarm_voltage", "unit": "V"}
+      ]
+    },
+    {
+      "command": "F",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Rated inverter information",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "rated_output_voltage", "unit": "V"},
+        {"index": 1, "key": "rated_output_current", "unit": "A"},
+        {"index": 3, "key": "rated_frequency", "unit": "Hz"}
+      ]
+    },
+    {
+      "command": "SVFW",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Software version",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "eybond_g_ascii_software_version"},
+        {"index": 1, "key": "eybond_g_ascii_software_date"}
+      ]
+    },
+    {
+      "command": "GTMP",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Temperature telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "pv_side_temperature", "unit": "°C"},
+        {"index": 1, "key": "charger_temperature", "unit": "°C"},
+        {"index": 2, "key": "ambient_temperature", "unit": "°C"}
+      ]
+    },
+    {
+      "command": "GLINE",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Grid/line telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "grid_voltage", "unit": "V"},
+        {"index": 1, "key": "grid_frequency", "unit": "Hz"},
+        {"index": 9, "key": "output_load_percentage", "unit": "%"},
+        {"index": 10, "key": "grid_energy_today", "unit": "kWh", "divisor": 100},
+        {"index": [11, 12], "key": "grid_energy_total", "unit": "kWh", "divisor": 100}
+      ]
+    },
+    {
+      "command": "GBUS",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Bus telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "bus_voltage", "unit": "V"}
+      ]
+    },
+    {
+      "command": "GCHG",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Charging telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "bus_voltage", "unit": "V"},
+        {"index": 1, "key": "charging_voltage", "unit": "V"},
+        {"index": 2, "key": "battery_cell_count"},
+        {"index": 3, "key": "charging_current", "unit": "A"}
+      ]
+    },
+    {
+      "command": "GOP",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Output telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "output_voltage", "unit": "V"},
+        {"index": 1, "key": "output_frequency", "unit": "Hz"},
+        {"index": 2, "key": "output_current", "unit": "A"},
+        {"index": 4, "key": "output_active_power", "unit": "W"},
+        {"index": 6, "key": "output_apparent_power", "unit": "VA"},
+        {"index": 9, "key": "output_load_percentage", "unit": "%"},
+        {"index": 12, "key": "output_energy_today", "unit": "kWh", "divisor": 100},
+        {"index": [13, 14], "key": "output_energy_total", "unit": "kWh", "divisor": 100}
+      ]
+    },
+    {
+      "command": "GINV",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Inverter telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "inverter_voltage", "unit": "V"},
+        {"index": 1, "key": "inverter_frequency", "unit": "Hz"}
+      ]
+    },
+    {
+      "command": "GWS",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Fault/warning status",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "fault_code"},
+        {"index": 1, "key": "warning_status_1"},
+        {"index": 2, "key": "warning_status_2"}
+      ]
+    },
+    {
+      "command": "BL",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Battery level",
+      "support_probe_enabled": true,
+      "fields": [
+        {"index": 0, "key": "battery_capacity", "unit": "%"}
+      ]
+    },
+    {"command": "FAN???", "access": "read", "source": "documentation_jsdsolar", "description": "Fan telemetry", "support_probe_enabled": true, "fields": []},
+    {"command": "TCQN????", "access": "read", "source": "documentation_jsdsolar", "description": "Equalization interval timer", "support_probe_enabled": true, "fields": []},
+    {"command": "DATE??????", "access": "read", "source": "documentation_jsdsolar", "description": "Date query", "support_probe_enabled": true, "fields": []},
+    {"command": "TIME??????", "access": "read", "source": "documentation_jsdsolar", "description": "Time query", "support_probe_enabled": true, "fields": []},
+    {"command": "GFAIL", "access": "read", "source": "documentation_jsdsolar", "description": "Failure context", "support_probe_enabled": true, "fields": []},
+    {"command": "GBMS", "access": "read", "source": "documentation_jsdsolar", "description": "BMS telemetry", "support_probe_enabled": true, "fields": []},
+    {"command": "I", "access": "read", "source": "documentation_jsdsolar", "description": "Identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "CFG", "access": "read", "source": "documentation_jsdsolar", "description": "Configuration query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPPV", "access": "read", "source": "documentation_jsdsolar", "description": "PV query", "support_probe_enabled": true, "fields": []},
+    {"command": "TE?", "access": "read", "source": "proxy_capture_valuecloud", "description": "Feature flag query", "support_probe_enabled": true, "fields": []},
+    {"command": "TD?", "access": "read", "source": "documentation_jsdsolar", "description": "Setting query", "support_probe_enabled": true, "fields": []},
+    {"command": "Q1", "access": "read", "source": "proxy_capture_valuecloud", "description": "Legacy observed query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT1", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT2", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT3", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT4", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT5", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT6", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT7", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT8", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPDAT9", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel/live data query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID0", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID1", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID2", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID3", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID4", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID5", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID6", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID7", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID8", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []},
+    {"command": "GPID9", "access": "read", "source": "documentation_jsdsolar_indexed", "description": "Indexed parallel system identity query", "support_probe_enabled": true, "fields": []}
+  ]
+}

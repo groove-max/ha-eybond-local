@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "github_comment_jsdsolar_g_ascii_family",
+  "kind": "github_comment",
+  "title": "External JsdSolar SmartESS G-command family evidence",
+  "reference": "https://github.com/syssi/esphome-pipsolar/issues/160#issuecomment-2660896958",
+  "captured_at": "2026-03-02",
+  "visibility": "public",
+  "summary": "External discussion of a JsdSolar/SmartESS device lists the same G-command family shape, including GPDAT0, GPV, GBAT, GMOD, GTMP, GCHG, GOP, GLINE, GBUS, GINV, GWS, Q1, and F. This supports treating the captured ValueCloud traffic as a distinct G-ASCII protocol family rather than as PI30 ASCII.",
+  "assertions": [
+    "runtime_compatibility"
+  ]
+}

@@ -54,6 +54,12 @@ class _FakeLinkManager:
         self.reset_calls += 1
         self.connected = False
 
+    def listener_diagnostics(self) -> dict[str, object]:
+        return {
+            "collector_callback_session_protocol": "at_text",
+            "collector_callback_identity_strategy": "at_dtupn",
+        }
+
 
 class _StaleHeartbeatThenRecoveredLinkManager(_FakeLinkManager):
     def __init__(self) -> None:
@@ -369,11 +375,17 @@ class _CollectorAtQueryTransport:
         self._responses = dict(responses)
         self.connected = connected
         self.queries: list[str] = []
+        self.writes: list[tuple[str, str]] = []
 
     async def async_query(self, command: str) -> CollectorAtResponse:
         self.queries.append(command)
         value = self._responses[command]
         return CollectorAtResponse(command=command, value=value, raw=f"AT+{command}:{value}")
+
+    async def async_write(self, command: str, value: str) -> CollectorAtResponse:
+        self.writes.append((command, value))
+        self._responses[command] = value
+        return CollectorAtResponse(command=command, value="W000", raw=f"AT+{command}:W000")
 
 
 class _CollectorOnlyLinkManager(_FakeLinkManager):
@@ -418,6 +430,26 @@ class _RuntimeValuesDriver:
 
 
 class HubSnapshotTests(unittest.TestCase):
+    def test_listener_diagnostics_delegate_to_link_manager(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+
+        diagnostics = hub.listener_diagnostics()
+
+        self.assertEqual(diagnostics["collector_callback_session_protocol"], "at_text")
+        self.assertEqual(diagnostics["collector_callback_identity_strategy"], "at_dtupn")
+
     def test_build_snapshot_includes_effective_profile_and_schema_names(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(
@@ -1044,6 +1076,54 @@ class HubSnapshotTests(unittest.TestCase):
                     (2, b"\x15"),
                     (2, b"\x1e"),
                     (3, b"\x1d1"),
+                ],
+            )
+
+        asyncio.run(_run())
+
+    def test_async_set_collector_server_endpoint_uses_at_management_when_fc_path_is_missing(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            link_manager = _FakeLinkManager()
+            link_manager.transport = object()
+            at_transport = _CollectorAtQueryTransport(
+                {"CLDSRVHOST1": "iot.eybond.com,18899,TCP"}
+            )
+            link_manager.collector_at_transport = at_transport
+            hub._link_manager = link_manager
+
+            result = await hub.async_set_collector_server_endpoint(
+                "192.168.8.113,18899,TCP",
+                apply_changes=True,
+            )
+
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["management_protocol"], "at_text")
+            self.assertEqual(result["at_apply_response"], "W000")
+            self.assertEqual(result["previous_endpoint"], "iot.eybond.com,18899,TCP")
+            self.assertEqual(result["requested_endpoint"], "192.168.8.113,18899,TCP")
+            self.assertEqual(result["readback_endpoint"], "192.168.8.113,18899,TCP")
+            self.assertEqual(
+                hub._collector_runtime_values["collector_server_endpoint"],
+                "192.168.8.113,18899,TCP",
+            )
+            self.assertEqual(at_transport.queries, ["CLDSRVHOST1", "CLDSRVHOST1"])
+            self.assertEqual(
+                at_transport.writes,
+                [
+                    ("CLDSRVHOST1", "192.168.8.113,18899,TCP"),
+                    ("INTPARA", "29,1"),
                 ],
             )
 

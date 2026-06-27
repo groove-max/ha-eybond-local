@@ -912,6 +912,22 @@ class ShadowLearningProxyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConsumeNextMessageFramingTests(unittest.TestCase):
+    def test_g_ascii_line_is_framed_as_ascii_message(self) -> None:
+        buffer = bytearray(b"GPDAT0\r")
+
+        result = _consume_next_message(buffer)
+
+        self.assertEqual(result, ("ascii", b"GPDAT0\r"))
+        self.assertEqual(buffer, bytearray())
+
+    def test_at_line_still_wins_over_generic_ascii_framing(self) -> None:
+        buffer = bytearray(b"AT+WFSS?\r\n")
+
+        result = _consume_next_message(buffer)
+
+        self.assertEqual(result, ("at", b"AT+WFSS?\r\n"))
+        self.assertEqual(buffer, bytearray())
+
     def test_eybond_frame_with_modbus_colliding_tid_is_not_stalled(self) -> None:
         # An eybond frame whose tid low byte is 0x10 (Modbus write-multiple
         # fcode) used to be read as a phantom Modbus frame and stall the
@@ -932,6 +948,24 @@ class ConsumeNextMessageFramingTests(unittest.TestCase):
                 self.assertEqual(kind, "frame")
                 self.assertEqual(consumed, frame)
                 self.assertEqual(len(buffer), 0)
+
+    def test_eybond_frame_with_ascii_like_tid_is_not_stalled(self) -> None:
+        frame = build_collector_request(
+            0x4701,
+            b"\x01\x03\x00\x10",
+            devcode=2376,
+            collector_addr=1,
+            fcode=4,
+        )
+        buffer = bytearray(frame)
+
+        result = _consume_next_message(buffer)
+
+        self.assertIsNotNone(result)
+        kind, consumed = result
+        self.assertEqual(kind, "frame")
+        self.assertEqual(consumed, frame)
+        self.assertEqual(buffer, bytearray())
 
     def test_partial_eybond_frame_still_waits(self) -> None:
         frame = build_collector_request(

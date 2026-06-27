@@ -28,6 +28,8 @@ class CollectorCloudProfileCatalogEntry:
     endpoint_write_format: str
     session_protocol: str
     identity_strategy: str
+    raw_passthrough_bootstrap: str
+    raw_passthrough_frame_format: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,8 @@ class CollectorCloudProfileCatalog:
     endpoint_write_formats: dict[str, str]
     session_protocols: dict[str, str]
     identity_strategies: dict[str, str]
+    raw_passthrough_bootstraps: dict[str, str]
+    raw_passthrough_frame_formats: dict[str, str]
 
 
 @lru_cache(maxsize=None)
@@ -65,6 +69,8 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
     endpoint_write_formats: dict[str, str] = {}
     session_protocols: dict[str, str] = {}
     identity_strategies: dict[str, str] = {}
+    raw_passthrough_bootstraps: dict[str, str] = {}
+    raw_passthrough_frame_formats: dict[str, str] = {}
 
     for entry in entries:
         family = entry.family
@@ -84,6 +90,10 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
             session_protocols[family] = entry.session_protocol
         if entry.identity_strategy:
             identity_strategies[family] = entry.identity_strategy
+        if entry.raw_passthrough_bootstrap:
+            raw_passthrough_bootstraps[family] = entry.raw_passthrough_bootstrap
+        if entry.raw_passthrough_frame_format:
+            raw_passthrough_frame_formats[family] = entry.raw_passthrough_frame_format
 
         for host in entry.known_hosts:
             if host:
@@ -102,6 +112,8 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
         endpoint_write_formats=endpoint_write_formats,
         session_protocols=session_protocols,
         identity_strategies=identity_strategies,
+        raw_passthrough_bootstraps=raw_passthrough_bootstraps,
+        raw_passthrough_frame_formats=raw_passthrough_frame_formats,
     )
 
 
@@ -199,6 +211,28 @@ def resolve_collector_cloud_identity_strategy(cloud_family: object) -> str:
     return catalog.identity_strategies.get(normalized_family, "")
 
 
+def resolve_collector_cloud_raw_passthrough_bootstrap(cloud_family: object) -> str:
+    """Resolve the raw inverter payload bootstrap mode for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.raw_passthrough_bootstraps.get(normalized_family, "")
+
+
+def resolve_collector_cloud_raw_passthrough_frame_format(cloud_family: object) -> str:
+    """Resolve the raw inverter payload frame format for a collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.raw_passthrough_frame_formats.get(normalized_family, "")
+
+
 def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalogEntry:
     known_hosts = tuple(
         str(item).strip().lower()
@@ -222,6 +256,10 @@ def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalog
         endpoint_write_format=str(raw.get("endpoint_write_format", "")).strip().lower(),
         session_protocol=str(raw.get("session_protocol", "")).strip().lower(),
         identity_strategy=str(raw.get("identity_strategy", "")).strip().lower(),
+        raw_passthrough_bootstrap=str(raw.get("raw_passthrough_bootstrap", "")).strip().lower(),
+        raw_passthrough_frame_format=str(
+            raw.get("raw_passthrough_frame_format", "")
+        ).strip().lower(),
     )
 
 

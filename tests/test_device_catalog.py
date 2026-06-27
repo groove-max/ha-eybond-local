@@ -283,6 +283,19 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         )
         self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
 
+    def test_must_pv1800_numeric_marker_resolves_to_issue_5_descriptor(self) -> None:
+        result = load_compiled_detection_catalog().resolve(
+            protocol_key="must_pv_ph18",
+            evidence={
+                "protocol.protocol_id": "MUST_PV_PH18",
+                "identity.model_number": "PV1800",
+            },
+        )
+
+        self.assertEqual(result.resolution, RESOLUTION_EXACT)
+        self.assertEqual(result.candidate_keys, ("must_pv18_3024",))
+        self.assertEqual(result.surface_key, "must_pv_ph18_read_only")
+
     def test_serial_plausibility_helper(self) -> None:
         self.assertTrue(serial_ascii_plausible("92632500000001"))
         self.assertTrue(serial_ascii_plausible("70S10300000005Q"))

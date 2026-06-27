@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.support.collector_registry import (  # noqa: E402
     collector_registry_path,
     get_collector_registry_record,
+    get_collector_registry_record_by_last_seen_ip,
     load_collector_registry,
     remember_collector_original_endpoint,
 )
@@ -77,6 +78,69 @@ class CollectorRegistryTests(unittest.TestCase):
             self.assertEqual(loaded.original_endpoint_raw, "ess.eybond.com")
             self.assertEqual(loaded.cloud_profile_key, "legacy_binary")
 
+    def test_existing_endpoint_keeps_endpoint_but_refreshes_last_seen_ip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            remember_collector_original_endpoint(
+                config_dir=config_dir,
+                collector_pn="PN12345",
+                original_endpoint_raw="iot.eybond.com,18899,TCP",
+                cloud_profile_key="valuecloud_at",
+                last_seen_ip="192.168.8.110",
+            )
+
+            record = remember_collector_original_endpoint(
+                config_dir=config_dir,
+                collector_pn="PN12345",
+                original_endpoint_raw="dtu_ess.eybond.com,18899,TCP",
+                cloud_profile_key="smartess_at",
+                last_seen_ip="192.168.8.111",
+            )
+
+            self.assertEqual(record.original_endpoint_raw, "iot.eybond.com,18899,TCP")
+            self.assertEqual(record.cloud_profile_key, "valuecloud_at")
+            self.assertEqual(record.last_seen_ip, "192.168.8.111")
+
+    def test_lookup_by_last_seen_ip_requires_unique_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            remember_collector_original_endpoint(
+                config_dir=config_dir,
+                collector_pn="PN12345",
+                original_endpoint_raw="iot.eybond.com,18899,TCP",
+                cloud_profile_key="valuecloud_at",
+                last_seen_ip="192.168.8.110",
+            )
+
+            record = get_collector_registry_record_by_last_seen_ip(
+                config_dir=config_dir,
+                last_seen_ip="192.168.8.110",
+            )
+
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record.collector_pn, "PN12345")
+            self.assertEqual(record.cloud_profile_key, "valuecloud_at")
+
+    def test_lookup_by_last_seen_ip_fails_closed_when_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            for pn in ("PN12345", "PN67890"):
+                remember_collector_original_endpoint(
+                    config_dir=config_dir,
+                    collector_pn=pn,
+                    original_endpoint_raw="iot.eybond.com,18899,TCP",
+                    cloud_profile_key="valuecloud_at",
+                    last_seen_ip="192.168.8.110",
+                )
+
+            self.assertIsNone(
+                get_collector_registry_record_by_last_seen_ip(
+                    config_dir=config_dir,
+                    last_seen_ip="192.168.8.110",
+                )
+            )
+
     def test_malformed_registry_loads_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp)
@@ -98,4 +162,3 @@ class CollectorRegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

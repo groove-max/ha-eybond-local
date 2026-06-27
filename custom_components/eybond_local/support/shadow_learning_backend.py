@@ -28,6 +28,7 @@ from .shadow_learning_protocol import resolve_shadow_learning_protocol_adapter
 
 
 _SHADOW_TRACE_DIR = "shadow_learning_traces"
+_ASCII_INCOMPLETE = object()
 
 # Cloud-issued AT commands that control where the DTU connects. These are always
 # answered from the shadow seed (never forwarded to the collector) so the cloud
@@ -36,6 +37,19 @@ _CLOUD_REDIRECT_AT_COMMAND_PREFIX = "CLDSRVHOST"
 
 # Bounded distinct value samples kept per register in the in-memory read map.
 _READ_SAMPLE_LIMIT = 8
+_ASCII_FIELD_SAMPLE_LIMIT = 8
+_G_ASCII_RUNTIME_FIELD_COMMANDS = {
+    "eybond_g_ascii_gdat0_fields": "GPDAT0",
+    "eybond_g_ascii_gpv_fields": "GPV",
+    "eybond_g_ascii_gbat_fields": "GBAT",
+    "eybond_g_ascii_gline_fields": "GLINE",
+    "eybond_g_ascii_gop_fields": "GOP",
+    "eybond_g_ascii_gchg_fields": "GCHG",
+    "eybond_g_ascii_gws_fields": "GWS",
+    "valuecloud_gdat0_fields": "GPDAT0",
+    "valuecloud_gpv_fields": "GPV",
+    "valuecloud_gbat_fields": "GBAT",
+}
 
 
 def shadow_learning_trace_root(config_dir: Path) -> Path:
@@ -204,7 +218,10 @@ def build_shadow_learning_preflight(seed: ShadowLearningSeed) -> ShadowLearningP
     )
     if not adapter.supported:
         blockers.append(adapter.blocker)
-    if not seed.register_bank:
+    if adapter.key == "eybond_g_ascii":
+        if not _has_g_ascii_command_seed(seed.command_responses):
+            blockers.append("missing_command_seed")
+    elif not seed.register_bank:
         blockers.append("missing_register_seed")
     return ShadowLearningPreflight(can_start=not blockers, blockers=tuple(blockers))
 
@@ -234,6 +251,8 @@ class InProcessShadowLearningHandler:
         self._observation_condition = asyncio.Condition()
         self._read_block_counts: dict[tuple[int, int], int] = {}
         self._read_register_samples: dict[int, list[int]] = {}
+        self._ascii_command_counts: dict[str, int] = {}
+        self._ascii_field_samples: dict[str, list[str]] = {}
         self._read_event_count = 0
 
     @property
@@ -264,7 +283,7 @@ class InProcessShadowLearningHandler:
         downstream labeling never mistakes them for multi-snapshot evidence.
         """
 
-        return {
+        payload = {
             "read_blocks": [
                 [address, count, occurrences]
                 for (address, count), occurrences in sorted(self._read_block_counts.items())
@@ -276,6 +295,17 @@ class InProcessShadowLearningHandler:
             "read_event_count": self._read_event_count,
             "value_source": "seed_bank",
         }
+        if self._ascii_command_counts:
+            payload["ascii_commands"] = [
+                [command, occurrences]
+                for command, occurrences in sorted(self._ascii_command_counts.items())
+            ]
+            payload["ascii_fields"] = {
+                command: list(samples)
+                for command, samples in sorted(self._ascii_field_samples.items())
+            }
+            payload["value_source"] = "seed_command_responses"
+        return payload
 
     def _record_read_observation(self, address: int, count: int, values: list[int]) -> None:
         self._read_event_count += 1
@@ -285,6 +315,19 @@ class InProcessShadowLearningHandler:
             samples = self._read_register_samples.setdefault(int(address) + offset, [])
             if value not in samples and len(samples) < _READ_SAMPLE_LIMIT:
                 samples.append(int(value))
+
+    def _record_ascii_read_observation(self, command: str, response_payload: bytes) -> None:
+        self._read_event_count += 1
+        normalized = str(command or "").strip().upper()
+        if not normalized:
+            return
+        self._ascii_command_counts[normalized] = self._ascii_command_counts.get(normalized, 0) + 1
+        sample = _normalize_ascii_response_sample(response_payload)
+        if not sample:
+            return
+        samples = self._ascii_field_samples.setdefault(normalized, [])
+        if sample not in samples and len(samples) < _ASCII_FIELD_SAMPLE_LIMIT:
+            samples.append(sample)
 
     def observation_cursor(self) -> int:
         """Return one cursor that points to the current end of observations."""
@@ -441,6 +484,12 @@ class InProcessShadowLearningHandler:
                             writer.write(response)
                             await writer.drain()
                         continue
+                    if kind == "ascii":
+                        response = await self._handle_ascii_frame(payload, remote=remote)
+                        if response is not None:
+                            writer.write(response)
+                            await writer.drain()
+                        continue
                     response = await self._handle_frame(payload, remote=remote)
                     if response is not None:
                         writer.write(response)
@@ -469,6 +518,14 @@ class InProcessShadowLearningHandler:
             line = bytes(buffer[: newline + 1])
             del buffer[: newline + 1]
             return "at", line
+        ascii_frame = _consume_g_ascii_frame(buffer)
+        if ascii_frame is _ASCII_INCOMPLETE:
+            frame = _consume_eybond_frame_if_complete(buffer)
+            if frame is not None:
+                return "frame", frame
+            return None
+        if ascii_frame is not None:
+            return "ascii", ascii_frame
         if len(buffer) < HEADER_SIZE:
             return None
         try:
@@ -530,10 +587,15 @@ class InProcessShadowLearningHandler:
         read_request = self._protocol_adapter.decode_read_request(payload)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
-            self._record_read_observation(read_request.address, read_request.count, values)
-            response_payload = self._protocol_adapter.build_read_response(
-                read_request, values
+            response_payload = self._protocol_adapter.build_seeded_read_response(
+                read_request,
+                values,
+                self._at_responses,
             )
+            if read_request.command:
+                self._record_ascii_read_observation(read_request.command, response_payload)
+            else:
+                self._record_read_observation(read_request.address, read_request.count, values)
             await self._append_event(
                 self._protocol_event_kind("read_request"),
                 "cloud_to_shadow",
@@ -546,6 +608,7 @@ class InProcessShadowLearningHandler:
                     "address": read_request.address,
                     "count": read_request.count,
                     "values": values,
+                    "command": read_request.command,
                 },
             )
             await self._append_event(
@@ -560,6 +623,8 @@ class InProcessShadowLearningHandler:
                     "address": read_request.address,
                     "count": read_request.count,
                     "values": values,
+                    "command": read_request.command,
+                    "response_ascii": response_payload.decode("ascii", errors="replace").strip(),
                 },
             )
             return build_collector_request(
@@ -623,6 +688,8 @@ class InProcessShadowLearningHandler:
                     "function_code": write_request.function_code,
                     "address": write_request.address,
                     "values": list(write_request.values),
+                    "command": write_request.command,
+                    "value": write_request.value,
                     "response_mode": "ack",
                 },
             )
@@ -638,6 +705,8 @@ class InProcessShadowLearningHandler:
                     "function_code": write_request.function_code,
                     "address": write_request.address,
                     "values": list(write_request.values),
+                    "command": write_request.command,
+                    "value": write_request.value,
                     "response_mode": "exception",
                 },
             )
@@ -676,7 +745,11 @@ class InProcessShadowLearningHandler:
                     "values": values,
                 },
             )
-            response = self._protocol_adapter.build_read_response(read_request, values)
+            response = self._protocol_adapter.build_seeded_read_response(
+                read_request,
+                values,
+                self._at_responses,
+            )
             await self._append_event(
                 self._protocol_event_kind("read_response"),
                 "shadow_to_cloud",
@@ -752,6 +825,83 @@ class InProcessShadowLearningHandler:
         )
         return response
 
+    async def _handle_ascii_frame(self, frame: bytes, *, remote: str) -> bytes | None:
+        """Handle one bare G-ASCII command from the cloud.
+
+        Reads are answered from command-response seed data. Unknown commands and
+        writes are NAK'd locally and never forwarded to the physical inverter.
+        """
+
+        read_request = self._protocol_adapter.decode_read_request(frame)
+        if read_request is not None:
+            response = self._protocol_adapter.build_seeded_read_response(
+                read_request,
+                [],
+                self._at_responses,
+            )
+            self._record_ascii_read_observation(read_request.command, response)
+            await self._append_event(
+                self._protocol_event_kind("read_request"),
+                "cloud_to_shadow",
+                {
+                    "remote": remote,
+                    "command": read_request.command,
+                    "payload_hex": frame.hex(),
+                },
+            )
+            await self._append_event(
+                self._protocol_event_kind("read_response"),
+                "shadow_to_cloud",
+                {
+                    "remote": remote,
+                    "command": read_request.command,
+                    "response_ascii": response.decode("ascii", errors="replace").strip(),
+                },
+            )
+            return response
+
+        write_request = self._protocol_adapter.decode_write_request(frame)
+        if write_request is None:
+            await self._append_event(
+                "shadow_unknown_frame",
+                "cloud_to_shadow",
+                {"remote": remote, "payload_hex": frame.hex()},
+            )
+            return self._protocol_adapter.build_raw_exception(frame, exception_code=0x01)
+
+        observation = self._protocol_adapter.write_observation(
+            frame=frame,
+            devcode=None,
+            devaddr=None,
+            timestamp=utc_now_iso(),
+            source="shadow_learning",
+        )
+        if observation is not None:
+            self._write_observations.append(observation)
+            async with self._observation_condition:
+                self._observation_condition.notify_all()
+            await self._append_event(
+                self._protocol_event_kind("write_observation"),
+                "cloud_to_shadow",
+                observation.to_json_dict(),
+            )
+
+        response = self._protocol_adapter.build_write_exception_response(
+            write_request,
+            exception_code=0x01,
+        )
+        await self._append_event(
+            self._protocol_event_kind("write_response"),
+            "shadow_to_cloud",
+            {
+                "remote": remote,
+                "command": write_request.command,
+                "value": write_request.value,
+                "response_mode": "exception",
+            },
+        )
+        return response
+
     async def _append_event(self, kind: str, direction: str, payload: dict[str, Any]) -> None:
         writer = self._writer
         if writer is None:
@@ -821,6 +971,14 @@ class InProcessShadowLearningHandler:
         return values
 
     def _build_exception_frame(self, header, inner_payload: bytes, *, exception_code: int) -> bytes:
+        if self._protocol_adapter.key != "modbus_rtu":
+            return build_collector_request(
+                header.tid,
+                self._protocol_adapter.build_raw_exception(inner_payload, exception_code=exception_code),
+                devcode=header.devcode,
+                collector_addr=header.devaddr,
+                fcode=header.fcode,
+            )
         if header.fcode == FC_FORWARD_TO_DEVICE and len(inner_payload) >= 2:
             # A modbus-to-device wrapper carries a real Modbus PDU: the NACK's
             # inner bytes must echo the INNER slave id and function code
@@ -890,6 +1048,7 @@ def _build_command_responses(
     command_responses: dict[str, str] | None,
 ) -> dict[str, str]:
     responses = dict(build_command_fixture_responses(raw_capture or {}))
+    responses.update(_build_g_ascii_command_responses(raw_capture or {}))
     if command_responses:
         responses.update({str(command): str(value) for command, value in command_responses.items()})
     if collector_callback_endpoint:
@@ -897,6 +1056,48 @@ def _build_command_responses(
     if collector_pn:
         responses.setdefault("QID", str(collector_pn))
     return responses
+
+
+def _build_g_ascii_command_responses(raw_capture: dict[str, Any]) -> dict[str, str]:
+    responses: dict[str, str] = {}
+    for key, value in _walk_mapping_values(raw_capture):
+        normalized_key = str(key or "").strip().lower()
+        command = _G_ASCII_RUNTIME_FIELD_COMMANDS.get(normalized_key)
+        if command and value not in (None, ""):
+            responses.setdefault(command, str(value).strip())
+    return responses
+
+
+def _walk_mapping_values(value: Any) -> list[tuple[str, Any]]:
+    found: list[tuple[str, Any]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.append((str(key), item))
+            found.extend(_walk_mapping_values(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_walk_mapping_values(item))
+    return found
+
+
+def _has_g_ascii_command_seed(command_responses: dict[str, str]) -> bool:
+    for command, value in (command_responses or {}).items():
+        normalized = str(command or "").strip().upper()
+        if not value:
+            continue
+        if normalized.startswith(("GPDAT", "GPV", "GBAT", "GLINE", "GOP", "GCHG", "GWS")):
+            return True
+    return False
+
+
+def _normalize_ascii_response_sample(response_payload: bytes) -> str:
+    try:
+        text = response_payload.decode("ascii", errors="replace").strip()
+    except Exception:
+        return ""
+    if text.startswith("("):
+        text = text[1:]
+    return text
 
 
 
@@ -955,6 +1156,44 @@ def _best_capture(raw_capture: dict[str, Any]) -> dict[str, Any] | None:
             best_score = score
             best_capture = capture
     return best_capture
+
+
+def _consume_g_ascii_frame(buffer: bytearray) -> bytes | object | None:
+    if not buffer:
+        return None
+    first = buffer[0]
+    if not (first == 0x23 or first == 0x28 or 0x41 <= first <= 0x5A):
+        return None
+    carriage = buffer.find(b"\r")
+    if carriage < 0:
+        if len(buffer) < 64:
+            return _ASCII_INCOMPLETE
+        return None
+    if carriage > 128:
+        return None
+    frame = bytes(buffer[: carriage + 1])
+    body = frame[:-1]
+    if not body or body.startswith(b"AT+"):
+        return None
+    if any(byte < 0x20 or byte > 0x7E for byte in body):
+        return None
+    del buffer[: carriage + 1]
+    return frame
+
+
+def _consume_eybond_frame_if_complete(buffer: bytearray) -> bytes | None:
+    if len(buffer) < HEADER_SIZE:
+        return None
+    try:
+        header = decode_header(bytes(buffer[:HEADER_SIZE]))
+    except Exception:
+        return None
+    total_len = header.total_len
+    if total_len < HEADER_SIZE or len(buffer) < total_len:
+        return None
+    frame = bytes(buffer[:total_len])
+    del buffer[:total_len]
+    return frame
 
 
 def _open_append_text_file(path: Path) -> TextIO:

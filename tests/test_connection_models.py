@@ -128,7 +128,7 @@ class ConnectionModelsTests(unittest.TestCase):
                 CONF_TCP_PORT: 8899,
                 CONF_UDP_PORT: 58899,
                 CONF_COLLECTOR_IP: "192.168.2.209",
-                CONF_COLLECTOR_PN: "I30000250633873380",
+                CONF_COLLECTOR_PN: "A0000000000001",
                 CONF_DRIVER_HINT: "auto",
                 CONF_DISCOVERY_TARGET: "192.168.1.255",
                 CONF_HEARTBEAT_INTERVAL: 60,

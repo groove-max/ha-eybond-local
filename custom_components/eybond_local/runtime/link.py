@@ -325,6 +325,8 @@ class EybondRuntimeLinkManager:
         collector_pn: str = "",
         collector_session_protocol: str = "",
         collector_identity_strategy: str = "",
+        collector_raw_passthrough_bootstrap: str = "",
+        collector_raw_passthrough_frame_format: str = "",
     ) -> None:
         self._configured_server_ip = server_ip
         self._configured_advertised_server_ip = advertised_server_ip.strip()
@@ -332,6 +334,12 @@ class EybondRuntimeLinkManager:
         self._collector_pn = str(collector_pn or "").strip()
         self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
         self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
+        self._collector_raw_passthrough_bootstrap = (
+            str(collector_raw_passthrough_bootstrap or "").strip().lower()
+        )
+        self._collector_raw_passthrough_frame_format = (
+            str(collector_raw_passthrough_frame_format or "").strip().lower()
+        )
         self._tcp_port = int(tcp_port)
         self._configured_advertised_tcp_port = int(advertised_tcp_port or 0)
         self._udp_port = int(udp_port)
@@ -419,6 +427,13 @@ class EybondRuntimeLinkManager:
         if not collector.remote_ip and at_collector.remote_ip:
             collector.remote_ip = at_collector.remote_ip
             collector.remote_port = at_collector.remote_port
+        if at_collector.connection_count > collector.connection_count:
+            collector.remote_port = at_collector.remote_port
+            collector.connection_count = at_collector.connection_count
+            collector.connection_replace_count = at_collector.connection_replace_count
+            collector.disconnect_count = at_collector.disconnect_count
+            collector.last_disconnect_reason = at_collector.last_disconnect_reason
+            collector.pending_request_drop_count = at_collector.pending_request_drop_count
         merged_pn = _prefer_more_complete_collector_pn(
             collector.collector_pn,
             at_collector.collector_pn,
@@ -493,6 +508,12 @@ class EybondRuntimeLinkManager:
             "collector_listener_last_error": self._listener_last_error,
             "collector_callback_session_protocol": self._collector_session_protocol,
             "collector_callback_identity_strategy": self._collector_identity_strategy,
+            "collector_callback_raw_passthrough_bootstrap": (
+                self._collector_raw_passthrough_bootstrap
+            ),
+            "collector_callback_raw_passthrough_frame_format": (
+                self._collector_raw_passthrough_frame_format
+            ),
         }
         diagnostics.update(self._session_inventory_diagnostics())
         return diagnostics
@@ -595,25 +616,35 @@ class EybondRuntimeLinkManager:
         *,
         collector_session_protocol: str,
         collector_identity_strategy: str,
+        collector_raw_passthrough_bootstrap: str = "",
+        collector_raw_passthrough_frame_format: str = "",
         reason: str = "collector_session_profile_change",
     ) -> bool:
         """Rebuild transports when the resolved callback session profile changes."""
 
         normalized_protocol = str(collector_session_protocol or "").strip().lower()
         normalized_strategy = str(collector_identity_strategy or "").strip().lower()
+        normalized_raw_bootstrap = str(collector_raw_passthrough_bootstrap or "").strip().lower()
+        normalized_raw_frame = str(collector_raw_passthrough_frame_format or "").strip().lower()
         if (
             normalized_protocol == self._collector_session_protocol
             and normalized_strategy == self._collector_identity_strategy
+            and normalized_raw_bootstrap == self._collector_raw_passthrough_bootstrap
+            and normalized_raw_frame == self._collector_raw_passthrough_frame_format
         ):
             return False
 
         logger.warning(
-            "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s; rebuilding transport",
+            "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s, raw_bootstrap %s -> %s, raw_frame %s -> %s; rebuilding transport",
             reason or "collector_session_profile_change",
             self._collector_session_protocol or "unknown",
             normalized_protocol or "unknown",
             self._collector_identity_strategy or "unknown",
             normalized_strategy or "unknown",
+            self._collector_raw_passthrough_bootstrap or "unknown",
+            normalized_raw_bootstrap or "unknown",
+            self._collector_raw_passthrough_frame_format or "unknown",
+            normalized_raw_frame or "unknown",
         )
         was_started = self._started
         if was_started:
@@ -622,6 +653,8 @@ class EybondRuntimeLinkManager:
 
         self._collector_session_protocol = normalized_protocol
         self._collector_identity_strategy = normalized_strategy
+        self._collector_raw_passthrough_bootstrap = normalized_raw_bootstrap
+        self._collector_raw_passthrough_frame_format = normalized_raw_frame
         self._rebuild_link(self._effective_server_ip)
         self._listener_rebind_count += 1
 
@@ -747,6 +780,8 @@ class EybondRuntimeLinkManager:
         output_path,
         masked_endpoint: str = "",
         restore_trigger_path=None,
+        async_open_output=None,
+        async_close_output=None,
     ) -> None:
         """Route one collector's callback connection through the in-process proxy."""
 
@@ -774,6 +809,8 @@ class EybondRuntimeLinkManager:
                 output_path=output_path,
                 masked_endpoint=masked_endpoint,
                 restore_trigger_path=restore_trigger_path,
+                async_open_output=async_open_output,
+                async_close_output=async_close_output,
             )
             await handler.start()
             route = SharedProxyCaptureRoute(
@@ -1155,10 +1192,10 @@ class EybondRuntimeLinkManager:
         return tuple(transports)
 
     def _selected_connected_remote_ip(self) -> tuple[str, bool]:
-        if self._collector_ip:
-            return self._collector_ip, False
         if self._collector_pn:
             return "", False
+        if self._collector_ip:
+            return self._collector_ip, False
 
         payload_ips = {
             str(transport.collector_info.remote_ip or "").strip()
@@ -1366,6 +1403,8 @@ class EybondRuntimeLinkManager:
             collector_pn=self._collector_pn,
             collector_session_protocol=self._collector_session_protocol,
             collector_identity_strategy=self._collector_identity_strategy,
+            collector_raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+            collector_raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
         )
         at_transport = SharedCollectorAtTransport(
             host=bind_host,
@@ -1375,6 +1414,8 @@ class EybondRuntimeLinkManager:
             collector_pn=self._collector_pn,
             collector_session_protocol=self._collector_session_protocol,
             collector_identity_strategy=self._collector_identity_strategy,
+            collector_raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+            collector_raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
         )
         return payload_transport, at_transport
 

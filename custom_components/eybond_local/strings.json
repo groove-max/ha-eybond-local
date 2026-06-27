@@ -598,6 +598,7 @@
         "must_pv_ph18": "MUST PV/PH18",
         "smartess_local": "SmartESS 0925 / Modbus",
         "pi30": "PI30",
+        "eybond_g_ascii": "EyeBond G-ASCII",
         "pi18": "PI18"
       }
     },

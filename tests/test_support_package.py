@@ -331,6 +331,51 @@ class SupportPackageTests(unittest.TestCase):
             self.assertNotIn("Read-only unverified SMG family", readme)
             self.assertNotIn("Built-in writes are intentionally disabled", readme)
 
+    def test_archive_manifest_does_not_reference_missing_fixtures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-eybond-g-ascii",
+                entry_title="EyeBond G-ASCII",
+                connected=True,
+                collector={"collector_pn": "A0000000000001"},
+                inverter={
+                    "driver_key": "eybond_g_ascii",
+                    "model_name": "EyeBond G-ASCII inverter",
+                    "serial_number": "A0000000000001",
+                    "variant_key": "family_fallback",
+                },
+                values={"protocol_id": "EYBOND_G_ASCII"},
+                data={"server_ip": "192.168.1.50"},
+                options={"poll_interval": 10},
+                profile_name="",
+                register_schema_name="",
+                variant_key="family_fallback",
+                effective_owner_key="eybond_g_ascii",
+            )
+
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-eybond-g-ascii",
+                entry_title="EyeBond G-ASCII",
+                support_bundle=support_bundle,
+                raw_capture={},
+                fixture=None,
+                anonymized_fixture=None,
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                names = set(archive.namelist())
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+                readme = archive.read("README.txt").decode("utf-8")
+
+            self.assertNotIn("fixture/raw_fixture.json", names)
+            self.assertNotIn("fixture/anonymized_fixture.json", names)
+            self.assertIsNone(manifest["archive_members"]["raw_fixture"])
+            self.assertIsNone(manifest["archive_members"]["anonymized_fixture"])
+            self.assertNotIn("fixture/raw_fixture.json", readme)
+            self.assertNotIn("fixture/anonymized_fixture.json", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

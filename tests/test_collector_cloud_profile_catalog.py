@@ -16,6 +16,8 @@ from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loa
     resolve_collector_cloud_default_protocol,
     resolve_collector_cloud_endpoint_write_format,
     resolve_collector_cloud_identity_strategy,
+    resolve_collector_cloud_raw_passthrough_bootstrap,
+    resolve_collector_cloud_raw_passthrough_frame_format,
     resolve_collector_cloud_session_protocol,
     resolve_collector_cloud_default_host,
     resolve_collector_cloud_family_by_host,
@@ -61,6 +63,8 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(smartess.endpoint_write_format, "host_port_protocol")
         self.assertEqual(smartess.session_protocol, "at_text")
         self.assertEqual(smartess.identity_strategy, "at_dtupn")
+        self.assertEqual(smartess.raw_passthrough_bootstrap, "uart_write_same_value")
+        self.assertEqual(smartess.raw_passthrough_frame_format, "transparent")
 
     def test_loads_smartvalue_profile_details(self) -> None:
         catalog = load_collector_cloud_profile_catalog()
@@ -76,6 +80,8 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(smartvalue.endpoint_write_format, "host_port_protocol")
         self.assertEqual(smartvalue.session_protocol, "at_text")
         self.assertEqual(smartvalue.identity_strategy, "at_dtupn")
+        self.assertEqual(smartvalue.raw_passthrough_bootstrap, "uart_write_same_value")
+        self.assertEqual(smartvalue.raw_passthrough_frame_format, "transparent")
 
     def test_loads_valuecloud_profile_details(self) -> None:
         catalog = load_collector_cloud_profile_catalog()
@@ -91,6 +97,8 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(valuecloud.endpoint_write_format, "host_port_protocol")
         self.assertEqual(valuecloud.session_protocol, "at_text")
         self.assertEqual(valuecloud.identity_strategy, "at_dtupn")
+        self.assertEqual(valuecloud.raw_passthrough_bootstrap, "none")
+        self.assertEqual(valuecloud.raw_passthrough_frame_format, "")
 
     def test_resolves_known_families_by_host(self) -> None:
         self.assertEqual(resolve_collector_cloud_family_by_host("ess.eybond.com"), "legacy_binary")
@@ -114,6 +122,8 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(resolve_collector_cloud_endpoint_write_format("unknown"), "")
         self.assertEqual(resolve_collector_cloud_session_protocol("unknown"), "")
         self.assertEqual(resolve_collector_cloud_identity_strategy("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_raw_passthrough_bootstrap("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_raw_passthrough_frame_format("unknown"), "")
 
     def test_resolves_known_default_hosts(self) -> None:
         self.assertEqual(resolve_collector_cloud_default_host("legacy_binary"), "ess.eybond.com")

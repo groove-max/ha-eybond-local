@@ -374,6 +374,42 @@
         }
       ],
       "layouts": []
+    },
+    {
+      "key": "eybond_g_ascii",
+      "transport_key": "eybond_g_ascii",
+      "probe_timeout": 12.0,
+      "signature_timeout": 4.0,
+      "probe_targets": [
+        {"devcode": 2452, "collector_addr": 255, "device_addr": 0}
+      ],
+      "probe_actions": [
+        {
+          "key": "eybond_g_ascii.gdat0",
+          "kind": "ascii_command",
+          "command": "GPDAT0",
+          "parser_key": "eybond_g_ascii.gdat0",
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "protocol.protocol_id", "source_key": "protocol_id"},
+            {"key": "shape.gdat0_field_count", "source_key": "gdat0_field_count"},
+            {"key": "fingerprint.gdat0_model_code", "source_key": "gdat0_model_code"}
+          ]
+        },
+        {
+          "key": "eybond_g_ascii.gpv",
+          "kind": "ascii_command",
+          "command": "GPV",
+          "parser_key": "eybond_g_ascii.gpv",
+          "cost": 1,
+          "optional": false,
+          "evidence_fields": [
+            {"key": "shape.gpv_field_count", "source_key": "gpv_field_count"}
+          ]
+        }
+      ],
+      "layouts": []
     }
   ],
   "support_capture_policies": {
@@ -435,22 +471,38 @@
     },
     "must_pv_ph18": {
       "ranges": [
+        [10001, 8],
         [10103, 1],
+        [10101, 12],
         [10110, 1],
         [15201, 3],
+        [15201, 21],
         [15205, 1],
         [15207, 3],
         [15212, 1],
         [15217, 3],
         [20000, 2],
+        [20001, 16],
+        [20101, 32],
+        [20142, 2],
+        [20213, 2],
         [25201, 1],
+        [25201, 74],
         [25205, 12],
         [25225, 2],
         [25233, 2],
         [25274, 1]
       ],
       "notes": [
-        "MUST PV/PH18 support is read-only. Devices are expected to use Modbus RTU 19200 8N1 and slave address 4."
+        "MUST PV/PH18 support is read-only. Devices are expected to use Modbus RTU 19200 8N1 and slave address 4.",
+        "Support capture includes extra read-only ranges observed in SmartESS cloud proxy traffic; these ranges are diagnostic evidence only and are not part of normal runtime polling."
+      ]
+    },
+    "eybond_g_ascii": {
+      "ranges": [],
+      "notes": [
+        "EyeBond/JsdSolar G-ASCII support is read-only. Current evidence comes from ValueCloud proxy/support captures and a matching local protocol document covering GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL responses.",
+        "Support capture uses protocol_catalogs/command_schemas/eybond_g_ascii/base.json as the schema-driven read-only command probe plan. Captured unknown fields are maintainer evidence only until the schema/driver decoder is explicitly updated."
       ]
     }
   },
@@ -624,6 +676,18 @@
       "read_only": true,
       "default_for_driver": true,
       "support_capture_policy": "must_pv_ph18"
+    },
+    {
+      "key": "eybond_g_ascii_read_only",
+      "protocol_key": "eybond_g_ascii",
+      "driver_key": "eybond_g_ascii",
+      "variant_key": "g_ascii_family",
+      "profile_name": "",
+      "register_schema_name": "eybond_g_ascii/base.json",
+      "tier": "partial",
+      "read_only": true,
+      "default_for_driver": true,
+      "support_capture_policy": "eybond_g_ascii"
     }
   ],
   "devices": [
@@ -1105,12 +1169,13 @@
       "priority": 220,
       "anchors": [
         {"key": "protocol.protocol_id", "equals": "MUST_PV_PH18"},
-        {"key": "identity.model_number", "equals": "PV18"}
+        {"key": "identity.model_number", "one_of": ["PV18", "PV1800"]}
       ],
       "provenance": {
         "sources": [
           "github:issue#5 MUST PV18-3024 user report",
           "support archives 2026-06-13/14: SmartESS protocol asset 02FF,0,0, and collector serial baudrate 19200-8-1-0",
+          "private follow-up support archive: numeric PV1800 marker and framed EyeBond runtime path",
           "third-party MUST PV/PH18 Modbus register map"
         ],
         "confidence": "third-party-map-with-support-archive"
@@ -1131,6 +1196,26 @@
           "private register map: SRNE-compatible Modbus product-info and telemetry ranges"
         ],
         "confidence": "third-party-map-unconfirmed"
+      }
+    },
+    {
+      "entry_key": "eybond_g_ascii_family",
+      "surface_key": "eybond_g_ascii_read_only",
+      "model_name": "EyeBond G-ASCII family",
+      "priority": 40,
+      "family_fallback": true,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "EYBOND_G_ASCII"},
+        {"key": "shape.gdat0_field_count", "min": 20, "required": false},
+        {"key": "shape.gpv_field_count", "min": 20, "required": false}
+      ],
+      "provenance": {
+        "sources": [
+          "ValueCloud proxy/support captures: GPDAT0, GPV, GBAT, GMOD, SVFW, GTMP, GLINE, GBUS, GCHG, GOP, GINV command family",
+          "local protocol document protocol.JSDSOLAR.docx: JsdSolar G-command ASCII read-only telemetry layout",
+          "external JsdSolar SmartESS G-command discussion: confirms the same GPDAT0/GPV/GBAT/GMOD command family exists outside this capture"
+        ],
+        "confidence": "documented-read-only"
       }
     }
   ],

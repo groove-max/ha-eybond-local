@@ -49,6 +49,7 @@ _KNOWN_EYBOND_FCODES = frozenset(
 # Sentinel: the buffer head looks like a Modbus RTU frame that is still
 # accumulating bytes; the caller must wait rather than try collector framing.
 _MODBUS_INCOMPLETE = object()
+_ASCII_INCOMPLETE = object()
 
 
 def route_status_indicates_control_ready(status: dict[str, Any]) -> bool:
@@ -379,6 +380,19 @@ class InProcessFailClosedShadowProxyHandler:
                             {"remote": remote, "payload_hex": payload.hex()},
                         )
                         continue
+                    if kind == "ascii":
+                        async with upstream_write_lock:
+                            upstream_writer.write(payload)
+                            await upstream_writer.drain()
+                        await self._append_event(
+                            "shadow_proxy_forward_collector_ascii",
+                            "collector_to_cloud",
+                            {
+                                "remote": remote,
+                                "payload_ascii": payload.decode("ascii", errors="replace").strip(),
+                            },
+                        )
+                        continue
                     header = decode_header(payload[:HEADER_SIZE])
                     if header.fcode in _COLLECTOR_FORWARD_FCODES:
                         pending_requests[int(header.tid)] = _PendingCollectorRequest(
@@ -476,6 +490,14 @@ class InProcessFailClosedShadowProxyHandler:
                         # the shadow bank and observe + NACK writes locally. It
                         # is never forwarded to the inverter.
                         response = await self._backend._handle_modbus_frame(payload, remote=remote)
+                        if response is not None:
+                            async with upstream_write_lock:
+                                upstream_writer.write(response)
+                                await upstream_writer.drain()
+                        continue
+
+                    if kind == "ascii":
+                        response = await self._backend._handle_ascii_frame(payload, remote=remote)
                         if response is not None:
                             async with upstream_write_lock:
                                 upstream_writer.write(response)
@@ -629,6 +651,14 @@ def _consume_next_message(buffer: bytearray) -> tuple[str, bytes] | None:
         return None
     if modbus is not None:
         return "modbus", modbus
+    ascii_frame = _consume_g_ascii_frame(buffer)
+    if ascii_frame is _ASCII_INCOMPLETE:
+        frame = _consume_eybond_frame_if_complete(buffer)
+        if frame is not None:
+            return "frame", frame
+        return None
+    if ascii_frame is not None:
+        return "ascii", ascii_frame
     if len(buffer) < HEADER_SIZE:
         return None
     header = decode_header(bytes(buffer[:HEADER_SIZE]))
@@ -699,6 +729,31 @@ def _modbus_crc_is_valid(frame: bytes) -> bool:
     if len(frame) < 4:
         return False
     return crc16_modbus(frame[:-2]) == int.from_bytes(frame[-2:], "little")
+
+
+def _consume_g_ascii_frame(buffer: bytearray) -> bytes | object | None:
+    """Consume one complete no-CRC G-ASCII line from the buffer head."""
+
+    if not buffer:
+        return None
+    first = buffer[0]
+    if not (first == 0x23 or first == 0x28 or 0x41 <= first <= 0x5A):
+        return None
+    carriage = buffer.find(b"\r")
+    if carriage < 0:
+        if len(buffer) < 64:
+            return _ASCII_INCOMPLETE
+        return None
+    if carriage > 128:
+        return None
+    frame = bytes(buffer[: carriage + 1])
+    body = frame[:-1]
+    if not body or body.startswith(b"AT+"):
+        return None
+    if any(byte < 0x20 or byte > 0x7E for byte in body):
+        return None
+    del buffer[: carriage + 1]
+    return frame
 
 
 def _is_allowlisted_correlated_response(

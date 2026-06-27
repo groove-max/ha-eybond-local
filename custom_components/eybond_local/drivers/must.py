@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
+from ..metadata.device_catalog_loader import resolve_support_capture_policy
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget, RegisterValueSpec
 from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
@@ -49,13 +50,7 @@ class MustPvPh18Driver(InverterDriver):
         schema_name = self.register_schema_name
         schema = load_register_schema(schema_name)
         session = self._session(transport, target)
-        try:
-            model_block = schema.block("serial")
-            model_words = await session.read_holding(model_block.start, model_block.count)
-        except Exception:
-            return None
-
-        model_name = _decode_model_name(model_words)
+        model_name = await _async_probe_model_name(session, schema)
         if not model_name.startswith(_MODEL_PREFIXES):
             return None
 
@@ -134,28 +129,28 @@ class MustPvPh18Driver(InverterDriver):
         transport,
         inverter: DetectedInverter,
     ) -> dict[str, Any]:
-        schema = load_register_schema(
+        session = self._session(transport, inverter.probe_target)
+        ranges = _support_capture_ranges(
             inverter.register_schema_name or self.register_schema_name
         )
-        session = self._session(transport, inverter.probe_target)
         captured_ranges: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
-        for block in schema.blocks:
+        for start, count in ranges:
             try:
-                values = await session.read_holding(block.start, block.count)
+                values = await session.read_holding(start, count)
             except Exception as exc:
                 failures.append(
                     {
-                        "start": block.start,
-                        "count": block.count,
+                        "start": start,
+                        "count": count,
                         "error": str(exc),
                     }
                 )
                 continue
             captured_ranges.append(
                 {
-                    "start": block.start,
-                    "count": block.count,
+                    "start": start,
+                    "count": count,
                     "words": list(values),
                 }
             )
@@ -164,12 +159,10 @@ class MustPvPh18Driver(InverterDriver):
             "driver_key": self.key,
             "model_name": inverter.model_name,
             "serial_number": inverter.serial_number,
-            "capture_notes": [
-                "MUST PV/PH18 uses Modbus RTU at 19200 8N1 and slave address 4."
-            ],
+            "capture_notes": list(_support_capture_notes()),
             "planned_ranges": [
-                {"start": block.start, "count": block.count}
-                for block in schema.blocks
+                {"start": start, "count": count}
+                for start, count in ranges
             ],
             "captured_ranges": captured_ranges,
             "range_failures": failures,
@@ -199,12 +192,83 @@ def _must_default_schema_name() -> str:
     return "must_pv_ph18/base.json"
 
 
+def _support_capture_ranges(schema_name: str) -> tuple[tuple[int, int], ...]:
+    schema = load_register_schema(schema_name)
+    planned = [(block.start, block.count) for block in schema.blocks]
+    planned.extend(_support_capture_policy().ranges)
+    return _merge_capture_ranges(planned)
+
+
+def _support_capture_notes() -> tuple[str, ...]:
+    policy_notes = _support_capture_policy().notes
+    if policy_notes:
+        return policy_notes
+    return ("MUST PV/PH18 uses Modbus RTU at 19200 8N1 and slave address 4.",)
+
+
+def _support_capture_policy():
+    return resolve_support_capture_policy(
+        driver_key=MustPvPh18Driver.key,
+        variant_key="pv_ph18",
+        profile_name="",
+        register_schema_name=_must_default_schema_name(),
+    )
+
+
+def _merge_capture_ranges(ranges: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    normalized = sorted(
+        (int(start), int(count))
+        for start, count in ranges
+        if int(count) > 0
+    )
+    merged: list[tuple[int, int]] = []
+    for start, count in normalized:
+        end = start + count
+        if not merged:
+            merged.append((start, count))
+            continue
+        last_start, last_count = merged[-1]
+        last_end = last_start + last_count
+        if start > last_end:
+            merged.append((start, count))
+            continue
+        merged[-1] = (last_start, max(last_end, end) - last_start)
+    return tuple(merged)
+
+
+async def _async_probe_model_name(session: ModbusSession, schema) -> str:
+    try:
+        model_block = schema.block("serial")
+        model_words = await session.read_holding(model_block.start, model_block.count)
+    except Exception:
+        model_words = []
+
+    model_name = _decode_model_name(model_words)
+    if model_name.startswith(_MODEL_PREFIXES):
+        return model_name
+
+    try:
+        model_number_words = await session.read_holding(20001, 1)
+    except Exception:
+        return model_name
+    return _decode_numeric_pv_model_name(model_number_words) or model_name
+
+
 def _decode_model_name(words: list[int]) -> str:
     if len(words) < 2:
         return ""
     prefix = _decode_ascii_word(words[0])
     suffix = str(int(words[1])) if int(words[1]) > 0 else ""
     return f"{prefix}{suffix}".strip()
+
+
+def _decode_numeric_pv_model_name(words: list[int]) -> str:
+    if not words:
+        return ""
+    value = int(words[0])
+    if not (1000 <= value <= 12000):
+        return ""
+    return f"PV{value}"
 
 
 def _decode_ascii_word(value: int) -> str:

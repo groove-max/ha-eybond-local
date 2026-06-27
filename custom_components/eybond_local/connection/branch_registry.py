@@ -102,6 +102,8 @@ def _build_eybond_connection_spec(
         collector_cloud_family=transport_profile.cloud_family,
         collector_session_protocol=transport_profile.session_protocol,
         collector_identity_strategy=transport_profile.identity_strategy,
+        collector_raw_passthrough_bootstrap=transport_profile.raw_passthrough_bootstrap,
+        collector_raw_passthrough_frame_format=transport_profile.raw_passthrough_frame_format,
         discovery_target=str(
             options.get(
                 CONF_DISCOVERY_TARGET,

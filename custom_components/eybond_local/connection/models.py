@@ -36,6 +36,8 @@ class EybondConnectionSpec(ConnectionSpec):
     collector_cloud_family: str
     collector_session_protocol: str
     collector_identity_strategy: str
+    collector_raw_passthrough_bootstrap: str
+    collector_raw_passthrough_frame_format: str
     discovery_target: str
     discovery_interval: int
     heartbeat_interval: int
@@ -54,6 +56,8 @@ class EybondConnectionSpec(ConnectionSpec):
         collector_cloud_family: str = "",
         collector_session_protocol: str = "",
         collector_identity_strategy: str = "",
+        collector_raw_passthrough_bootstrap: str = "",
+        collector_raw_passthrough_frame_format: str = "",
         discovery_target: str = "",
         discovery_interval: int,
         heartbeat_interval: int,
@@ -70,6 +74,16 @@ class EybondConnectionSpec(ConnectionSpec):
         object.__setattr__(self, "collector_cloud_family", collector_cloud_family)
         object.__setattr__(self, "collector_session_protocol", collector_session_protocol)
         object.__setattr__(self, "collector_identity_strategy", collector_identity_strategy)
+        object.__setattr__(
+            self,
+            "collector_raw_passthrough_bootstrap",
+            collector_raw_passthrough_bootstrap,
+        )
+        object.__setattr__(
+            self,
+            "collector_raw_passthrough_frame_format",
+            collector_raw_passthrough_frame_format,
+        )
         object.__setattr__(self, "discovery_target", discovery_target)
         object.__setattr__(self, "discovery_interval", int(discovery_interval))
         object.__setattr__(self, "heartbeat_interval", int(heartbeat_interval))

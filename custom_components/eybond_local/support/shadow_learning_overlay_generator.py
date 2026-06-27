@@ -900,14 +900,36 @@ def _normalize_read_map(read_map: dict[str, Any] | None) -> dict[str, Any]:
             except (TypeError, ValueError):
                 continue
             registers[str(register)] = [int(value) for value in samples][:8]
-    if not blocks and not registers:
+    ascii_commands = []
+    for item in read_map.get("ascii_commands", []) or []:
+        if isinstance(item, (list, tuple)) and len(item) >= 1:
+            command = str(item[0] or "").strip().upper()
+            if not command:
+                continue
+            occurrences = int(item[1]) if len(item) > 1 else 0
+            ascii_commands.append([command, occurrences])
+    ascii_fields: dict[str, list[str]] = {}
+    raw_ascii_fields = read_map.get("ascii_fields")
+    if isinstance(raw_ascii_fields, dict):
+        for key, samples in raw_ascii_fields.items():
+            command = str(key or "").strip().upper()
+            if not command or not isinstance(samples, (list, tuple)):
+                continue
+            ascii_fields[command] = [str(value) for value in samples][:8]
+
+    if not blocks and not registers and not ascii_commands and not ascii_fields:
         return {}
-    return {
+    normalized = {
         "read_blocks": blocks,
         "registers": registers,
         "read_event_count": int(read_map.get("read_event_count", 0) or 0),
         "value_source": str(read_map.get("value_source") or ""),
     }
+    if ascii_commands:
+        normalized["ascii_commands"] = ascii_commands
+    if ascii_fields:
+        normalized["ascii_fields"] = ascii_fields
+    return normalized
 
 
 def _safe_matched_count(correlation: dict[str, Any]) -> int:

@@ -308,6 +308,7 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: {}
     )
     support_proxy_session.inspect_proxy_capture_trace = lambda *args, **kwargs: {}
+    support_proxy_session.open_proxy_trace_output_file = lambda path: None
     support_proxy_session.summarize_proxy_capture_trace = (
         lambda *args, **kwargs: {}
     )
@@ -1345,6 +1346,133 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     updated_options[0]["collector_original_server_endpoint_source"],
                     "test_registry",
                 )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_restore_collector_original_endpoint_from_registry_by_unique_last_seen_ip(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            remember_collector_original_endpoint,
+        )
+
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                remember_collector_original_endpoint(
+                    config_dir=Path(tmp),
+                    collector_pn="E50000200000000001",
+                    original_endpoint_raw="iot.eybond.com,18899,TCP",
+                    cloud_profile_key="valuecloud_at",
+                    source="test_registry",
+                    observed_at="2026-06-24T20:52:14+00:00",
+                    last_seen_ip="192.168.8.110",
+                )
+                updated_options: list[dict[str, str]] = []
+
+                async def _async_add_executor_job(func, *args):
+                    return func(*args)
+
+                coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+                coordinator.hass = types.SimpleNamespace(
+                    config=types.SimpleNamespace(config_dir=tmp),
+                    async_add_executor_job=_async_add_executor_job,
+                )
+                coordinator._async_update_entry_without_reload = lambda **kwargs: updated_options.append(
+                    kwargs["options"]
+                )
+                coordinator._connection_spec = types.SimpleNamespace(
+                    effective_advertised_server_ip="192.168.8.113",
+                    effective_advertised_tcp_port=8899,
+                )
+                coordinator._runtime = types.SimpleNamespace(
+                    collector_server_endpoint_rollback_target="",
+                )
+                coordinator._remembered_collector_server_endpoint = ""
+                coordinator.config_entry = types.SimpleNamespace(
+                    data={
+                        "collector_pn": "E5000020000000",
+                        "collector_ip": "192.168.8.110",
+                    },
+                    options={},
+                )
+                snapshot = self.RuntimeSnapshot(
+                    collector=types.SimpleNamespace(remote_ip="192.168.8.110"),
+                    values={},
+                )
+
+                await coordinator._async_restore_collector_original_endpoint_from_registry(
+                    snapshot
+                )
+
+                self.assertEqual(
+                    coordinator.collector_server_endpoint_rollback_target,
+                    "iot.eybond.com,18899,TCP",
+                )
+                self.assertEqual(len(updated_options), 1)
+                self.assertEqual(
+                    updated_options[0]["collector_original_server_endpoint"],
+                    "iot.eybond.com,18899,TCP",
+                )
+                self.assertEqual(
+                    updated_options[0]["collector_original_server_endpoint_profile_key"],
+                    "valuecloud_at",
+                )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_restore_collector_original_endpoint_by_ip_fails_closed_when_ambiguous(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            remember_collector_original_endpoint,
+        )
+
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                for pn in ("PN12345", "PN67890"):
+                    remember_collector_original_endpoint(
+                        config_dir=Path(tmp),
+                        collector_pn=pn,
+                        original_endpoint_raw="iot.eybond.com,18899,TCP",
+                        cloud_profile_key="valuecloud_at",
+                        last_seen_ip="192.168.8.110",
+                    )
+                updated_options: list[dict[str, str]] = []
+
+                async def _async_add_executor_job(func, *args):
+                    return func(*args)
+
+                coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+                coordinator.hass = types.SimpleNamespace(
+                    config=types.SimpleNamespace(config_dir=tmp),
+                    async_add_executor_job=_async_add_executor_job,
+                )
+                coordinator._async_update_entry_without_reload = lambda **kwargs: updated_options.append(
+                    kwargs["options"]
+                )
+                coordinator._connection_spec = types.SimpleNamespace(
+                    effective_advertised_server_ip="192.168.8.113",
+                    effective_advertised_tcp_port=8899,
+                )
+                coordinator._runtime = types.SimpleNamespace(
+                    collector_server_endpoint_rollback_target="",
+                )
+                coordinator._remembered_collector_server_endpoint = ""
+                coordinator.config_entry = types.SimpleNamespace(
+                    data={"collector_ip": "192.168.8.110"},
+                    options={},
+                )
+                snapshot = self.RuntimeSnapshot(
+                    collector=types.SimpleNamespace(remote_ip="192.168.8.110"),
+                    values={},
+                )
+
+                await coordinator._async_restore_collector_original_endpoint_from_registry(
+                    snapshot
+                )
+
+                self.assertEqual(coordinator.collector_server_endpoint_rollback_target, "")
+                self.assertEqual(updated_options, [])
 
         import asyncio
 
@@ -3603,6 +3731,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             async def _async_request_refresh() -> None:
                 return None
 
+            async def _async_clear_shadow_learning_session_state() -> None:
+                return None
+
             coordinator.config_entry = types.SimpleNamespace(
                 entry_id="entry-id",
                 data={"collector_operation_mode": "smartess_cloud_home_assistant"},
@@ -3628,6 +3759,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator._async_wait_for_shadow_learning_ready = (
                 _async_wait_for_shadow_learning_ready
+            )
+            coordinator._async_clear_shadow_learning_session_state = (
+                _async_clear_shadow_learning_session_state
             )
             coordinator.async_request_refresh = _async_request_refresh
             coordinator._publish_tooling_values = lambda **_kwargs: None
@@ -4020,6 +4154,270 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(values["collector_original_endpoint_profile_key"], "")
         self.assertEqual(values["collector_original_endpoint_source"], "")
         self.assertEqual(values["collector_original_endpoint_observed_at"], "")
+
+    def test_collector_onboarding_values_include_transport_profile_mismatch(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "collector_cloud_family": "smartess_at",
+                "driver_hint": "auto",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._connection_spec = types.SimpleNamespace(
+            collector_cloud_family="smartess_at",
+            collector_session_protocol="at_text",
+            collector_identity_strategy="at_dtupn",
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            collector_server_endpoint_rollback_target="",
+            listener_diagnostics=lambda: {
+                "collector_callback_session_protocol": "",
+                "collector_callback_identity_strategy": "",
+            },
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+
+        values = coordinator._collector_transport_profile_runtime_values()
+
+        self.assertEqual(values["collector_resolved_cloud_family"], "smartess_at")
+        self.assertEqual(values["collector_resolved_session_protocol"], "at_text")
+        self.assertEqual(values["collector_resolved_identity_strategy"], "at_dtupn")
+        self.assertEqual(values["collector_connection_session_protocol"], "at_text")
+        self.assertEqual(values["collector_connection_identity_strategy"], "at_dtupn")
+        self.assertEqual(values["collector_runtime_link_session_protocol"], "")
+        self.assertEqual(values["collector_runtime_link_identity_strategy"], "")
+
+    def test_update_reconciles_transport_after_runtime_endpoint_discovery(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            refresh_count = 0
+            reconcile_calls: list[tuple[str, str, str]] = []
+
+            async def _async_refresh(*, poll_interval: float | None = None):
+                nonlocal refresh_count
+                del poll_interval
+                refresh_count += 1
+                return self.RuntimeSnapshot(
+                    connected=True,
+                    values={
+                        "collector_server_endpoint": "dtu_ess.eybond.com,18899,TCP",
+                        "refresh_count": refresh_count,
+                    },
+                )
+
+            async def _async_reconcile_collector_session_profile(
+                *,
+                collector_session_protocol: str,
+                collector_identity_strategy: str,
+                collector_raw_passthrough_bootstrap: str = "",
+                collector_raw_passthrough_frame_format: str = "",
+                reason: str,
+            ) -> bool:
+                del collector_raw_passthrough_bootstrap, collector_raw_passthrough_frame_format
+                reconcile_calls.append(
+                    (collector_session_protocol, collector_identity_strategy, reason)
+                )
+                return (
+                    reason == "post_refresh_profile_discovery"
+                    and collector_session_protocol == "at_text"
+                    and collector_identity_strategy == "at_dtupn"
+                )
+
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-1",
+                data={
+                    "driver_hint": "auto",
+                    "poll_interval": 10,
+                },
+                options={},
+                title="Collector PN A0000000000001",
+            )
+            coordinator.hass = types.SimpleNamespace()
+            coordinator.data = self.RuntimeSnapshot()
+            coordinator._runtime = types.SimpleNamespace(
+                async_refresh=_async_refresh,
+                async_reconcile_collector_session_profile=(
+                    _async_reconcile_collector_session_profile
+                ),
+                listener_diagnostics=lambda: {
+                    "collector_callback_session_protocol": "",
+                    "collector_callback_identity_strategy": "",
+                },
+            )
+            coordinator._remembered_collector_server_endpoint = ""
+            coordinator._device_overlay_merge_status = ""
+            coordinator._tooling_values = {}
+            coordinator._async_reconcile_network = AsyncMock(return_value=False)
+            coordinator._async_reconcile_proxy_capture_session = AsyncMock(
+                side_effect=lambda snapshot: snapshot
+            )
+            coordinator._async_reconcile_shadow_learning_session = AsyncMock(
+                side_effect=lambda snapshot: snapshot
+            )
+            coordinator._async_restore_collector_original_endpoint_from_registry = AsyncMock()
+            coordinator._async_remember_collector_server_endpoint = AsyncMock()
+            coordinator._async_remember_runtime_identity = AsyncMock()
+            coordinator._sync_forced_collector_operation_mode = lambda: None
+            coordinator._configure_reverse_discovery_mode = lambda: None
+            coordinator._async_warm_effective_metadata_cache = AsyncMock()
+            coordinator._async_reconcile_collector_operation_mode_endpoint = AsyncMock()
+            coordinator._write_exposure_context = lambda: {
+                "variant_key": "",
+                "profile_name": "",
+                "profile_source_scope": "",
+                "schema_source_scope": "",
+                "device_scoped_overlay_active": False,
+                "device_scoped_overlay_scope": "",
+                "selected_control_keys": None,
+                "effective_capabilities_experimental": False,
+            }
+            coordinator._support_workflow_values = lambda _snapshot: {}
+            coordinator._collector_onboarding_values = lambda _snapshot: {}
+            coordinator._proxy_capture_values = AsyncMock(return_value={})
+            coordinator._prune_hidden_collector_values_for_mode = lambda _snapshot: None
+            coordinator.async_sync_device_registry = lambda _snapshot: None
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_key",
+                new_callable=PropertyMock,
+                return_value="",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_label",
+                new_callable=PropertyMock,
+                return_value="",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_source",
+                new_callable=PropertyMock,
+                return_value="",
+            ), patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "collector_cloud_profile_confidence",
+                new_callable=PropertyMock,
+                return_value="",
+            ), patch(
+                "custom_components.eybond_local._async_self_heal_sensor_display_precision",
+                new_callable=AsyncMock,
+                create=True,
+            ):
+                snapshot = await coordinator._async_update_data_with_runtime_lock()
+
+            self.assertEqual(refresh_count, 2)
+            self.assertIn(
+                ("at_text", "at_dtupn", "post_refresh_profile_discovery"),
+                reconcile_calls,
+            )
+            self.assertEqual(snapshot.values["collector_cloud_family"], "smartess_at")
+            self.assertEqual(snapshot.values["refresh_count"], 2)
+
+        asyncio.run(_run())
+
+    def test_refresh_before_support_export_updates_snapshot_best_effort(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
+            refreshed = self.RuntimeSnapshot(values={"collector_resolved_session_protocol": "at_text"})
+            coordinator.data = self.RuntimeSnapshot(values={})
+            coordinator._async_update_data = AsyncMock(return_value=refreshed)
+
+            await coordinator._async_refresh_before_support_export()
+
+            self.assertIs(coordinator.data, refreshed)
+
+        asyncio.run(_run())
+
+    def test_refresh_before_support_export_is_fail_open(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
+            original = self.RuntimeSnapshot(values={"existing": True})
+            coordinator.data = original
+            coordinator._async_update_data = AsyncMock(side_effect=RuntimeError("boom"))
+
+            await coordinator._async_refresh_before_support_export()
+
+            self.assertIs(coordinator.data, original)
+
+        asyncio.run(_run())
+
+    def test_collector_original_endpoint_values_include_registry_summary(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            remember_collector_original_endpoint,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            remember_collector_original_endpoint(
+                config_dir=Path(tmp),
+                collector_pn="PN12345",
+                original_endpoint_raw="dtu_ess.eybond.com,18899,TCP",
+                cloud_profile_key="smartess_at",
+                source="test_registry",
+                observed_at="2026-06-22T10:00:00+00:00",
+                last_seen_ip="192.168.2.209",
+            )
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.hass = types.SimpleNamespace(
+                config=types.SimpleNamespace(path=lambda: tmp),
+            )
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"collector_pn": "PN12345"},
+                options={},
+            )
+            coordinator.data = self.RuntimeSnapshot(values={})
+            coordinator._remembered_collector_server_endpoint = ""
+
+            values = coordinator._collector_original_endpoint_runtime_values(
+                include_registry=True
+            )
+
+        self.assertEqual(values["collector_registry_record_status"], "found")
+        self.assertTrue(values["collector_registry_record_pn_known"])
+        self.assertEqual(
+            values["collector_registry_original_endpoint"],
+            "dtu_ess.eybond.com,18899,TCP",
+        )
+        self.assertEqual(values["collector_registry_cloud_profile_key"], "smartess_at")
+        self.assertEqual(values["collector_registry_source"], "test_registry")
+        self.assertEqual(values["collector_registry_last_seen_ip"], "192.168.2.209")
+
+    def test_integration_build_runtime_values_read_embedded_build_info(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            (package_dir / "manifest.json").write_text(
+                '{"version": "0.2.0-test"}',
+                encoding="utf-8",
+            )
+            (package_dir / "BUILD_INFO.txt").write_text(
+                "eybond_local build\n"
+                "manifest_version: 0.2.0-test\n"
+                "git_describe:     v0.2.0-test-1-gabcdef0\n"
+                "git_commit:       abcdef0\n"
+                "commit_date:      2026-06-23\n"
+                "built_at:         20260623T194735Z\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                self.coordinator_module,
+                "_package_dir",
+                return_value=package_dir,
+            ):
+                values = self.coordinator_module._integration_build_runtime_values()
+
+        self.assertEqual(values["integration_manifest_version"], "0.2.0-test")
+        self.assertTrue(values["integration_build_info_present"])
+        self.assertEqual(
+            values["integration_build_git_describe"],
+            "v0.2.0-test-1-gabcdef0",
+        )
+        self.assertEqual(values["integration_build_git_commit"], "abcdef0")
+        self.assertEqual(values["integration_build_commit_date"], "2026-06-23")
+        self.assertEqual(values["integration_build_built_at"], "20260623T194735Z")
 
     def test_async_set_collector_operation_mode_updates_runtime_endpoint_and_persists_mode(self) -> None:
         async def _run() -> None:

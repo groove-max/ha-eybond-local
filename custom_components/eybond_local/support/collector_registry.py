@@ -145,6 +145,32 @@ def get_collector_registry_record(
     return load_collector_registry(config_dir).get(normalized_pn)
 
 
+def get_collector_registry_record_by_last_seen_ip(
+    *,
+    config_dir: Path,
+    last_seen_ip: str,
+) -> CollectorRegistryRecord | None:
+    """Return the only registry record last seen at this IP.
+
+    IP based restore is deliberately fail-closed: a home network may reuse IPs or
+    have several collectors behind the same visible peer.  The caller gets a
+    record only when the match is unique.
+    """
+
+    normalized_ip = str(last_seen_ip or "").strip()
+    if not normalized_ip:
+        return None
+
+    matches = [
+        record
+        for record in load_collector_registry(config_dir).values()
+        if record.last_seen_ip == normalized_ip
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def remember_collector_original_endpoint(
     *,
     config_dir: Path,
@@ -168,6 +194,17 @@ def remember_collector_original_endpoint(
     records = load_collector_registry(config_dir)
     existing = records.get(record.collector_pn)
     if existing is not None and existing.original_endpoint_raw:
+        if last_seen_ip and existing.last_seen_ip != record.last_seen_ip:
+            existing = CollectorRegistryRecord(
+                collector_pn=existing.collector_pn,
+                original_endpoint_raw=existing.original_endpoint_raw,
+                cloud_profile_key=existing.cloud_profile_key or record.cloud_profile_key,
+                source=existing.source,
+                observed_at=existing.observed_at,
+                last_seen_ip=record.last_seen_ip,
+            )
+            records[existing.collector_pn] = existing
+            save_collector_registry(config_dir=config_dir, records=records)
         return existing
     records[record.collector_pn] = record
     save_collector_registry(config_dir=config_dir, records=records)
@@ -190,4 +227,3 @@ def _normalize_collector_pn(value: object) -> str:
     if not candidate or _PN_RE.fullmatch(candidate) is None:
         return ""
     return candidate
-

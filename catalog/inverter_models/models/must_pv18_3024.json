@@ -5,6 +5,7 @@
   "model": "PV18-3024",
   "aliases": [
     "MUST PV18-3024",
+    "MUST PV1800",
     "MUST PV/PH18"
   ],
   "lifecycle": "experimental",
@@ -25,20 +26,23 @@
   },
   "coverage": {
     "runtime_control_surface": "read_only",
-    "smartess_control_surface": "unknown",
+    "smartess_control_surface": "cloud_catalog",
     "vendor_register_map": "partial",
     "notes": [
-      "Runtime support uses a third-party MUST PV/PH18 Modbus map for read-only telemetry."
+      "Runtime support uses a third-party MUST PV/PH18 Modbus map for read-only telemetry.",
+      "SmartESS cloud settings were observed as a catalog-only control surface; they are not exposed as local controls because no safe write/readback correlation exists."
     ]
   },
   "known_limitations": [
     "Read-only first implementation; no write controls are exposed.",
     "Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.",
+    "SmartESS cloud-visible settings are not exposed as Home Assistant controls until local Modbus write correlation is validated.",
     "Telemetry map is based on a third-party MUST PV/PH18 Modbus register map and still needs owner confirmation through a fresh support archive after integration update."
   ],
-  "knowledge_summary": "MUST PV18-3024 support is based on issue #5 support archives and a third-party MUST PV/PH18 Modbus register map. The user archives showed Auto/PI30 probe timeouts, SmartESS protocol asset \"02FF,0,0,\" and collector serial baudrate 19200-8-1-0. The runtime adds a read-only MUST PV/PH18 Modbus surface using slave address 4 and the third-party register map.",
+  "knowledge_summary": "MUST PV18-3024 support is based on issue #5 support archives and a third-party MUST PV/PH18 Modbus register map. The user archives showed Auto/PI30 probe timeouts, SmartESS protocol asset \"02FF,0,0,\" and collector serial baudrate 19200-8-1-0. The runtime accepts both the PV18 marker and a numeric PV1800 marker at Modbus register 20001, and adds a read-only MUST PV/PH18 Modbus surface using slave address 4 and the third-party register map.",
   "source_keys": [
     "github_issue_5",
-    "private_must_pv_ph18_modbus_map"
+    "private_must_pv_ph18_modbus_map",
+    "support_archive_issue_5_followup_private"
   ]
 }

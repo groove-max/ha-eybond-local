@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import dataclasses
 from datetime import datetime, timedelta, timezone
 import ipaddress
+import json
 import logging
 from pathlib import Path
 import socket
@@ -146,6 +147,7 @@ from ..support.cloud_evidence import (
 )
 from ..support.collector_registry import (
     get_collector_registry_record,
+    get_collector_registry_record_by_last_seen_ip,
     remember_collector_original_endpoint,
 )
 from ..support.proxy_capture import build_proxy_capture_overview
@@ -155,6 +157,7 @@ from ..support.proxy_session import (
     build_proxy_capture_trace_path,
     inspect_proxy_capture_start_status,
     inspect_proxy_capture_trace,
+    open_proxy_trace_output_file,
     summarize_proxy_capture_trace,
 )
 from ..support.proxy_trace import (
@@ -421,6 +424,60 @@ def _known_collector_cloud_profile_value(value: object) -> str:
     """Return one normalized non-empty collector cloud profile metadata value."""
 
     return str(value or "").strip()
+
+
+def _package_dir() -> Path:
+    """Return the installed integration package directory."""
+
+    return Path(__file__).resolve().parents[1]
+
+
+def _read_package_json(filename: str) -> dict[str, Any]:
+    """Read one package JSON file without letting diagnostics fail startup."""
+
+    try:
+        payload = json.loads((_package_dir() / filename).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_build_info_file() -> dict[str, str]:
+    """Read BUILD_INFO.txt embedded by the manual archive builder, if present."""
+
+    path = _package_dir() / "BUILD_INFO.txt"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return {"build_info_present": "false"}
+
+    result: dict[str, str] = {"build_info_present": "true"}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        normalized_key = key.strip().lower().replace(" ", "_")
+        if normalized_key:
+            result[normalized_key] = value.strip()
+    return result
+
+
+def _integration_build_runtime_values() -> dict[str, object]:
+    """Return support-facing package/build diagnostics for the loaded Python code."""
+
+    manifest = _read_package_json("manifest.json")
+    build_info = _read_build_info_file()
+    values: dict[str, object] = {
+        "integration_package_dir": str(_package_dir()),
+        "integration_manifest_version": str(manifest.get("version") or ""),
+        "integration_build_info_present": build_info.get("build_info_present") == "true",
+    }
+    for key in ("git_describe", "git_commit", "commit_date", "built_at"):
+        value = str(build_info.get(key) or "").strip()
+        if value:
+            values[f"integration_build_{key}"] = value
+    return values
 
 
 def _collector_cloud_family_from_endpoint_shape(endpoint: object) -> str:
@@ -965,7 +1022,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         protocol = self.collector_session_protocol
         identity_strategy = self.collector_identity_strategy
-        if not protocol and not identity_strategy:
+        raw_passthrough_bootstrap = self.collector_raw_passthrough_bootstrap
+        raw_passthrough_frame_format = self.collector_raw_passthrough_frame_format
+        if (
+            not protocol
+            and not identity_strategy
+            and not raw_passthrough_bootstrap
+            and not raw_passthrough_frame_format
+        ):
             return False
 
         reconcile = getattr(self._runtime, "async_reconcile_collector_session_profile", None)
@@ -976,16 +1040,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await reconcile(
                 collector_session_protocol=protocol,
                 collector_identity_strategy=identity_strategy,
+                collector_raw_passthrough_bootstrap=raw_passthrough_bootstrap,
+                collector_raw_passthrough_frame_format=raw_passthrough_frame_format,
                 reason=reason,
             )
         )
         if changed:
             logger.warning(
-                "Reconciled EyeBond collector session profile for entry %s after %s: protocol=%s identity=%s",
+                "Reconciled EyeBond collector session profile for entry %s after %s: protocol=%s identity=%s raw_bootstrap=%s raw_frame=%s",
                 self.config_entry.entry_id,
                 reason or "collector_session_profile_change",
                 protocol or "unknown",
                 identity_strategy or "unknown",
+                raw_passthrough_bootstrap or "unknown",
+                raw_passthrough_frame_format or "unknown",
             )
         return changed
 
@@ -1419,17 +1487,33 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if self._normalized_remembered_collector_server_endpoint():
             return
         collector_pn = self._preferred_collector_pn(snapshot)
-        if not collector_pn:
+        collector = getattr(snapshot, "collector", None)
+        collector_ip = (
+            str(getattr(collector, "remote_ip", "") or "").strip()
+            or str(self.config_entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
+        )
+        if not collector_pn and not collector_ip:
             return
 
         config_dir = Path(self.hass.config.config_dir)
         try:
             record = await self.hass.async_add_executor_job(
-                lambda: get_collector_registry_record(
-                    config_dir=config_dir,
-                    collector_pn=collector_pn,
+                lambda: (
+                    get_collector_registry_record(
+                        config_dir=config_dir,
+                        collector_pn=collector_pn,
+                    )
+                    if collector_pn
+                    else None
                 )
             )
+            if record is None and collector_ip:
+                record = await self.hass.async_add_executor_job(
+                    lambda: get_collector_registry_record_by_last_seen_ip(
+                        config_dir=config_dir,
+                        last_seen_ip=collector_ip,
+                    )
+                )
         except Exception as exc:
             logger.debug("Could not read collector registry: %s", exc)
             return
@@ -1925,34 +2009,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
             )
         )
-        snapshot = await self._async_reconcile_proxy_capture_session(snapshot)
-        snapshot = await self._async_reconcile_shadow_learning_session(snapshot)
-        await self._async_restore_collector_original_endpoint_from_registry(snapshot)
-        await self._async_remember_collector_server_endpoint(snapshot)
-        await self._async_remember_runtime_identity(snapshot)
-        # Keep self.data aligned with the fresh snapshot before helpers that
-        # inspect coordinator state instead of the local snapshot argument.
-        self.data = snapshot
-        self._sync_forced_collector_operation_mode()
-        self._configure_reverse_discovery_mode()
-        await self._async_warm_effective_metadata_cache()
-        collector_cloud_family = self.collector_cloud_family
-        if collector_cloud_family:
-            snapshot.values["collector_cloud_family"] = collector_cloud_family
-        collector_cloud_profile_key = self.collector_cloud_profile_key
-        if collector_cloud_profile_key:
-            snapshot.values["collector_cloud_profile_key"] = collector_cloud_profile_key
-        collector_cloud_profile_label = self.collector_cloud_profile_label
-        if collector_cloud_profile_label:
-            snapshot.values["collector_cloud_profile_label"] = collector_cloud_profile_label
-        collector_cloud_profile_source = self.collector_cloud_profile_source
-        if collector_cloud_profile_source:
-            snapshot.values["collector_cloud_profile_source"] = collector_cloud_profile_source
-        collector_cloud_profile_confidence = self.collector_cloud_profile_confidence
-        if collector_cloud_profile_confidence:
-            snapshot.values["collector_cloud_profile_confidence"] = (
-                collector_cloud_profile_confidence
+        snapshot = await self._async_prepare_runtime_snapshot_profile(snapshot)
+        if await self._async_reconcile_collector_session_profile(
+            reason="post_refresh_profile_discovery"
+        ):
+            snapshot = await self._runtime.async_refresh(
+                poll_interval=float(
+                    self.config_entry.options.get(
+                        CONF_POLL_INTERVAL,
+                        DEFAULT_POLL_INTERVAL,
+                    )
+                )
             )
+            snapshot = await self._async_prepare_runtime_snapshot_profile(snapshot)
         await self._async_reconcile_collector_operation_mode_endpoint(snapshot)
         snapshot.values["connection_type"] = self.config_entry.data.get(CONF_CONNECTION_TYPE, "eybond")
         snapshot.values["collector_operation_mode"] = self.collector_operation_mode
@@ -2024,6 +2093,42 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         await _async_self_heal_sensor_display_precision(self.hass, self.config_entry)
         self.async_sync_device_registry(snapshot)
+        return snapshot
+
+    async def _async_prepare_runtime_snapshot_profile(
+        self,
+        snapshot: RuntimeSnapshot,
+    ) -> RuntimeSnapshot:
+        """Persist runtime-learned profile facts before transport-profile reconcile."""
+
+        snapshot = await self._async_reconcile_proxy_capture_session(snapshot)
+        snapshot = await self._async_reconcile_shadow_learning_session(snapshot)
+        await self._async_restore_collector_original_endpoint_from_registry(snapshot)
+        await self._async_remember_collector_server_endpoint(snapshot)
+        await self._async_remember_runtime_identity(snapshot)
+        # Keep self.data aligned with the fresh snapshot before helpers that
+        # inspect coordinator state instead of the local snapshot argument.
+        self.data = snapshot
+        self._sync_forced_collector_operation_mode()
+        self._configure_reverse_discovery_mode()
+        await self._async_warm_effective_metadata_cache()
+        collector_cloud_family = self.collector_cloud_family
+        if collector_cloud_family:
+            snapshot.values["collector_cloud_family"] = collector_cloud_family
+        collector_cloud_profile_key = self.collector_cloud_profile_key
+        if collector_cloud_profile_key:
+            snapshot.values["collector_cloud_profile_key"] = collector_cloud_profile_key
+        collector_cloud_profile_label = self.collector_cloud_profile_label
+        if collector_cloud_profile_label:
+            snapshot.values["collector_cloud_profile_label"] = collector_cloud_profile_label
+        collector_cloud_profile_source = self.collector_cloud_profile_source
+        if collector_cloud_profile_source:
+            snapshot.values["collector_cloud_profile_source"] = collector_cloud_profile_source
+        collector_cloud_profile_confidence = self.collector_cloud_profile_confidence
+        if collector_cloud_profile_confidence:
+            snapshot.values["collector_cloud_profile_confidence"] = (
+                collector_cloud_profile_confidence
+            )
         return snapshot
 
     def _publish_runtime_intermediate_snapshot(self, snapshot: RuntimeSnapshot) -> None:
@@ -2389,6 +2494,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 upstream_host=upstream_host,
                 upstream_port=upstream_port,
             )
+
+            async def _async_open_proxy_trace_output(path: Path):
+                return await self.hass.async_add_executor_job(
+                    open_proxy_trace_output_file,
+                    path,
+                )
+
+            async def _async_close_proxy_trace_output(output):
+                await self.hass.async_add_executor_job(output.close)
+
             await self._runtime.async_start_proxy_capture_route(
                 owner_id=route_owner_id,
                 entry_id=self.config_entry.entry_id,
@@ -2401,6 +2516,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 output_path=trace_path,
                 masked_endpoint=self.proxy_capture_upstream_endpoint,
                 restore_trigger_path=restore_trigger_path,
+                async_open_output=_async_open_proxy_trace_output,
+                async_close_output=_async_close_proxy_trace_output,
             )
             route_started = True
             if overview.redirect_required:
@@ -2431,7 +2548,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 status="running",
             )
             await self._async_save_proxy_capture_session_state(running_state)
-        except Exception:
+        except Exception as exc:
+            error_text = str(exc or "").strip()
+            error_code = error_text.split(":", 1)[0] if error_text else type(exc).__name__
             if overview.redirect_required and overview.current_endpoint:
                 await self._async_best_effort_restore_after_start_failure(overview.current_endpoint)
             if route_started:
@@ -2447,6 +2566,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 )
             self._publish_tooling_values(
                 **self._proxy_capture_overview_runtime_values(),
+                proxy_capture_start_error=error_text,
+                proxy_capture_start_error_code=error_code,
+                proxy_capture_start_error_type=type(exc).__name__,
                 local_metadata_status="Collector proxy capture failed to start",
             )
             raise
@@ -3241,6 +3363,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return self.collector_transport_profile.identity_strategy
 
     @property
+    def collector_raw_passthrough_bootstrap(self) -> str:
+        """Return the raw inverter payload bootstrap mode implied by the cloud profile."""
+
+        return self.collector_transport_profile.raw_passthrough_bootstrap
+
+    @property
+    def collector_raw_passthrough_frame_format(self) -> str:
+        """Return the raw inverter payload frame format implied by the cloud profile."""
+
+        return self.collector_transport_profile.raw_passthrough_frame_format
+
+    @property
     def collector_transport_profile(self):
         """Return the resolved callback transport profile for this runtime."""
 
@@ -3259,10 +3393,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if driver_hint and driver_hint != DRIVER_HINT_AUTO:
                 return driver_hint
 
-        owner_key = str(self.effective_metadata_snapshot.effective_owner_key or "").strip().lower()
+        snapshot = self.effective_metadata_snapshot
+        if isinstance(snapshot, Mapping):
+            owner_key = str(snapshot.get("effective_owner_key") or "").strip().lower()
+        else:
+            owner_key = str(getattr(snapshot, "effective_owner_key", "") or "").strip().lower()
         if owner_key:
             return owner_key
-        return str(self.effective_owner_key or "").strip().lower()
+        try:
+            return str(self.effective_owner_key or "").strip().lower()
+        except Exception:
+            return ""
 
     @property
     def collector_cloud_profile_key(self) -> str:
@@ -4545,7 +4686,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     async def async_export_support_bundle(self) -> str:
         """Export one JSON support bundle for the current entry."""
 
-        support_bundle_payload = self._build_support_bundle_payload()
+        await self._async_refresh_before_support_export()
+        integration_build_values = await self.hass.async_add_executor_job(
+            _integration_build_runtime_values
+        )
+        support_bundle_payload = self._build_support_bundle_payload(
+            integration_build_values=integration_build_values,
+        )
         path = await self.hass.async_add_executor_job(
             lambda: export_support_bundle(
                 config_dir=Path(self.hass.config.config_dir),
@@ -4614,7 +4761,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     ),
                 )
 
-        support_bundle_payload = self._build_support_bundle_payload()
+        await self._async_refresh_before_support_export()
+        integration_build_values = await self.hass.async_add_executor_job(
+            _integration_build_runtime_values
+        )
+        support_bundle_payload = self._build_support_bundle_payload(
+            integration_build_values=integration_build_values,
+        )
         driver = self.current_driver
         try:
             raw_capture = await self._runtime.async_capture_support_evidence()
@@ -4668,6 +4821,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 notification_id=f"{DOMAIN}_support_package_{self.config_entry.entry_id}",
             )
         return str(path)
+
+    async def _async_refresh_before_support_export(self) -> None:
+        """Best-effort refresh so support archives reflect self-healed runtime state."""
+
+        try:
+            snapshot = await self._async_update_data()
+        except Exception as exc:  # noqa: BLE001 - support export must remain available
+            logger.warning(
+                "Support archive pre-refresh failed for entry %s: %s",
+                self.config_entry.entry_id,
+                exc,
+            )
+            return
+        if snapshot is not None:
+            self.data = snapshot
 
     async def async_create_local_profile_draft(self) -> str:
         """Create or refresh one local experimental profile draft."""
@@ -5293,12 +5461,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "support_workflow_advanced_hint": workflow["advanced_hint"],
         }
 
-    def _collector_original_endpoint_runtime_values(self) -> dict[str, Any]:
+    def _collector_original_endpoint_runtime_values(
+        self,
+        *,
+        include_registry: bool = False,
+    ) -> dict[str, Any]:
         """Return non-sensitive diagnostics for preserved original endpoint state."""
 
         options = getattr(self.config_entry, "options", {}) or {}
         remembered_endpoint = self._normalized_remembered_collector_server_endpoint()
-        return {
+        values: dict[str, Any] = {
             "collector_original_endpoint_known": bool(remembered_endpoint),
             "collector_original_endpoint_profile_key": str(
                 options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY, "") or ""
@@ -5310,6 +5482,75 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT, "") or ""
             ).strip(),
         }
+        if not include_registry:
+            return values
+
+        collector_pn = self._preferred_collector_pn(self.data)
+        registry_status = "unavailable"
+        record = None
+        if collector_pn:
+            try:
+                record = get_collector_registry_record(
+                    config_dir=Path(self.hass.config.path()),
+                    collector_pn=collector_pn,
+                )
+                registry_status = "found" if record is not None else "missing"
+            except Exception as exc:  # pragma: no cover - defensive diagnostics only
+                registry_status = f"error:{type(exc).__name__}"
+        values["collector_registry_record_status"] = registry_status
+        values["collector_registry_record_pn_known"] = bool(collector_pn)
+        if record is not None:
+            values.update(
+                {
+                    "collector_registry_original_endpoint": record.original_endpoint_raw,
+                    "collector_registry_cloud_profile_key": record.cloud_profile_key,
+                    "collector_registry_source": record.source,
+                    "collector_registry_observed_at": record.observed_at,
+                    "collector_registry_last_seen_ip": record.last_seen_ip,
+                }
+            )
+        return values
+
+    def _collector_transport_profile_runtime_values(self) -> dict[str, Any]:
+        """Return diagnostics that compare resolved profile and live link state."""
+
+        profile = self.collector_transport_profile
+        values: dict[str, Any] = {
+            "collector_resolved_cloud_family": profile.cloud_family,
+            "collector_resolved_runtime_owner_key": profile.runtime_owner_key,
+            "collector_resolved_session_protocol": profile.session_protocol,
+            "collector_resolved_identity_strategy": profile.identity_strategy,
+        }
+        connection = getattr(self, "_connection_spec", None)
+        if connection is not None:
+            values.update(
+                {
+                    "collector_connection_cloud_family": str(
+                        getattr(connection, "collector_cloud_family", "") or ""
+                    ),
+                    "collector_connection_session_protocol": str(
+                        getattr(connection, "collector_session_protocol", "") or ""
+                    ),
+                    "collector_connection_identity_strategy": str(
+                        getattr(connection, "collector_identity_strategy", "") or ""
+                    ),
+                }
+            )
+        runtime = getattr(self, "_runtime", None)
+        link_diagnostics = getattr(runtime, "listener_diagnostics", None)
+        if callable(link_diagnostics):
+            try:
+                diagnostics = link_diagnostics()
+            except Exception as exc:  # pragma: no cover - defensive diagnostics only
+                values["collector_runtime_link_diagnostics_error"] = type(exc).__name__
+            else:
+                values["collector_runtime_link_session_protocol"] = str(
+                    diagnostics.get("collector_callback_session_protocol") or ""
+                )
+                values["collector_runtime_link_identity_strategy"] = str(
+                    diagnostics.get("collector_callback_identity_strategy") or ""
+                )
+        return values
 
     def _collector_onboarding_values(self, snapshot: RuntimeSnapshot | None = None) -> dict[str, Any]:
         """Return compact collector-side onboarding status helpers for entity UX."""
@@ -5319,6 +5560,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return {
             "collector_onboarding_status": support_label or "Unknown",
             **self._collector_original_endpoint_runtime_values(),
+            **self._collector_transport_profile_runtime_values(),
         }
 
     async def _proxy_capture_values(self, snapshot: RuntimeSnapshot | None = None) -> dict[str, Any]:
@@ -5393,11 +5635,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             values["proxy_capture_session_anonymized"] = state.anonymized
         return values
 
-    def _build_support_bundle_payload(self) -> dict[str, Any]:
+    def _build_support_bundle_payload(
+        self,
+        *,
+        integration_build_values: Mapping[str, object] | None = None,
+    ) -> dict[str, Any]:
         inverter = self.data.inverter
         metadata = self.effective_metadata
         smartess_protocol = metadata.smartess_protocol
         values = dict(self.data.values)
+        values.update(integration_build_values or _integration_build_runtime_values())
+        values.update(self._collector_transport_profile_runtime_values())
+        values.update(self._collector_original_endpoint_runtime_values(include_registry=True))
         cloud_evidence_record = self._latest_smartess_cloud_evidence_record()
         cloud_evidence = None
         if cloud_evidence_record is not None:

@@ -21,12 +21,19 @@ from ..const import (
 from ..metadata.collector_cloud_profile_catalog_loader import (
     load_collector_cloud_profile_catalog,
     resolve_collector_cloud_identity_strategy,
+    resolve_collector_cloud_raw_passthrough_bootstrap,
+    resolve_collector_cloud_raw_passthrough_frame_format,
     resolve_collector_cloud_session_protocol,
 )
 from .cloud_family import collector_cloud_family_observation_from_endpoint
 
 
-EYBOND_FRAMED_RUNTIME_OWNER_KEYS: frozenset[str] = frozenset({"modbus_smg"})
+EYBOND_FRAMED_RUNTIME_OWNER_KEYS: frozenset[str] = frozenset(
+    {
+        "modbus_smg",
+        "must_pv_ph18",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +44,8 @@ class CollectorTransportProfile:
     runtime_owner_key: str
     session_protocol: str
     identity_strategy: str
+    raw_passthrough_bootstrap: str
+    raw_passthrough_frame_format: str
 
 
 def known_collector_cloud_family(value: object) -> str:
@@ -122,6 +131,8 @@ def resolve_collector_transport_profile(
             runtime_owner_key=normalized_owner,
             session_protocol="eybond_framed",
             identity_strategy="framed_heartbeat_then_fc2_pn",
+            raw_passthrough_bootstrap="",
+            raw_passthrough_frame_format="",
         )
 
     return CollectorTransportProfile(
@@ -129,6 +140,12 @@ def resolve_collector_transport_profile(
         runtime_owner_key=normalized_owner,
         session_protocol=resolve_collector_cloud_session_protocol(normalized_family),
         identity_strategy=resolve_collector_cloud_identity_strategy(normalized_family),
+        raw_passthrough_bootstrap=resolve_collector_cloud_raw_passthrough_bootstrap(
+            normalized_family
+        ),
+        raw_passthrough_frame_format=resolve_collector_cloud_raw_passthrough_frame_format(
+            normalized_family
+        ),
     )
 
 

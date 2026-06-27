@@ -34,8 +34,12 @@ from .device_scoped_overlay import filter_learned_read_measurements_for_activati
 from .const import (
     COLLECTOR_OPERATION_MODES,
     CONF_COLLECTOR_CLOUD_FAMILY,
+    CONF_COLLECTOR_IP,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_PN,
     CONF_CONTROL_MODE,
     CONF_CONNECTION_TYPE,
@@ -389,18 +393,84 @@ async def _async_self_heal_collector_cloud_family(
     hass: HomeAssistant,
     entry: ConfigEntry,
 ) -> None:
-    """Restore legacy callback family when older runtime state persisted unknown."""
+    """Restore callback cloud family when older runtime state persisted unknown."""
 
     if _known_collector_cloud_family(entry.data.get(CONF_COLLECTOR_CLOUD_FAMILY)):
         return
 
     family = _cloud_family_from_entry_endpoint_shape(entry)
+    registry_record = None
+    if not family:
+        from .support.collector_registry import (
+            get_collector_registry_record,
+            get_collector_registry_record_by_last_seen_ip,
+        )
+
+        collector_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
+        collector_ip = str(entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
+        hass_config = getattr(hass, "config", None)
+        config_dir_raw = str(getattr(hass_config, "config_dir", "") or "").strip()
+        if not config_dir_raw:
+            return
+        config_dir = Path(config_dir_raw)
+        try:
+            registry_record = await hass.async_add_executor_job(
+                lambda: (
+                    get_collector_registry_record(
+                        config_dir=config_dir,
+                        collector_pn=collector_pn,
+                    )
+                    if collector_pn
+                    else None
+                )
+            )
+            if registry_record is None and collector_ip:
+                registry_record = await hass.async_add_executor_job(
+                    lambda: get_collector_registry_record_by_last_seen_ip(
+                        config_dir=config_dir,
+                        last_seen_ip=collector_ip,
+                    )
+                )
+        except Exception as exc:
+            logger.debug("Could not read EyeBond collector registry during family self-heal: %s", exc)
+            registry_record = None
+
+        if registry_record is not None:
+            from .collector.transport_profile import known_collector_cloud_family
+
+            family = known_collector_cloud_family(registry_record.cloud_profile_key)
+            if not family:
+                from .collector.cloud_family import collector_cloud_family_observation_from_endpoint
+
+                observation = collector_cloud_family_observation_from_endpoint(
+                    registry_record.original_endpoint_raw
+                )
+                family = _known_collector_cloud_family(observation.family)
+
     if not family:
         return
 
     data = dict(entry.data)
+    options = dict(entry.options)
     data[CONF_COLLECTOR_CLOUD_FAMILY] = family
-    hass.config_entries.async_update_entry(entry, data=data)
+    if registry_record is not None and registry_record.original_endpoint_raw:
+        options.setdefault(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+            registry_record.original_endpoint_raw,
+        )
+        options.setdefault(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+            registry_record.cloud_profile_key or family,
+        )
+        options.setdefault(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+            registry_record.source or "collector_registry",
+        )
+        options.setdefault(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+            registry_record.observed_at,
+        )
+    hass.config_entries.async_update_entry(entry, data=data, options=options)
 
 
 def _entity_unique_id(entry_id: str, domain: str, key: str) -> str:

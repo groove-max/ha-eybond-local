@@ -155,7 +155,7 @@ class ShadowEventRecord:
 
 @dataclass(frozen=True, slots=True)
 class ShadowWriteObservation:
-    """One observed Modbus write captured during shadow learning."""
+    """One observed write captured during shadow learning."""
 
     register: int
     values: tuple[int, ...]
@@ -166,9 +166,12 @@ class ShadowWriteObservation:
     unit: int = 1
     source: str = "shadow_cloud"
     timestamp: str = field(default_factory=utc_now_iso)
+    protocol: str = ""
+    command: str = ""
+    value: str = ""
 
     def to_json_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "timestamp": str(self.timestamp),
             "source": str(self.source),
             "unit": int(self.unit),
@@ -179,6 +182,13 @@ class ShadowWriteObservation:
             "devaddr": self.devaddr,
             "raw_payload_hex": str(self.raw_payload_hex),
         }
+        if self.protocol:
+            payload["protocol"] = str(self.protocol)
+        if self.command:
+            payload["command"] = str(self.command)
+        if self.value:
+            payload["value"] = str(self.value)
+        return payload
 
     @classmethod
     def from_json_dict(cls, payload: dict[str, Any]) -> ShadowWriteObservation:
@@ -192,6 +202,9 @@ class ShadowWriteObservation:
             devcode=_maybe_int(payload.get("devcode")),
             devaddr=_maybe_int(payload.get("devaddr")),
             raw_payload_hex=str(payload.get("raw_payload_hex") or ""),
+            protocol=str(payload.get("protocol") or ""),
+            command=str(payload.get("command") or ""),
+            value=str(payload.get("value") or ""),
         )
 
 

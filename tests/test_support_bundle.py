@@ -81,6 +81,7 @@ class SupportBundleTests(unittest.TestCase):
             values={
                 "collector_signal_strength": -67,
                 "smartess_protocol_asset_id": "0925",
+                "integration_build_git_describe": "v0.2.0-beta.2-75-gabcdef0",
                 "runtime_reconnect_count": 1,
                 "last_error": "",
                 "operating_mode": "Off-Grid",
@@ -93,6 +94,7 @@ class SupportBundleTests(unittest.TestCase):
 
         self.assertIn("collector_signal_strength", raw["roles"]["collector"]["values"])
         self.assertIn("smartess_protocol_asset_id", raw["roles"]["collector"]["values"])
+        self.assertIn("integration_build_git_describe", raw["roles"]["integration"]["values"])
         self.assertIn("runtime_reconnect_count", raw["roles"]["integration"]["values"])
         self.assertIn("last_error", raw["roles"]["integration"]["values"])
         self.assertIn("operating_mode", raw["roles"]["inverter"]["values"])
@@ -277,6 +279,29 @@ class SupportBundleTests(unittest.TestCase):
             profile_name="modbus_smg/models/anenji_4200_protocol_1.json",
             register_schema_name="modbus_smg/models/anenji_4200_protocol_1.json",
             variant_key="anenji_4200_protocol_1",
+        )
+
+        self.assertIsNone(raw["source_metadata"]["support_marker"])
+
+    def test_builds_support_bundle_payload_without_smg_marker_for_eybond_g_ascii_family_fallback(self) -> None:
+        raw = build_support_bundle_payload(
+            entry_id="entry-eybond-g-ascii",
+            entry_title="EyeBond G-ASCII",
+            connected=True,
+            collector={"collector_pn": "A0000000000001"},
+            inverter={
+                "driver_key": "eybond_g_ascii",
+                "model_name": "EyeBond G-ASCII inverter",
+                "variant_key": "family_fallback",
+                "serial_number": "A0000000000001",
+            },
+            values={"protocol_id": "EYBOND_G_ASCII"},
+            data={"server_ip": "192.168.1.50"},
+            options={"poll_interval": 10},
+            profile_name="",
+            register_schema_name="",
+            variant_key="family_fallback",
+            effective_owner_key="eybond_g_ascii",
         )
 
         self.assertIsNone(raw["source_metadata"]["support_marker"])

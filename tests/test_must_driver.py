@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.must import MustPvPh18Driver  # noqa: E402
+from custom_components.eybond_local.drivers.must import _support_capture_ranges  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
 
@@ -76,6 +77,28 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.register_schema_name, "must_pv_ph18/base.json")
         self.assertEqual(inverter.probe_target.device_addr, 4)
 
+    async def test_probe_detects_numeric_pv1800_model_register(self) -> None:
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=4)
+        registers = _must_registers()
+        registers.pop(20000)
+        registers[20001] = 1800
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        self.assertIsNotNone(inverter)
+        assert inverter is not None
+        self.assertEqual(inverter.driver_key, "must_pv_ph18")
+        self.assertEqual(inverter.protocol_family, "must_pv_ph18")
+        self.assertEqual(inverter.model_name, "MUST PV1800")
+        self.assertEqual(inverter.variant_key, "pv_ph18")
+        self.assertEqual(inverter.register_schema_name, "must_pv_ph18/base.json")
+
     async def test_read_values_decodes_third_party_register_map(self) -> None:
         driver = MustPvPh18Driver()
         target = ProbeTarget(devcode=1, collector_addr=255, device_addr=4)
@@ -114,8 +137,12 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_evidence_captures_planned_ranges(self) -> None:
         driver = MustPvPh18Driver()
         target = ProbeTarget(devcode=1, collector_addr=255, device_addr=4)
+        registers = _must_registers()
+        for start, count in _support_capture_ranges("must_pv_ph18/base.json"):
+            for register in range(start, start + count):
+                registers.setdefault(register, 0)
         transport = FixtureTransport(
-            registers=_must_registers(),
+            registers=registers,
             command_responses=None,
             probe_target=target,
         )
@@ -127,9 +154,17 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["capture_kind"], "must_pv_ph18_modbus_register_dump")
         self.assertEqual(evidence["range_failures"], [])
         planned = [(item["start"], item["count"]) for item in evidence["planned_ranges"]]
-        self.assertIn((20000, 2), planned)
-        self.assertIn((25205, 12), planned)
+        self.assertIn((20000, 17), planned)
+        self.assertIn((25201, 74), planned)
         self.assertEqual(len(evidence["fixture_ranges"]), len(planned))
+
+    def test_support_capture_ranges_include_cloud_observed_diagnostic_windows(self) -> None:
+        ranges = _support_capture_ranges("must_pv_ph18/base.json")
+
+        self.assertIn((20000, 17), ranges)
+        self.assertIn((20101, 32), ranges)
+        self.assertIn((20213, 2), ranges)
+        self.assertIn((25201, 74), ranges)
 
 
 if __name__ == "__main__":

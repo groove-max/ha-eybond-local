@@ -122,9 +122,13 @@ def export_support_package(
         },
         "archive_members": {
             "support_bundle": "support_bundle.json",
-            "raw_capture": "raw_capture.json",
-            "raw_fixture": "fixture/raw_fixture.json",
-            "anonymized_fixture": "fixture/anonymized_fixture.json",
+            "raw_capture": "raw_capture.json" if raw_capture is not None else None,
+            "raw_fixture": "fixture/raw_fixture.json" if fixture is not None else None,
+            "anonymized_fixture": (
+                "fixture/anonymized_fixture.json"
+                if anonymized_fixture is not None
+                else None
+            ),
             "cloud_evidence": _CLOUD_EVIDENCE_ARCHIVE_MEMBER if cloud_evidence is not None else None,
             "shadow_learning": shadow_manifest_members or None,
         },
@@ -150,10 +154,14 @@ def export_support_package(
             "Send this ZIP file to the developer. The main files are:",
             "- manifest.json",
             "- support_bundle.json (includes explicit collector, inverter, and integration role sections)",
-            "- raw_capture.json",
-            "- fixture/anonymized_fixture.json",
         ]
     )
+    if raw_capture is not None:
+        readme_lines.append("- raw_capture.json")
+    if anonymized_fixture is not None:
+        readme_lines.append("- fixture/anonymized_fixture.json")
+    if fixture is not None:
+        readme_lines.append("- fixture/raw_fixture.json")
     if cloud_evidence is not None:
         readme_lines.append("- evidence/cloud_evidence.json")
     if shadow_manifest_members:

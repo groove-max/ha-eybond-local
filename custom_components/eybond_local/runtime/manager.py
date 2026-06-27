@@ -31,6 +31,9 @@ class RuntimeManager(Protocol):
     async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
         ...
 
+    def listener_diagnostics(self) -> dict[str, object]:
+        ...
+
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
         ...
 
@@ -76,6 +79,8 @@ class RuntimeManager(Protocol):
         output_path: Any,
         masked_endpoint: str = "",
         restore_trigger_path: Any = None,
+        async_open_output: Any = None,
+        async_close_output: Any = None,
     ) -> None:
         ...
 

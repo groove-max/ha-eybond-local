@@ -294,6 +294,46 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertEqual(blockers, ())
         self.assertEqual(seed.protocol_adapter_key, "modbus_rtu")
 
+    def test_eybond_g_ascii_protocol_resolves_learning_adapter_without_register_seed(self) -> None:
+        snapshot = {
+            "effective_owner_key": "eybond_g_ascii",
+            "effective_owner_name": "EyeBond G-ASCII",
+            "variant_key": "default",
+            "profile_name": "eybond_g_ascii/base.json",
+            "register_schema_name": "eybond_g_ascii/base.json",
+            "protocol_family": "eybond_g_ascii",
+            "driver_key": "eybond_g_ascii",
+            "confidence": "high",
+        }
+
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260625T120000Z",
+            entry_id="entry-1",
+            collector_pn="A0000000000001",
+            collector_cloud_family="valuecloud_at",
+            collector_cloud_profile_key="valuecloud_at",
+            collector_cloud_profile_label="ValueCloud AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=snapshot,
+            raw_capture={
+                "runtime": {
+                    "values": {
+                        "eybond_g_ascii_gdat0_fields": "B 0 5 4003 0 00 219.7 50.01",
+                        "eybond_g_ascii_gpv_fields": "183.1 027.6 00.43 05.31 00972",
+                    }
+                }
+            },
+            write_response_mode="exception",
+        )
+
+        self.assertEqual(blockers, ())
+        self.assertEqual(seed.protocol_adapter_key, "eybond_g_ascii")
+        self.assertEqual(seed.register_bank, {})
+        self.assertIn("GPDAT0", seed.command_responses)
+        self.assertTrue(build_shadow_learning_preflight(seed).can_start)
+
     def test_must_register_protocol_resolves_modbus_learning_adapter(self) -> None:
         snapshot = {
             "effective_owner_key": "must_pv_ph18",
@@ -452,6 +492,67 @@ class ShadowLearningBackendTests(unittest.TestCase):
             self.assertEqual(read_map["registers"]["302"], [560])
             self.assertEqual(read_map["read_event_count"], 2)
             self.assertEqual(read_map["value_source"], "seed_bank")
+
+    def test_eybond_g_ascii_reads_and_writes_are_handled_fail_closed(self) -> None:
+        seed = ShadowLearningSeed(
+            session_id="entry-1_20260625T120000Z",
+            entry_id="entry-1",
+            collector_pn="A0000000000001",
+            collector_cloud_profile_key="valuecloud_at",
+            collector_cloud_profile_label="ValueCloud AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot={
+                "profile_name": "eybond_g_ascii/base.json",
+                "register_schema_name": "eybond_g_ascii/base.json",
+                "protocol_family": "eybond_g_ascii",
+                "driver_key": "eybond_g_ascii",
+            },
+            command_responses={
+                "CLDSRVHOST1": "192.168.1.50,18899,TCP",
+                "GPDAT0": "B 0 5 4003 0 00 219.7 50.01",
+                "GPV": "(183.1 027.6 00.43 05.31 00972\r",
+            },
+            register_bank={},
+            latest_support_evidence=None,
+            collector_cloud_family="valuecloud_at",
+            protocol_adapter_key="eybond_g_ascii",
+            write_response_mode="exception",
+            allow_ack_writes=False,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler = InProcessShadowLearningHandler(
+                seed=seed,
+                output_path=Path(temp_dir) / "shadow.jsonl",
+            )
+
+            async def _run() -> None:
+                await handler.start()
+                read_response = await handler._handle_ascii_frame(
+                    b"GPDAT0\r",
+                    remote="iot.eybond.com:18899",
+                )
+                write_response = await handler._handle_ascii_frame(
+                    b"OPR01\r",
+                    remote="iot.eybond.com:18899",
+                )
+                await handler.stop()
+                self.assertEqual(read_response, b"(B 0 5 4003 0 00 219.7 50.01\r")
+                self.assertEqual(write_response, b"NAK\r")
+
+            asyncio.run(_run())
+
+            observations = handler.write_observations
+            self.assertEqual(len(observations), 1)
+            self.assertEqual(observations[0].protocol, "eybond_g_ascii")
+            self.assertEqual(observations[0].command, "OPR")
+            self.assertEqual(observations[0].value, "01")
+            read_map = handler.read_map
+            self.assertEqual(read_map["ascii_commands"], [["GPDAT0", 1]])
+            self.assertEqual(read_map["ascii_fields"]["GPDAT0"], ["B 0 5 4003 0 00 219.7 50.01"])
+            self.assertEqual(read_map["value_source"], "seed_command_responses")
 
     def test_ack_mode_mutates_register_bank_and_returns_ack(self) -> None:
         seed = ShadowLearningSeed(

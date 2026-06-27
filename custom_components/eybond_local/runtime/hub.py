@@ -410,6 +410,10 @@ class EybondHub:
             collector_pn=connection.collector_pn,
             collector_session_protocol=connection.collector_session_protocol,
             collector_identity_strategy=connection.collector_identity_strategy,
+            collector_raw_passthrough_bootstrap=connection.collector_raw_passthrough_bootstrap,
+            collector_raw_passthrough_frame_format=(
+                connection.collector_raw_passthrough_frame_format
+            ),
             tcp_port=connection.tcp_port,
             advertised_tcp_port=connection.advertised_tcp_port,
             udp_port=connection.udp_port,
@@ -458,6 +462,8 @@ class EybondHub:
         *,
         collector_session_protocol: str,
         collector_identity_strategy: str,
+        collector_raw_passthrough_bootstrap: str = "",
+        collector_raw_passthrough_frame_format: str = "",
         reason: str = "collector_session_profile_change",
     ) -> bool:
         """Rebuild link transports after a runtime-learned collector profile change."""
@@ -465,8 +471,18 @@ class EybondHub:
         return await self._link_manager.async_reconcile_collector_session_profile(
             collector_session_protocol=collector_session_protocol,
             collector_identity_strategy=collector_identity_strategy,
+            collector_raw_passthrough_bootstrap=collector_raw_passthrough_bootstrap,
+            collector_raw_passthrough_frame_format=collector_raw_passthrough_frame_format,
             reason=reason,
         )
+
+    def listener_diagnostics(self) -> dict[str, object]:
+        """Return active collector listener/session diagnostics."""
+
+        diagnostics = getattr(self._link_manager, "listener_diagnostics", None)
+        if callable(diagnostics):
+            return dict(diagnostics())
+        return {}
 
     def set_inverter_overlay_applier(
         self, applier: Callable[[DetectedInverter, Any], DetectedInverter] | None
@@ -525,6 +541,8 @@ class EybondHub:
         output_path,
         masked_endpoint: str = "",
         restore_trigger_path=None,
+        async_open_output=None,
+        async_close_output=None,
     ) -> None:
         """Start one in-process proxy capture route on the active runtime link."""
 
@@ -539,6 +557,10 @@ class EybondHub:
             "masked_endpoint": masked_endpoint,
             "restore_trigger_path": restore_trigger_path,
         }
+        if async_open_output is not None:
+            route_kwargs["async_open_output"] = async_open_output
+        if async_close_output is not None:
+            route_kwargs["async_close_output"] = async_close_output
         if owner_id:
             route_kwargs["owner_id"] = owner_id
         if entry_id:
@@ -1044,10 +1066,17 @@ class EybondHub:
         await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
 
         transport = self._link_manager.transport
-        if not hasattr(transport, "async_send_collector"):
-            raise RuntimeError("collector_local_management_not_supported")
-
         normalized_endpoint = _normalize_collector_server_endpoint(endpoint)
+        if not hasattr(transport, "async_send_collector"):
+            at_transport = getattr(self._link_manager, "collector_at_transport", None)
+            if not hasattr(at_transport, "async_query") or not hasattr(at_transport, "async_write"):
+                raise RuntimeError("collector_local_management_not_supported")
+            return await self._async_set_collector_server_endpoint_at(
+                at_transport,
+                normalized_endpoint,
+                apply_changes=apply_changes,
+            )
+
         session = SmartEssLocalSession(transport)
         previous_endpoint = await self._async_query_collector_text(session, SET_SERVER_ENDPOINT)
         if previous_endpoint and previous_endpoint != normalized_endpoint:
@@ -1090,6 +1119,54 @@ class EybondHub:
 
         result["status"] = "applied"
         result["warning"] = "collector redirect apply accepted; the current session may disconnect before the next refresh"
+        return result
+
+    async def _async_set_collector_server_endpoint_at(
+        self,
+        at_transport: object,
+        normalized_endpoint: str,
+        *,
+        apply_changes: bool = True,
+    ) -> dict[str, object]:
+        """Stage or apply CLDSRVHOST1 through the collector AT management path."""
+
+        previous_response = await at_transport.async_query("CLDSRVHOST1")
+        previous_endpoint = str(getattr(previous_response, "value", "") or "").strip()
+        if previous_endpoint and previous_endpoint != normalized_endpoint:
+            self._collector_last_server_endpoint_before_change = previous_endpoint
+
+        write_response = await at_transport.async_write("CLDSRVHOST1", normalized_endpoint)
+        if str(getattr(write_response, "command", "") or "").strip().upper() != "CLDSRVHOST1":
+            raise RuntimeError("collector_at_set_failed:command=CLDSRVHOST1")
+
+        readback_response = await at_transport.async_query("CLDSRVHOST1")
+        readback_endpoint = str(getattr(readback_response, "value", "") or "").strip()
+        effective_endpoint = readback_endpoint or normalized_endpoint
+
+        self._collector_runtime_values["collector_server_endpoint"] = effective_endpoint
+        self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
+
+        result: dict[str, object] = {
+            "status": "applied" if apply_changes else "staged",
+            "requested_endpoint": normalized_endpoint,
+            "readback_endpoint": effective_endpoint,
+            "apply_changes": apply_changes,
+            "management_protocol": "at_text",
+        }
+        if previous_endpoint:
+            result["previous_endpoint"] = previous_endpoint
+        if apply_changes:
+            try:
+                apply_response = await at_transport.async_write("INTPARA", "29,1")
+                result["at_apply_response"] = str(
+                    getattr(apply_response, "value", "") or ""
+                ).strip()
+            except Exception as exc:
+                result["at_apply_warning"] = f"{type(exc).__name__}:{exc}"
+            result["warning"] = (
+                "collector AT endpoint write accepted; the current session may disconnect "
+                "before the next refresh"
+            )
         return result
 
     async def async_apply_collector_changes(self) -> dict[str, object]:

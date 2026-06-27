@@ -35,12 +35,14 @@ from .pi30 import Pi30Driver
 from .smartess_local import SmartEssLocalDriver
 from .smg import SmgModbusDriver
 from .srne import SrneModbusDriver
+from .eybond_g_ascii import EybondGAsciiDriver
 
 _DRIVERS: tuple[InverterDriver, ...] = (
     SmgModbusDriver(),
     SrneModbusDriver(),
     MustPvPh18Driver(),
     Pi30Driver(),
+    EybondGAsciiDriver(),
     SmartEssLocalDriver(),
     Pi18Driver(),
 )

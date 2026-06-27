@@ -3847,6 +3847,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "SRNE / Modbus",
                 "MUST PV/PH18",
                 "PI30",
+                "EyeBond G-ASCII",
                 "SmartESS 0925 / Modbus",
                 "PI18",
             ],

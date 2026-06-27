@@ -59,6 +59,8 @@ def build_contribution_record(
         "fingerprint": _clean_fingerprint(fingerprint),
         "register_coverage": [list(block[:2]) for block in read_map.get("read_blocks", [])],
         "read_map_registers": read_map.get("registers", {}),
+        "ascii_command_coverage": read_map.get("ascii_commands", []),
+        "read_map_ascii_fields": read_map.get("ascii_fields", {}),
         "label_evidence": _label_evidence(manifest),
         "cloud_hints": _cloud_hints(fingerprint, manifest),
         "capture_meta": {
@@ -144,6 +146,8 @@ def _scrub_read_map(read_map: Any) -> dict[str, Any]:
     return {
         "read_blocks": list(read_map.get("read_blocks") or []),
         "registers": registers,
+        "ascii_commands": _scrub(read_map.get("ascii_commands") or []),
+        "ascii_fields": _scrub(read_map.get("ascii_fields") or {}),
     }
 
 

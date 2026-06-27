@@ -952,6 +952,7 @@ def _driver_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
         "srne_modbus": "SRNE / Modbus",
         "must_pv_ph18": "MUST PV/PH18",
         "pi30": "PI30",
+        "eybond_g_ascii": "EyeBond G-ASCII",
         "pi18": "PI18",
     }
     options = [
@@ -8225,7 +8226,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "common.dynamic.proxy_capture_action_error_reconnect_timeout",
                 "Collector did not reconnect through the proxy in time. Check the collector callback settings and try again.",
             )
-        if error_code == "proxy_capture_upstream_connect_failed":
+        if error_code in {
+            "proxy_capture_upstream_connect_failed",
+            "proxy_capture_upstream_unreachable",
+        }:
             return self._tr(
                 "common.dynamic.proxy_capture_action_error_upstream_connect_failed",
                 "Home Assistant could not connect to the current upstream collector endpoint: {detail}.",

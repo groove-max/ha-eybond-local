@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_5_followup_private",
+  "kind": "support_archive",
+  "title": "MUST PV/PH18 private follow-up support archive",
+  "reference": "private:issue-5-follow-up",
+  "captured_at": "2026-06-25",
+  "visibility": "private",
+  "summary_publishable": false,
+  "summary": "Private maintainer-only support archive used to validate the MUST PV/PH18 framed transport path and numeric PV1800 model marker. Raw collector identifiers, account details, network addresses, and archive identifiers are intentionally not tracked.",
+  "assertions": [
+    "runtime_compatibility",
+    "fingerprint"
+  ]
+}

@@ -46,6 +46,17 @@ class CollectorTransportProfileTests(unittest.TestCase):
         self.assertEqual(profile.session_protocol, "eybond_framed")
         self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
 
+    def test_must_runtime_uses_framed_payload_even_without_cloud_family(self) -> None:
+        profile = resolve_collector_transport_profile(
+            cloud_family="",
+            runtime_owner_key="must_pv_ph18",
+        )
+
+        self.assertEqual(profile.cloud_family, "")
+        self.assertEqual(profile.runtime_owner_key, "must_pv_ph18")
+        self.assertEqual(profile.session_protocol, "eybond_framed")
+        self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
+
     def test_entry_context_recovers_family_from_original_endpoint_profile(self) -> None:
         profile = resolve_collector_transport_profile_from_entry_context(
             {},

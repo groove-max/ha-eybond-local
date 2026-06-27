@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
 
-from .at import CollectorAtResponse, build_at_query, parse_at_response
+from .at import CollectorAtResponse, build_at_query, build_at_write, parse_at_response
 from .cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
@@ -64,6 +64,21 @@ async def _finish_cleanup_on_cancel(awaitable: Awaitable[Any]) -> Any:
 
 def _looks_like_at_traffic(chunk: bytes) -> bool:
     return chunk.lstrip().startswith(b"AT+")
+
+
+def _looks_like_uart_passthrough_value(value: str) -> bool:
+    normalized = str(value or "").strip()
+    if not normalized.isascii():
+        return False
+    parts = [part.strip() for part in normalized.split(",")]
+    if len(parts) != 4:
+        return False
+    baud, data_bits, stop_bits, parity = parts
+    if not baud.isdigit() or not data_bits.isdigit() or not stop_bits.isdigit():
+        return False
+    if parity.upper() not in {"NONE", "N", "ODD", "EVEN", "O", "E"}:
+        return False
+    return True
 
 
 def _mask_identity_token(value: str) -> str:
@@ -345,6 +360,9 @@ class CollectorAtTransport(Protocol):
     async def async_query(self, command: str) -> CollectorAtResponse:
         ...
 
+    async def async_write(self, command: str, value: str) -> CollectorAtResponse:
+        ...
+
 
 class _CollectorConnection:
     def __init__(self, *, remote_ip_hint: str = "", heartbeat_interval: float, write_timeout: float) -> None:
@@ -489,6 +507,29 @@ class _CollectorConnection:
             self._pending_at_response = future
             try:
                 await self._async_write(build_at_query(command))
+                response = await asyncio.wait_for(future, timeout=request_timeout)
+            finally:
+                if self._pending_at_response is future:
+                    self._pending_at_response = None
+            self._apply_at_response_metadata(response)
+            return response
+
+    async def async_write(
+        self,
+        command: str,
+        value: str,
+        *,
+        request_timeout: float,
+    ) -> CollectorAtResponse:
+        if not self.connected or not self._writer:
+            raise ConnectionError("collector_not_connected")
+
+        async with self._request_lock:
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[CollectorAtResponse] = loop.create_future()
+            self._pending_at_response = future
+            try:
+                await self._async_write(build_at_write(command, value))
                 response = await asyncio.wait_for(future, timeout=request_timeout)
             finally:
                 if self._pending_at_response is future:
@@ -741,7 +782,14 @@ class _CollectorConnection:
 
 
 class _CollectorAtConnection:
-    def __init__(self, *, remote_ip_hint: str = "", write_timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        remote_ip_hint: str = "",
+        write_timeout: float,
+        raw_passthrough_bootstrap: str = "",
+        raw_passthrough_frame_format: str = "",
+    ) -> None:
         self._write_timeout = float(write_timeout)
         self._reader_task: asyncio.Task[None] | None = None
         self._reader: asyncio.StreamReader | None = None
@@ -754,6 +802,11 @@ class _CollectorAtConnection:
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
+        self._raw_passthrough_bootstrap = str(raw_passthrough_bootstrap or "").strip().lower()
+        self._raw_passthrough_frame_format = (
+            str(raw_passthrough_frame_format or "").strip().lower()
+        )
+        self._raw_passthrough_bootstrapped = False
 
     @property
     def connected(self) -> bool:
@@ -765,6 +818,16 @@ class _CollectorAtConnection:
 
     def set_write_timeout(self, timeout: float) -> None:
         self._write_timeout = float(timeout)
+
+    def set_raw_passthrough_bootstrap(self, mode: str) -> None:
+        normalized = str(mode or "").strip().lower()
+        if normalized == self._raw_passthrough_bootstrap:
+            return
+        self._raw_passthrough_bootstrap = normalized
+        self._raw_passthrough_bootstrapped = False
+
+    def set_raw_passthrough_frame_format(self, mode: str) -> None:
+        self._raw_passthrough_frame_format = str(mode or "").strip().lower()
 
     async def wait_until_connected(self, timeout: float) -> bool:
         if self.connected:
@@ -780,17 +843,10 @@ class _CollectorAtConnection:
             raise ConnectionError("collector_not_connected")
 
         async with self._request_lock:
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[CollectorAtResponse] = loop.create_future()
-            self._pending_response = future
-            try:
-                await self._async_write(build_at_query(command))
-                response = await asyncio.wait_for(future, timeout=request_timeout)
-            finally:
-                if self._pending_response is future:
-                    self._pending_response = None
-            self._apply_response_metadata(response)
-            return response
+            return await self._async_query_locked(
+                build_at_query(command),
+                request_timeout=request_timeout,
+            )
 
     async def async_send_raw_payload(self, payload: bytes, *, request_timeout: float) -> bytes:
         """Send one raw inverter payload over a plain AT callback stream.
@@ -804,6 +860,9 @@ class _CollectorAtConnection:
             raise ConnectionError("collector_not_connected")
 
         async with self._request_lock:
+            await self._async_bootstrap_raw_passthrough_locked(
+                request_timeout=min(float(request_timeout), 2.0),
+            )
             loop = asyncio.get_running_loop()
             future: asyncio.Future[bytes] = loop.create_future()
             self._pending_raw_response = future
@@ -813,6 +872,82 @@ class _CollectorAtConnection:
             finally:
                 if self._pending_raw_response is future:
                     self._pending_raw_response = None
+
+    async def _async_query_locked(
+        self,
+        payload: bytes,
+        *,
+        request_timeout: float,
+    ) -> CollectorAtResponse:
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[CollectorAtResponse] = loop.create_future()
+        self._pending_response = future
+        try:
+            await self._async_write(payload)
+            response = await asyncio.wait_for(future, timeout=request_timeout)
+        finally:
+            if self._pending_response is future:
+                self._pending_response = None
+        self._apply_response_metadata(response)
+        return response
+
+    async def async_write(
+        self,
+        command: str,
+        value: str,
+        *,
+        request_timeout: float,
+    ) -> CollectorAtResponse:
+        if not self.connected or not self._writer:
+            raise ConnectionError("collector_not_connected")
+
+        async with self._request_lock:
+            return await self._async_query_locked(
+                build_at_write(command, value),
+                request_timeout=request_timeout,
+            )
+
+    async def _async_bootstrap_raw_passthrough_locked(self, *, request_timeout: float) -> None:
+        """Mirror SmartESS AT bootstrap before direct inverter ASCII traffic.
+
+        Legacy dtu_ess collectors send PI30 traffic as raw serial bytes on the
+        AT callback stream, but the cloud first confirms the current UART mode
+        with an ``AT+UART=<same value>`` write. Some older collectors appear not
+        to forward raw inverter bytes reliably until this step is performed.
+        """
+
+        if self._raw_passthrough_bootstrapped:
+            return
+        if self._raw_passthrough_bootstrap == "none":
+            self._raw_passthrough_bootstrapped = True
+            return
+
+        try:
+            response = await self._async_query_locked(
+                build_at_query("UART"),
+                request_timeout=request_timeout,
+            )
+            uart_value = str(response.value or "").strip()
+            if not _looks_like_uart_passthrough_value(uart_value):
+                logger.debug(
+                    "Skipping raw passthrough UART bootstrap remote=%s value=%r",
+                    self._collector.remote_ip,
+                    uart_value,
+                )
+                self._raw_passthrough_bootstrapped = True
+                return
+            await self._async_query_locked(
+                build_at_write("UART", uart_value),
+                request_timeout=request_timeout,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Raw passthrough UART bootstrap failed remote=%s error=%s",
+                self._collector.remote_ip,
+                exc,
+            )
+        finally:
+            self._raw_passthrough_bootstrapped = True
 
     async def run(
         self,
@@ -837,6 +972,7 @@ class _CollectorAtConnection:
         self._writer = writer
         self._session_id = str(session_id or "").strip()
         self._session_identity_callback = session_identity_callback
+        self._raw_passthrough_bootstrapped = False
         self._connected.set()
 
         logger.info("Collector AT connection from %s:%s", self._collector.remote_ip, self._collector.remote_port)
@@ -868,16 +1004,40 @@ class _CollectorAtConnection:
 
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
         try:
+            buffered_prefix = b""
             while True:
-                prefix = await reader.readexactly(3)
+                if len(buffered_prefix) >= 3:
+                    prefix = buffered_prefix[:3]
+                    buffered_prefix = buffered_prefix[3:]
+                else:
+                    prefix = buffered_prefix + await reader.readexactly(3 - len(buffered_prefix))
+                    buffered_prefix = b""
                 if prefix.startswith((b"(", b"^")):
-                    line = prefix + await reader.readuntil(b"\r")
+                    terminator = prefix.find(b"\r")
+                    if terminator >= 0:
+                        line = prefix[: terminator + 1]
+                        buffered_prefix = prefix[terminator + 1 :] + buffered_prefix
+                    else:
+                        line = prefix + await reader.readuntil(b"\r")
                     future = self._pending_raw_response
                     if future is not None and not future.done():
                         future.set_result(line)
                         continue
                     logger.debug(
                         "Unhandled collector raw ASCII payload remote=%s payload=%r",
+                        self._collector.remote_ip,
+                        line,
+                    )
+                    continue
+
+                if prefix in {b"NAK", b"NOA", b"ERC"}:
+                    line = prefix + await reader.readuntil(b"\r")
+                    future = self._pending_raw_response
+                    if future is not None and not future.done():
+                        future.set_result(line)
+                        continue
+                    logger.debug(
+                        "Unhandled collector raw negative payload remote=%s payload=%r",
                         self._collector.remote_ip,
                         line,
                     )
@@ -1231,6 +1391,8 @@ class _SharedEybondListener:
         collector_ip: str,
         write_timeout: float,
         collector_pn: str = "",
+        raw_passthrough_bootstrap: str = "",
+        raw_passthrough_frame_format: str = "",
     ) -> _CollectorAtConnection | None:
         if collector_ip:
             connection = self._at_connections.get(collector_ip)
@@ -1238,10 +1400,14 @@ class _SharedEybondListener:
                 connection = _CollectorAtConnection(
                     remote_ip_hint=collector_ip,
                     write_timeout=write_timeout,
+                    raw_passthrough_bootstrap=raw_passthrough_bootstrap,
+                    raw_passthrough_frame_format=raw_passthrough_frame_format,
                 )
                 self._at_connections[collector_ip] = connection
             else:
                 connection.set_write_timeout(write_timeout)
+                connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
+                connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
             return connection
 
         if collector_pn:
@@ -1251,9 +1417,14 @@ class _SharedEybondListener:
             )
             if connection is not None:
                 connection.set_write_timeout(write_timeout)
+                connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
+                connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
             return connection
 
         connection = self.current_at_connection(write_timeout=write_timeout)
+        if connection is not None:
+            connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
+            connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
         return connection
 
     def _connection_by_collector_pn(
@@ -1935,6 +2106,8 @@ class _SharedEybondListener:
         *,
         collector_ip: str,
         write_timeout: float,
+        raw_passthrough_bootstrap: str = "",
+        raw_passthrough_frame_format: str = "",
     ) -> _CollectorAtConnection:
         remote_ip = pending.remote_ip
         connection = self._at_connections.get(remote_ip)
@@ -1947,9 +2120,13 @@ class _SharedEybondListener:
             connection = _CollectorAtConnection(
                 remote_ip_hint=remote_ip,
                 write_timeout=write_timeout,
+                raw_passthrough_bootstrap=raw_passthrough_bootstrap,
+                raw_passthrough_frame_format=raw_passthrough_frame_format,
             )
         else:
             connection.set_write_timeout(write_timeout)
+            connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
+            connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
 
         self._at_connections[remote_ip] = connection
         if collector_ip and collector_ip not in self._at_connections:
@@ -2536,6 +2713,8 @@ class SharedEybondTransport:
         collector_pn: str = "",
         collector_session_protocol: str = "",
         collector_identity_strategy: str = "",
+        collector_raw_passthrough_bootstrap: str = "",
+        collector_raw_passthrough_frame_format: str = "",
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -2546,6 +2725,12 @@ class SharedEybondTransport:
         self._collector_pn = str(collector_pn or "").strip()
         self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
         self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
+        self._collector_raw_passthrough_bootstrap = (
+            str(collector_raw_passthrough_bootstrap or "").strip().lower()
+        )
+        self._collector_raw_passthrough_frame_format = (
+            str(collector_raw_passthrough_frame_format or "").strip().lower()
+        )
         self._listener: _SharedEybondListener | None = None
 
     @property
@@ -2661,8 +2846,12 @@ class SharedEybondTransport:
             if connection is not None and connection.connected:
                 return True
 
-            if self._collector_ip:
-                pending = self._listener.pop_pending_socket(self._collector_ip)
+            if self._collector_ip or self._collector_pn:
+                pending = await self._listener.pop_pending_socket_for_route(
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._collector_session_protocol,
+                )
                 if pending is not None:
                     connection = await self._listener.activate_pending_connection(
                         pending,
@@ -2698,8 +2887,12 @@ class SharedEybondTransport:
                     return False
                 return await connection.wait_until_heartbeat(timeout=remaining)
 
-            if self._collector_ip:
-                pending = self._listener.pop_pending_socket(self._collector_ip)
+            if self._collector_ip or self._collector_pn:
+                pending = await self._listener.pop_pending_socket_for_route(
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._collector_session_protocol,
+                )
                 if pending is not None:
                     connection = await self._listener.activate_pending_connection(
                         pending,
@@ -2771,8 +2964,12 @@ class SharedEybondTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip:
-            pending = self._listener.pop_pending_socket(self._collector_ip)
+        if self._collector_ip or self._collector_pn:
+            pending = await self._listener.pop_pending_socket_for_route(
+                collector_ip=self._collector_ip,
+                collector_pn=self._collector_pn,
+                session_protocol=self._collector_session_protocol,
+            )
             if pending is not None:
                 return await self._listener.activate_pending_connection(
                     pending,
@@ -2789,6 +2986,15 @@ class SharedEybondTransport:
     def _connection(self, *, create_placeholder: bool) -> _CollectorConnection | None:
         if self._listener is None:
             return None
+        if self._collector_pn:
+            connection = self._listener.ensure_connection(
+                "",
+                self._heartbeat_interval,
+                self._write_timeout,
+                self._collector_pn,
+            )
+            if connection is not None:
+                return connection
         if create_placeholder:
             return self._listener.ensure_connection(
                 self._collector_ip,
@@ -2799,13 +3005,6 @@ class SharedEybondTransport:
         if self._collector_ip:
             return self._listener.ensure_connection(
                 self._collector_ip,
-                self._heartbeat_interval,
-                self._write_timeout,
-                self._collector_pn,
-            )
-        if self._collector_pn:
-            return self._listener.ensure_connection(
-                "",
                 self._heartbeat_interval,
                 self._write_timeout,
                 self._collector_pn,
@@ -2829,6 +3028,8 @@ class SharedCollectorAtTransport:
         collector_pn: str = "",
         collector_session_protocol: str = "",
         collector_identity_strategy: str = "",
+        collector_raw_passthrough_bootstrap: str = "",
+        collector_raw_passthrough_frame_format: str = "",
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -2838,6 +3039,12 @@ class SharedCollectorAtTransport:
         self._collector_pn = str(collector_pn or "").strip()
         self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
         self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
+        self._collector_raw_passthrough_bootstrap = (
+            str(collector_raw_passthrough_bootstrap or "").strip().lower()
+        )
+        self._collector_raw_passthrough_frame_format = (
+            str(collector_raw_passthrough_frame_format or "").strip().lower()
+        )
         self._listener: _SharedEybondListener | None = None
 
     @property
@@ -2913,14 +3120,20 @@ class SharedCollectorAtTransport:
             if connection is not None and connection.connected:
                 return True
 
-            if self._collector_ip:
-                pending = self._listener.pop_pending_socket(self._collector_ip)
+            if self._collector_ip or self._collector_pn:
+                pending = await self._listener.pop_pending_socket_for_route(
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._collector_session_protocol,
+                )
                 if pending is not None:
                     if self._uses_at_text_session():
                         connection = await self._listener.activate_pending_at_connection(
                             pending,
                             collector_ip=self._collector_ip,
                             write_timeout=self._write_timeout,
+                            raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+                            raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
                         )
                         if connection.connected:
                             return True
@@ -2951,14 +3164,20 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip:
-            pending = self._listener.pop_pending_socket(self._collector_ip)
+        if self._collector_ip or self._collector_pn:
+            pending = await self._listener.pop_pending_socket_for_route(
+                collector_ip=self._collector_ip,
+                collector_pn=self._collector_pn,
+                session_protocol=self._collector_session_protocol,
+            )
             if pending is not None:
                 if self._uses_at_text_session():
                     connection = await self._listener.activate_pending_at_connection(
                         pending,
                         collector_ip=self._collector_ip,
                         write_timeout=self._write_timeout,
+                        raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+                        raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
                     )
                     return await connection.async_query(command, request_timeout=self._request_timeout)
                 framed = await self._listener.activate_pending_connection(
@@ -2976,6 +3195,70 @@ class SharedCollectorAtTransport:
             raise ConnectionError("collector_not_connected")
 
         return await connection.async_query(command, request_timeout=self._request_timeout)
+
+    async def async_write(self, command: str, value: str) -> CollectorAtResponse:
+        framed = self._framed_connection(create_placeholder=False)
+        if framed is not None and framed.connected:
+            return await framed.async_write(
+                command,
+                value,
+                request_timeout=self._request_timeout,
+            )
+
+        connection = self._at_connection(create_placeholder=bool(self._collector_ip))
+        if connection is not None and connection.connected:
+            return await connection.async_write(
+                command,
+                value,
+                request_timeout=self._request_timeout,
+            )
+
+        if self._listener is None:
+            raise ConnectionError("collector_not_connected")
+
+        if self._collector_ip or self._collector_pn:
+            pending = await self._listener.pop_pending_socket_for_route(
+                collector_ip=self._collector_ip,
+                collector_pn=self._collector_pn,
+                session_protocol=self._collector_session_protocol,
+            )
+            if pending is not None:
+                if self._uses_at_text_session():
+                    connection = await self._listener.activate_pending_at_connection(
+                        pending,
+                        collector_ip=self._collector_ip,
+                        write_timeout=self._write_timeout,
+                        raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+                        raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+                    )
+                    return await connection.async_write(
+                        command,
+                        value,
+                        request_timeout=self._request_timeout,
+                    )
+                framed = await self._listener.activate_pending_connection(
+                    pending,
+                    collector_ip=self._collector_ip,
+                    heartbeat_interval=60.0,
+                    write_timeout=self._write_timeout,
+                )
+                return await framed.async_write(
+                    command,
+                    value,
+                    request_timeout=self._request_timeout,
+                )
+
+        if connection is None:
+            raise ConnectionError("collector_not_connected")
+
+        if not connection.connected:
+            raise ConnectionError("collector_not_connected")
+
+        return await connection.async_write(
+            command,
+            value,
+            request_timeout=self._request_timeout,
+        )
 
     async def async_send_payload(
         self,
@@ -3000,13 +3283,19 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip:
-            pending = self._listener.pop_pending_socket(self._collector_ip)
+        if self._collector_ip or self._collector_pn:
+            pending = await self._listener.pop_pending_socket_for_route(
+                collector_ip=self._collector_ip,
+                collector_pn=self._collector_pn,
+                session_protocol=self._collector_session_protocol,
+            )
             if pending is not None:
                 connection = await self._listener.activate_pending_at_connection(
                     pending,
                     collector_ip=self._collector_ip,
                     write_timeout=self._write_timeout,
+                    raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+                    raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
                 )
                 return await connection.async_send_raw_payload(
                     payload,
@@ -3031,29 +3320,50 @@ class SharedCollectorAtTransport:
     def _at_connection(self, *, create_placeholder: bool) -> _CollectorAtConnection | None:
         if self._listener is None:
             return None
+        if self._collector_pn:
+            connection = self._listener.ensure_at_connection(
+                "",
+                self._write_timeout,
+                self._collector_pn,
+                self._collector_raw_passthrough_bootstrap,
+                self._collector_raw_passthrough_frame_format,
+            )
+            if connection is not None:
+                return connection
         if create_placeholder:
             return self._listener.ensure_at_connection(
                 self._collector_ip,
                 self._write_timeout,
                 self._collector_pn,
+                self._collector_raw_passthrough_bootstrap,
+                self._collector_raw_passthrough_frame_format,
             )
         if self._collector_ip:
             return self._listener.ensure_at_connection(
                 self._collector_ip,
                 self._write_timeout,
                 self._collector_pn,
+                self._collector_raw_passthrough_bootstrap,
+                self._collector_raw_passthrough_frame_format,
             )
-        if self._collector_pn:
-            return self._listener.ensure_at_connection(
-                "",
-                self._write_timeout,
-                self._collector_pn,
-            )
-        return self._listener.current_at_connection(write_timeout=self._write_timeout)
+        connection = self._listener.current_at_connection(write_timeout=self._write_timeout)
+        if connection is not None:
+            connection.set_raw_passthrough_bootstrap(self._collector_raw_passthrough_bootstrap)
+            connection.set_raw_passthrough_frame_format(self._collector_raw_passthrough_frame_format)
+        return connection
 
     def _framed_connection(self, *, create_placeholder: bool) -> _CollectorConnection | None:
         if self._listener is None:
             return None
+        if self._collector_pn:
+            connection = self._listener.ensure_connection(
+                "",
+                heartbeat_interval=60.0,
+                write_timeout=self._write_timeout,
+                collector_pn=self._collector_pn,
+            )
+            if connection is not None:
+                return connection
         if create_placeholder:
             return self._listener.ensure_connection(
                 self._collector_ip,
@@ -3064,13 +3374,6 @@ class SharedCollectorAtTransport:
         if self._collector_ip:
             return self._listener.ensure_connection(
                 self._collector_ip,
-                heartbeat_interval=60.0,
-                write_timeout=self._write_timeout,
-                collector_pn=self._collector_pn,
-            )
-        if self._collector_pn:
-            return self._listener.ensure_connection(
-                "",
                 heartbeat_interval=60.0,
                 write_timeout=self._write_timeout,
                 collector_pn=self._collector_pn,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -19,6 +20,7 @@ from custom_components.eybond_local import (
     _async_finalize_expert_entity_migration,
     _async_initial_refresh_for_setup,
     _async_remove_legacy_runtime_select_entities,
+    _async_self_heal_collector_cloud_family,
     _async_self_heal_entry_title,
     _async_self_heal_expert_defaults,
     _async_self_heal_enabled_defaults,
@@ -439,6 +441,60 @@ class InitModuleTests(unittest.TestCase):
                 registry.updated,
                 [("button.smg_6200_collector_apply_collector_changes", None)],
             )
+
+        asyncio.run(_run())
+
+    def test_self_heal_collector_cloud_family_from_unique_registry_ip(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            remember_collector_original_endpoint,
+        )
+
+        async def _run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                remember_collector_original_endpoint(
+                    config_dir=Path(tmp),
+                    collector_pn="E50000200000000001",
+                    original_endpoint_raw="iot.eybond.com,18899,TCP",
+                    cloud_profile_key="valuecloud_at",
+                    source="test_registry",
+                    observed_at="2026-06-24T20:52:14+00:00",
+                    last_seen_ip="192.168.8.110",
+                )
+                updates: list[dict[str, object]] = []
+
+                async def async_add_executor_job(func, *args):
+                    return func(*args)
+
+                class _ConfigEntries:
+                    def async_update_entry(self, entry, *, data=None, options=None, title=None) -> None:
+                        del entry, title
+                        updates.append({"data": data or {}, "options": options or {}})
+
+                hass = types.SimpleNamespace(
+                    config=types.SimpleNamespace(config_dir=tmp),
+                    async_add_executor_job=async_add_executor_job,
+                    config_entries=_ConfigEntries(),
+                )
+                entry = types.SimpleNamespace(
+                    data={
+                        "collector_pn": "E5000020000000",
+                        "collector_ip": "192.168.8.110",
+                    },
+                    options={},
+                )
+
+                await _async_self_heal_collector_cloud_family(hass, entry)
+
+                self.assertEqual(len(updates), 1)
+                self.assertEqual(updates[0]["data"]["collector_cloud_family"], "valuecloud_at")
+                self.assertEqual(
+                    updates[0]["options"]["collector_original_server_endpoint"],
+                    "iot.eybond.com,18899,TCP",
+                )
+                self.assertEqual(
+                    updates[0]["options"]["collector_original_server_endpoint_profile_key"],
+                    "valuecloud_at",
+                )
 
         asyncio.run(_run())
 

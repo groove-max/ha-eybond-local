@@ -30,6 +30,29 @@ _MODBUS_RTU_CLOUD_FAMILIES: frozenset[str] = frozenset(
     }
 )
 _ASCII_FAMILIES: frozenset[str] = frozenset({"pi18", "pi30"})
+_EYBOND_G_ASCII_FAMILIES: frozenset[str] = frozenset(
+    {
+        "eybond_g_ascii",
+        "valuecloud_at",
+    }
+)
+_EYBOND_G_ASCII_READ_COMMANDS: frozenset[str] = frozenset(
+    {
+        "F",
+        "GMOD",
+        "SVFW",
+        "GTMP",
+        "GLINE",
+        "GBAT",
+        "GBUS",
+        "GCHG",
+        "GOP",
+        "GINV",
+        "GWS",
+        "BL",
+        "GPV",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +63,7 @@ class ShadowReadRequest:
     function_code: int
     address: int
     count: int
+    command: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +74,8 @@ class ShadowWriteRequest:
     function_code: int
     address: int
     values: tuple[int, ...]
+    command: str = ""
+    value: str = ""
 
     @property
     def count(self) -> int:
@@ -83,6 +109,14 @@ class ShadowLearningProtocolAdapter:
 
     def build_read_response(self, request: ShadowReadRequest, values: list[int]) -> bytes:
         raise NotImplementedError
+
+    def build_seeded_read_response(
+        self,
+        request: ShadowReadRequest,
+        values: list[int],
+        command_responses: dict[str, str],
+    ) -> bytes:
+        return self.build_read_response(request, values)
 
     def build_write_ack_response(self, request: ShadowWriteRequest) -> bytes:
         raise NotImplementedError
@@ -187,6 +221,96 @@ class ModbusRtuShadowLearningAdapter(ShadowLearningProtocolAdapter):
             register_bank[request.address + offset] = int(value)
 
 
+class EybondGAsciiShadowLearningAdapter(ShadowLearningProtocolAdapter):
+    """Shadow-learning adapter for ValueCloud/EyeBond G-ASCII payloads."""
+
+    def __init__(self) -> None:
+        super().__init__(key="eybond_g_ascii", supported=True)
+
+    def decode_read_request(self, frame: bytes) -> ShadowReadRequest | None:
+        command = _decode_g_ascii_command(frame)
+        if not command:
+            return None
+        if _is_g_ascii_read_command(command):
+            return ShadowReadRequest(
+                unit=0,
+                function_code=0,
+                address=0,
+                count=0,
+                command=command,
+            )
+        return None
+
+    def decode_write_request(self, frame: bytes) -> ShadowWriteRequest | None:
+        command = _decode_g_ascii_command(frame)
+        if not command or _is_g_ascii_read_command(command):
+            return None
+        key, value = _split_g_ascii_write_command(command)
+        return ShadowWriteRequest(
+            unit=0,
+            function_code=0,
+            address=-1,
+            values=(),
+            command=key,
+            value=value,
+        )
+
+    def write_observation(
+        self,
+        *,
+        frame: bytes,
+        devcode: int | None,
+        devaddr: int | None,
+        timestamp: str = "",
+        source: str = "shadow_learning",
+    ) -> ShadowWriteObservation | None:
+        request = self.decode_write_request(frame)
+        if request is None:
+            return None
+        return ShadowWriteObservation(
+            timestamp=str(timestamp or utc_now_iso()),
+            source=str(source or "shadow_learning"),
+            unit=0,
+            function_code=0,
+            register=-1,
+            values=(),
+            devcode=devcode,
+            devaddr=devaddr,
+            raw_payload_hex=frame.hex(),
+            protocol=self.key,
+            command=request.command,
+            value=request.value,
+        )
+
+    def build_read_response(self, request: ShadowReadRequest, values: list[int]) -> bytes:
+        return self.build_raw_exception(b"", exception_code=0x01)
+
+    def build_seeded_read_response(
+        self,
+        request: ShadowReadRequest,
+        values: list[int],
+        command_responses: dict[str, str],
+    ) -> bytes:
+        command = str(request.command or "").strip().upper()
+        if not command:
+            return self.build_raw_exception(b"", exception_code=0x01)
+        value = _lookup_g_ascii_response(command, command_responses)
+        if value is None:
+            return self.build_raw_exception(command.encode("ascii", errors="ignore") + b"\r", exception_code=0x01)
+        return _normalize_g_ascii_response(command, value)
+
+    def build_write_ack_response(self, request: ShadowWriteRequest) -> bytes:
+        return b"ACK\r"
+
+    def build_write_exception_response(
+        self, request: ShadowWriteRequest, *, exception_code: int
+    ) -> bytes:
+        return self.build_raw_exception(b"", exception_code=exception_code)
+
+    def build_raw_exception(self, frame: bytes, *, exception_code: int) -> bytes:
+        return b"NAK\r"
+
+
 class UnsupportedShadowLearningAdapter(ShadowLearningProtocolAdapter):
     """Fail-closed adapter for explicit protocols without local learning support."""
 
@@ -217,6 +341,8 @@ def resolve_shadow_learning_protocol_adapter(
     cloud_family = str(collector_cloud_family or "").strip().lower()
     if cloud_family in _MODBUS_RTU_CLOUD_FAMILIES:
         return ModbusRtuShadowLearningAdapter()
+    if cloud_family in _EYBOND_G_ASCII_FAMILIES:
+        return EybondGAsciiShadowLearningAdapter()
 
     protocol_family = str(snapshot.get("protocol_family") or "").strip().lower()
     driver_key = str(snapshot.get("driver_key") or "").strip().lower()
@@ -229,6 +355,8 @@ def resolve_shadow_learning_protocol_adapter(
     }
     if explicit_keys & _MODBUS_RTU_FAMILIES:
         return ModbusRtuShadowLearningAdapter()
+    if explicit_keys & _EYBOND_G_ASCII_FAMILIES:
+        return EybondGAsciiShadowLearningAdapter()
     if explicit_keys & _ASCII_FAMILIES:
         return UnsupportedShadowLearningAdapter(protocol_family or driver_key)
 
@@ -239,7 +367,69 @@ def resolve_shadow_learning_protocol_adapter(
         return ModbusRtuShadowLearningAdapter()
     if "modbus" in evidence or "smg" in evidence:
         return ModbusRtuShadowLearningAdapter()
+    if "eybond_g_ascii" in evidence or "valuecloud" in evidence:
+        return EybondGAsciiShadowLearningAdapter()
     return UnsupportedShadowLearningAdapter(protocol_family or driver_key or profile_name)
+
+
+def _decode_g_ascii_command(frame: bytes) -> str:
+    if not frame or len(frame) > 128 or not frame.endswith(b"\r"):
+        return ""
+    payload = frame[:-1]
+    if not payload:
+        return ""
+    try:
+        text = payload.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return ""
+    if not text or text.startswith("AT+"):
+        return ""
+    if any(ord(char) < 0x20 or ord(char) > 0x7E for char in text):
+        return ""
+    return text.upper()
+
+
+def _is_g_ascii_read_command(command: str) -> bool:
+    normalized = str(command or "").strip().upper()
+    return (
+        normalized in _EYBOND_G_ASCII_READ_COMMANDS
+        or (normalized.startswith("GPDAT") and normalized[5:].isdigit())
+        or normalized.endswith("?")
+    )
+
+
+def _split_g_ascii_write_command(command: str) -> tuple[str, str]:
+    normalized = str(command or "").strip().upper()
+    for index, char in enumerate(normalized):
+        if char.isdigit() or char in {"+", "-", "."}:
+            return normalized[:index] or normalized, normalized[index:]
+    return normalized, ""
+
+
+def _lookup_g_ascii_response(command: str, responses: dict[str, str]) -> str | None:
+    normalized = str(command or "").strip().upper()
+    for key in (normalized, normalized.rstrip("?")):
+        if key in responses:
+            return responses[key]
+    return None
+
+
+def _normalize_g_ascii_response(command: str, value: str) -> bytes:
+    text = str(value or "").strip()
+    if not text:
+        return b"NAK\r"
+    if text.endswith("\r"):
+        return text.encode("ascii", errors="replace")
+    upper = text.upper()
+    if upper in {"ACK", "NAK", "NOA", "ERCRC"}:
+        return f"{upper}\r".encode("ascii")
+    if text.startswith(("(", "#")):
+        return f"{text}\r".encode("ascii", errors="replace")
+    if str(command or "").strip().upper() == "BL":
+        return f"BL{text}\r".encode("ascii", errors="replace")
+    if str(command or "").strip().upper() == "F":
+        return f"#{text}\r".encode("ascii", errors="replace")
+    return f"({text}\r".encode("ascii", errors="replace")
 
 
 __all__ = [
@@ -247,6 +437,7 @@ __all__ = [
     "ShadowReadRequest",
     "ShadowWriteRequest",
     "ModbusRtuShadowLearningAdapter",
+    "EybondGAsciiShadowLearningAdapter",
     "UnsupportedShadowLearningAdapter",
     "resolve_shadow_learning_protocol_adapter",
 ]
