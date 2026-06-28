@@ -327,6 +327,7 @@ class EybondRuntimeLinkManager:
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
+        collector_raw_passthrough_min_interval_ms: int = 0,
     ) -> None:
         self._configured_server_ip = server_ip
         self._configured_advertised_server_ip = advertised_server_ip.strip()
@@ -339,6 +340,10 @@ class EybondRuntimeLinkManager:
         )
         self._collector_raw_passthrough_frame_format = (
             str(collector_raw_passthrough_frame_format or "").strip().lower()
+        )
+        self._collector_raw_passthrough_min_interval_ms = max(
+            0,
+            int(collector_raw_passthrough_min_interval_ms or 0),
         )
         self._tcp_port = int(tcp_port)
         self._configured_advertised_tcp_port = int(advertised_tcp_port or 0)
@@ -514,6 +519,9 @@ class EybondRuntimeLinkManager:
             "collector_callback_raw_passthrough_frame_format": (
                 self._collector_raw_passthrough_frame_format
             ),
+            "collector_callback_raw_passthrough_min_interval_ms": (
+                self._collector_raw_passthrough_min_interval_ms
+            ),
         }
         diagnostics.update(self._session_inventory_diagnostics())
         return diagnostics
@@ -618,6 +626,7 @@ class EybondRuntimeLinkManager:
         collector_identity_strategy: str,
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
+        collector_raw_passthrough_min_interval_ms: int = 0,
         reason: str = "collector_session_profile_change",
     ) -> bool:
         """Rebuild transports when the resolved callback session profile changes."""
@@ -626,16 +635,21 @@ class EybondRuntimeLinkManager:
         normalized_strategy = str(collector_identity_strategy or "").strip().lower()
         normalized_raw_bootstrap = str(collector_raw_passthrough_bootstrap or "").strip().lower()
         normalized_raw_frame = str(collector_raw_passthrough_frame_format or "").strip().lower()
+        normalized_raw_min_interval_ms = max(
+            0,
+            int(collector_raw_passthrough_min_interval_ms or 0),
+        )
         if (
             normalized_protocol == self._collector_session_protocol
             and normalized_strategy == self._collector_identity_strategy
             and normalized_raw_bootstrap == self._collector_raw_passthrough_bootstrap
             and normalized_raw_frame == self._collector_raw_passthrough_frame_format
+            and normalized_raw_min_interval_ms == self._collector_raw_passthrough_min_interval_ms
         ):
             return False
 
         logger.warning(
-            "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s, raw_bootstrap %s -> %s, raw_frame %s -> %s; rebuilding transport",
+            "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s, raw_bootstrap %s -> %s, raw_frame %s -> %s, raw_min_interval_ms %s -> %s; rebuilding transport",
             reason or "collector_session_profile_change",
             self._collector_session_protocol or "unknown",
             normalized_protocol or "unknown",
@@ -645,6 +659,8 @@ class EybondRuntimeLinkManager:
             normalized_raw_bootstrap or "unknown",
             self._collector_raw_passthrough_frame_format or "unknown",
             normalized_raw_frame or "unknown",
+            self._collector_raw_passthrough_min_interval_ms,
+            normalized_raw_min_interval_ms,
         )
         was_started = self._started
         if was_started:
@@ -655,6 +671,7 @@ class EybondRuntimeLinkManager:
         self._collector_identity_strategy = normalized_strategy
         self._collector_raw_passthrough_bootstrap = normalized_raw_bootstrap
         self._collector_raw_passthrough_frame_format = normalized_raw_frame
+        self._collector_raw_passthrough_min_interval_ms = normalized_raw_min_interval_ms
         self._rebuild_link(self._effective_server_ip)
         self._listener_rebind_count += 1
 
@@ -1405,6 +1422,9 @@ class EybondRuntimeLinkManager:
             collector_identity_strategy=self._collector_identity_strategy,
             collector_raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
             collector_raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+            collector_raw_passthrough_min_interval_ms=(
+                self._collector_raw_passthrough_min_interval_ms
+            ),
         )
         at_transport = SharedCollectorAtTransport(
             host=bind_host,
@@ -1416,6 +1436,9 @@ class EybondRuntimeLinkManager:
             collector_identity_strategy=self._collector_identity_strategy,
             collector_raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
             collector_raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+            collector_raw_passthrough_min_interval_ms=(
+                self._collector_raw_passthrough_min_interval_ms
+            ),
         )
         return payload_transport, at_transport
 

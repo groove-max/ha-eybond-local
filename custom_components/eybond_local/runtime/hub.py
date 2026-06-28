@@ -414,6 +414,9 @@ class EybondHub:
             collector_raw_passthrough_frame_format=(
                 connection.collector_raw_passthrough_frame_format
             ),
+            collector_raw_passthrough_min_interval_ms=(
+                connection.collector_raw_passthrough_min_interval_ms
+            ),
             tcp_port=connection.tcp_port,
             advertised_tcp_port=connection.advertised_tcp_port,
             udp_port=connection.udp_port,
@@ -464,6 +467,7 @@ class EybondHub:
         collector_identity_strategy: str,
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
+        collector_raw_passthrough_min_interval_ms: int = 0,
         reason: str = "collector_session_profile_change",
     ) -> bool:
         """Rebuild link transports after a runtime-learned collector profile change."""
@@ -473,6 +477,9 @@ class EybondHub:
             collector_identity_strategy=collector_identity_strategy,
             collector_raw_passthrough_bootstrap=collector_raw_passthrough_bootstrap,
             collector_raw_passthrough_frame_format=collector_raw_passthrough_frame_format,
+            collector_raw_passthrough_min_interval_ms=(
+                collector_raw_passthrough_min_interval_ms
+            ),
             reason=reason,
         )
 
@@ -1565,6 +1572,26 @@ class EybondHub:
         values["collector_connection_replace_count"] = collector.connection_replace_count
         values["collector_disconnect_count"] = collector.disconnect_count
         values["collector_pending_request_drop_count"] = collector.pending_request_drop_count
+        values["collector_raw_request_count"] = collector.raw_request_count
+        values["collector_raw_response_count"] = collector.raw_response_count
+        values["collector_raw_timeout_count"] = collector.raw_timeout_count
+        values["collector_raw_unhandled_line_count"] = collector.raw_unhandled_line_count
+        for key, value in (
+            ("collector_raw_last_request_ascii", collector.raw_last_request_ascii),
+            ("collector_raw_last_request_hex", collector.raw_last_request_hex),
+            ("collector_raw_last_response_ascii", collector.raw_last_response_ascii),
+            ("collector_raw_last_response_hex", collector.raw_last_response_hex),
+            (
+                "collector_raw_last_timeout_request_ascii",
+                collector.raw_last_timeout_request_ascii,
+            ),
+            ("collector_raw_last_parser", collector.raw_last_parser),
+            ("collector_raw_last_frame_format", collector.raw_last_frame_format),
+        ):
+            if value:
+                values[key] = value
+            else:
+                values.pop(key, None)
         values["collector_discovery_restart_count"] = collector.discovery_restart_count
         if collector.collector_pn:
             values["collector_pn"] = collector.collector_pn
@@ -1664,6 +1691,8 @@ class EybondHub:
         if self._inverter is not None:
             values["driver_key"] = self._inverter.driver_key
             values["protocol_family"] = self._inverter.protocol_family
+            if not (extra_values and "runtime_detection_status" in extra_values):
+                values.pop("runtime_detection_status", None)
             if self._inverter.variant_key:
                 values["variant_key"] = self._inverter.variant_key
             if self._inverter.profile_name:

@@ -4214,9 +4214,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 collector_identity_strategy: str,
                 collector_raw_passthrough_bootstrap: str = "",
                 collector_raw_passthrough_frame_format: str = "",
+                collector_raw_passthrough_min_interval_ms: int = 0,
                 reason: str,
             ) -> bool:
-                del collector_raw_passthrough_bootstrap, collector_raw_passthrough_frame_format
+                del (
+                    collector_raw_passthrough_bootstrap,
+                    collector_raw_passthrough_frame_format,
+                    collector_raw_passthrough_min_interval_ms,
+                )
                 reconcile_calls.append(
                     (collector_session_protocol, collector_identity_strategy, reason)
                 )

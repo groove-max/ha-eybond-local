@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import sys
+import types
 from time import monotonic
 import unittest
 from pathlib import Path
@@ -25,6 +26,7 @@ from custom_components.eybond_local.collector.transport import (
     _PendingCollectorSocket,
     _SharedEybondListener,
 )
+from custom_components.eybond_local.collector.at import CollectorAtResponse
 from custom_components.eybond_local.collector.protocol import (
     HEADER_SIZE,
     build_collector_request,
@@ -32,6 +34,7 @@ from custom_components.eybond_local.collector.protocol import (
     decode_header,
 )
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.payload.ascii_line import build_ascii_line_request
 from custom_components.eybond_local.payload.pi30 import build_request, crc16_xmodem
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
@@ -1574,6 +1577,39 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await transport.stop()
 
+    async def test_at_text_transport_ignores_connected_framed_connection(self) -> None:
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=_free_tcp_port(),
+            request_timeout=1.0,
+            collector_ip="",
+            collector_session_protocol="at_text",
+        )
+        framed = types.SimpleNamespace(
+            connected=True,
+            collector_info=CollectorInfo(remote_ip="framed"),
+            async_query=AsyncMock(
+                return_value=CollectorAtResponse(command="DTUPN", value="framed", raw="")
+            ),
+        )
+        at = types.SimpleNamespace(
+            connected=True,
+            collector_info=CollectorInfo(remote_ip="at"),
+            async_query=AsyncMock(
+                return_value=CollectorAtResponse(command="DTUPN", value="at", raw="")
+            ),
+        )
+        transport._framed_connection = lambda create_placeholder: framed  # type: ignore[method-assign]
+        transport._at_connection = lambda create_placeholder: at  # type: ignore[method-assign]
+
+        self.assertTrue(transport.connected)
+        self.assertEqual(transport.collector_info.remote_ip, "at")
+        response = await transport.async_query("DTUPN")
+
+        self.assertEqual(response.value, "at")
+        framed.async_query.assert_not_awaited()
+        at.async_query.assert_awaited_once()
+
     async def test_listener_uses_hairpin_alias_during_connection_handling(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         placeholder = listener.ensure_connection(
@@ -2024,6 +2060,229 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await connection.disconnect()
             run_task.cancel()
+
+    async def test_at_connection_supports_valuecloud_plain_line_raw_payload_response(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="plain_line",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_plain_line_raw_payload",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+
+            gmod_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    build_ascii_line_request("GMOD"),
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(writer, b"GMOD\r")
+            reader.feed_data(b"B\r")
+            gmod_response = await gmod_task
+            self.assertEqual(gmod_response, b"B\r")
+
+            gpv_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    build_ascii_line_request("GPV"),
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(writer, b"GMOD\rGPV\r")
+            reader.feed_data(b"176.3 027.6 25.64 06.90 01216\r")
+            gpv_response = await gpv_task
+            self.assertEqual(gpv_response, b"176.3 027.6 25.64 06.90 01216\r")
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_valuecloud_plain_line_mode_keeps_printable_binary_frame_prefixes(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="plain_line",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_printable_binary_prefix",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            query_task = asyncio.create_task(connection.async_query("VDTU", request_timeout=1.0))
+            await _wait_for_writer_buffer(writer, b"AT+VDTU?\r\n")
+
+            reader.feed_data(
+                build_collector_request(
+                    0x4142,
+                    b"\x00\x00",
+                    devcode=0,
+                    collector_addr=1,
+                    fcode=1,
+                )
+            )
+            reader.feed_data(b"AT+VDTU:valuecloud-at-test\r\n")
+
+            response = await query_task
+            self.assertEqual(response.command, "VDTU")
+            self.assertEqual(response.value, "valuecloud-at-test")
+            self.assertEqual(connection.collector_info.heartbeat_devcode, 0)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_valuecloud_plain_line_unhandled_bare_token_does_not_desync_reader(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="plain_line",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_unhandled_bare_token",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+
+            reader.feed_data(b"BL050\r")
+            deadline = monotonic() + 1.0
+            while connection.collector_info.raw_unhandled_line_count != 1:
+                if monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(connection.collector_info.raw_unhandled_line_count, 1)
+            self.assertEqual(connection.collector_info.raw_last_response_ascii, "BL050.")
+
+            gmod_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    build_ascii_line_request("GMOD"),
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(writer, b"GMOD\r")
+            reader.feed_data(b"(B\r")
+            self.assertEqual(await gmod_task, b"(B\r")
+            self.assertEqual(connection.collector_info.raw_response_count, 1)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_valuecloud_plain_line_partial_unknown_fragment_does_not_stall_reader(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="plain_line",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_partial_unknown_fragment",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+
+            reader.feed_data(b"#22")
+            deadline = monotonic() + 1.0
+            while connection.collector_info.raw_last_parser != "mixed_frame_header_timeout":
+                if monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(
+                connection.collector_info.raw_last_parser,
+                "mixed_frame_header_timeout",
+            )
+
+            gmod_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    build_ascii_line_request("GMOD"),
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(writer, b"GMOD\r")
+            reader.feed_data(b"(B\r")
+            self.assertEqual(await gmod_task, b"(B\r")
+            self.assertEqual(connection.collector_info.raw_response_count, 1)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_connection_handles_valuecloud_metadata_nak_before_raw_payload(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="plain_line",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_nak_before_raw",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+
+            query_task = asyncio.create_task(connection.async_query("VDTU", request_timeout=0.3))
+            await _wait_for_writer_buffer(writer, b"AT+VDTU?\r\n")
+            reader.feed_data(b"NAK\r")
+            with self.assertRaises(asyncio.TimeoutError):
+                await query_task
+
+            gmod_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    build_ascii_line_request("GMOD"),
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(writer, b"AT+VDTU?\r\nGMOD\r")
+            reader.feed_data(b"(B\r")
+            self.assertEqual(await gmod_task, b"(B\r")
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_connection_with_finished_reader_task_is_not_connected(self) -> None:
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+
+        async def _done() -> None:
+            return None
+
+        task = asyncio.create_task(_done())
+        await task
+        connection._writer = _FakeWriter()
+        connection._reader_task = task
+
+        self.assertFalse(connection.connected)
+
+    async def test_at_connection_disconnect_fails_pending_raw_response(self) -> None:
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        future: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+        connection._pending_raw_response = future
+
+        await connection.disconnect()
+
+        self.assertTrue(future.done())
+        with self.assertRaisesRegex(ConnectionError, "collector_disconnected"):
+            future.result()
 
     async def test_at_connection_returns_eybond_g_ascii_negative_response_unchanged(self) -> None:
         reader = asyncio.StreamReader()

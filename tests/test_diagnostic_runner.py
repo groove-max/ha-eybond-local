@@ -42,6 +42,47 @@ class CountingTransport:
         return await self.inner.async_send_payload(payload, route=route)
 
 
+class PlainAsciiTransport:
+    """Small transport for no-CRC ASCII-line diagnostic commands."""
+
+    def __init__(self, responses: dict[str, str]) -> None:
+        self.responses = dict(responses)
+        self.calls = 0
+        self.routes: list[object] = []
+
+    @property
+    def connected(self) -> bool:
+        return True
+
+    async def async_send_payload(self, payload: bytes, *, route) -> bytes:
+        self.calls += 1
+        self.routes.append(route)
+        if not payload.endswith(b"\r"):
+            raise RuntimeError("missing_terminator")
+        command = payload[:-1].decode("ascii")
+        if command not in self.responses:
+            raise RuntimeError(f"missing_command:{command}")
+        return f"({self.responses[command]}".encode("ascii") + b"\r"
+
+
+class TimeoutAwarePlainAsciiTransport(PlainAsciiTransport):
+    """Plain ASCII transport that records per-request timeout overrides."""
+
+    def __init__(self, responses: dict[str, str]) -> None:
+        super().__init__(responses)
+        self.request_timeouts: list[float | None] = []
+
+    async def async_send_payload(
+        self,
+        payload: bytes,
+        *,
+        route,
+        request_timeout: float | None = None,
+    ) -> bytes:
+        self.request_timeouts.append(request_timeout)
+        return await super().async_send_payload(payload, route=route)
+
+
 def _modbus(registers: dict[int, int], **kwargs) -> CountingTransport:
     inner = FixtureTransport(registers=registers, command_responses=None, probe_target=TARGET)
     return CountingTransport(inner, **kwargs)
@@ -278,6 +319,44 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         result = await run_scenario("driver pi30\nascii QPIGS\n", _ctx(transport))
         self.assertTrue(result.success)
         self.assertEqual(result.results[0]["response"]["payload"], "1 2 3")
+
+    async def test_eybond_g_ascii_payload_is_returned(self) -> None:
+        transport = PlainAsciiTransport({"GPDAT0": "B 0 5 4003 0 00"})
+        result = await run_scenario(
+            "driver eybond_g_ascii\nascii GPDAT0\n",
+            _ctx(transport),
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(result.results[0]["request"]["command"], "GPDAT0")
+        self.assertEqual(result.results[0]["response"]["payload"], "B 0 5 4003 0 00")
+
+    async def test_eybond_g_ascii_uses_plain_ascii_payload_family(self) -> None:
+        class SelectingPlainAsciiTransport(PlainAsciiTransport):
+            def __init__(self, responses: dict[str, str]) -> None:
+                super().__init__(responses)
+                self.payload_families: list[str] = []
+
+            def select_payload_route(self, route, *, payload_family: str = ""):
+                self.payload_families.append(payload_family)
+                return route
+
+        transport = SelectingPlainAsciiTransport({"GPDAT0": "B 0 5 4003 0 00"})
+        result = await run_scenario(
+            "driver eybond_g_ascii\nascii GPDAT0\n",
+            _ctx(transport),
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(transport.payload_families, ["eybond_g_ascii"])
+
+    async def test_ascii_operation_timeout_is_forwarded_to_timeout_aware_transport(self) -> None:
+        transport = TimeoutAwarePlainAsciiTransport({"GMOD": "B"})
+        result = await run_scenario(
+            "driver eybond_g_ascii\noperation_timeout 10\nascii GMOD\n",
+            _ctx(transport),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(transport.request_timeouts, [10.0])
 
     async def test_cancellation_propagates(self) -> None:
         transport = _modbus({10: 1}, delay=5.0)

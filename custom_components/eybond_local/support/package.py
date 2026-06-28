@@ -251,6 +251,7 @@ def _support_bundle_support_marker(
     return build_support_marker(
         variant_key=str(source_metadata.get("variant_key", "") or ""),
         profile_name=str(source_metadata.get("profile_name", "") or ""),
+        effective_owner_key=str(source_metadata.get("effective_owner_key", "") or ""),
     )
 
 

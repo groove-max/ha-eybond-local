@@ -87,8 +87,29 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("pi18", "pi30", "smartess_local"),
+                driver_keys=("pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_active_power",),
+                compute="passthrough",
+            ),
+        ),
+    ),
+    CanonicalTelemetryDescription(
+        description=MeasurementDescription(
+            key="load_percent",
+            name="Load Percent",
+            unit="%",
+            state_class="measurement",
+            icon="mdi:gauge",
+        ),
+        variants=(
+            CanonicalTelemetryVariant(
+                driver_keys=("pi18",),
+                source_keys=("output_load_percent",),
+                compute="passthrough",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("eybond_g_ascii",),
+                source_keys=("output_load_percentage",),
                 compute="passthrough",
             ),
         ),
@@ -105,7 +126,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("pi18", "pi30", "smartess_local"),
+                driver_keys=("pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("pv_input_voltage",),
                 compute="passthrough",
             ),
@@ -148,6 +169,23 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
     ),
     CanonicalTelemetryDescription(
         description=MeasurementDescription(
+            key="battery_percent",
+            name="Battery Percent",
+            unit="%",
+            device_class="battery",
+            state_class="measurement",
+            icon="mdi:battery",
+        ),
+        variants=(
+            CanonicalTelemetryVariant(
+                driver_keys=("pi18", "eybond_g_ascii"),
+                source_keys=("battery_capacity",),
+                compute="passthrough",
+            ),
+        ),
+    ),
+    CanonicalTelemetryDescription(
+        description=MeasurementDescription(
             key="battery_power",
             name="Battery Power",
             unit="W",
@@ -179,6 +217,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 ),
                 compute="signed_delta_multiply",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("eybond_g_ascii",),
+                source_keys=(
+                    "battery_voltage",
+                    "battery_current",
+                    "eybond_g_ascii_operating_mode_code",
+                ),
+                compute="eybond_g_ascii_battery_power",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -193,7 +240,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_home",
             ),
@@ -211,7 +258,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_battery",
             ),
@@ -229,7 +276,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_grid",
             ),
@@ -247,7 +294,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_battery_to_home",
             ),
@@ -265,7 +312,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_home",
             ),
@@ -283,7 +330,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local"),
+                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_battery",
             ),
@@ -367,6 +414,9 @@ def _compute_variant(
             return 0.0
         return round(float(voltage) * (charge - discharge), 4)
 
+    if variant.compute == "eybond_g_ascii_battery_power":
+        return _compute_eybond_g_ascii_battery_power(values, variant)
+
     if variant.compute.startswith("flow_"):
         flows = _compute_flow_split(values)
         if flows is None:
@@ -374,6 +424,43 @@ def _compute_variant(
         flow_key = variant.compute.removeprefix("flow_")
         return flows.get(flow_key)
 
+    return None
+
+
+def _compute_eybond_g_ascii_battery_power(
+    values: dict[str, Any],
+    variant: CanonicalTelemetryVariant,
+) -> float | None:
+    """Return signed battery power for EyeBond G-ASCII telemetry.
+
+    The protocol exposes battery current as a magnitude.  The sign is inferred
+    from GMOD/DCDC mode when it is known:
+
+    * ``B`` = charging, positive power.
+    * ``0`` = discharging soft start, negative power.
+
+    Some devices may eventually expose a signed current directly; preserve that
+    sign if it appears instead of forcing it through the mode map.
+    """
+
+    voltage = values.get(variant.source_keys[0])
+    current = values.get(variant.source_keys[1])
+    mode = values.get(variant.source_keys[2])
+    if not isinstance(voltage, (int, float)) or not isinstance(current, (int, float)):
+        return None
+
+    voltage_value = float(voltage)
+    current_value = float(current)
+    if current_value == 0.0:
+        return 0.0
+    if current_value < 0.0:
+        return round(voltage_value * current_value, 4)
+
+    mode_code = str(mode).strip().upper() if mode is not None else ""
+    if mode_code.startswith("B"):
+        return round(voltage_value * current_value, 4)
+    if mode_code.startswith("0"):
+        return round(-(voltage_value * current_value), 4)
     return None
 
 

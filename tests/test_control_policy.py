@@ -15,6 +15,7 @@ from custom_components.eybond_local.control_policy import (
     can_expose_preset,
     controls_enabled,
     controls_reason,
+    controls_summary,
 )
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 
@@ -55,6 +56,31 @@ class ControlPolicyTests(unittest.TestCase):
         self.assertEqual(
             controls_reason(control_mode="full", detection_confidence="none"),
             "manual_full_override",
+        )
+
+    def test_no_write_capabilities_keeps_runtime_read_only(self) -> None:
+        self.assertFalse(
+            controls_enabled(
+                control_mode="full",
+                detection_confidence="high",
+                write_capability_count=0,
+            )
+        )
+        self.assertEqual(
+            controls_reason(
+                control_mode="full",
+                detection_confidence="high",
+                write_capability_count=0,
+            ),
+            "no_write_capabilities",
+        )
+        self.assertEqual(
+            controls_summary(
+                control_mode="full",
+                detection_confidence="high",
+                write_capability_count=0,
+            ),
+            "Monitoring only. This runtime profile does not expose writable controls.",
         )
 
     def test_preset_exposure_requires_all_items_tested(self) -> None:

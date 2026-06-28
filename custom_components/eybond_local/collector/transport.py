@@ -24,6 +24,10 @@ from .protocol import (
     FC_FORWARD_TO_DEVICE,
     FC_HEARTBEAT,
     FC_QUERY_COLLECTOR,
+    FC_SET_COLLECTOR,
+    FC_SET_DEVICE_REG,
+    FC_TRIGGER_QUERY_HISTORY,
+    FC_TRIGGER_QUERY_REAL_TIME,
     HEADER_SIZE,
     TIDCounter,
     build_collector_request,
@@ -79,6 +83,36 @@ def _looks_like_uart_passthrough_value(value: str) -> bool:
     if parity.upper() not in {"NONE", "N", "ODD", "EVEN", "O", "E"}:
         return False
     return True
+
+
+def _looks_like_plain_raw_response_start(chunk: bytes) -> bool:
+    if not chunk:
+        return False
+    first = chunk[:1]
+    if first in {b"(", b"^"}:
+        return True
+    value = first[0]
+    return 0x20 <= value <= 0x7E
+
+
+def _short_ascii(value: bytes, *, limit: int = 160) -> str:
+    text = "".join(chr(byte) if 0x20 <= byte <= 0x7E else "." for byte in value[:limit])
+    if len(value) > limit:
+        text += "..."
+    return text
+
+
+_AT_TEXT_MIXED_FRAME_READ_TIMEOUT = 0.05
+_AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN = 4096
+_AT_TEXT_MIXED_FRAME_FCODES = {
+    FC_HEARTBEAT,
+    FC_QUERY_COLLECTOR,
+    FC_SET_COLLECTOR,
+    FC_FORWARD_TO_DEVICE,
+    FC_TRIGGER_QUERY_REAL_TIME,
+    FC_SET_DEVICE_REG,
+    FC_TRIGGER_QUERY_HISTORY,
+}
 
 
 def _mask_identity_token(value: str) -> str:
@@ -232,6 +266,17 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             collector_pn_digits=collector.collector_pn_digits,
             heartbeat_age_seconds=collector.heartbeat_age_seconds,
             heartbeat_fresh=collector.heartbeat_fresh,
+            raw_request_count=collector.raw_request_count,
+            raw_response_count=collector.raw_response_count,
+            raw_timeout_count=collector.raw_timeout_count,
+            raw_unhandled_line_count=collector.raw_unhandled_line_count,
+            raw_last_request_ascii=collector.raw_last_request_ascii,
+            raw_last_request_hex=collector.raw_last_request_hex,
+            raw_last_response_ascii=collector.raw_last_response_ascii,
+            raw_last_response_hex=collector.raw_last_response_hex,
+            raw_last_timeout_request_ascii=collector.raw_last_timeout_request_ascii,
+            raw_last_parser=collector.raw_last_parser,
+            raw_last_frame_format=collector.raw_last_frame_format,
             collector_cloud_family=collector.collector_cloud_family,
             collector_cloud_family_source=collector.collector_cloud_family_source,
             collector_cloud_family_confidence=collector.collector_cloud_family_confidence,
@@ -385,7 +430,11 @@ class _CollectorConnection:
 
     @property
     def connected(self) -> bool:
-        return self._writer is not None and not self._writer.is_closing()
+        writer = self._writer
+        if writer is None or writer.is_closing():
+            return False
+        reader_task = self._reader_task
+        return reader_task is None or not reader_task.done()
 
     @property
     def collector_info(self) -> CollectorInfo:
@@ -789,6 +838,7 @@ class _CollectorAtConnection:
         write_timeout: float,
         raw_passthrough_bootstrap: str = "",
         raw_passthrough_frame_format: str = "",
+        raw_passthrough_min_interval_ms: int = 0,
     ) -> None:
         self._write_timeout = float(write_timeout)
         self._reader_task: asyncio.Task[None] | None = None
@@ -806,11 +856,20 @@ class _CollectorAtConnection:
         self._raw_passthrough_frame_format = (
             str(raw_passthrough_frame_format or "").strip().lower()
         )
+        self._raw_passthrough_min_interval = max(
+            0.0,
+            float(raw_passthrough_min_interval_ms or 0) / 1000.0,
+        )
+        self._raw_passthrough_last_write_monotonic = 0.0
         self._raw_passthrough_bootstrapped = False
 
     @property
     def connected(self) -> bool:
-        return self._writer is not None and not self._writer.is_closing()
+        writer = self._writer
+        if writer is None or writer.is_closing():
+            return False
+        reader_task = self._reader_task
+        return reader_task is None or not reader_task.done()
 
     @property
     def collector_info(self) -> CollectorInfo:
@@ -828,6 +887,9 @@ class _CollectorAtConnection:
 
     def set_raw_passthrough_frame_format(self, mode: str) -> None:
         self._raw_passthrough_frame_format = str(mode or "").strip().lower()
+
+    def set_raw_passthrough_min_interval_ms(self, value: int) -> None:
+        self._raw_passthrough_min_interval = max(0.0, float(value or 0) / 1000.0)
 
     async def wait_until_connected(self, timeout: float) -> bool:
         if self.connected:
@@ -866,12 +928,57 @@ class _CollectorAtConnection:
             loop = asyncio.get_running_loop()
             future: asyncio.Future[bytes] = loop.create_future()
             self._pending_raw_response = future
+            self._collector.raw_request_count += 1
+            self._collector.raw_last_request_hex = payload.hex()
+            self._collector.raw_last_request_ascii = _short_ascii(payload)
+            self._collector.raw_last_frame_format = self._raw_passthrough_frame_format
             try:
+                logger.debug(
+                    "EyeBond raw passthrough write remote=%s frame=%s payload=%r",
+                    self._collector.remote_ip,
+                    self._raw_passthrough_frame_format or "default",
+                    payload,
+                )
+                await self._async_wait_raw_passthrough_spacing_locked()
                 await self._async_write(payload)
-                return await asyncio.wait_for(future, timeout=request_timeout)
+                self._raw_passthrough_last_write_monotonic = (
+                    asyncio.get_running_loop().time()
+                )
+                response = await asyncio.wait_for(future, timeout=request_timeout)
+                self._collector.raw_response_count += 1
+                self._collector.raw_last_response_hex = response.hex()
+                self._collector.raw_last_response_ascii = _short_ascii(response)
+                logger.debug(
+                    "EyeBond raw passthrough response remote=%s parser=%s payload=%r",
+                    self._collector.remote_ip,
+                    self._collector.raw_last_parser or "unknown",
+                    response,
+                )
+                return response
+            except asyncio.TimeoutError:
+                self._collector.raw_timeout_count += 1
+                self._collector.raw_last_timeout_request_ascii = _short_ascii(payload)
+                logger.debug(
+                    "EyeBond raw passthrough timeout remote=%s frame=%s payload=%r last_parser=%s last_response=%r",
+                    self._collector.remote_ip,
+                    self._raw_passthrough_frame_format or "default",
+                    payload,
+                    self._collector.raw_last_parser or "",
+                    self._collector.raw_last_response_ascii,
+                )
+                raise
             finally:
                 if self._pending_raw_response is future:
                     self._pending_raw_response = None
+
+    async def _async_wait_raw_passthrough_spacing_locked(self) -> None:
+        interval = self._raw_passthrough_min_interval
+        if interval <= 0:
+            return
+        elapsed = asyncio.get_running_loop().time() - self._raw_passthrough_last_write_monotonic
+        remaining = interval - elapsed
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
     async def _async_query_locked(
         self,
@@ -1006,6 +1113,43 @@ class _CollectorAtConnection:
         try:
             buffered_prefix = b""
             while True:
+                if buffered_prefix:
+                    first = buffered_prefix[:1]
+                    buffered_prefix = buffered_prefix[1:]
+                else:
+                    first = await reader.readexactly(1)
+
+                if first == b"A":
+                    prefix = first + await reader.readexactly(2)
+                    if prefix == b"AT+":
+                        line = prefix + await reader.readuntil(b"\n")
+                        self._handle_at_response_line(line)
+                        continue
+                    buffered_prefix = prefix + buffered_prefix
+
+                raw_future = self._pending_raw_response
+                if (
+                    raw_future is not None
+                    and not raw_future.done()
+                    and (
+                        _looks_like_plain_raw_response_start(first)
+                        or (
+                            buffered_prefix
+                            and _looks_like_plain_raw_response_start(buffered_prefix[:1])
+                        )
+                    )
+                ):
+                    if buffered_prefix:
+                        line = buffered_prefix + await reader.readuntil(b"\r")
+                        buffered_prefix = b""
+                    else:
+                        line = first + await reader.readuntil(b"\r")
+                    self._handle_raw_ascii_line(line, parser="raw_pending_or_plain_line")
+                    continue
+
+                if not buffered_prefix:
+                    buffered_prefix = first + buffered_prefix
+
                 if len(buffered_prefix) >= 3:
                     prefix = buffered_prefix[:3]
                     buffered_prefix = buffered_prefix[3:]
@@ -1019,36 +1163,53 @@ class _CollectorAtConnection:
                         buffered_prefix = prefix[terminator + 1 :] + buffered_prefix
                     else:
                         line = prefix + await reader.readuntil(b"\r")
-                    future = self._pending_raw_response
-                    if future is not None and not future.done():
-                        future.set_result(line)
-                        continue
-                    logger.debug(
-                        "Unhandled collector raw ASCII payload remote=%s payload=%r",
-                        self._collector.remote_ip,
-                        line,
-                    )
+                    self._handle_raw_ascii_line(line, parser="raw_prefix_ascii")
                     continue
 
                 if prefix in {b"NAK", b"NOA", b"ERC"}:
                     line = prefix + await reader.readuntil(b"\r")
-                    future = self._pending_raw_response
-                    if future is not None and not future.done():
-                        future.set_result(line)
-                        continue
-                    logger.debug(
-                        "Unhandled collector raw negative payload remote=%s payload=%r",
-                        self._collector.remote_ip,
-                        line,
-                    )
+                    self._handle_raw_ascii_line(line, parser="raw_negative")
+                    continue
+
+                if (
+                    self._raw_passthrough_frame_format == "plain_line"
+                    and prefix.startswith(b"BL")
+                ):
+                    line = prefix + await reader.readuntil(b"\r")
+                    self._handle_raw_ascii_line(line, parser="raw_plain_line_bare_token")
                     continue
 
                 if prefix != b"AT+":
-                    header_bytes = prefix + await reader.readexactly(HEADER_SIZE - len(prefix))
+                    header_tail = await self._read_mixed_frame_tail(
+                        reader,
+                        HEADER_SIZE - len(prefix),
+                    )
+                    if header_tail is None:
+                        self._record_unhandled_raw_fragment(
+                            prefix,
+                            parser="mixed_frame_header_timeout",
+                        )
+                        continue
+                    header_bytes = prefix + header_tail
                     header = decode_header(header_bytes)
+                    if not self._looks_like_mixed_frame_header(header):
+                        self._record_unhandled_raw_fragment(
+                            header_bytes,
+                            parser="mixed_frame_header_invalid",
+                        )
+                        continue
                     payload = b""
                     if header.payload_len > 0:
-                        payload = await reader.readexactly(header.payload_len)
+                        payload = await self._read_mixed_frame_tail(
+                            reader,
+                            header.payload_len,
+                        )
+                        if payload is None:
+                            self._record_unhandled_raw_fragment(
+                                header_bytes,
+                                parser="mixed_frame_payload_timeout",
+                            )
+                            continue
                     if header.fcode == FC_HEARTBEAT:
                         pn = parse_heartbeat_pn(payload)
                         if pn:
@@ -1100,6 +1261,85 @@ class _CollectorAtConnection:
             logger.info("Collector AT disconnected %s: %s", self._collector.remote_ip, exc)
         except asyncio.CancelledError:
             raise
+
+    async def _read_mixed_frame_tail(
+        self,
+        reader: asyncio.StreamReader,
+        size: int,
+    ) -> bytes | None:
+        if size <= 0:
+            return b""
+        if self._raw_passthrough_frame_format != "plain_line":
+            return await reader.readexactly(size)
+        try:
+            return await asyncio.wait_for(
+                reader.readexactly(size),
+                timeout=_AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return None
+
+    def _looks_like_mixed_frame_header(self, header: EybondHeader) -> bool:
+        if header.payload_len < 0:
+            return False
+        if header.payload_len > _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN:
+            return False
+        if header.fcode not in _AT_TEXT_MIXED_FRAME_FCODES:
+            return False
+        return True
+
+    def _record_unhandled_raw_fragment(self, payload: bytes, *, parser: str) -> None:
+        self._collector.raw_unhandled_line_count += 1
+        self._collector.raw_last_parser = parser
+        self._collector.raw_last_response_hex = payload.hex()
+        self._collector.raw_last_response_ascii = _short_ascii(payload)
+        logger.debug(
+            "Unhandled collector mixed/raw fragment remote=%s parser=%s payload=%r",
+            self._collector.remote_ip,
+            parser,
+            payload,
+        )
+
+    def _handle_raw_ascii_line(self, line: bytes, *, parser: str) -> None:
+        future = self._pending_raw_response
+        if future is not None and not future.done():
+            self._collector.raw_last_parser = parser
+            future.set_result(line)
+            return
+
+        self._collector.raw_unhandled_line_count += 1
+        self._collector.raw_last_parser = f"{parser}_unhandled"
+        self._collector.raw_last_response_hex = line.hex()
+        self._collector.raw_last_response_ascii = _short_ascii(line)
+        logger.debug(
+            "Unhandled collector raw ASCII payload remote=%s parser=%s payload=%r",
+            self._collector.remote_ip,
+            parser,
+            line,
+        )
+
+    def _handle_at_response_line(self, line: bytes) -> None:
+        try:
+            response = parse_at_response(line)
+        except Exception:
+            logger.debug(
+                "Unhandled collector AT payload remote=%s payload=%r",
+                self._collector.remote_ip,
+                line,
+            )
+            return
+        future = self._pending_response
+        if future is not None and not future.done():
+            future.set_result(response)
+            return
+
+        self._apply_response_metadata(response)
+        logger.debug(
+            "Unsolicited collector AT response remote=%s command=%s value=%s",
+            self._collector.remote_ip,
+            response.command,
+            response.value,
+        )
 
     def _apply_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
@@ -1165,6 +1405,11 @@ class _CollectorAtConnection:
         self._pending_response = None
         if future is not None and not future.done():
             future.set_exception(ConnectionError("collector_disconnected"))
+
+        raw_future = self._pending_raw_response
+        self._pending_raw_response = None
+        if raw_future is not None and not raw_future.done():
+            raw_future.set_exception(ConnectionError("collector_disconnected"))
 
 
 @dataclass(slots=True)
@@ -1393,6 +1638,7 @@ class _SharedEybondListener:
         collector_pn: str = "",
         raw_passthrough_bootstrap: str = "",
         raw_passthrough_frame_format: str = "",
+        raw_passthrough_min_interval_ms: int = 0,
     ) -> _CollectorAtConnection | None:
         if collector_ip:
             connection = self._at_connections.get(collector_ip)
@@ -1402,12 +1648,16 @@ class _SharedEybondListener:
                     write_timeout=write_timeout,
                     raw_passthrough_bootstrap=raw_passthrough_bootstrap,
                     raw_passthrough_frame_format=raw_passthrough_frame_format,
+                    raw_passthrough_min_interval_ms=raw_passthrough_min_interval_ms,
                 )
                 self._at_connections[collector_ip] = connection
             else:
                 connection.set_write_timeout(write_timeout)
                 connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
                 connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
+                connection.set_raw_passthrough_min_interval_ms(
+                    raw_passthrough_min_interval_ms
+                )
             return connection
 
         if collector_pn:
@@ -1419,12 +1669,16 @@ class _SharedEybondListener:
                 connection.set_write_timeout(write_timeout)
                 connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
                 connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
+                connection.set_raw_passthrough_min_interval_ms(
+                    raw_passthrough_min_interval_ms
+                )
             return connection
 
         connection = self.current_at_connection(write_timeout=write_timeout)
         if connection is not None:
             connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
             connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
+            connection.set_raw_passthrough_min_interval_ms(raw_passthrough_min_interval_ms)
         return connection
 
     def _connection_by_collector_pn(
@@ -2108,6 +2362,7 @@ class _SharedEybondListener:
         write_timeout: float,
         raw_passthrough_bootstrap: str = "",
         raw_passthrough_frame_format: str = "",
+        raw_passthrough_min_interval_ms: int = 0,
     ) -> _CollectorAtConnection:
         remote_ip = pending.remote_ip
         connection = self._at_connections.get(remote_ip)
@@ -2122,11 +2377,13 @@ class _SharedEybondListener:
                 write_timeout=write_timeout,
                 raw_passthrough_bootstrap=raw_passthrough_bootstrap,
                 raw_passthrough_frame_format=raw_passthrough_frame_format,
+                raw_passthrough_min_interval_ms=raw_passthrough_min_interval_ms,
             )
         else:
             connection.set_write_timeout(write_timeout)
             connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
             connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
+            connection.set_raw_passthrough_min_interval_ms(raw_passthrough_min_interval_ms)
 
         self._at_connections[remote_ip] = connection
         if collector_ip and collector_ip not in self._at_connections:
@@ -2715,6 +2972,7 @@ class SharedEybondTransport:
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
+        collector_raw_passthrough_min_interval_ms: int = 0,
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -2730,6 +2988,10 @@ class SharedEybondTransport:
         )
         self._collector_raw_passthrough_frame_format = (
             str(collector_raw_passthrough_frame_format or "").strip().lower()
+        )
+        self._collector_raw_passthrough_min_interval_ms = max(
+            0,
+            int(collector_raw_passthrough_min_interval_ms or 0),
         )
         self._listener: _SharedEybondListener | None = None
 
@@ -3030,6 +3292,7 @@ class SharedCollectorAtTransport:
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
+        collector_raw_passthrough_min_interval_ms: int = 0,
     ) -> None:
         self._host = host
         self._port = int(port)
@@ -3045,22 +3308,28 @@ class SharedCollectorAtTransport:
         self._collector_raw_passthrough_frame_format = (
             str(collector_raw_passthrough_frame_format or "").strip().lower()
         )
+        self._collector_raw_passthrough_min_interval_ms = max(
+            0,
+            int(collector_raw_passthrough_min_interval_ms or 0),
+        )
         self._listener: _SharedEybondListener | None = None
 
     @property
     def connected(self) -> bool:
-        framed = self._framed_connection(create_placeholder=False)
-        if framed is not None and framed.connected:
-            return True
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None and framed.connected:
+                return True
 
         connection = self._at_connection(create_placeholder=False)
         return connection.connected if connection is not None else False
 
     @property
     def collector_info(self) -> CollectorInfo:
-        framed = self._framed_connection(create_placeholder=False)
-        if framed is not None and framed.connected:
-            return framed.collector_info
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None and framed.connected:
+                return framed.collector_info
 
         connection = self._at_connection(create_placeholder=False)
         if connection is not None:
@@ -3112,9 +3381,10 @@ class SharedCollectorAtTransport:
 
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            framed = self._framed_connection(create_placeholder=False)
-            if framed is not None and framed.connected:
-                return True
+            if not self._uses_at_text_session():
+                framed = self._framed_connection(create_placeholder=False)
+                if framed is not None and framed.connected:
+                    return True
 
             connection = self._at_connection(create_placeholder=bool(self._collector_ip))
             if connection is not None and connection.connected:
@@ -3134,6 +3404,9 @@ class SharedCollectorAtTransport:
                             write_timeout=self._write_timeout,
                             raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
                             raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+                            raw_passthrough_min_interval_ms=(
+                                self._collector_raw_passthrough_min_interval_ms
+                            ),
                         )
                         if connection.connected:
                             return True
@@ -3153,9 +3426,10 @@ class SharedCollectorAtTransport:
             await asyncio.sleep(min(0.1, remaining))
 
     async def async_query(self, command: str) -> CollectorAtResponse:
-        framed = self._framed_connection(create_placeholder=False)
-        if framed is not None and framed.connected:
-            return await framed.async_query(command, request_timeout=self._request_timeout)
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None and framed.connected:
+                return await framed.async_query(command, request_timeout=self._request_timeout)
 
         connection = self._at_connection(create_placeholder=bool(self._collector_ip))
         if connection is not None and connection.connected:
@@ -3178,6 +3452,9 @@ class SharedCollectorAtTransport:
                         write_timeout=self._write_timeout,
                         raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
                         raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+                        raw_passthrough_min_interval_ms=(
+                            self._collector_raw_passthrough_min_interval_ms
+                        ),
                     )
                     return await connection.async_query(command, request_timeout=self._request_timeout)
                 framed = await self._listener.activate_pending_connection(
@@ -3197,13 +3474,14 @@ class SharedCollectorAtTransport:
         return await connection.async_query(command, request_timeout=self._request_timeout)
 
     async def async_write(self, command: str, value: str) -> CollectorAtResponse:
-        framed = self._framed_connection(create_placeholder=False)
-        if framed is not None and framed.connected:
-            return await framed.async_write(
-                command,
-                value,
-                request_timeout=self._request_timeout,
-            )
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None and framed.connected:
+                return await framed.async_write(
+                    command,
+                    value,
+                    request_timeout=self._request_timeout,
+                )
 
         connection = self._at_connection(create_placeholder=bool(self._collector_ip))
         if connection is not None and connection.connected:
@@ -3230,6 +3508,9 @@ class SharedCollectorAtTransport:
                         write_timeout=self._write_timeout,
                         raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
                         raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+                        raw_passthrough_min_interval_ms=(
+                            self._collector_raw_passthrough_min_interval_ms
+                        ),
                     )
                     return await connection.async_write(
                         command,
@@ -3265,6 +3546,7 @@ class SharedCollectorAtTransport:
         payload: bytes,
         *,
         route: LinkRoute,
+        request_timeout: float | None = None,
     ) -> bytes:
         """Send one raw inverter payload over the active AT stream."""
 
@@ -3272,12 +3554,17 @@ class SharedCollectorAtTransport:
             raise TypeError(f"unsupported_link_route:{route.family}")
         if not self._uses_at_text_session():
             raise TypeError("raw_serial_route_requires_at_text_session")
+        effective_request_timeout = (
+            float(request_timeout)
+            if request_timeout is not None
+            else self._request_timeout
+        )
 
         connection = self._at_connection(create_placeholder=bool(self._collector_ip))
         if connection is not None and connection.connected:
             return await connection.async_send_raw_payload(
                 payload,
-                request_timeout=self._request_timeout,
+                request_timeout=effective_request_timeout,
             )
 
         if self._listener is None:
@@ -3296,10 +3583,13 @@ class SharedCollectorAtTransport:
                     write_timeout=self._write_timeout,
                     raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
                     raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+                    raw_passthrough_min_interval_ms=(
+                        self._collector_raw_passthrough_min_interval_ms
+                    ),
                 )
                 return await connection.async_send_raw_payload(
                     payload,
-                    request_timeout=self._request_timeout,
+                    request_timeout=effective_request_timeout,
                 )
 
         raise ConnectionError("collector_not_connected")
@@ -3327,6 +3617,7 @@ class SharedCollectorAtTransport:
                 self._collector_pn,
                 self._collector_raw_passthrough_bootstrap,
                 self._collector_raw_passthrough_frame_format,
+                self._collector_raw_passthrough_min_interval_ms,
             )
             if connection is not None:
                 return connection
@@ -3337,6 +3628,7 @@ class SharedCollectorAtTransport:
                 self._collector_pn,
                 self._collector_raw_passthrough_bootstrap,
                 self._collector_raw_passthrough_frame_format,
+                self._collector_raw_passthrough_min_interval_ms,
             )
         if self._collector_ip:
             return self._listener.ensure_at_connection(
@@ -3345,11 +3637,15 @@ class SharedCollectorAtTransport:
                 self._collector_pn,
                 self._collector_raw_passthrough_bootstrap,
                 self._collector_raw_passthrough_frame_format,
+                self._collector_raw_passthrough_min_interval_ms,
             )
         connection = self._listener.current_at_connection(write_timeout=self._write_timeout)
         if connection is not None:
             connection.set_raw_passthrough_bootstrap(self._collector_raw_passthrough_bootstrap)
             connection.set_raw_passthrough_frame_format(self._collector_raw_passthrough_frame_format)
+            connection.set_raw_passthrough_min_interval_ms(
+                self._collector_raw_passthrough_min_interval_ms
+            )
         return connection
 
     def _framed_connection(self, *, create_placeholder: bool) -> _CollectorConnection | None:

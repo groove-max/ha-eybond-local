@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from ..link_transport import PayloadLinkTransport, async_send_payload, select_payload_route
 from ..models import ProbeTarget
+from ..payload import ascii_line
 from ..payload import pi18 as pi18_payload
 from ..payload import pi30 as pi30_payload
 from ..payload.modbus import ModbusSession, merge_register_bit
@@ -31,6 +32,7 @@ DIAGNOSTIC_SUPPORTED_KINDS: dict[str, frozenset[str]] = {
     "modbus_smg": frozenset({"read", "write", "write_bit"}),
     "pi30": frozenset({"ascii"}),
     "pi18": frozenset({"ascii"}),
+    "eybond_g_ascii": frozenset({"ascii"}),
 }
 
 
@@ -111,6 +113,7 @@ class AsciiDiagnosticTarget:
         build_request,
         parse_response,
         decode_errors: tuple[type[Exception], ...],
+        payload_family: str | None = None,
     ) -> None:
         self.driver_key = driver_key
         self._transport = transport
@@ -118,15 +121,26 @@ class AsciiDiagnosticTarget:
         self._build_request = build_request
         self._parse_response = parse_response
         self._decode_errors = decode_errors
+        self._payload_family = payload_family or f"{driver_key}_ascii"
 
-    async def send_ascii(self, command: str) -> AsciiOutcome:
+    async def send_ascii(
+        self,
+        command: str,
+        *,
+        request_timeout: float | None = None,
+    ) -> AsciiOutcome:
         request = self._build_request(command)
         route = select_payload_route(
             self._transport,
             self._route,
-            payload_family=f"{self.driver_key}_ascii",
+            payload_family=self._payload_family,
         )
-        raw = await async_send_payload(self._transport, request, route=route)
+        raw = await async_send_payload(
+            self._transport,
+            request,
+            route=route,
+            request_timeout=request_timeout,
+        )
         payload: str | None = None
         decode_error: str | None = None
         try:
@@ -171,5 +185,15 @@ def build_diagnostic_target(
             pi18_payload.build_request,
             pi18_payload.parse_response,
             (pi18_payload.Pi18Error,),
+        )
+    if driver_key == "eybond_g_ascii":
+        return AsciiDiagnosticTarget(
+            driver_key,
+            transport,
+            target.link_route,
+            ascii_line.build_ascii_line_request,
+            ascii_line.parse_ascii_line_response,
+            (ascii_line.AsciiLineError,),
+            payload_family="eybond_g_ascii",
         )
     raise UnsupportedDriverError(f"no_diagnostic_target_for_driver:{driver_key}")

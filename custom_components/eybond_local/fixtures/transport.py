@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from .utils import load_fixture_json
@@ -33,6 +34,16 @@ class FixtureTransport:
         self._probe_target = probe_target
         self.name = name
         self.collector = collector or {}
+
+    @property
+    def collector_info(self) -> SimpleNamespace:
+        """Expose saved collector metadata through the runtime-like attribute.
+
+        Some drivers use ``transport.collector_info`` during offline detection
+        for identity/evidence.  Fixtures store that metadata as a plain dict.
+        """
+
+        return SimpleNamespace(**self.collector)
 
     async def async_send_forward(
         self,
@@ -91,10 +102,19 @@ class FixtureTransport:
             )
 
     def _handle_command_request(self, payload: bytes, *, devcode: int, collector_addr: int) -> bytes:
-        if len(payload) < 4:
-            raise FixtureTransportError("request_too_short")
         if payload[-1] != 0x0D:
             raise FixtureTransportError("missing_terminator")
+
+        no_crc_command = _decode_no_crc_ascii_command(payload)
+        if no_crc_command is not None:
+            response_payload = self._command_responses.get(
+                (devcode, collector_addr, no_crc_command)
+            )
+            if response_payload is not None:
+                return _encode_no_crc_ascii_response(response_payload)
+
+        if len(payload) < 4:
+            raise FixtureTransportError("request_too_short")
 
         request_crc = payload[-3:-1]
         body = payload[:-3]
@@ -241,6 +261,39 @@ def load_fixture_payload(
 
 def _command_family(body: bytes) -> str:
     return "pi18" if body.startswith(b"^") else "pi30"
+
+
+def _decode_no_crc_ascii_command(payload: bytes) -> str | None:
+    """Decode a CR-terminated plain ASCII command, if the frame is one.
+
+    EyeBond G-ASCII commands are plain ``COMMAND\r`` lines without the PI30/PI18
+    CRC bytes.  This intentionally runs before the CRC path and only succeeds
+    when the decoded command exists in the fixture response map.
+    """
+
+    if not payload or payload[-1] != 0x0D:
+        return None
+    body = payload[:-1]
+    try:
+        command = body.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    command = command.strip()
+    return command or None
+
+
+def _encode_no_crc_ascii_response(response_payload: str) -> bytes:
+    """Return a replay response for plain ASCII command fixtures.
+
+    New support packages store raw G-ASCII response frames such as ``"(B\r"``
+    or ``"NAK\r"``.  Older synthetic fixtures may store only the parsed payload;
+    those are still accepted and terminated as plain ASCII lines.
+    """
+
+    text = str(response_payload)
+    if text.endswith("\r"):
+        return text.encode("ascii", errors="replace")
+    return f"{text}\r".encode("ascii", errors="replace")
 
 
 def _encode_command_crc(body: bytes, *, family: str) -> bytes:

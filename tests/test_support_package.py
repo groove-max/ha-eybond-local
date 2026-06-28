@@ -371,8 +371,10 @@ class SupportPackageTests(unittest.TestCase):
 
             self.assertNotIn("fixture/raw_fixture.json", names)
             self.assertNotIn("fixture/anonymized_fixture.json", names)
+            self.assertIsNone(manifest["support_marker"])
             self.assertIsNone(manifest["archive_members"]["raw_fixture"])
             self.assertIsNone(manifest["archive_members"]["anonymized_fixture"])
+            self.assertNotIn("Read-only unverified SMG family", readme)
             self.assertNotIn("fixture/raw_fixture.json", readme)
             self.assertNotIn("fixture/anonymized_fixture.json", readme)
 

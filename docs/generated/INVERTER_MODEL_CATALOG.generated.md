@@ -233,7 +233,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `eybond_g_ascii_family` → surface `eybond_g_ascii_read_only` (driver eybond_g_ascii, variant g_ascii_family)
       - Protocol: eybond_g_ascii | Detection: anchors (protocol.protocol_id=EYBOND_G_ASCII; shape.gdat0_field_count=; shape.gpv_field_count=)
       - Tier: partial | Read-only: yes | Profile: — | Schema: eybond_g_ascii/base.json
-      - Capabilities: no model-specific profile | Telemetry: 55 measurements, 0 binary sensors
+      - Capabilities: no model-specific profile | Telemetry: 100 measurements, 3 binary sensors
 - Known limitations:
   - No write controls are exposed.
   - Commercial model identity is user-reported; available runtime captures identify the protocol family and telemetry shape, not a unique LVYUAN model fingerprint.

@@ -427,6 +427,17 @@ class CollectorInfo:
     connection_replace_count: int = 0
     disconnect_count: int = 0
     pending_request_drop_count: int = 0
+    raw_request_count: int = 0
+    raw_response_count: int = 0
+    raw_timeout_count: int = 0
+    raw_unhandled_line_count: int = 0
+    raw_last_request_ascii: str = ""
+    raw_last_request_hex: str = ""
+    raw_last_response_ascii: str = ""
+    raw_last_response_hex: str = ""
+    raw_last_timeout_request_ascii: str = ""
+    raw_last_parser: str = ""
+    raw_last_frame_format: str = ""
     last_disconnect_reason: str = ""
     discovery_restart_count: int = 0
     last_discovery_reason: str = ""

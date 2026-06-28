@@ -17,7 +17,9 @@ from ..models import (
 from .register_schema_models import RegisterBlockLayout, RegisterSchemaMetadata
 from ..const import BUILTIN_SCHEMA_PREFIX
 
-REGISTER_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs" / "register_schemas"
+PROTOCOL_CATALOGS_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs"
+REGISTER_SCHEMAS_DIR = PROTOCOL_CATALOGS_DIR / "register_schemas"
+COMMAND_SCHEMAS_DIR = PROTOCOL_CATALOGS_DIR / "command_schemas"
 _EXTERNAL_REGISTER_SCHEMA_ROOTS: tuple[Path, ...] = ()
 
 
@@ -41,6 +43,16 @@ def load_register_schema(schema_name: str) -> RegisterSchemaMetadata:
         for key, value in raw.get("spec_sets", {}).items()
     }
     measurement_precisions = _build_measurement_display_precisions(spec_sets)
+    measurement_description_items = _description_items(
+        raw,
+        list_key="measurement_descriptions",
+        source_key="measurement_descriptions_from_command_schema",
+    )
+    binary_sensor_description_items = _description_items(
+        raw,
+        list_key="binary_sensor_descriptions",
+        source_key="binary_sensor_descriptions_from_command_schema",
+    )
 
     schema = RegisterSchemaMetadata(
         key=str(raw.get("schema_key", schema_path.stem)),
@@ -59,11 +71,11 @@ def load_register_schema(schema_name: str) -> RegisterSchemaMetadata:
         },
         measurement_descriptions=tuple(
             _parse_measurement_description(item, measurement_precisions)
-            for item in raw.get("measurement_descriptions", [])
+            for item in measurement_description_items
         ),
         binary_sensor_descriptions=tuple(
             _parse_binary_sensor_description(item)
-            for item in raw.get("binary_sensor_descriptions", [])
+            for item in binary_sensor_description_items
         ),
     )
     _validate_schema(schema)
@@ -84,6 +96,45 @@ def _load_raw_schema(schema_path: Path) -> dict[str, Any]:
         parent_path = _resolve_schema_path(parent_ref_str)
     parent_raw = _load_raw_schema(parent_path)
     return _merge_raw_schema(parent_raw, raw)
+
+
+def _description_items(
+    raw: Mapping[str, Any],
+    *,
+    list_key: str,
+    source_key: str,
+) -> list[dict[str, Any]]:
+    source_ref = str(raw.get(source_key) or "").strip()
+    linked_items: list[dict[str, Any]] = []
+    if source_ref:
+        linked_items = _load_command_schema_description_items(source_ref, list_key=list_key)
+    local_items = [
+        dict(item)
+        for item in raw.get(list_key, [])
+        if isinstance(item, Mapping)
+    ]
+    if linked_items and local_items:
+        return _merge_keyed_list(linked_items, local_items, key_field="key")
+    if linked_items:
+        return linked_items
+    return local_items
+
+
+@lru_cache(maxsize=None)
+def _load_command_schema_description_items(
+    schema_name: str,
+    *,
+    list_key: str,
+) -> list[dict[str, Any]]:
+    schema_path = (COMMAND_SCHEMAS_DIR / schema_name).resolve()
+    if not _is_within_root(schema_path, COMMAND_SCHEMAS_DIR):
+        raise ValueError(f"command schema path escapes catalog root: {schema_name}")
+    raw = json.loads(schema_path.read_text(encoding="utf-8"))
+    return [
+        dict(item)
+        for item in raw.get(list_key, [])
+        if isinstance(item, Mapping)
+    ]
 
 
 def set_external_register_schema_roots(roots: tuple[Path, ...] | list[Path]) -> None:

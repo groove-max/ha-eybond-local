@@ -86,6 +86,7 @@ class ShadowLearningSessionManifest:
     collector_cloud_profile_confidence: str
     collector_callback_endpoint: str
     collector_cloud_family: str = ""
+    raw_passthrough_frame_format: str = ""
     protocol_adapter_key: str = "modbus_rtu"
     write_response_mode: str = "exception"
     created_at: str = field(default_factory=utc_now_iso)
@@ -103,6 +104,7 @@ class ShadowLearningSessionManifest:
             "collector_cloud_profile_source": str(self.collector_cloud_profile_source),
             "collector_cloud_profile_confidence": str(self.collector_cloud_profile_confidence),
             "collector_callback_endpoint": str(self.collector_callback_endpoint),
+            "raw_passthrough_frame_format": str(self.raw_passthrough_frame_format),
             "protocol_adapter_key": str(self.protocol_adapter_key),
             "write_response_mode": str(self.write_response_mode),
             "created_at": str(self.created_at),
@@ -126,6 +128,7 @@ class ShadowLearningSeed:
     register_bank: dict[int, int]
     latest_support_evidence: dict[str, Any] | None = None
     collector_cloud_family: str = ""
+    raw_passthrough_frame_format: str = ""
     protocol_adapter_key: str = "modbus_rtu"
     write_response_mode: str = "exception"
     allow_ack_writes: bool = False
@@ -145,6 +148,7 @@ def build_shadow_learning_seed(
     entry_id: str,
     collector_pn: str,
     collector_cloud_family: str = "",
+    raw_passthrough_frame_format: str = "",
     collector_cloud_profile_key: str,
     collector_cloud_profile_label: str,
     collector_cloud_profile_source: str,
@@ -171,9 +175,11 @@ def build_shadow_learning_seed(
         register_bank=register_bank,
     )
     normalized_cloud_family = str(collector_cloud_family or "").strip()
+    normalized_raw_frame_format = str(raw_passthrough_frame_format or "").strip().lower()
     adapter = resolve_shadow_learning_protocol_adapter(
         normalized_snapshot,
         collector_cloud_family=normalized_cloud_family,
+        raw_passthrough_frame_format=normalized_raw_frame_format,
     )
     normalized_mode = "ack" if allow_ack_writes and str(write_response_mode or "").strip().lower() == "ack" else "exception"
     seed = ShadowLearningSeed(
@@ -181,6 +187,7 @@ def build_shadow_learning_seed(
         entry_id=str(entry_id or "").strip(),
         collector_pn=str(collector_pn or "").strip(),
         collector_cloud_family=normalized_cloud_family,
+        raw_passthrough_frame_format=normalized_raw_frame_format,
         collector_cloud_profile_key=str(collector_cloud_profile_key or "").strip(),
         collector_cloud_profile_label=str(collector_cloud_profile_label or "").strip(),
         collector_cloud_profile_source=str(collector_cloud_profile_source or "").strip(),
@@ -215,6 +222,7 @@ def build_shadow_learning_preflight(seed: ShadowLearningSeed) -> ShadowLearningP
     adapter = resolve_shadow_learning_protocol_adapter(
         seed.effective_metadata_snapshot,
         collector_cloud_family=seed.collector_cloud_family,
+        raw_passthrough_frame_format=seed.raw_passthrough_frame_format,
     )
     if not adapter.supported:
         blockers.append(adapter.blocker)
@@ -246,6 +254,7 @@ class InProcessShadowLearningHandler:
         self._protocol_adapter = resolve_shadow_learning_protocol_adapter(
             seed.effective_metadata_snapshot,
             collector_cloud_family=seed.collector_cloud_family,
+            raw_passthrough_frame_format=seed.raw_passthrough_frame_format,
         )
         self._write_observations: list[ShadowWriteObservation] = []
         self._observation_condition = asyncio.Condition()
@@ -397,6 +406,7 @@ class InProcessShadowLearningHandler:
                     collector_cloud_profile_source=self._seed.collector_cloud_profile_source,
                     collector_cloud_profile_confidence=self._seed.collector_cloud_profile_confidence,
                     collector_callback_endpoint=self._seed.collector_callback_endpoint,
+                    raw_passthrough_frame_format=self._seed.raw_passthrough_frame_format,
                     protocol_adapter_key=self._protocol_adapter.key,
                     write_response_mode=self._seed.write_response_mode,
                 ).to_json_dict(),

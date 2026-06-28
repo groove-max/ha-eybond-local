@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import json
+from pathlib import Path
 from typing import Any
 
 from ..payload.modbus import (
@@ -33,10 +36,9 @@ _ASCII_FAMILIES: frozenset[str] = frozenset({"pi18", "pi30"})
 _EYBOND_G_ASCII_FAMILIES: frozenset[str] = frozenset(
     {
         "eybond_g_ascii",
-        "valuecloud_at",
     }
 )
-_EYBOND_G_ASCII_READ_COMMANDS: frozenset[str] = frozenset(
+_EYBOND_G_ASCII_FALLBACK_READ_COMMANDS: frozenset[str] = frozenset(
     {
         "F",
         "GMOD",
@@ -52,6 +54,13 @@ _EYBOND_G_ASCII_READ_COMMANDS: frozenset[str] = frozenset(
         "BL",
         "GPV",
     }
+)
+_EYBOND_G_ASCII_COMMAND_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "protocol_catalogs"
+    / "command_schemas"
+    / "eybond_g_ascii"
+    / "base.json"
 )
 
 
@@ -327,47 +336,62 @@ def resolve_shadow_learning_protocol_adapter(
     snapshot: dict[str, Any] | None,
     *,
     collector_cloud_family: str = "",
+    raw_passthrough_frame_format: str = "",
 ) -> ShadowLearningProtocolAdapter:
     """Resolve the cloud-side protocol adapter for one shadow-learning session.
 
-    ``snapshot`` describes the local HA-to-inverter protocol. Shadow learning
-    observes the cloud-to-collector data plane instead, so a known collector
-    cloud family wins over the local driver. Unknown legacy snapshots default
-    to Modbus for backward compatibility. An explicit non-Modbus local protocol
-    fails closed only when no supported cloud-side dialect is known.
+    ``snapshot`` describes the local HA-to-inverter protocol. The collector
+    cloud family describes the cloud/session provider, not necessarily the
+    inverter payload protocol, so it must not by itself select a G-ASCII
+    adapter. Unknown legacy snapshots default to Modbus for backward
+    compatibility. Explicit non-Modbus local protocols fail closed unless
+    runtime protocol evidence identifies a supported dialect.
     """
 
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     cloud_family = str(collector_cloud_family or "").strip().lower()
+    raw_frame_format = str(raw_passthrough_frame_format or "").strip().lower()
     if cloud_family in _MODBUS_RTU_CLOUD_FAMILIES:
         return ModbusRtuShadowLearningAdapter()
-    if cloud_family in _EYBOND_G_ASCII_FAMILIES:
-        return EybondGAsciiShadowLearningAdapter()
 
     protocol_family = str(snapshot.get("protocol_family") or "").strip().lower()
     driver_key = str(snapshot.get("driver_key") or "").strip().lower()
+    effective_owner_key = str(snapshot.get("effective_owner_key") or "").strip().lower()
     profile_name = str(snapshot.get("profile_name") or "").strip().lower()
     schema_name = str(snapshot.get("register_schema_name") or "").strip().lower()
     explicit_keys = {
         value
-        for value in (protocol_family, driver_key)
+        for value in (protocol_family, driver_key, effective_owner_key)
         if value
     }
     if explicit_keys & _MODBUS_RTU_FAMILIES:
         return ModbusRtuShadowLearningAdapter()
     if explicit_keys & _EYBOND_G_ASCII_FAMILIES:
         return EybondGAsciiShadowLearningAdapter()
+    if raw_frame_format == "plain_line" and (
+        "eybond_g_ascii" in profile_name
+        or "eybond_g_ascii" in schema_name
+    ):
+        return EybondGAsciiShadowLearningAdapter()
     if explicit_keys & _ASCII_FAMILIES:
         return UnsupportedShadowLearningAdapter(protocol_family or driver_key)
 
     evidence = " ".join(
-        value for value in (protocol_family, driver_key, profile_name, schema_name) if value
+        value
+        for value in (
+            protocol_family,
+            driver_key,
+            effective_owner_key,
+            profile_name,
+            schema_name,
+        )
+        if value
     )
     if not evidence:
         return ModbusRtuShadowLearningAdapter()
     if "modbus" in evidence or "smg" in evidence:
         return ModbusRtuShadowLearningAdapter()
-    if "eybond_g_ascii" in evidence or "valuecloud" in evidence:
+    if "eybond_g_ascii" in evidence:
         return EybondGAsciiShadowLearningAdapter()
     return UnsupportedShadowLearningAdapter(protocol_family or driver_key or profile_name)
 
@@ -392,10 +416,37 @@ def _decode_g_ascii_command(frame: bytes) -> str:
 def _is_g_ascii_read_command(command: str) -> bool:
     normalized = str(command or "").strip().upper()
     return (
-        normalized in _EYBOND_G_ASCII_READ_COMMANDS
+        normalized in _eybond_g_ascii_read_commands()
         or (normalized.startswith("GPDAT") and normalized[5:].isdigit())
         or normalized.endswith("?")
     )
+
+
+@lru_cache(maxsize=1)
+def _eybond_g_ascii_read_commands() -> frozenset[str]:
+    """Return read/query commands from the shared G-ASCII command schema.
+
+    Shadow learning, runtime support captures, and offline protocol evidence
+    must classify the same commands the same way.  Keep a conservative fallback
+    so learning remains fail-closed-but-usable if a local package is incomplete.
+    """
+
+    commands: set[str] = set(_EYBOND_G_ASCII_FALLBACK_READ_COMMANDS)
+    try:
+        schema = json.loads(_EYBOND_G_ASCII_COMMAND_SCHEMA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return frozenset(commands)
+
+    for raw_item in schema.get("commands") or []:
+        if not isinstance(raw_item, dict):
+            continue
+        access = str(raw_item.get("access") or "").strip().lower()
+        if access not in {"read", "query"}:
+            continue
+        command = str(raw_item.get("command") or "").strip().upper()
+        if command:
+            commands.add(command)
+    return frozenset(commands)
 
 
 def _split_g_ascii_write_command(command: str) -> tuple[str, str]:

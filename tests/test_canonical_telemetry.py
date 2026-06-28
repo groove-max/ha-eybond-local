@@ -50,6 +50,24 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertIn("pv_to_home_power", keys)
         self.assertIn("grid_to_battery_power", keys)
 
+    def test_eybond_g_ascii_canonical_measurements_expose_card_aliases(self) -> None:
+        keys = {
+            description.key
+            for description in canonical_measurements_for_driver("eybond_g_ascii")
+        }
+
+        self.assertIn("output_power", keys)
+        self.assertIn("load_percent", keys)
+        self.assertIn("battery_percent", keys)
+        self.assertIn("battery_power", keys)
+        self.assertIn("pv_voltage", keys)
+        self.assertIn("pv_to_home_power", keys)
+        self.assertIn("pv_to_battery_power", keys)
+        self.assertIn("pv_to_grid_power", keys)
+        self.assertIn("battery_to_home_power", keys)
+        self.assertIn("grid_to_home_power", keys)
+        self.assertIn("grid_to_battery_power", keys)
+
     def test_apply_canonical_measurements_builds_pi30_common_values(self) -> None:
         values = {
             "input_voltage": 230.0,
@@ -147,6 +165,61 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_to_home_power"], 204.8)
         self.assertEqual(values["grid_to_home_power"], 145.2)
         self.assertEqual(values["grid_to_battery_power"], 0.0)
+
+    def test_apply_canonical_measurements_builds_eybond_g_ascii_card_values(self) -> None:
+        values = {
+            "eybond_g_ascii_operating_mode_code": "B",
+            "grid_voltage": 0.0,
+            "output_active_power": 904.0,
+            "output_load_percentage": 25.0,
+            "battery_voltage": 27.5,
+            "battery_current": 15.8,
+            "battery_capacity": 100.0,
+            "pv_input_voltage": 183.1,
+            "pv_power": 972.0,
+        }
+
+        apply_canonical_measurements("eybond_g_ascii", values)
+
+        self.assertEqual(values["output_power"], 904.0)
+        self.assertEqual(values["load_percent"], 25.0)
+        self.assertEqual(values["battery_percent"], 100.0)
+        self.assertEqual(values["pv_voltage"], 183.1)
+        self.assertEqual(values["battery_power"], 434.5)
+        self.assertEqual(values["pv_to_home_power"], 904.0)
+        self.assertEqual(values["pv_to_battery_power"], 68.0)
+        self.assertEqual(values["pv_to_grid_power"], 0.0)
+        self.assertEqual(values["battery_to_home_power"], 0.0)
+        self.assertEqual(values["grid_to_home_power"], 0.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+
+    def test_apply_canonical_measurements_signs_eybond_g_ascii_discharge_power(self) -> None:
+        values = {
+            "eybond_g_ascii_operating_mode_code": "0",
+            "output_active_power": 700.0,
+            "battery_voltage": 25.6,
+            "battery_current": 4.0,
+            "pv_power": 0.0,
+        }
+
+        apply_canonical_measurements("eybond_g_ascii", values)
+
+        self.assertEqual(values["battery_power"], -102.4)
+        self.assertEqual(values["battery_to_home_power"], 102.4)
+
+    def test_apply_canonical_measurements_does_not_guess_eybond_g_ascii_battery_sign(self) -> None:
+        values = {
+            "eybond_g_ascii_operating_mode_code": "X",
+            "output_active_power": 700.0,
+            "battery_voltage": 25.6,
+            "battery_current": 4.0,
+            "pv_power": 0.0,
+        }
+
+        apply_canonical_measurements("eybond_g_ascii", values)
+
+        self.assertNotIn("battery_power", values)
+        self.assertNotIn("battery_to_home_power", values)
 
     def test_apply_canonical_measurements_does_not_infer_grid_flow_when_grid_voltage_is_zero(self) -> None:
         values = {

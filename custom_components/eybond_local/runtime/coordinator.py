@@ -931,6 +931,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             entry_id=self.config_entry.entry_id,
             integration_version=integration_version,
             catalog_detection=self._diagnostic_catalog_detection(),
+            runtime_debug=self._diagnostic_runtime_debug(transport),
             default_stop_on_error=stop_on_error,
             default_operation_timeout=operation_timeout,
         )
@@ -940,6 +941,99 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if callable(accessor):
             return accessor()
         return None
+
+    def _diagnostic_runtime_debug(self, transport: object) -> dict[str, object]:
+        """Return transport internals needed to diagnose raw command routing."""
+
+        debug: dict[str, object] = {
+            "transport_type": type(transport).__name__ if transport is not None else "",
+            "transport_id": id(transport) if transport is not None else 0,
+            "transport_connected": bool(getattr(transport, "connected", False)),
+        }
+        try:
+            collector = getattr(transport, "collector_info", None)
+            if collector is not None:
+                debug.update(
+                    {
+                        "collector_remote_ip": getattr(collector, "remote_ip", "") or "",
+                        "collector_remote_port": getattr(collector, "remote_port", None),
+                        "collector_pn_present": bool(
+                            str(getattr(collector, "collector_pn", "") or "").strip()
+                        ),
+                        "raw_request_count": getattr(collector, "raw_request_count", 0),
+                        "raw_response_count": getattr(collector, "raw_response_count", 0),
+                        "raw_timeout_count": getattr(collector, "raw_timeout_count", 0),
+                        "raw_unhandled_line_count": getattr(
+                            collector,
+                            "raw_unhandled_line_count",
+                            0,
+                        ),
+                        "raw_last_request_ascii": getattr(
+                            collector,
+                            "raw_last_request_ascii",
+                            "",
+                        )
+                        or "",
+                        "raw_last_response_ascii": getattr(
+                            collector,
+                            "raw_last_response_ascii",
+                            "",
+                        )
+                        or "",
+                        "raw_last_timeout_request_ascii": getattr(
+                            collector,
+                            "raw_last_timeout_request_ascii",
+                            "",
+                        )
+                        or "",
+                        "raw_last_parser": getattr(collector, "raw_last_parser", "")
+                        or "",
+                        "raw_last_frame_format": getattr(
+                            collector,
+                            "raw_last_frame_format",
+                            "",
+                        )
+                        or "",
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not block scenario
+            debug["collector_info_error"] = str(exc)
+
+        try:
+            connection_getter = getattr(transport, "_at_connection", None)
+            if callable(connection_getter):
+                connection = connection_getter(create_placeholder=False)
+                debug["at_connection_id"] = id(connection) if connection is not None else 0
+                debug["at_connection_connected"] = bool(
+                    getattr(connection, "connected", False)
+                )
+                if connection is not None:
+                    reader_task = getattr(connection, "_reader_task", None)
+                    writer = getattr(connection, "_writer", None)
+                    pending_raw = getattr(connection, "_pending_raw_response", None)
+                    debug.update(
+                        {
+                            "at_reader_task_done": bool(
+                                reader_task is not None and reader_task.done()
+                            ),
+                            "at_writer_closing": bool(
+                                writer is not None and writer.is_closing()
+                            ),
+                            "at_pending_raw_present": pending_raw is not None,
+                            "at_pending_raw_done": bool(
+                                pending_raw is not None and pending_raw.done()
+                            ),
+                            "at_raw_frame_format": getattr(
+                                connection,
+                                "_raw_passthrough_frame_format",
+                                "",
+                            )
+                            or "",
+                        }
+                    )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not block scenario
+            debug["connection_debug_error"] = str(exc)
+        return debug
 
     @staticmethod
     def _diagnostic_default_probe_target(driver_key: str):
@@ -971,6 +1065,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> dict:
         async with self._runtime_operation_lock:
             result = await run_scenario(commands, context)
+        result.context["runtime_debug_after"] = self._diagnostic_runtime_debug(
+            getattr(context, "transport", None)
+        )
         config_dir = Path(self.hass.config.config_dir)
         entry_id = self.config_entry.entry_id
         export = await self.hass.async_add_executor_job(
@@ -1024,11 +1121,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         identity_strategy = self.collector_identity_strategy
         raw_passthrough_bootstrap = self.collector_raw_passthrough_bootstrap
         raw_passthrough_frame_format = self.collector_raw_passthrough_frame_format
+        raw_passthrough_min_interval_ms = self.collector_raw_passthrough_min_interval_ms
         if (
             not protocol
             and not identity_strategy
             and not raw_passthrough_bootstrap
             and not raw_passthrough_frame_format
+            and raw_passthrough_min_interval_ms <= 0
         ):
             return False
 
@@ -1042,18 +1141,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 collector_identity_strategy=identity_strategy,
                 collector_raw_passthrough_bootstrap=raw_passthrough_bootstrap,
                 collector_raw_passthrough_frame_format=raw_passthrough_frame_format,
+                collector_raw_passthrough_min_interval_ms=raw_passthrough_min_interval_ms,
                 reason=reason,
             )
         )
         if changed:
             logger.warning(
-                "Reconciled EyeBond collector session profile for entry %s after %s: protocol=%s identity=%s raw_bootstrap=%s raw_frame=%s",
+                "Reconciled EyeBond collector session profile for entry %s after %s: protocol=%s identity=%s raw_bootstrap=%s raw_frame=%s raw_min_interval_ms=%s",
                 self.config_entry.entry_id,
                 reason or "collector_session_profile_change",
                 protocol or "unknown",
                 identity_strategy or "unknown",
                 raw_passthrough_bootstrap or "unknown",
                 raw_passthrough_frame_format or "unknown",
+                raw_passthrough_min_interval_ms,
             )
         return changed
 
@@ -2798,6 +2899,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             entry_id=self.config_entry.entry_id,
             collector_pn=self.smartess_collector_pn,
             collector_cloud_family=self.collector_cloud_family,
+            raw_passthrough_frame_format=self.collector_raw_passthrough_frame_format,
             collector_cloud_profile_key=self.collector_cloud_profile_key,
             collector_cloud_profile_label=self.collector_cloud_profile_label,
             collector_cloud_profile_source=self.collector_cloud_profile_source,
@@ -3375,6 +3477,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return self.collector_transport_profile.raw_passthrough_frame_format
 
     @property
+    def collector_raw_passthrough_min_interval_ms(self) -> int:
+        """Return minimum interval between raw passthrough requests."""
+
+        return self.collector_transport_profile.raw_passthrough_min_interval_ms
+
+    @property
     def collector_transport_profile(self):
         """Return the resolved callback transport profile for this runtime."""
 
@@ -3708,6 +3816,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return controls_enabled(
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
+            write_capability_count=self._current_write_capability_count(),
         )
 
     @property
@@ -3723,6 +3832,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return controls_reason(
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
+            write_capability_count=self._current_write_capability_count(),
         )
 
     @property
@@ -3732,7 +3842,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return controls_summary(
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
+            write_capability_count=self._current_write_capability_count(),
         )
+
+    def _current_write_capability_count(self) -> int | None:
+        """Return the number of writable controls known for the current runtime."""
+
+        inverter = self.identified_inverter
+        if inverter is not None:
+            return len(tuple(getattr(inverter, "capabilities", ()) or ()))
+
+        driver = self.current_driver
+        if driver is not None:
+            return len(tuple(getattr(driver, "write_capabilities", ()) or ()))
+
+        return None
 
     def can_expose_capability(self, capability: WriteCapability) -> bool:
         """Whether one capability should exist as a writable HA entity."""
@@ -4690,8 +4814,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         integration_build_values = await self.hass.async_add_executor_job(
             _integration_build_runtime_values
         )
+        collector_registry_lookup = await self._async_collector_registry_lookup()
         support_bundle_payload = self._build_support_bundle_payload(
             integration_build_values=integration_build_values,
+            collector_registry_lookup=collector_registry_lookup,
         )
         path = await self.hass.async_add_executor_job(
             lambda: export_support_bundle(
@@ -4761,23 +4887,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     ),
                 )
 
-        await self._async_refresh_before_support_export()
         integration_build_values = await self.hass.async_add_executor_job(
             _integration_build_runtime_values
         )
-        support_bundle_payload = self._build_support_bundle_payload(
+        support_bundle_payload, raw_capture = await self._async_build_support_package_payloads(
             integration_build_values=integration_build_values,
         )
-        driver = self.current_driver
-        try:
-            raw_capture = await self._runtime.async_capture_support_evidence()
-        except Exception as exc:
-            raw_capture = {
-                "capture_kind": "unsupported_or_failed",
-                "error": str(exc),
-                "captured_ranges": [],
-                "range_failures": [],
-            }
         fixture = self._build_support_fixture(raw_capture)
         anonymized_fixture = anonymize_fixture_json(fixture) if fixture is not None else None
         profile_metadata = self.effective_profile_metadata
@@ -4836,6 +4951,62 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return
         if snapshot is not None:
             self.data = snapshot
+
+    async def _async_build_support_package_payloads(
+        self,
+        *,
+        integration_build_values: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Build support bundle payload and raw capture under one runtime operation lock."""
+
+        async with self._runtime_operation_lock:
+            try:
+                snapshot = await self._async_update_data_with_runtime_lock()
+            except Exception as exc:  # noqa: BLE001 - support export must remain available
+                logger.warning(
+                    "Support archive pre-refresh failed for entry %s: %s",
+                    self.config_entry.entry_id,
+                    exc,
+                )
+            else:
+                if snapshot is not None:
+                    self.data = snapshot
+
+            collector_registry_lookup = await self._async_collector_registry_lookup()
+            support_bundle_payload = self._build_support_bundle_payload(
+                integration_build_values=integration_build_values,
+                collector_registry_lookup=collector_registry_lookup,
+            )
+            try:
+                raw_capture = await self._runtime.async_capture_support_evidence()
+            except Exception as exc:
+                raw_capture = {
+                    "capture_kind": "unsupported_or_failed",
+                    "error": str(exc),
+                    "captured_ranges": [],
+                    "range_failures": [],
+                }
+
+        return support_bundle_payload, raw_capture
+
+    async def _async_collector_registry_lookup(self) -> tuple[str, Any | None]:
+        """Read the collector registry record without blocking the Home Assistant loop."""
+
+        collector_pn = self._preferred_collector_pn(self.data)
+        if not collector_pn:
+            return "unavailable", None
+
+        try:
+            record = await self.hass.async_add_executor_job(
+                lambda: get_collector_registry_record(
+                    config_dir=Path(self.hass.config.path()),
+                    collector_pn=collector_pn,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive diagnostics only
+            return f"error:{type(exc).__name__}", None
+
+        return ("found" if record is not None else "missing"), record
 
     async def async_create_local_profile_draft(self) -> str:
         """Create or refresh one local experimental profile draft."""
@@ -5465,6 +5636,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self,
         *,
         include_registry: bool = False,
+        registry_lookup: tuple[str, Any | None] | None = None,
     ) -> dict[str, Any]:
         """Return non-sensitive diagnostics for preserved original endpoint state."""
 
@@ -5486,9 +5658,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return values
 
         collector_pn = self._preferred_collector_pn(self.data)
-        registry_status = "unavailable"
-        record = None
-        if collector_pn:
+        if registry_lookup is not None:
+            registry_status, record = registry_lookup
+        else:
+            registry_status = "unavailable"
+            record = None
+        if collector_pn and registry_lookup is None:
             try:
                 record = get_collector_registry_record(
                     config_dir=Path(self.hass.config.path()),
@@ -5639,6 +5814,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self,
         *,
         integration_build_values: Mapping[str, object] | None = None,
+        collector_registry_lookup: tuple[str, Any | None] | None = None,
     ) -> dict[str, Any]:
         inverter = self.data.inverter
         metadata = self.effective_metadata
@@ -5646,7 +5822,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         values = dict(self.data.values)
         values.update(integration_build_values or _integration_build_runtime_values())
         values.update(self._collector_transport_profile_runtime_values())
-        values.update(self._collector_original_endpoint_runtime_values(include_registry=True))
+        values.update(
+            self._collector_original_endpoint_runtime_values(
+                include_registry=True,
+                registry_lookup=collector_registry_lookup,
+            )
+        )
         cloud_evidence_record = self._latest_smartess_cloud_evidence_record()
         cloud_evidence = None
         if cloud_evidence_record is not None:

@@ -71,6 +71,7 @@ class DiagnosticRuntimeContext:
     entry_id: str = ""
     integration_version: str = ""
     catalog_detection: dict | None = None
+    runtime_debug: dict | None = None
     default_stop_on_error: bool = True
     default_operation_timeout: float | None = None
     clock: Callable[[], datetime] = _default_clock
@@ -286,13 +287,7 @@ def _prepare(text: str, context: DiagnosticRuntimeContext) -> _PreparedRun:
 
 
 async def _maybe_timeout(coro, timeout: float | None):
-    """Await ``coro`` with an optional shorten-only per-operation timeout.
-
-    Decision: ``operation_timeout`` wraps each transport operation in
-    ``asyncio.wait_for``. Because the shared transport keeps its own request
-    timeout, this can only SHORTEN an operation, never extend it beyond the
-    driver's built-in timeout.
-    """
+    """Await ``coro`` with an optional per-operation timeout."""
 
     if timeout is None:
         return await coro
@@ -349,7 +344,7 @@ async def _execute_command(
 
     if isinstance(command, AsciiCommand):
         outcome: AsciiOutcome = await _maybe_timeout(
-            target.send_ascii(command.command), timeout
+            target.send_ascii(command.command, request_timeout=timeout), timeout
         )
         request = {"command": command.command}
         response = {
@@ -480,6 +475,7 @@ def _build_context(prepared: _PreparedRun, context: DiagnosticRuntimeContext) ->
             "device_addr": pt.device_addr,
         },
         "catalog_detection": context.catalog_detection or {},
+        "runtime_debug": context.runtime_debug or {},
     }
 
 

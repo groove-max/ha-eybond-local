@@ -30,6 +30,7 @@ class CollectorCloudProfileCatalogEntry:
     identity_strategy: str
     raw_passthrough_bootstrap: str
     raw_passthrough_frame_format: str
+    raw_passthrough_min_interval_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ class CollectorCloudProfileCatalog:
     identity_strategies: dict[str, str]
     raw_passthrough_bootstraps: dict[str, str]
     raw_passthrough_frame_formats: dict[str, str]
+    raw_passthrough_min_interval_ms: dict[str, int]
 
 
 @lru_cache(maxsize=None)
@@ -71,6 +73,7 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
     identity_strategies: dict[str, str] = {}
     raw_passthrough_bootstraps: dict[str, str] = {}
     raw_passthrough_frame_formats: dict[str, str] = {}
+    raw_passthrough_min_interval_ms: dict[str, int] = {}
 
     for entry in entries:
         family = entry.family
@@ -94,6 +97,8 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
             raw_passthrough_bootstraps[family] = entry.raw_passthrough_bootstrap
         if entry.raw_passthrough_frame_format:
             raw_passthrough_frame_formats[family] = entry.raw_passthrough_frame_format
+        if entry.raw_passthrough_min_interval_ms > 0:
+            raw_passthrough_min_interval_ms[family] = entry.raw_passthrough_min_interval_ms
 
         for host in entry.known_hosts:
             if host:
@@ -114,6 +119,7 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
         identity_strategies=identity_strategies,
         raw_passthrough_bootstraps=raw_passthrough_bootstraps,
         raw_passthrough_frame_formats=raw_passthrough_frame_formats,
+        raw_passthrough_min_interval_ms=raw_passthrough_min_interval_ms,
     )
 
 
@@ -233,6 +239,17 @@ def resolve_collector_cloud_raw_passthrough_frame_format(cloud_family: object) -
     return catalog.raw_passthrough_frame_formats.get(normalized_family, "")
 
 
+def resolve_collector_cloud_raw_passthrough_min_interval_ms(cloud_family: object) -> int:
+    """Resolve the minimum delay between raw passthrough requests."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return 0
+
+    catalog = load_collector_cloud_profile_catalog()
+    return int(catalog.raw_passthrough_min_interval_ms.get(normalized_family, 0) or 0)
+
+
 def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalogEntry:
     known_hosts = tuple(
         str(item).strip().lower()
@@ -260,6 +277,11 @@ def _parse_profile_entry(raw: dict[str, object]) -> CollectorCloudProfileCatalog
         raw_passthrough_frame_format=str(
             raw.get("raw_passthrough_frame_format", "")
         ).strip().lower(),
+        raw_passthrough_min_interval_ms=(
+            int(raw.get("raw_passthrough_min_interval_ms", 0) or 0)
+            if _is_int_like(raw.get("raw_passthrough_min_interval_ms", 0))
+            else 0
+        ),
     )
 
 

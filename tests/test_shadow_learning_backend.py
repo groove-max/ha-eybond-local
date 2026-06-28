@@ -30,6 +30,11 @@ from custom_components.eybond_local.support.shadow_learning_backend import (
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
 )
+from custom_components.eybond_local.support.shadow_learning_protocol import (
+    EybondGAsciiShadowLearningAdapter,
+    ModbusRtuShadowLearningAdapter,
+    resolve_shadow_learning_protocol_adapter,
+)
 
 
 def _sample_snapshot() -> EffectiveMetadataSnapshot:
@@ -332,6 +337,98 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertEqual(seed.protocol_adapter_key, "eybond_g_ascii")
         self.assertEqual(seed.register_bank, {})
         self.assertIn("GPDAT0", seed.command_responses)
+        self.assertTrue(build_shadow_learning_preflight(seed).can_start)
+
+    def test_valuecloud_cloud_family_alone_does_not_select_g_ascii_learning(self) -> None:
+        adapter = resolve_shadow_learning_protocol_adapter(
+            {
+                "effective_owner_key": "modbus_smg",
+                "protocol_family": "modbus_smg",
+                "driver_key": "modbus_smg",
+                "register_schema_name": "modbus_smg/default.json",
+            },
+            collector_cloud_family="valuecloud_at",
+        )
+
+        self.assertIsInstance(adapter, ModbusRtuShadowLearningAdapter)
+
+    def test_plain_line_g_ascii_runtime_evidence_selects_g_ascii_learning(self) -> None:
+        adapter = resolve_shadow_learning_protocol_adapter(
+            {
+                "register_schema_name": "eybond_g_ascii/base.json",
+            },
+            collector_cloud_family="some_future_ascii_provider",
+            raw_passthrough_frame_format="plain_line",
+        )
+
+        self.assertIsInstance(adapter, EybondGAsciiShadowLearningAdapter)
+
+    def test_eybond_g_ascii_learning_read_commands_follow_command_schema(self) -> None:
+        adapter = EybondGAsciiShadowLearningAdapter()
+
+        for command in ("GBMS", "GPPV", "I", "CFG", "Q1", "FAN???", "GPID9"):
+            with self.subTest(command=command):
+                frame = f"{command}\r".encode("ascii")
+                read_request = adapter.decode_read_request(frame)
+                self.assertIsNotNone(read_request)
+                self.assertEqual(read_request.command, command)
+                self.assertIsNone(adapter.decode_write_request(frame))
+                self.assertIsNone(
+                    adapter.write_observation(
+                        frame=frame,
+                        devcode=None,
+                        devaddr=None,
+                        timestamp="2026-06-25T12:00:00+00:00",
+                    )
+                )
+
+    def test_eybond_g_ascii_learning_still_classifies_unknown_control_as_write(self) -> None:
+        adapter = EybondGAsciiShadowLearningAdapter()
+
+        frame = b"SW230\r"
+
+        self.assertIsNone(adapter.decode_read_request(frame))
+        write_request = adapter.decode_write_request(frame)
+        self.assertIsNotNone(write_request)
+        self.assertEqual(write_request.command, "SW")
+        self.assertEqual(write_request.value, "230")
+
+    def test_eybond_g_ascii_seed_keeps_support_capture_command_responses(self) -> None:
+        snapshot = {
+            "register_schema_name": "eybond_g_ascii/base.json",
+            "protocol_family": "eybond_g_ascii",
+            "driver_key": "eybond_g_ascii",
+        }
+
+        seed, blockers = build_shadow_learning_seed(
+            session_id="entry-1_20260625T120000Z",
+            entry_id="entry-1",
+            collector_pn="A0000000000001",
+            collector_cloud_family="valuecloud_at",
+            collector_cloud_profile_key="valuecloud_at",
+            collector_cloud_profile_label="ValueCloud AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=snapshot,
+            raw_capture={
+                "driver_key": "eybond_g_ascii",
+                "responses": {
+                    "GPDAT0": "(0 5 4003 0 00 219.7 49.95\r",
+                    "GBMS": "(00000 65535 65535\r",
+                    "GPPV": "(1 016.0 000.0\r",
+                    "CFG": "NAK\r",
+                },
+                "failures": {},
+            },
+            write_response_mode="exception",
+        )
+
+        self.assertEqual(blockers, ())
+        self.assertEqual(seed.protocol_adapter_key, "eybond_g_ascii")
+        self.assertEqual(seed.command_responses["GBMS"], "(00000 65535 65535\r")
+        self.assertEqual(seed.command_responses["GPPV"], "(1 016.0 000.0\r")
+        self.assertEqual(seed.command_responses["CFG"], "NAK\r")
         self.assertTrue(build_shadow_learning_preflight(seed).can_start)
 
     def test_must_register_protocol_resolves_modbus_learning_adapter(self) -> None:

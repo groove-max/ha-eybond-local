@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 import json
 from pathlib import Path
 from typing import Any
 
-from ..models import DetectedInverter, MeasurementDescription, ProbeTarget
+from ..metadata.register_schema_loader import load_register_schema
+from ..models import (
+    DetectedInverter,
+    ProbeTarget,
+)
 from ..payload.ascii_line import (
     AsciiLineError,
     AsciiLineSession,
@@ -34,437 +39,20 @@ _COMMAND_SCHEMA_PATH = (
 )
 
 
-_MEASUREMENTS: tuple[MeasurementDescription, ...] = (
-    MeasurementDescription(
-        key="eybond_g_ascii_operating_mode_code",
-        name="EyeBond G-ASCII Operating Mode",
-        icon="mdi:state-machine",
-    ),
-    MeasurementDescription(
-        key="grid_voltage",
-        name="Grid Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="grid_frequency",
-        name="Grid Frequency",
-        unit="Hz",
-        device_class="frequency",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="output_voltage",
-        name="Output Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="output_frequency",
-        name="Output Frequency",
-        unit="Hz",
-        device_class="frequency",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="mains_input_voltage",
-        name="Mains Input Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="mains_frequency",
-        name="Mains Frequency",
-        unit="Hz",
-        device_class="frequency",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="output_current",
-        name="Output Current",
-        unit="A",
-        device_class="current",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="inverter_voltage",
-        name="Inverter Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="inverter_frequency",
-        name="Inverter Frequency",
-        unit="Hz",
-        device_class="frequency",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="output_load_percentage",
-        name="Output Load Percentage",
-        unit="%",
-        state_class="measurement",
-        suggested_display_precision=0,
-    ),
-    MeasurementDescription(
-        key="output_active_power",
-        name="Output Active Power",
-        unit="W",
-        device_class="power",
-        state_class="measurement",
-        suggested_display_precision=0,
-    ),
-    MeasurementDescription(
-        key="output_apparent_power",
-        name="Output Apparent Power",
-        unit="VA",
-        device_class="apparent_power",
-        state_class="measurement",
-        suggested_display_precision=0,
-    ),
-    MeasurementDescription(
-        key="battery_voltage",
-        name="Battery Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="battery_current",
-        name="Battery Current",
-        unit="A",
-        device_class="current",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="battery_capacity",
-        name="Battery Capacity",
-        unit="%",
-        device_class="battery",
-        state_class="measurement",
-        suggested_display_precision=0,
-    ),
-    MeasurementDescription(
-        key="battery_cell_count",
-        name="Battery Cell Count",
-        icon="mdi:battery-cog-outline",
-        diagnostic=True,
-    ),
-    MeasurementDescription(
-        key="battery_discharge_cutoff_voltage",
-        name="Battery Discharge Cut-Off Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="battery_discharge_alarm_voltage",
-        name="Battery Discharge Alarm Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="pv_input_voltage",
-        name="PV Input Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="pv_charging_current",
-        name="PV Charging Current",
-        unit="A",
-        device_class="current",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="pv_current",
-        name="PV Current",
-        unit="A",
-        device_class="current",
-        state_class="measurement",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="pv_power",
-        name="PV Power",
-        unit="W",
-        device_class="power",
-        state_class="measurement",
-        suggested_display_precision=0,
-    ),
-    MeasurementDescription(
-        key="pv_tracking_status",
-        name="PV Tracking Status",
-        icon="mdi:solar-power",
-        diagnostic=True,
-    ),
-    MeasurementDescription(
-        key="pv_chargeable_status",
-        name="PV Chargeable Status",
-        icon="mdi:battery-charging",
-        diagnostic=True,
-    ),
-    MeasurementDescription(
-        key="pv_energy_today",
-        name="PV Energy Today",
-        unit="kWh",
-        device_class="energy",
-        state_class="total_increasing",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="pv_energy_total",
-        name="Total PV Energy",
-        unit="kWh",
-        device_class="energy",
-        state_class="total_increasing",
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="inverter_temperature",
-        name="Inverter Temperature",
-        unit="°C",
-        device_class="temperature",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="mainboard_temperature",
-        name="Mainboard Temperature",
-        unit="°C",
-        device_class="temperature",
-        state_class="measurement",
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="pv_side_temperature",
-        name="PV Side Temperature",
-        unit="°C",
-        device_class="temperature",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="charger_temperature",
-        name="Charger Temperature",
-        unit="°C",
-        device_class="temperature",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="ambient_temperature",
-        name="Ambient Temperature",
-        unit="°C",
-        device_class="temperature",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="bus_voltage",
-        name="Bus Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="charging_voltage",
-        name="Charging Voltage",
-        unit="V",
-        device_class="voltage",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="charging_current",
-        name="Charging Current",
-        unit="A",
-        device_class="current",
-        state_class="measurement",
-        diagnostic=True,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="grid_energy_today",
-        name="Grid Energy Today",
-        unit="kWh",
-        device_class="energy",
-        state_class="total_increasing",
-        diagnostic=True,
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="grid_energy_total",
-        name="Total Grid Energy",
-        unit="kWh",
-        device_class="energy",
-        state_class="total_increasing",
-        diagnostic=True,
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="output_energy_today",
-        name="Output Energy Today",
-        unit="kWh",
-        device_class="energy",
-        state_class="total_increasing",
-        diagnostic=True,
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="output_energy_total",
-        name="Total Output Energy",
-        unit="kWh",
-        device_class="energy",
-        state_class="total_increasing",
-        diagnostic=True,
-        suggested_display_precision=2,
-    ),
-    MeasurementDescription(
-        key="rated_output_voltage",
-        name="Rated Output Voltage",
-        unit="V",
-        device_class="voltage",
-        diagnostic=True,
-        live=False,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="rated_output_current",
-        name="Rated Output Current",
-        unit="A",
-        device_class="current",
-        diagnostic=True,
-        live=False,
-        suggested_display_precision=0,
-    ),
-    MeasurementDescription(
-        key="rated_frequency",
-        name="Rated Frequency",
-        unit="Hz",
-        device_class="frequency",
-        diagnostic=True,
-        live=False,
-        suggested_display_precision=1,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_software_version",
-        name="EyeBond G-ASCII Software Version",
-        icon="mdi:chip",
-        diagnostic=True,
-        live=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_software_date",
-        name="EyeBond G-ASCII Software Date",
-        icon="mdi:calendar",
-        diagnostic=True,
-        live=False,
-    ),
-    MeasurementDescription(
-        key="fault_code",
-        name="Fault Code",
-        icon="mdi:alert-circle-outline",
-        diagnostic=True,
-    ),
-    MeasurementDescription(
-        key="warning_status_1",
-        name="Warning Status 1",
-        icon="mdi:alert-outline",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="warning_status_2",
-        name="Warning Status 2",
-        icon="mdi:alert-outline",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="dcdc_control_status",
-        name="DCDC Control Status",
-        icon="mdi:transfer",
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gdat0_fields",
-        name="EyeBond GPDAT0 Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gpv_fields",
-        name="EyeBond GPV Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gbat_fields",
-        name="EyeBond GBAT Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gline_fields",
-        name="EyeBond GLINE Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gop_fields",
-        name="EyeBond GOP Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gchg_fields",
-        name="EyeBond GCHG Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-    MeasurementDescription(
-        key="eybond_g_ascii_gws_fields",
-        name="EyeBond GWS Fields",
-        icon="mdi:format-list-numbered",
-        diagnostic=True,
-        enabled_default=False,
-    ),
-)
+_REGISTER_SCHEMA_NAME = "eybond_g_ascii/base.json"
+
+
+@lru_cache(maxsize=1)
+def _eybond_g_ascii_register_schema():
+    return load_register_schema(_REGISTER_SCHEMA_NAME)
+
+
+def _eybond_g_ascii_measurements():
+    return _eybond_g_ascii_register_schema().measurement_descriptions
+
+
+def _eybond_g_ascii_binary_sensors():
+    return _eybond_g_ascii_register_schema().binary_sensor_descriptions
 
 
 class EybondGAsciiDriver(InverterDriver):
@@ -475,8 +63,8 @@ class EybondGAsciiDriver(InverterDriver):
     probe_timeout = 12.0
     signature_timeout = 4.0
     probe_targets = _EYBOND_G_ASCII_PROBE_TARGETS
-    measurements = _MEASUREMENTS
-    binary_sensors = ()
+    measurements = _eybond_g_ascii_measurements()
+    binary_sensors = _eybond_g_ascii_binary_sensors()
     capability_groups = ()
     write_capabilities = ()
     capability_presets = ()
@@ -540,7 +128,7 @@ class EybondGAsciiDriver(InverterDriver):
             probe_target=target,
             details=details,
             profile_name="",
-            register_schema_name="eybond_g_ascii/base.json",
+            register_schema_name=_REGISTER_SCHEMA_NAME,
             capability_groups=(),
             capabilities=(),
             capability_presets=(),
@@ -603,8 +191,9 @@ async def _async_capture_eybond_g_ascii_support_evidence(
     responses: dict[str, str] = {}
     failures: dict[str, str] = {}
     command_results: list[dict[str, Any]] = []
+    command_schema_key, command_specs = await asyncio.to_thread(_support_probe_plan)
 
-    for spec in _support_command_specs():
+    for spec in command_specs:
         command = str(spec.get("command") or "")
         source = str(spec.get("source") or "")
         description = str(spec.get("description") or "")
@@ -672,13 +261,13 @@ async def _async_capture_eybond_g_ascii_support_evidence(
                 "description": spec.get("description"),
                 "known_field_count": len(spec.get("fields") or []),
             }
-            for spec in _support_command_specs()
+            for spec in command_specs
         ],
         "responses": responses,
         "failures": failures,
         "protocol_probe": {
             "schema_version": 1,
-            "command_schema_key": str(_load_command_schema().get("schema_key") or ""),
+            "command_schema_key": command_schema_key,
             "protocol_id": "EYBOND_G_ASCII",
             "command_count": len(command_results),
             "response_count": len(responses),
@@ -698,6 +287,15 @@ def _load_command_schema() -> dict[str, Any]:
 
 def _support_command_specs() -> tuple[dict[str, Any], ...]:
     schema = _load_command_schema()
+    return _support_command_specs_from_schema(schema)
+
+
+def _support_probe_plan() -> tuple[str, tuple[dict[str, Any], ...]]:
+    schema = _load_command_schema()
+    return str(schema.get("schema_key") or ""), _support_command_specs_from_schema(schema)
+
+
+def _support_command_specs_from_schema(schema: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     deduped: dict[str, dict[str, Any]] = {}
     for raw_item in schema.get("commands") or []:
         if not isinstance(raw_item, dict):
@@ -830,6 +428,8 @@ async def _async_collect_eybond_g_ascii_values(
             _set_float(values, "pv_side_temperature", fields, 0)
             _set_float(values, "charger_temperature", fields, 1)
             _set_float(values, "ambient_temperature", fields, 2)
+            _set_float(values, "low_voltage_mppt_temperature_1", fields, 3)
+            _set_float(values, "low_voltage_mppt_temperature_2", fields, 4)
 
         gline = await _optional_request(session, "GLINE")
         if gline:
@@ -839,6 +439,12 @@ async def _async_collect_eybond_g_ascii_values(
             _set_float(values, "grid_frequency", fields, 1)
             _set_float(values, "mains_input_voltage", fields, 0)
             _set_float(values, "mains_frequency", fields, 1)
+            _set_float(values, "grid_loss_high_voltage", fields, 2)
+            _set_float(values, "grid_loss_low_voltage", fields, 3)
+            _set_float(values, "grid_restore_high_voltage", fields, 4)
+            _set_float(values, "grid_restore_low_voltage", fields, 5)
+            _set_float(values, "grid_loss_high_frequency", fields, 6)
+            _set_float(values, "grid_loss_low_frequency", fields, 7)
             _set_float(values, "output_load_percentage", fields, 9)
             _set_scaled_float(values, "grid_energy_today", fields, 10, divisor=100.0)
             _set_combined_scaled_counter(values, "grid_energy_total", fields, 11, 12, divisor=100.0)
@@ -857,6 +463,8 @@ async def _async_collect_eybond_g_ascii_values(
         if gbus:
             fields = parse_space_fields(gbus)
             _set_float(values, "bus_voltage", fields, 0)
+            _set_float(values, "bus_reference_start_voltage", fields, 1)
+            _set_float(values, "bus_reference_voltage", fields, 2)
 
         gchg = await _optional_request(session, "GCHG")
         if gchg:
@@ -866,6 +474,18 @@ async def _async_collect_eybond_g_ascii_values(
             _set_float(values, "charging_voltage", fields, 1)
             _set_float(values, "battery_cell_count", fields, 2)
             _set_float(values, "charging_current", fields, 3)
+            _set_float(values, "constant_voltage_charging_voltage", fields, 6)
+            _set_float(values, "float_charging_voltage", fields, 7)
+            _set_float(values, "equalization_charging_voltage", fields, 8)
+            _set_float(values, "max_charging_current", fields, 9)
+            _set_float(values, "constant_voltage_charging_time", fields, 10)
+            _set_float(values, "equalization_charging_time", fields, 11)
+            _set_float(values, "equalization_timeout", fields, 12)
+            _set_float(values, "equalization_interval", fields, 13)
+            _set_bool_flag(values, "equalization_enabled", fields, 14)
+            _set_str(values, "battery_type_code", fields, 15)
+            _set_float(values, "low_power_discharge_time", fields, 16)
+            _set_str(values, "charging_mode_code", fields, 17)
 
         gop = await _optional_request(session, "GOP")
         if gop:
@@ -874,8 +494,11 @@ async def _async_collect_eybond_g_ascii_values(
             _set_float(values, "output_voltage", fields, 0)
             _set_float(values, "output_frequency", fields, 1)
             _set_float(values, "output_current", fields, 2)
+            _set_float(values, "output_low_current", fields, 3)
             _set_float(values, "output_active_power", fields, 4)
             _set_float(values, "output_apparent_power", fields, 6)
+            _set_float(values, "output_low_current_power", fields, 7)
+            _set_float(values, "output_half_wave_apparent_power", fields, 8)
             _set_float(values, "output_load_percentage", fields, 9)
             _set_scaled_float(values, "output_energy_today", fields, 12, divisor=100.0)
             _set_combined_scaled_counter(values, "output_energy_total", fields, 13, 14, divisor=100.0)
@@ -885,6 +508,7 @@ async def _async_collect_eybond_g_ascii_values(
             fields = parse_space_fields(ginv)
             _set_float(values, "inverter_voltage", fields, 0)
             _set_float(values, "inverter_frequency", fields, 1)
+            _set_float(values, "inverter_current", fields, 2)
 
         gws = await _optional_request(session, "GWS")
         if gws:
@@ -903,6 +527,63 @@ async def _async_collect_eybond_g_ascii_values(
                 values["battery_capacity"] = float(text)
             except ValueError:
                 pass
+
+        fan = await _optional_request(session, "FAN???")
+        if fan:
+            fields = parse_space_fields(fan)
+            values["eybond_g_ascii_fan_fields"] = " ".join(fields)
+            _set_float(values, "fan_speed_percentage", fields, 0)
+            _set_float(values, "fan1_speed_detected", fields, 1)
+            _set_float(values, "fan2_speed_detected", fields, 2)
+            _set_bool_flag(values, "fan1_stopped", fields, 3)
+            _set_bool_flag(values, "fan2_stopped", fields, 4)
+
+        tcqn = await _optional_request(session, "TCQN????")
+        if tcqn:
+            fields = parse_space_fields(tcqn)
+            _set_float(values, "equalization_elapsed_hours", fields, 0)
+
+        date = await _optional_request(session, "DATE??????")
+        if date:
+            fields = parse_space_fields(date)
+            _set_offset_2000_date(values, "inverter_date", fields)
+
+        time = await _optional_request(session, "TIME??????")
+        if time:
+            fields = parse_space_fields(time)
+            _set_hms_time(values, "inverter_time", fields)
+
+        gbms = await _optional_request(session, "GBMS")
+        if gbms:
+            fields = parse_space_fields(gbms)
+            if _gbms_has_live_values(fields):
+                values["eybond_g_ascii_gbms_fields"] = " ".join(fields)
+                _set_str(values, "bms_communication_status_code", fields, 0)
+                _set_str(values, "bms_status_code", fields, 1)
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_voltage", fields, 2, divisor=10.0
+                )
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_current", fields, 3, divisor=100.0
+                )
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_temperature", fields, 4, divisor=10.0
+                )
+                _set_float_unless_unavailable(values, "bms_soc_raw", fields, 5)
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_remaining_capacity", fields, 6, divisor=10.0
+                )
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_rated_capacity", fields, 7, divisor=10.0
+                )
+                _set_str_unless_unavailable(values, "bms_fault_code", fields, 8)
+                _set_str_unless_unavailable(values, "bms_warning_code", fields, 9)
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_max_charging_current", fields, 10, divisor=100.0
+                )
+                _set_scaled_float_unless_unavailable(
+                    values, "bms_constant_voltage_point", fields, 11, divisor=10.0
+                )
 
     return values
 
@@ -937,6 +618,23 @@ def _set_str(values: dict[str, Any], key: str, fields: list[str], index: int) ->
         values[key] = text
 
 
+def _set_str_unless_unavailable(
+    values: dict[str, Any],
+    key: str,
+    fields: list[str],
+    index: int,
+) -> None:
+    try:
+        raw = fields[index]
+    except IndexError:
+        return
+    if _is_unavailable_numeric_field(raw):
+        return
+    text = str(raw).strip()
+    if text:
+        values[key] = text
+
+
 def _set_clean_date(values: dict[str, Any], key: str, fields: list[str], index: int) -> None:
     try:
         raw = fields[index]
@@ -960,6 +658,24 @@ def _set_float(values: dict[str, Any], key: str, fields: list[str], index: int) 
         return
 
 
+def _set_float_unless_unavailable(
+    values: dict[str, Any],
+    key: str,
+    fields: list[str],
+    index: int,
+) -> None:
+    try:
+        raw = fields[index]
+    except IndexError:
+        return
+    if _is_unavailable_numeric_field(raw):
+        return
+    try:
+        values[key] = float(_clean_numeric_field(raw))
+    except (TypeError, ValueError):
+        return
+
+
 def _set_float_if_absent(
     values: dict[str, Any],
     key: str,
@@ -969,6 +685,15 @@ def _set_float_if_absent(
     if key in values:
         return
     _set_float(values, key, fields, index)
+
+
+def _set_bool_flag(values: dict[str, Any], key: str, fields: list[str], index: int) -> None:
+    try:
+        raw = str(fields[index]).strip()
+    except IndexError:
+        return
+    if raw in {"0", "1"}:
+        values[key] = raw == "1"
 
 
 def _set_scaled_float(
@@ -985,6 +710,26 @@ def _set_scaled_float(
         return
     try:
         values[key] = float(raw) / float(divisor)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return
+
+
+def _set_scaled_float_unless_unavailable(
+    values: dict[str, Any],
+    key: str,
+    fields: list[str],
+    index: int,
+    *,
+    divisor: float,
+) -> None:
+    try:
+        raw = fields[index]
+    except IndexError:
+        return
+    if _is_unavailable_numeric_field(raw):
+        return
+    try:
+        values[key] = float(_clean_numeric_field(raw)) / float(divisor)
     except (TypeError, ValueError, ZeroDivisionError):
         return
 
@@ -1009,5 +754,65 @@ def _set_combined_scaled_counter(
         return
 
 
+def _set_offset_2000_date(values: dict[str, Any], key: str, fields: list[str]) -> None:
+    if len(fields) < 3:
+        return
+    try:
+        year = 2000 + int(_clean_numeric_field(fields[0]))
+        month = int(_clean_numeric_field(fields[1]))
+        day = int(_clean_numeric_field(fields[2]))
+    except (TypeError, ValueError):
+        return
+    if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31:
+        values[key] = f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _set_hms_time(values: dict[str, Any], key: str, fields: list[str]) -> None:
+    if len(fields) < 3:
+        return
+    try:
+        hour = int(_clean_numeric_field(fields[0]))
+        minute = int(_clean_numeric_field(fields[1]))
+        second = int(_clean_numeric_field(fields[2]))
+    except (TypeError, ValueError):
+        return
+    if 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59:
+        values[key] = f"{hour:02d}:{minute:02d}:{second:02d}"
+
+
 def _clean_numeric_field(value: object) -> str:
     return str(value).strip().lstrip("#").rstrip(".")
+
+
+def _is_unavailable_numeric_field(value: object) -> bool:
+    text = _clean_numeric_field(value)
+    if not text:
+        return True
+    try:
+        return int(text) in {0xFFFF, 0xFFFFFFFF}
+    except ValueError:
+        return False
+
+
+def _gbms_has_live_values(fields: list[str]) -> bool:
+    """Return true when GBMS carries real BMS data, not no-BMS sentinels.
+
+    Devices without a BMS may still answer ``GBMS`` with status-like zeros and
+    ``65535`` placeholders.  Do not expose BMS entities until at least one
+    measurement/configuration field that represents actual BMS data is present.
+    """
+
+    meaningful_indexes = (2, 3, 4, 5, 6, 7, 10, 11, 12)
+    for index in meaningful_indexes:
+        try:
+            raw = fields[index]
+        except IndexError:
+            continue
+        if _is_unavailable_numeric_field(raw):
+            continue
+        try:
+            if float(_clean_numeric_field(raw)) != 0.0:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False

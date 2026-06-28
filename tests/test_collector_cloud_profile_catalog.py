@@ -98,7 +98,8 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(valuecloud.session_protocol, "at_text")
         self.assertEqual(valuecloud.identity_strategy, "at_dtupn")
         self.assertEqual(valuecloud.raw_passthrough_bootstrap, "none")
-        self.assertEqual(valuecloud.raw_passthrough_frame_format, "")
+        self.assertEqual(valuecloud.raw_passthrough_frame_format, "plain_line")
+        self.assertEqual(valuecloud.raw_passthrough_min_interval_ms, 1000)
 
     def test_resolves_known_families_by_host(self) -> None:
         self.assertEqual(resolve_collector_cloud_family_by_host("ess.eybond.com"), "legacy_binary")

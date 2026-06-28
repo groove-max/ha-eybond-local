@@ -42,12 +42,16 @@ from .const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_PN,
     CONF_CONTROL_MODE,
+    CONF_DETECTED_MODEL,
+    CONF_DETECTED_SERIAL,
+    CONF_DRIVER_HINT,
     CONF_CONNECTION_TYPE,
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_SERVER_IP,
     CONNECTION_TYPE_EYBOND,
     CONTROL_MODE_FULL,
     DEFAULT_COLLECTOR_OPERATION_MODE,
+    DRIVER_HINT_AUTO,
     PLATFORMS,
 )
 from .platform_context import entity_setup_context
@@ -219,7 +223,8 @@ async def _async_initial_refresh_for_setup(
             timeout=_SETUP_INITIAL_REFRESH_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        logger.warning(
+        log = logger.info if _entry_has_startup_entity_fallback(entry) else logger.warning
+        log(
             "Initial EyeBond refresh timed out after %.1fs for entry %s; continuing setup while refresh finishes in background",
             _SETUP_INITIAL_REFRESH_TIMEOUT,
             entry.entry_id,
@@ -238,6 +243,23 @@ async def _async_initial_refresh_for_setup(
 
         refresh_task.add_done_callback(_log_background_refresh_result)
         entry.async_on_unload(partial(_cancel_task_callback, refresh_task))
+
+
+def _entry_has_startup_entity_fallback(entry: ConfigEntry) -> bool:
+    """Return whether entity setup can proceed from persisted metadata."""
+
+    data = getattr(entry, "data", {}) or {}
+    options = getattr(entry, "options", {}) or {}
+    driver_hint = str(
+        options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
+        or DRIVER_HINT_AUTO
+    ).strip()
+    if driver_hint and driver_hint != DRIVER_HINT_AUTO:
+        return True
+    return bool(
+        str(data.get(CONF_DETECTED_MODEL) or "").strip()
+        or str(data.get(CONF_DETECTED_SERIAL) or "").strip()
+    )
 
 
 async def _async_self_heal_server_ip(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -470,6 +492,36 @@ async def _async_self_heal_collector_cloud_family(
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
             registry_record.observed_at,
         )
+    hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+
+async def _async_self_heal_valuecloud_driver_hint(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Migrate stale ValueCloud pre-architecture driver hints to the canonical driver key."""
+
+    family = _known_collector_cloud_family(entry.data.get(CONF_COLLECTOR_CLOUD_FAMILY))
+    if family != "valuecloud_at":
+        return
+
+    data = dict(entry.data)
+    options = dict(entry.options)
+    changed = False
+    for source in (data, options):
+        hint = str(source.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO) or DRIVER_HINT_AUTO).strip()
+        if hint != "valuecloud_pi30":
+            continue
+        source[CONF_DRIVER_HINT] = "eybond_g_ascii"
+        changed = True
+
+    if not changed:
+        return
+
+    logger.warning(
+        "Migrating stale EyeBond ValueCloud driver_hint from valuecloud_pi30 to eybond_g_ascii for entry %s",
+        entry.entry_id,
+    )
     hass.config_entries.async_update_entry(entry, data=data, options=options)
 
 
@@ -923,7 +975,7 @@ async def _async_finalize_expert_entity_migration(
                 timeout=_EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            logger.warning(
+            logger.info(
                 "Timed out waiting to finalize EyeBond expert entity migration for entry %s; continuing best-effort cleanup",
                 entry.entry_id,
             )
@@ -1130,6 +1182,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_self_heal_server_ip(hass, entry)
         await _async_self_heal_collector_operation_mode(hass, entry)
         await _async_self_heal_collector_cloud_family(hass, entry)
+        await _async_self_heal_valuecloud_driver_hint(hass, entry)
         await _async_self_heal_entry_title(hass, entry)
         coordinator = EybondLocalCoordinator(hass, entry)
         await coordinator.async_setup()

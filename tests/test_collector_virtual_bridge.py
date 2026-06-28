@@ -27,6 +27,7 @@ from custom_components.eybond_local.models import (  # noqa: E402
     DetectedInverter,
     DriverMatch,
     ProbeTarget,
+    RuntimeSnapshot,
 )
 from custom_components.eybond_local.onboarding.driver_detection import (  # noqa: E402
     DetectedDriverContext,
@@ -262,6 +263,29 @@ class SnapshotDetectionFlagTests(unittest.TestCase):
         import asyncio
 
         asyncio.run(_run())
+
+    def test_detecting_inverter_status_is_removed_after_inverter_is_known(self) -> None:
+        hub = _make_hub()
+        hub._last_snapshot = RuntimeSnapshot(
+            connected=True,
+            values={
+                "runtime_detection_status": "detecting_inverter",
+                "collector_virtual_bridge": True,
+            },
+        )
+        hub._inverter = DetectedInverter(
+            driver_key="eybond_g_ascii",
+            protocol_family="eybond_g_ascii",
+            model_name="EyeBond G-ASCII inverter",
+            serial_number="A0000000000001",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
+        )
+
+        snapshot = hub._build_snapshot(extra_values={"grid_voltage": 220.0})
+
+        self.assertNotIn("runtime_detection_status", snapshot.values)
+        self.assertEqual(snapshot.values["driver_key"], "eybond_g_ascii")
+        self.assertEqual(snapshot.values["grid_voltage"], 220.0)
 
 
 class OnboardingBridgeDetectionTests(unittest.IsolatedAsyncioTestCase):

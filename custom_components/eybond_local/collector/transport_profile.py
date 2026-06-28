@@ -23,6 +23,7 @@ from ..metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_identity_strategy,
     resolve_collector_cloud_raw_passthrough_bootstrap,
     resolve_collector_cloud_raw_passthrough_frame_format,
+    resolve_collector_cloud_raw_passthrough_min_interval_ms,
     resolve_collector_cloud_session_protocol,
 )
 from .cloud_family import collector_cloud_family_observation_from_endpoint
@@ -46,6 +47,7 @@ class CollectorTransportProfile:
     identity_strategy: str
     raw_passthrough_bootstrap: str
     raw_passthrough_frame_format: str
+    raw_passthrough_min_interval_ms: int
 
 
 def known_collector_cloud_family(value: object) -> str:
@@ -133,6 +135,7 @@ def resolve_collector_transport_profile(
             identity_strategy="framed_heartbeat_then_fc2_pn",
             raw_passthrough_bootstrap="",
             raw_passthrough_frame_format="",
+            raw_passthrough_min_interval_ms=0,
         )
 
     return CollectorTransportProfile(
@@ -144,6 +147,9 @@ def resolve_collector_transport_profile(
             normalized_family
         ),
         raw_passthrough_frame_format=resolve_collector_cloud_raw_passthrough_frame_format(
+            normalized_family
+        ),
+        raw_passthrough_min_interval_ms=resolve_collector_cloud_raw_passthrough_min_interval_ms(
             normalized_family
         ),
     )

@@ -7739,6 +7739,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             session_id=f"{self._config_entry.entry_id}_preview",
             entry_id=self._config_entry.entry_id,
             collector_pn=coordinator.smartess_collector_pn,
+            collector_cloud_family=coordinator.collector_cloud_family,
+            raw_passthrough_frame_format=getattr(
+                coordinator,
+                "collector_raw_passthrough_frame_format",
+                "",
+            ),
             collector_cloud_profile_key=coordinator.collector_cloud_profile_key,
             collector_cloud_profile_label=coordinator.collector_cloud_profile_label,
             collector_cloud_profile_source=coordinator.collector_cloud_profile_source,

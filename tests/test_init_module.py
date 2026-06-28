@@ -24,6 +24,7 @@ from custom_components.eybond_local import (
     _async_self_heal_entry_title,
     _async_self_heal_expert_defaults,
     _async_self_heal_enabled_defaults,
+    _async_self_heal_valuecloud_driver_hint,
     _default_enabled_unique_ids,
     _default_enabled_unique_ids_for_current_runtime,
     _is_integration_disabled,
@@ -495,6 +496,58 @@ class InitModuleTests(unittest.TestCase):
                     updates[0]["options"]["collector_original_server_endpoint_profile_key"],
                     "valuecloud_at",
                 )
+
+        asyncio.run(_run())
+
+    def test_self_heal_valuecloud_driver_hint_migrates_stale_internal_key(self) -> None:
+        async def _run() -> None:
+            updates: list[dict[str, object]] = []
+
+            class _ConfigEntries:
+                def async_update_entry(self, entry, *, data=None, options=None, title=None) -> None:
+                    del entry, title
+                    updates.append({"data": data or {}, "options": options or {}})
+
+            hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+            entry = types.SimpleNamespace(
+                entry_id="entry123",
+                data={
+                    "collector_cloud_family": "valuecloud_at",
+                    "driver_hint": "valuecloud_pi30",
+                },
+                options={"driver_hint": "valuecloud_pi30"},
+            )
+
+            await _async_self_heal_valuecloud_driver_hint(hass, entry)
+
+            self.assertEqual(len(updates), 1)
+            self.assertEqual(updates[0]["data"]["driver_hint"], "eybond_g_ascii")
+            self.assertEqual(updates[0]["options"]["driver_hint"], "eybond_g_ascii")
+
+        asyncio.run(_run())
+
+    def test_self_heal_valuecloud_driver_hint_does_not_alias_other_families(self) -> None:
+        async def _run() -> None:
+            updates: list[dict[str, object]] = []
+
+            class _ConfigEntries:
+                def async_update_entry(self, entry, *, data=None, options=None, title=None) -> None:
+                    del entry, data, options, title
+                    updates.append({})
+
+            hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+            entry = types.SimpleNamespace(
+                entry_id="entry123",
+                data={
+                    "collector_cloud_family": "smartess_at",
+                    "driver_hint": "valuecloud_pi30",
+                },
+                options={"driver_hint": "valuecloud_pi30"},
+            )
+
+            await _async_self_heal_valuecloud_driver_hint(hass, entry)
+
+            self.assertEqual(updates, [])
 
         asyncio.run(_run())
 
