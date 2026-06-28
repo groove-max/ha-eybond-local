@@ -778,7 +778,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         bluetooth_module.async_discovered_service_info = Mock(
             return_value=(
                 types.SimpleNamespace(
-                    address="E8:88:6C:43:C2:47",
+                    address="AA:BB:CC:DD:EE:47",
                     name="E50000200000000001\u200b",
                     manufacturer_data={0x3545: b"0000200000000001"},
                     service_uuids=(),
@@ -810,7 +810,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = ble_selector.config.kwargs["options"]
         self.assertEqual(
             [option["value"] for option in options],
-            ["E8:88:6C:43:C2:47"],
+            ["AA:BB:CC:DD:EE:47"],
         )
         self.assertIn("E50000200000000001", options[0]["label"])
 
@@ -823,7 +823,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         bluetooth_module.async_scanner_devices_by_address = Mock(return_value=())
         bluetooth_module.BluetoothScanningMode = types.SimpleNamespace(ACTIVE=sentinel.active_scan)
         service_info = types.SimpleNamespace(
-            address="E8:88:6C:43:C2:47",
+            address="AA:BB:CC:DD:EE:47",
             name="E50000200000000001\u200b",
             manufacturer_data={0x3545: b"0000200000000001"},
             service_uuids=(),
@@ -873,7 +873,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = ble_selector.config.kwargs["options"]
         self.assertEqual(
             [option["value"] for option in options],
-            ["E8:88:6C:43:C2:47"],
+            ["AA:BB:CC:DD:EE:47"],
         )
         self.assertIn("E50000200000000001", options[0]["label"])
 
@@ -4186,7 +4186,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-            await flow.async_step_smartess_cloud_assist_choice()
+            flow._smartess_cloud_assist_mode = "auto"
             with patch(
                 "custom_components.eybond_local.config_flow.fetch_and_export_smartess_device_bundle_cloud_evidence",
                 return_value=CloudEvidenceRecord(
@@ -4754,15 +4754,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await options.async_step_diagnostics()
 
         self.assertEqual(result["type"], "menu")
+        # The diagnostic command runner is gated behind Home Assistant Advanced
+        # Mode (off by default), so it is not in the standard diagnostics menu.
         self.assertEqual(
             result["menu_options"],
             [
                 "create_support_package",
-                "diagnostic_commands",
                 "reload_local_metadata",
                 "proxy_capture",
             ],
         )
+        self.assertNotIn("diagnostic_commands", result["menu_options"])
         self.assertEqual(
             result["description_placeholders"]["support_archive_action_label"],
             "Create support archive",
@@ -4772,6 +4774,40 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "Reload local metadata",
         )
         self.assertNotIn("advanced_metadata", result["menu_options"])
+
+    async def test_diagnostics_menu_shows_command_runner_in_advanced_mode(self) -> None:
+        options = self._make_options_flow()
+        options.show_advanced_options = True
+        workflow = {
+            f"support_workflow_{key}": value
+            for key, value in build_support_workflow_state(
+                has_inverter=True,
+                effective_owner_key="modbus_smg",
+                effective_owner_name="SMG-family runtime",
+                detection_confidence="high",
+                profile_source_scope="external",
+                schema_source_scope="builtin",
+            ).items()
+        }
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            options._config_entry.runtime_data = types.SimpleNamespace(
+                current_driver=None,
+                effective_owner_name="SMG-family runtime",
+                effective_owner_key="modbus_smg",
+                smartess_family_name="SmartESS 0925",
+                effective_profile_name="smg_modbus.json",
+                effective_register_schema_name="modbus_smg/models/smg_6200.json",
+                effective_profile_metadata=None,
+                effective_register_schema_metadata=None,
+                smartess_cloud_export_available=True,
+                smartess_known_family_draft_plan=None,
+                smartess_smg_bridge_plan=None,
+                data=types.SimpleNamespace(values=workflow),
+            )
+            result = await options.async_step_diagnostics()
+        self.assertEqual(result["type"], "menu")
+        self.assertIn("diagnostic_commands", result["menu_options"])
 
     async def test_diagnostic_commands_step_runs_and_displays_result(self) -> None:
         options = self._make_options_flow()
@@ -4805,6 +4841,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             {
                 "diagnostic_commands": "driver modbus_smg\nread 171\n",
                 "diagnostic_stop_on_error": False,
+                "diagnostic_publish_download_copy": True,
             }
         )
 
@@ -4814,6 +4851,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "commands": "driver modbus_smg\nread 171\n",
                     "stop_on_error": False,
+                    "confirm_write": False,
+                    "publish_download_copy": True,
                 }
             ],
         )
@@ -5357,7 +5396,19 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["step_id"], "diagnostics_result")
         self.assertIn(
-            "](http://192.168.1.50:8123/local/eybond_local/support/support_archive.zip)",
+            'href="http://192.168.1.50:8123/local/eybond_local/support/support_archive.zip"',
+            result["description_placeholders"]["download_markdown"],
+        )
+        self.assertIn(
+            'target="_blank"',
+            result["description_placeholders"]["download_markdown"],
+        )
+        self.assertIn(
+            "download",
+            result["description_placeholders"]["download_markdown"],
+        )
+        self.assertNotIn(
+            "\n\n`",
             result["description_placeholders"]["download_markdown"],
         )
 

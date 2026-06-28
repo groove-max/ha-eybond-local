@@ -122,14 +122,6 @@
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
-      "smartess_cloud_assist_choice": {
-        "title": "Уточнить через SmartESS cloud",
-        "description": "{smartess_cloud_offer_summary}\n\n**PN коллектора:** {collector_pn}\n**Последние облачные данные:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
-        "menu_options": {
-          "smartess_cloud_assist": "Использовать SmartESS cloud assist",
-          "confirm_without_cloud_assist": "Продолжить без SmartESS cloud assist"
-        }
-      },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
         "description": "Войдите в аккаунт SmartESS, чтобы подтвердить идентичность устройства для коллектора `{collector_pn}`. Логин используется один раз для этого шага; результат сохраняется как переиспользуемые данные онбординга.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
@@ -254,7 +246,8 @@
       "shadow_learning_failed": "Действие обнаружения элементов управления завершилось ошибкой. Проверьте детали и подтверждения и попробуйте снова.",
       "diagnostic_commands_required": "Вставьте хотя бы одну диагностическую команду.",
       "diagnostic_commands_unavailable": "Runtime интеграции не загружен, поэтому диагностические команды сейчас недоступны.",
-      "diagnostic_commands_failed": "Диагностический сценарий неожиданно завершился ошибкой. Проверьте журнал Home Assistant."
+      "diagnostic_commands_failed": "Диагностический сценарий неожиданно завершился ошибкой. Проверьте журнал Home Assistant.",
+      "invalid_selection": "Выбранный вариант больше недоступен."
     },
     "step": {
       "init": {
@@ -356,11 +349,14 @@
         "data": {
           "diagnostic_commands": "Команды",
           "diagnostic_stop_on_error": "Остановиться после первой ошибки",
+          "diagnostic_confirm_write": "Подтвердить запись в устройство",
+          "diagnostic_publish_download_copy": "Создать ссылку для скачивания",
           "diagnostic_result": "Результат"
         },
         "data_description": {
           "diagnostic_commands": "Вставьте полный многострочный сценарий, включая переопределение драйвера или адресов, если они были указаны.",
           "diagnostic_stop_on_error": "Отключите только если следующие команды должны выполняться даже после ошибки.",
+          "diagnostic_publish_download_copy": "Копирует обезличенный результат в Home Assistant /local. Оставьте выключенным, если не планируете скачивать или отправлять файл.",
           "diagnostic_result": "Результат последнего запуска только для чтения. Скопируйте его или используйте ссылку выше."
         }
       },

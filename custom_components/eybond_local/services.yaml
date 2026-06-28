@@ -266,6 +266,20 @@ run_diagnostic_commands:
       default: true
       selector:
         boolean:
+    confirm_write:
+      name: Confirm device writes
+      description: Must be enabled before running a scenario that contains write or write_bit commands, which can change device settings. Read-only scenarios ignore this.
+      required: false
+      default: false
+      selector:
+        boolean:
+    publish_download_copy:
+      name: Publish shareable download copy
+      description: Copy the redacted shareable result to Home Assistant /local so it can be downloaded from the UI. Leave disabled unless you intend to share the file.
+      required: false
+      default: false
+      selector:
+        boolean:
     operation_timeout:
       name: Per-operation timeout
       description: Timeout in seconds for one transport operation. This is not an overall scenario timeout. When unset, the driver's built-in timeout is used.

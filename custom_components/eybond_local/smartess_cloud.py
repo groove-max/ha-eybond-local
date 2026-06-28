@@ -513,9 +513,12 @@ def normalize_device_settings(dat: Any) -> dict[str, Any] | None:
             has_current_value=has_current_value,
         )
         area = _infer_setting_area(field_id)
-        semantic_entry = resolve_smartess_cloud_entry(title)
+        field_id_entry = resolve_smartess_cloud_entry(field_id) if field_id else None
+        semantic_entry = field_id_entry or resolve_smartess_cloud_entry(title)
         binding = _resolve_smartess_0925_setting_binding(semantic_entry)
-        classification = _resolve_smartess_0925_setting_classification(title)
+        classification = _resolve_smartess_0925_setting_classification(
+            field_id if field_id_entry is not None else title
+        )
         if binding is not None:
             mapped_field_count += 1
 

@@ -74,7 +74,7 @@ After the capture finishes, the same screen shows a **Saved result** download li
 
 Download the ZIP and attach it to the GitHub issue together with a short note about what you did during the capture.
 
-If the developer also asks for a normal Support Archive, create it separately from **Configure → Diagnostics and experimental metadata → Create support archive**.
+If the developer also asks for a normal Support Archive, create it separately from **Configure → Diagnostics and service tools → Create support archive**.
 
 ## Restoring SmartESS access
 

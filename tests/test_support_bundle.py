@@ -283,7 +283,7 @@ class SupportBundleTests(unittest.TestCase):
 
         self.assertIsNone(raw["source_metadata"]["support_marker"])
 
-    def test_builds_support_bundle_payload_without_smg_marker_for_eybond_g_ascii_family_fallback(self) -> None:
+    def test_builds_support_bundle_payload_without_smg_marker_for_eybond_g_ascii_family(self) -> None:
         raw = build_support_bundle_payload(
             entry_id="entry-eybond-g-ascii",
             entry_title="EyeBond G-ASCII",
@@ -292,7 +292,7 @@ class SupportBundleTests(unittest.TestCase):
             inverter={
                 "driver_key": "eybond_g_ascii",
                 "model_name": "EyeBond G-ASCII inverter",
-                "variant_key": "family_fallback",
+                "variant_key": "g_ascii_family",
                 "serial_number": "A0000000000001",
             },
             values={"protocol_id": "EYBOND_G_ASCII"},
@@ -300,7 +300,7 @@ class SupportBundleTests(unittest.TestCase):
             options={"poll_interval": 10},
             profile_name="",
             register_schema_name="",
-            variant_key="family_fallback",
+            variant_key="g_ascii_family",
             effective_owner_key="eybond_g_ascii",
         )
 

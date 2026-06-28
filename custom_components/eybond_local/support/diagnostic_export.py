@@ -206,7 +206,7 @@ def export_diagnostic_run(
     entry_id: str,
     result: DiagnosticRunResult,
     now: datetime | None = None,
-    publish_download_copy: bool = True,
+    publish_download_copy: bool = False,
 ) -> DiagnosticExportResult:
     """Write the local raw + shareable result files and optionally publish one."""
 

@@ -122,14 +122,6 @@
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
-      "smartess_cloud_assist_choice": {
-        "title": "Refine With SmartESS Cloud",
-        "description": "{smartess_cloud_offer_summary}\n\n**Collector PN:** {collector_pn}\n**Last cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
-        "menu_options": {
-          "smartess_cloud_assist": "Use SmartESS cloud assist",
-          "confirm_without_cloud_assist": "Continue without cloud assist"
-        }
-      },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
         "description": "Sign in with your SmartESS account to confirm the device identity for collector `{collector_pn}`. The login is used once for this step; the result is saved as reusable onboarding evidence.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
@@ -253,7 +245,9 @@
       "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details.",
       "diagnostic_commands_required": "Paste at least one diagnostic command.",
       "diagnostic_commands_unavailable": "The integration runtime is not loaded, so diagnostic commands cannot run.",
-      "diagnostic_commands_failed": "The diagnostic scenario failed unexpectedly. Check the Home Assistant log."
+      "diagnostic_commands_failed": "The diagnostic scenario failed unexpectedly. Check the Home Assistant log.",
+      "shadow_learning_failed": "Control discovery action failed. Check details and confirmations, then try again.",
+      "invalid_selection": "The selected option is no longer available."
     },
     "step": {
       "init": {
@@ -355,12 +349,54 @@
         "data": {
           "diagnostic_commands": "Commands",
           "diagnostic_stop_on_error": "Stop after the first error",
+          "diagnostic_confirm_write": "Confirm device writes",
+          "diagnostic_publish_download_copy": "Create shareable download link",
           "diagnostic_result": "Result"
         },
         "data_description": {
           "diagnostic_commands": "Paste the complete multiline scenario, including driver or address overrides when provided.",
           "diagnostic_stop_on_error": "Disable this only when later commands should still run after a failed command.",
+          "diagnostic_publish_download_copy": "Copies the redacted shareable result to Home Assistant /local. Leave disabled unless you intend to download or share it.",
           "diagnostic_result": "Read-only output from the latest run. Copy it or use the shareable download link above."
+        }
+      },
+      "shadow_learning": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "shadow_learning_confirm_cloud_write": "Yes, briefly send test commands to this device to find its controls"
+        },
+        "data_description": {
+          "shadow_learning_confirm_cloud_write": "To find the controls, Home Assistant briefly sends test commands to this device through SmartESS. The device's settings are not changed."
+        }
+      },
+      "shadow_learning_credentials": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "username": "SmartESS username",
+          "password": "SmartESS password"
+        },
+        "data_description": {
+          "username": "Used only for the current control discovery action.",
+          "password": "Used only for the current control discovery action."
+        }
+      },
+      "shadow_learning_review": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "enabled_controls": "Controls to add"
+        },
+        "data_description": {
+          "enabled_controls": "Tick the controls you want in Home Assistant. Risky ones are left off by default."
+        }
+      },
+      "shadow_learning_result": {
+        "title": "Add controls for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "result_action": "What would you like to do?"
         }
       },
       "proxy_capture": {
@@ -398,6 +434,9 @@
         "title": "Diagnostics Result",
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
       }
+    },
+    "progress": {
+      "shadow_learning": "{control_discovery_hint}"
     }
   },
   "entity": {

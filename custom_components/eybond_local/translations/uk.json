@@ -122,14 +122,6 @@
           "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
         }
       },
-      "smartess_cloud_assist_choice": {
-        "title": "Уточнити через SmartESS cloud",
-        "description": "{smartess_cloud_offer_summary}\n\n**PN колектора:** {collector_pn}\n**Останні хмарні дані:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
-        "menu_options": {
-          "smartess_cloud_assist": "Використати SmartESS cloud assist",
-          "confirm_without_cloud_assist": "Продовжити без SmartESS cloud assist"
-        }
-      },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
         "description": "Увійдіть в акаунт SmartESS, щоб підтвердити ідентичність пристрою для колектора `{collector_pn}`. Логін використовується один раз для цього кроку; результат зберігається як повторно використовувані дані онбордингу.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
@@ -254,7 +246,8 @@
       "shadow_learning_failed": "Дія виявлення елементів керування завершилась помилкою. Перевірте деталі та підтвердження і повторіть спробу.",
       "diagnostic_commands_required": "Вставте хоча б одну діагностичну команду.",
       "diagnostic_commands_unavailable": "Runtime інтеграції не завантажено, тому діагностичні команди зараз недоступні.",
-      "diagnostic_commands_failed": "Діагностичний сценарій неочікувано завершився помилкою. Перевірте журнал Home Assistant."
+      "diagnostic_commands_failed": "Діагностичний сценарій неочікувано завершився помилкою. Перевірте журнал Home Assistant.",
+      "invalid_selection": "Обраний варіант більше недоступний."
     },
     "step": {
       "init": {
@@ -356,11 +349,14 @@
         "data": {
           "diagnostic_commands": "Команди",
           "diagnostic_stop_on_error": "Зупинитися після першої помилки",
+          "diagnostic_confirm_write": "Підтвердити запис у пристрій",
+          "diagnostic_publish_download_copy": "Створити посилання для завантаження",
           "diagnostic_result": "Результат"
         },
         "data_description": {
           "diagnostic_commands": "Вставте повний багаторядковий сценарій, включно з перевизначенням драйвера або адрес, якщо їх було вказано.",
           "diagnostic_stop_on_error": "Вимкніть лише якщо наступні команди мають виконуватися навіть після помилки.",
+          "diagnostic_publish_download_copy": "Копіює знеособлений результат у Home Assistant /local. Залиште вимкненим, якщо не плануєте завантажувати або надсилати файл.",
           "diagnostic_result": "Результат останнього запуску лише для читання. Скопіюйте його або скористайтеся посиланням вище."
         }
       },

@@ -49,7 +49,7 @@ Choose this when you want that collector to talk only to Home Assistant.
 - the SmartESS app will no longer show live data for that collector while this mode is active
 - this is the right choice when you want a fully local day-to-day setup
 
-You can choose the mode during setup and change it later from **Runtime settings**.
+You can choose the mode during setup and change it later from **Connection and polling**.
 
 <p align="center"><img src="images/runtime-settings.png" alt="Runtime settings dialog" width="480"></p>
 
@@ -95,6 +95,14 @@ This is a support tool. Most users do not need it for normal operation.
 Use it only when a developer asks you to collect extra evidence.
 
 For the full user guide, see [Collector Proxy Capture](PROXY_CAPTURE.md).
+
+### Run diagnostic commands (advanced)
+
+This is a developer-directed tool for adding or debugging support for a specific model. Most users never need it, and it only appears in the options menu when Home Assistant **Advanced Mode** is on (your user profile → *Advanced Mode*). The same thing is available as the `eybond_local.run_diagnostic_commands` action under *Developer Tools → Actions*.
+
+It runs a small scenario of `read` / `write` / `write_bit` / `ascii` commands directly against the inverter over the existing collector connection, and returns the raw result plus a redacted file you can share with a developer. It does **not** change the integration's saved settings, and runs one scenario per device at a time.
+
+> Diagnostic commands run directly on the device. `write` / `write_bit` commands can change its settings, so a scenario that writes is only run when you explicitly enable **Confirm device writes** (`confirm_write`). Only run scenarios a developer gave you.
 
 ## Virtual bridge collectors
 

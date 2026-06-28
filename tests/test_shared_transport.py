@@ -564,6 +564,55 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("203.0.113.10", listener._connections)
         self.assertIn("E50000200000009777", listener._connections_by_pn)
 
+    async def test_collector_pn_prefix_match_requires_long_stable_prefix(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+
+        self.assertTrue(
+            listener._collector_pn_matches(
+                "E5000020000000",
+                "E50000200000009777",
+            )
+        )
+        self.assertFalse(
+            listener._collector_pn_matches(
+                "PN",
+                "PN-ONE",
+            )
+        )
+
+    async def test_disconnected_connection_drops_all_listener_indexes(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        listener._connections["203.0.113.10"] = connection
+        listener._connections["192.168.1.50"] = connection
+        listener._connections_by_pn["E50000200000009777"] = connection
+        listener._session_payload_connections["session-one"] = connection
+        listener._last_connection_ip = "203.0.113.10"
+
+        listener._drop_connection_indexes_for_connection(connection)
+
+        self.assertNotIn("203.0.113.10", listener._connections)
+        self.assertNotIn("192.168.1.50", listener._connections)
+        self.assertNotIn("E50000200000009777", listener._connections_by_pn)
+        self.assertNotIn("session-one", listener._session_payload_connections)
+        self.assertEqual(listener._last_connection_ip, "")
+
+    async def test_next_session_id_increments_once(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+
+        self.assertEqual(
+            listener._next_session_id(),
+            f"listener-{listener._port}-1",
+        )
+        self.assertEqual(
+            listener._next_session_id(),
+            f"listener-{listener._port}-2",
+        )
+
     async def test_release_at_connections_closes_target_pn_on_shared_peer_ip(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener.register_at_owner("203.0.113.10")
@@ -636,7 +685,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             diagnostics["sessions"][0]["collector_identity_masked"],
             "E50********000",
         )
-        self.assertIn("E5000020000000", listener._connections_by_pn)
+        self.assertNotIn("E5000020000000", listener._connections_by_pn)
+        self.assertNotIn("session-1", listener._session_payload_connections)
 
     async def test_listener_active_probe_routes_silent_at_session_to_pn_owner(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -670,7 +720,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         diagnostics = listener.session_inventory_diagnostics()
         self.assertEqual(diagnostics["pending_session_count"], 0)
         self.assertEqual(diagnostics["sessions"][0]["collector_identity_source"], "at_dtupn")
-        self.assertIn("E5000020000000", listener._at_connections_by_pn)
+        self.assertNotIn("E5000020000000", listener._at_connections_by_pn)
+        self.assertNotIn("session-1", listener._session_at_connections)
 
     async def test_listener_active_probe_routes_silent_framed_session_to_pn_owner(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -715,7 +766,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         diagnostics = listener.session_inventory_diagnostics()
         self.assertEqual(diagnostics["pending_session_count"], 0)
         self.assertEqual(diagnostics["sessions"][0]["collector_identity_source"], "fc2_parameter_2")
-        self.assertIn("E5000020000000", listener._connections_by_pn)
+        self.assertNotIn("E5000020000000", listener._connections_by_pn)
+        self.assertNotIn("session-1", listener._session_payload_connections)
 
     async def test_listener_does_not_active_probe_when_registered_protocols_are_mixed(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -782,12 +834,9 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(bytes(first_writer.buffer), b"AT+DTUPN?\r\n")
         self.assertEqual(bytes(second_writer.buffer), b"AT+DTUPN?\r\n")
-        self.assertIn("PN-ONE", listener._at_connections_by_pn)
-        self.assertIn("PN-TWO", listener._at_connections_by_pn)
-        self.assertIsNot(
-            listener._at_connections_by_pn["PN-ONE"],
-            listener._at_connections_by_pn["PN-TWO"],
-        )
+        self.assertNotIn("PN-ONE", listener._at_connections_by_pn)
+        self.assertNotIn("PN-TWO", listener._at_connections_by_pn)
+        self.assertFalse(listener._session_at_connections)
         diagnostics = listener.session_inventory_diagnostics()
         self.assertEqual(diagnostics["pending_session_count"], 0)
         self.assertEqual(diagnostics["recent_session_count"], 2)
@@ -832,11 +881,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(all(bytes(writer.buffer) == b"AT+DTUPN?\r\n" for writer in writers))
-        self.assertEqual(set(listener._at_connections_by_pn), set(pns))
-        self.assertEqual(
-            len({id(connection) for connection in listener._at_connections_by_pn.values()}),
-            len(pns),
-        )
+        self.assertFalse(listener._at_connections_by_pn)
+        self.assertFalse(listener._session_at_connections)
         diagnostics = listener.session_inventory_diagnostics()
         self.assertEqual(diagnostics["pending_session_count"], 0)
         self.assertEqual(diagnostics["recent_session_count"], len(pns))

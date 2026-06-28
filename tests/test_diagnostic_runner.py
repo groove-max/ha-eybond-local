@@ -101,6 +101,9 @@ def _ctx(transport, **kwargs) -> DiagnosticRuntimeContext:
         active_probe_target=TARGET,
         entry_id="entry-1",
         integration_version="0.2.0-test",
+        # Most execution tests intentionally exercise writes; the write-gate is
+        # covered explicitly by WriteConfirmationTests.
+        confirm_write=True,
     )
     base.update(kwargs)
     return DiagnosticRuntimeContext(**base)
@@ -236,6 +239,33 @@ class CommandSupportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("line 1", result.output)
                 self.assertIn(expected, result.output)
                 self.assertEqual(transport.calls, 0)
+
+
+class WriteConfirmationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_write_rejected_without_confirm_write(self) -> None:
+        transport = _modbus({354: 0})
+        result = await run_scenario("write 354 1\n", _ctx(transport, confirm_write=False))
+        self.assertFalse(result.success)
+        self.assertIn("confirm_write=true", result.output)
+        self.assertEqual(transport.calls, 0)  # rejected at preflight, no write
+
+    async def test_write_bit_rejected_without_confirm_write(self) -> None:
+        transport = _modbus({354: 1})
+        result = await run_scenario("write_bit 354 0 1\n", _ctx(transport, confirm_write=False))
+        self.assertFalse(result.success)
+        self.assertIn("confirm_write=true", result.output)
+        self.assertEqual(transport.calls, 0)
+
+    async def test_read_only_scenario_allowed_without_confirm_write(self) -> None:
+        transport = _modbus({171: 7})
+        result = await run_scenario("read 171\n", _ctx(transport, confirm_write=False))
+        self.assertTrue(result.success)
+
+    async def test_write_allowed_with_confirm_write(self) -> None:
+        transport = _modbus({354: 0})
+        result = await run_scenario("write 354 1\n", _ctx(transport, confirm_write=True))
+        self.assertTrue(result.success)
+        self.assertEqual(transport.inner._registers[354], 1)
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -386,6 +416,23 @@ class SingleFlightTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         self.assertEqual(await task, "done")
         self.assertFalse(flight.running)
+
+    async def test_custom_busy_error(self) -> None:
+        flight = DiagnosticSingleFlight(busy_error="support_package_export_in_progress")
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow() -> str:
+            started.set()
+            await release.wait()
+            return "done"
+
+        task = asyncio.ensure_future(flight.run(slow))
+        await started.wait()
+        with self.assertRaisesRegex(RuntimeError, "support_package_export_in_progress"):
+            await flight.run(slow)
+        release.set()
+        self.assertEqual(await task, "done")
 
     async def test_on_start_and_finish_callbacks(self) -> None:
         flight = DiagnosticSingleFlight()

@@ -7,6 +7,8 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+## [0.2.0-beta.2] - 2026-06-28
+
 ### Added
 
 - Added first-class support for the community **ESP EyeBond Collector** virtual bridge
@@ -38,6 +40,13 @@ the GitHub release body should be rendered from the matching version section her
   full support including second-output telemetry (power, apparent power, load, voltage,
   cut-off SOC, overload threshold) and an **Output 2 on/off switch** — and **Anenji 6200**
   (single output, full support with the SMG control set).
+- Added more supported models: **Anenji ANJ-4000W-24V** (full SMG telemetry), and read-only
+  telemetry support for **MUST PV18**, **SRNE-compatible Modbus** inverters, and **LVYUAN**
+  units on the new **ValueCloud / EyeBond G-ASCII** protocol. The full, always-current device
+  matrix is the generated [inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md).
+- Added collector **callback identity routing**: collector callbacks are routed by collector
+  identity (PN) instead of peer IP, so several collectors behind one router/NAT are tracked
+  separately, and a collector callback-identity diagnostic sensor surfaces the routing state.
 - Added bit-level write capabilities: controls that own a single bit of a shared register are
   written read-modify-write, preserving the other bits (this enables the Output 2 switch).
 - Added a memory guard to learning: on memory-tight hosts the scan refuses to start
@@ -47,6 +56,13 @@ the GitHub release body should be rendered from the matching version section her
 - Added a validation toggle (`EYBOND_FORCE_UNSUPPORTED=1` env var, or a
   `force_unsupported.flag` sentinel file in the HA config data dir) that treats every model as
   unsupported so the learning flow can be exercised on a fully supported device.
+- Added a developer-directed **diagnostic command runner** — the
+  `eybond_local.run_diagnostic_commands` action and an "Run diagnostic commands" options screen
+  (shown only with Home Assistant Advanced Mode) — that runs a small read/`write`/`write_bit`/
+  `ascii` scenario against the inverter over the existing collector connection, for adding or
+  debugging device support. It never changes config-entry settings, runs one scenario per entry
+  at a time, and requires an explicit `confirm_write` before any scenario that writes to the
+  device. Results are saved locally; the shareable copy has known identifiers redacted.
 
 ### Changed
 

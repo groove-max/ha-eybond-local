@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 import zipfile
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +16,33 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.support.bundle import build_support_bundle_payload
+from custom_components.eybond_local.support.download import (
+    resolve_support_package_download_path,
+    sign_support_package_download_url,
+    support_package_authenticated_download_url,
+)
 from custom_components.eybond_local.support.package import export_support_package
 
 
 class SupportPackageTests(unittest.TestCase):
+    def test_authenticated_support_package_download_url_uses_entry_id(self) -> None:
+        self.assertEqual(
+            support_package_authenticated_download_url("entry123"),
+            "/api/eybond_local/support_package/entry123",
+        )
+
+    def test_signed_support_package_download_url_uses_ha_signed_path(self) -> None:
+        auth_module = types.ModuleType("homeassistant.components.http.auth")
+        auth_module.async_sign_path = (
+            lambda _hass, path, _expiration: f"{path}?authSig=signed"
+        )
+
+        with patch.dict(sys.modules, {"homeassistant.components.http.auth": auth_module}):
+            self.assertEqual(
+                sign_support_package_download_url(object(), "entry123"),
+                "/api/eybond_local/support_package/entry123?authSig=signed",
+            )
+
     def test_exports_support_package_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_dir = Path(temp_dir)
@@ -87,12 +112,9 @@ class SupportPackageTests(unittest.TestCase):
             path = result.path
 
             self.assertEqual(path.suffix, ".zip")
-            self.assertIsNotNone(result.download_path)
-            self.assertEqual(
-                result.download_url,
-                f"/local/eybond_local/support_packages/{path.name}",
-            )
-            self.assertTrue(result.download_path.exists())
+            self.assertIsNone(result.download_path)
+            self.assertIsNone(result.download_url)
+            self.assertFalse((config_dir / "www").exists())
             with zipfile.ZipFile(path) as archive:
                 names = set(archive.namelist())
                 self.assertIn("manifest.json", names)
@@ -151,6 +173,92 @@ class SupportPackageTests(unittest.TestCase):
             self.assertEqual(raw_capture["capture_kind"], "modbus_register_dump")
             self.assertTrue(anonymized_fixture["anonymized"])
             self.assertIn("collector, inverter, and integration role sections", readme)
+
+    def test_resolves_authenticated_download_path_for_latest_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_root = config_dir / "eybond_local" / "support_packages"
+            support_root.mkdir(parents=True)
+            archive_path = support_root / "entry123_20260628T000000000000Z.zip"
+            archive_path.write_bytes(b"zip")
+            coordinator = types.SimpleNamespace(
+                data=types.SimpleNamespace(
+                    values={"support_package_path": str(archive_path)}
+                )
+            )
+
+            self.assertEqual(
+                resolve_support_package_download_path(
+                    config_dir=config_dir,
+                    entry_id="entry123",
+                    coordinator=coordinator,
+                ),
+                archive_path.resolve(),
+            )
+
+    def test_rejects_unsafe_authenticated_download_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_root = config_dir / "eybond_local" / "support_packages"
+            support_root.mkdir(parents=True)
+            other_entry = support_root / "other_20260628T000000000000Z.zip"
+            other_entry.write_bytes(b"zip")
+            outside = config_dir / "outside.zip"
+            outside.write_bytes(b"zip")
+            not_zip = support_root / "entry123_20260628T000000000000Z.txt"
+            not_zip.write_text("not zip", encoding="utf-8")
+
+            for candidate in (other_entry, outside, not_zip):
+                coordinator = types.SimpleNamespace(
+                    data=types.SimpleNamespace(
+                        values={"support_package_path": str(candidate)}
+                    )
+                )
+                self.assertIsNone(
+                    resolve_support_package_download_path(
+                        config_dir=config_dir,
+                        entry_id="entry123",
+                        coordinator=coordinator,
+                    )
+                )
+
+    def test_explicit_publish_download_copy_exposes_support_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-publish",
+                entry_title="SMG 6200",
+                connected=True,
+                collector={"collector_pn": "E5000020000000"},
+                inverter={
+                    "driver_key": "modbus_smg",
+                    "model_name": "SMG 6200",
+                    "serial_number": "92632500000001",
+                },
+                values={},
+                data={},
+                options={},
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            )
+
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-publish",
+                entry_title="SMG 6200",
+                support_bundle=support_bundle,
+                raw_capture={"capture_kind": "modbus_register_dump"},
+                fixture=None,
+                anonymized_fixture=None,
+                publish_download_copy=True,
+            )
+
+            self.assertIsNotNone(result.download_path)
+            self.assertEqual(
+                result.download_url,
+                f"/local/eybond_local/support_packages/{result.path.name}",
+            )
+            self.assertTrue(result.download_path.exists())
 
     def test_exports_command_based_replay_fixture_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -343,14 +451,14 @@ class SupportPackageTests(unittest.TestCase):
                     "driver_key": "eybond_g_ascii",
                     "model_name": "EyeBond G-ASCII inverter",
                     "serial_number": "A0000000000001",
-                    "variant_key": "family_fallback",
+                    "variant_key": "g_ascii_family",
                 },
                 values={"protocol_id": "EYBOND_G_ASCII"},
                 data={"server_ip": "192.168.1.50"},
                 options={"poll_interval": 10},
                 profile_name="",
                 register_schema_name="",
-                variant_key="family_fallback",
+                variant_key="g_ascii_family",
                 effective_owner_key="eybond_g_ascii",
             )
 
@@ -377,6 +485,135 @@ class SupportPackageTests(unittest.TestCase):
             self.assertNotIn("Read-only unverified SMG family", readme)
             self.assertNotIn("fixture/raw_fixture.json", readme)
             self.assertNotIn("fixture/anonymized_fixture.json", readme)
+
+    def test_shadow_learning_trace_must_match_current_entry_or_collector(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            trace_root = config_dir / "eybond_local" / "shadow_learning_traces"
+            trace_root.mkdir(parents=True)
+            stale_trace = trace_root / "other_20260619T201327774513Z.jsonl"
+            stale_trace.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "kind": "shadow_session_manifest",
+                                "entry_id": "other-entry",
+                                "collector_pn": "E5000020000000",
+                                "session_id": "other-session",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "kind": "shadow_modbus_write_observation",
+                                "payload": {"register": 300, "values": [1]},
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-current",
+                entry_title="SmartESS 0925",
+                connected=True,
+                collector={"collector_pn": "Q0000000000001"},
+                inverter={
+                    "driver_key": "smartess_local",
+                    "model_name": "PowMr 4.2kW / VMII-NXPW5KW (SmartESS 0925)",
+                    "serial_number": "",
+                },
+                values={"shadow_learning_trace_path": str(stale_trace)},
+                data={"collector_pn": "Q0000000000001"},
+                options={},
+                profile_name="smartess_local/models/0925.json",
+                register_schema_name="smartess_local/models/0925.json",
+                variant_key="smartess_0925",
+            )
+
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-current",
+                entry_title="SmartESS 0925",
+                support_bundle=support_bundle,
+                raw_capture={},
+                fixture=None,
+                anonymized_fixture=None,
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                names = set(archive.namelist())
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+            self.assertNotIn("evidence/shadow_learning/trace.jsonl", names)
+            self.assertIsNone(manifest["archive_members"]["shadow_learning"])
+
+    def test_shadow_learning_trace_matching_current_entry_is_included(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            trace_root = config_dir / "eybond_local" / "shadow_learning_traces"
+            trace_root.mkdir(parents=True)
+            trace = trace_root / "entry_current_20260628T201327774513Z.jsonl"
+            trace.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "kind": "shadow_session_manifest",
+                                "entry_id": "entry-current",
+                                "collector_pn": "Q0000000000001",
+                                "session_id": "entry-current-session",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "kind": "shadow_modbus_write_observation",
+                                "payload": {"register": 4536, "values": [1]},
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-current",
+                entry_title="SmartESS 0925",
+                connected=True,
+                collector={"collector_pn": "Q0000000000001"},
+                inverter={
+                    "driver_key": "smartess_local",
+                    "model_name": "PowMr 4.2kW / VMII-NXPW5KW (SmartESS 0925)",
+                    "serial_number": "",
+                },
+                values={},
+                data={"collector_pn": "Q0000000000001"},
+                options={},
+                profile_name="smartess_local/models/0925.json",
+                register_schema_name="smartess_local/models/0925.json",
+                variant_key="smartess_0925",
+            )
+
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-current",
+                entry_title="SmartESS 0925",
+                support_bundle=support_bundle,
+                raw_capture={},
+                fixture=None,
+                anonymized_fixture=None,
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                names = set(archive.namelist())
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+            self.assertIn("evidence/shadow_learning/trace.jsonl", names)
+            self.assertEqual(
+                manifest["archive_members"]["shadow_learning"]["trace"],
+                "evidence/shadow_learning/trace.jsonl",
+            )
 
 
 if __name__ == "__main__":

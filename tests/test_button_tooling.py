@@ -132,6 +132,7 @@ class _CoordinatorStub:
         self.collector_callback_target_endpoint = "203.0.113.7,2223,TCP"
         self.proxy_capture_target_endpoint = "203.0.113.7,18899,TCP"
         self.collector_server_endpoint_rollback_target = "47.91.67.66,18899,TCP"
+        self.support_package_export_running = False
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.proxy_capture_overview = types.SimpleNamespace(
             can_start=True,
@@ -194,6 +195,10 @@ class _CoordinatorStub:
     async def async_request_refresh(self):
         self.calls.append(("request_refresh", {}))
 
+    async def async_export_support_package(self):
+        self.calls.append(("create_support_package", {}))
+        return "/config/eybond_local/support_packages/entry-1.zip"
+
 
 class ToolingButtonTests(unittest.TestCase):
     def test_collector_tooling_specs_are_enabled_by_default(self) -> None:
@@ -227,6 +232,47 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertNotIn("reload_local_metadata", specs)
         self.assertNotIn("create_local_profile_draft", specs)
         self.assertNotIn("create_local_schema_draft", specs)
+
+    def test_create_support_package_button_is_disabled_while_export_running(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.support_package_export_running = True
+        coordinator.data.values["support_package_export_running"] = True
+        coordinator.data.values["support_package_export_status"] = "running"
+        entity = EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(
+                key="create_support_package",
+                name="Create Support Archive",
+                icon="mdi:package-variant-closed",
+            ),
+        )
+
+        self.assertFalse(entity.available)
+        self.assertTrue(entity.extra_state_attributes["support_package_export_running"])
+        self.assertEqual(
+            entity.extra_state_attributes["support_package_export_status"],
+            "running",
+        )
+
+    def test_create_support_package_button_press_rejects_duplicate_export(self) -> None:
+        async def _run() -> None:
+            coordinator = _CoordinatorStub()
+            coordinator.support_package_export_running = True
+            entity = EybondToolingButton(
+                coordinator,
+                _ToolingButtonSpec(
+                    key="create_support_package",
+                    name="Create Support Archive",
+                    icon="mdi:package-variant-closed",
+                ),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "support_package_export_in_progress"):
+                await entity.async_press()
+
+            self.assertEqual(coordinator.calls, [])
+
+        asyncio.run(_run())
 
     def test_rediscover_collector_button_stays_available_while_waiting_for_reconnect(self) -> None:
         coordinator = _CoordinatorStub()

@@ -1,12 +1,17 @@
-# Collector Profile Architecture Plan
+# Collector Profile Architecture
 
-This is a maintainer plan for the collector-side architecture. It covers three
-related problems that should be solved together instead of with separate
+> **Status: implemented.** All phases below have shipped; this doc now describes
+> the collector-side architecture as built. The only remaining work is
+> on-hardware validation of a few cloud profiles and the speculative
+> SmartValue / ValueCloud items called out at the end.
+
+This is a maintainer reference for the collector-side architecture. It covers
+three related problems that are solved together instead of with separate
 heuristics:
 
 - cloud endpoint formatting and restore safety;
 - collector kind / capability handling, including ESP EyeBond Collector;
-- future callback session identity binding for routed, VPN, and NAT setups.
+- callback session identity binding for routed, VPN, and NAT setups.
 
 The current implementation already has an early collector cloud profile catalog
 at `custom_components/eybond_local/protocol_catalogs/collector_cloud_profiles.json`.

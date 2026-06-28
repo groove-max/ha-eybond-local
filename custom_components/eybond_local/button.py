@@ -449,7 +449,9 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
     @property
     def available(self) -> bool:
         if self._spec.key == "create_support_package":
-            return True
+            return not bool(
+                getattr(self.coordinator, "support_package_export_running", False)
+            )
         if self._spec.key == "reload_local_metadata":
             return True
         if self._spec.key == "create_local_profile_draft":
@@ -498,6 +500,11 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             "support_package_download_path": values.get("support_package_download_path"),
             "support_package_download_url": values.get("support_package_download_url"),
             "support_package_download_relative_url": values.get("support_package_download_relative_url"),
+            "support_package_export_running": values.get(
+                "support_package_export_running",
+                bool(getattr(self.coordinator, "support_package_export_running", False)),
+            ),
+            "support_package_export_status": values.get("support_package_export_status"),
             "cloud_evidence_path": values.get("cloud_evidence_path"),
             "local_profile_draft_path": values.get("local_profile_draft_path"),
             "local_schema_draft_path": values.get("local_schema_draft_path"),
@@ -614,6 +621,8 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
 
     async def async_press(self) -> None:
         if self._spec.key == "create_support_package":
+            if bool(getattr(self.coordinator, "support_package_export_running", False)):
+                raise RuntimeError("support_package_export_in_progress")
             await self.coordinator.async_export_support_package()
             return
         if self._spec.key == "create_local_profile_draft":

@@ -120,7 +120,7 @@ class ShareablePayloadTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
-    def test_export_writes_three_files_and_publishes_only_shareable(self) -> None:
+    def test_export_writes_three_files_without_public_download_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp)
             export = export_diagnostic_run(
@@ -144,7 +144,22 @@ class ExportTests(unittest.TestCase):
             self.assertNotIn(SYNTHETIC_SERIAL, shareable_text)
             self.assertNotIn(ENTRY_ID, shareable_text)
 
-            # Only the shareable copy is exposed via /local.
+            # Nothing is exposed via /local unless the caller opts in.
+            self.assertIsNone(export.download_path)
+            self.assertIsNone(export.download_url)
+            self.assertFalse((config_dir / "www").exists())
+
+    def test_export_with_publish_exposes_only_shareable_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            export = export_diagnostic_run(
+                config_dir=config_dir,
+                entry_id=ENTRY_ID,
+                result=_result(),
+                now=datetime(2026, 6, 19, tzinfo=timezone.utc),
+                publish_download_copy=True,
+            )
+
             self.assertIsNotNone(export.download_path)
             self.assertTrue(export.download_path.exists())
             self.assertEqual(export.download_path.name, export.shareable_path.name)

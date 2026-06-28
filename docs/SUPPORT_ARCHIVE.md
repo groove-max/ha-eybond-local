@@ -24,7 +24,7 @@ For unsupported or partially supported hardware, always attach a Support Archive
 1. Open **Settings → Devices & Services**.
 2. Open **EyeBond Local**.
 3. Click **Configure**.
-4. Open **Diagnostics and experimental metadata**.
+4. Open **Diagnostics and service tools**.
 5. Choose **Create support archive**.
 6. Download the generated ZIP.
 7. Attach it to the GitHub issue.

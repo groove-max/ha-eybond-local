@@ -105,7 +105,7 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
             def _handle_read_holding(self, payload: bytes) -> bytes:
                 address = int.from_bytes(payload[2:4], "big")
                 count = int.from_bytes(payload[4:6], "big")
-                if fail_config_bulk and address == 5001 and count > 1:
+                if fail_config_bulk and address in {5001, 6030} and count > 1:
                     raise FixtureTransportError("config_bulk_rejected")
                 return super()._handle_read_holding(payload)
 
@@ -254,6 +254,36 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(values["buzzer_enabled"], False)
         self.assertIs(values["power_saving_enabled"], False)
         self.assertIs(values["lcd_backlight_enabled"], True)
+
+    async def test_support_capture_reads_0925_config_controls_individually(self) -> None:
+        evidence = await self.driver.async_capture_support_evidence(
+            self._transport(fail_config_bulk=True),
+            self._inverter(),
+        )
+
+        self.assertTrue(
+            any(
+                item["start"] == 5004
+                and item["count"] == 1
+                and item.get("capability") == "lcd_backlight_enabled"
+                for item in evidence["captured_ranges"]
+            )
+        )
+        self.assertFalse(
+            any(
+                failure["start"] == 5001 and failure["count"] == 33
+                for failure in evidence["range_failures"]
+            )
+        )
+        config_plan = [
+            item
+            for item in evidence["planned_ranges"]
+            if item["block"] == "config"
+        ][0]
+        self.assertEqual(
+            config_plan["read_strategy"],
+            "individual_non_action_control_registers",
+        )
 
     async def test_write_scaled_control_decodes_readback(self) -> None:
         transport = self._transport()

@@ -297,14 +297,14 @@ class SmartEssBleHelperTests(unittest.TestCase):
 
     def test_normalize_discovered_candidate_rebuilds_pn_from_manufacturer_id_prefix(self) -> None:
         candidate = normalize_discovered_candidate(
-            address="E8:88:6C:43:C2:47",
-            device_name="E8:88:6C:43:C2:47",
+            address="AA:BB:CC:DD:EE:47",
+            device_name="AA:BB:CC:DD:EE:47",
             manufacturer_data={0x3545: b"0000200000000001"},
         )
 
         assert candidate is not None
         self.assertEqual(candidate.local_pn, "E50000200000000001")
-        self.assertEqual(candidate.local_name, "E8:88:6C:43:C2:47")
+        self.assertEqual(candidate.local_name, "AA:BB:CC:DD:EE:47")
 
     def test_choose_ble_uuid_layout_prefers_known_service_layouts(self) -> None:
         self.assertEqual(

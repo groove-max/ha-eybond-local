@@ -102,6 +102,14 @@ def collector_capability_profile_from_runtime(
 ) -> CollectorCapabilityProfile:
     """Build one collector capability profile from runtime/config evidence."""
 
+    # Default-to-factory is intentional, not fail-open: a factory collector has
+    # no positive "I am factory" signal — it is the ABSENCE of a bridge signal,
+    # and collectors with older firmware that never answer AT+VDTU must behave
+    # as factory (documented backward-compat). The bridge is detected once at
+    # onboarding and persisted to entry data/options below, and the OR over all
+    # signals means a known bridge never flips back to factory on a transient
+    # missing runtime signal. The cloud-only flows this profile gates are all
+    # additionally user-initiated and no-op on a bridge.
     runtime_values = values or {}
     entry_data = data or {}
     entry_options = options or {}

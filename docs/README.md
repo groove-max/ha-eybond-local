@@ -11,7 +11,7 @@ This is the public documentation for EyeBond Local.
 - [Collector Proxy Capture](PROXY_CAPTURE.md) — use this only when support asks for a temporary capture
 - [Remote / NAT Setup Guide](REMOTE_SETUP.md) — only for collectors outside the normal Home Assistant network
 - [Inverter Model Catalog](generated/INVERTER_MODEL_CATALOG.generated.md) — supported and partially supported inverter models
-- [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) — community firmware bridge for inverters without a factory collector (detected and supported automatically; see [Collector Management](COLLECTOR_MANAGEMENT.md#virtual-bridge-collectors-esp-eybond-collector))
+- [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) — community firmware bridge for inverters without a factory collector (detected and supported automatically; see [Collector Management](COLLECTOR_MANAGEMENT.md#virtual-bridge-collectors))
 
 Ukrainian readers can also use the [Ukrainian README](../README.uk.md).
 
@@ -21,4 +21,4 @@ If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CON
 
 Maintainer architecture notes:
 
-- [Collector Profile Architecture Plan](COLLECTOR_PROFILE_ARCHITECTURE_PLAN.md) — collector cloud profiles, endpoint preservation, ESP bridge capabilities, and future callback session identity routing.
+- [Collector Profile Architecture](COLLECTOR_PROFILE_ARCHITECTURE_PLAN.md) — collector cloud profiles, endpoint preservation, ESP bridge capabilities, and callback session identity routing (implemented; pending on-hardware validation of a few profiles).

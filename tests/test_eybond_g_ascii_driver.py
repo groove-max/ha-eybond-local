@@ -137,6 +137,8 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(detected)
+        self.assertEqual(detected.variant_key, "g_ascii_family")
+        self.assertEqual(detected.profile_name, "")
         self.assertEqual(detected.register_schema_name, "eybond_g_ascii/base.json")
         evidence = detected.details["catalog_detection"]["evidence"]
         self.assertEqual(evidence["protocol.protocol_id"], "EYBOND_G_ASCII")

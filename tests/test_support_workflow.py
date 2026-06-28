@@ -69,10 +69,10 @@ class SupportWorkflowTests(unittest.TestCase):
         self.assertIn("support archive", workflow["next_action"])
         self.assertIn("unverified", workflow["advanced_hint"])
 
-    def test_eybond_g_ascii_family_fallback_does_not_use_smg_specific_marker(self) -> None:
+    def test_eybond_g_ascii_family_does_not_use_smg_specific_marker(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=True,
-            variant_key="family_fallback",
+            variant_key="g_ascii_family",
             profile_name="",
             effective_owner_key="eybond_g_ascii",
             effective_owner_name="EyeBond G-ASCII",

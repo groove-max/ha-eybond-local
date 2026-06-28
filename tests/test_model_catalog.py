@@ -353,6 +353,41 @@ class SurfaceConflictTests(unittest.TestCase):
         self.assertFalse(any("incompatible surfaces" in e for e in report.errors), report.errors)
 
 
+class CoverageCrossCheckTests(unittest.TestCase):
+    """coverage.runtime_control_surface must not overstate the resolved runtime."""
+
+    def _validate(self, model):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _write_catalog(Path(tmp), [model], [])
+            return validate_catalog(base, runtime_catalog=RUNTIME)
+
+    def test_available_coverage_on_read_only_surface_errors(self) -> None:
+        model = _ok_model(descriptor="aninerel_anl_4200t_24l_w_pro")  # read-only surface
+        model["coverage"]["runtime_control_surface"] = "available"
+        report = self._validate(model)
+        self.assertTrue(
+            any("every resolved runtime surface is read-only" in e for e in report.errors),
+            report.errors,
+        )
+
+    def test_read_only_coverage_on_writable_surface_warns(self) -> None:
+        model = _ok_model(descriptor="smg_6200")  # writable surface
+        model["coverage"]["runtime_control_surface"] = "read_only"
+        report = self._validate(model)
+        self.assertTrue(
+            any("but a resolved runtime surface is writable" in w for w in report.warnings),
+            report.warnings,
+        )
+
+    def test_read_only_coverage_on_read_only_surface_is_clean(self) -> None:
+        model = _ok_model(descriptor="aninerel_anl_4200t_24l_w_pro")
+        model["coverage"]["runtime_control_surface"] = "read_only"
+        report = self._validate(model)
+        self.assertFalse(
+            any("runtime_control_surface" in e for e in report.errors), report.errors
+        )
+
+
 class JournalGroupingTests(unittest.TestCase):
     """Finding 3 & 4: support grouping and multi-variant table rows."""
 

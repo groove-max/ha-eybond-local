@@ -484,6 +484,7 @@ def validate_catalog(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) -
                 _err(errors, ctx, f"unknown source_key '{source_key}'")
         # Runtime descriptor + surface integrity, per-variant surface compatibility.
         model_has_safe_surface = False
+        model_has_writable_surface = False
         for vindex, variant in enumerate(model.get("variants", [])):
             vctx = f"{ctx}.variants[{vindex}]"
             # Descriptors inside one variant are different immutable fingerprints
@@ -499,6 +500,8 @@ def validate_catalog(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) -
                     continue
                 variant_surfaces.add(resolved.surface_key)
                 model_has_safe_surface = True
+                if resolved.read_only is False:
+                    model_has_writable_surface = True
             if len(variant_surfaces) > 1:
                 _err(errors, vctx, f"incompatible surfaces within one variant: {sorted(variant_surfaces)}")
         if model.get("lifecycle") == "supported" and not model_has_safe_surface:
@@ -519,6 +522,29 @@ def validate_catalog(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) -
         # Research models with no source.
         if model.get("lifecycle") == "research" and not model.get("source_keys"):
             warnings.append(f"{ctx}: research model has no source")
+
+        # Coverage cross-check: runtime_control_surface must not overstate what
+        # the resolved runtime surface can actually expose. `available` claims
+        # the base runtime surface itself is writable, so it contradicts an
+        # all-read-only resolution. (`device_scoped_overlay`/`hardware_confirmed`
+        # controls can legitimately come from a learned overlay on a read-only
+        # base, so they are not tied to the base read-only flag.)
+        coverage = model.get("coverage")
+        control_surface = (
+            coverage.get("runtime_control_surface") if isinstance(coverage, dict) else None
+        )
+        if control_surface == "available" and not model_has_writable_surface:
+            _err(
+                errors,
+                ctx,
+                "coverage.runtime_control_surface='available' but every resolved runtime "
+                "surface is read-only",
+            )
+        elif control_surface in ("none", "read_only") and model_has_writable_surface:
+            warnings.append(
+                f"{ctx}: coverage.runtime_control_surface='{control_surface}' but a resolved "
+                "runtime surface is writable"
+            )
 
     # Aliases shared across manufacturers.
     alias_owners: dict[str, set[str]] = {}

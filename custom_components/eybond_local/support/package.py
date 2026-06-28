@@ -79,9 +79,9 @@ def export_support_package(
     profile_source: dict[str, Any] | None = None,
     register_schema_source: dict[str, Any] | None = None,
     overwrite: bool = False,
-    publish_download_copy: bool = True,
+    publish_download_copy: bool = False,
 ) -> SupportPackageExportResult:
-    """Write one combined support archive and publish one `/local` download copy."""
+    """Write one combined support archive and optionally publish one `/local` copy."""
 
     cloud_evidence = _support_bundle_cloud_evidence(support_bundle)
     support_marker = _support_bundle_support_marker(support_bundle)
@@ -423,16 +423,21 @@ def _resolve_shadow_trace_path(
         must_exist=True,
         root=trace_root,
     )
-    if explicit_path is not None:
+    if explicit_path is not None and _shadow_trace_matches_support_bundle(
+        explicit_path,
+        support_bundle,
+    ):
         return explicit_path
 
     if not trace_root.exists() or not trace_root.is_dir():
         return None
 
-    entry_id = str(_dict_value(_dict_value(support_bundle, "entry"), "entry_id") or "")
+    entry_payload = _dict_value(support_bundle, "entry")
+    runtime_collector = _dict_value(_dict_value(support_bundle, "runtime"), "collector")
+    entry_id = _scalar_string(entry_payload, "entry_id")
     collector_pn = str(
-        _dict_value(_dict_value(_dict_value(support_bundle, "runtime"), "collector"), "collector_pn")
-        or ""
+        _scalar_string(runtime_collector, "collector_pn")
+        or _scalar_string(_dict_value(entry_payload, "data"), "collector_pn")
     )
     stems = tuple(
         stem
@@ -455,7 +460,43 @@ def _resolve_shadow_trace_path(
         key=lambda candidate: candidate.stat().st_mtime,
         reverse=True,
     )
-    return candidates[0] if candidates else None
+    for candidate in candidates:
+        if _shadow_trace_matches_support_bundle(candidate, support_bundle):
+            return candidate
+    return None
+
+
+def _shadow_trace_matches_support_bundle(
+    trace_path: Path,
+    support_bundle: dict[str, Any],
+) -> bool:
+    """Return whether one shadow-learning trace belongs to this support bundle."""
+
+    manifest = _load_shadow_session_manifest_from_trace(trace_path)
+    if not manifest:
+        return False
+
+    entry_payload = _dict_value(support_bundle, "entry")
+    runtime_collector = _dict_value(_dict_value(support_bundle, "runtime"), "collector")
+    expected_entry_id = _scalar_string(entry_payload, "entry_id")
+    expected_collector_pn = (
+        _scalar_string(runtime_collector, "collector_pn")
+        or _scalar_string(_dict_value(entry_payload, "data"), "collector_pn")
+    )
+
+    manifest_entry_id = str(manifest.get("entry_id") or "").strip()
+    if expected_entry_id and manifest_entry_id:
+        return manifest_entry_id == expected_entry_id
+
+    manifest_identities = {
+        str(manifest.get(key) or "").strip()
+        for key in ("collector_pn", "cloud_pn", "cloud_sn")
+    }
+    manifest_identities.discard("")
+    if expected_collector_pn and manifest_identities:
+        return expected_collector_pn in manifest_identities
+
+    return False
 
 
 def _load_shadow_trace_payload(trace_path: Path) -> dict[str, Any] | None:
@@ -660,6 +701,15 @@ def _dict_value(payload: dict[str, Any] | None, key: str) -> dict[str, Any]:
         return {}
     value = payload.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def _scalar_string(payload: dict[str, Any] | None, key: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get(key)
+    if isinstance(value, (dict, list, tuple, set, frozenset)):
+        return ""
+    return str(value or "").strip()
 
 
 def _overlay_review_model(payload: dict[str, Any] | None) -> dict[str, Any] | None:

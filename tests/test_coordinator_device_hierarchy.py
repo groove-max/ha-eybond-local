@@ -93,6 +93,8 @@ def _install_coordinator_stubs() -> None:
     helpers.device_registry = device_registry
     helpers.network = network
     helpers.update_coordinator = update_coordinator
+    network.NoURLAvailableError = RuntimeError
+    network.get_url = lambda *args, **kwargs: "http://127.0.0.1:8123"
 
     const = _ensure_module("custom_components.eybond_local.const")
     const.CONF_COLLECTOR_IP = "collector_ip"
@@ -288,6 +290,9 @@ def _install_coordinator_stubs() -> None:
 
     support_package = _ensure_module("custom_components.eybond_local.support.package")
     support_package.export_support_package = lambda *args, **kwargs: None
+    support_package.support_packages_root = (
+        lambda config_dir: Path(config_dir) / "eybond_local" / "support_packages"
+    )
 
     support_proxy_capture = _ensure_module(
         "custom_components.eybond_local.support.proxy_capture"
@@ -455,6 +460,13 @@ def _install_coordinator_stubs() -> None:
         error: str | None = None
 
     class DiagnosticSingleFlight:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        @property
+        def running(self) -> bool:
+            return False
+
         async def cancel(self) -> None:
             return None
 
@@ -622,6 +634,25 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "eybond_local_proxy_capture_entry-1_session_bundle",
         )
 
+    def test_absolute_local_download_url_makes_signed_api_link_browser_safe(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+
+        with patch.object(
+            self.coordinator_module.network,
+            "get_url",
+            return_value="http://192.168.1.98:8123/",
+        ):
+            url = coordinator._absolute_local_download_url(
+                "/api/eybond_local/support_package/entry-1?authSig=signed"
+            )
+
+        self.assertEqual(
+            url,
+            "http://192.168.1.98:8123/api/eybond_local/support_package/entry-1?authSig=signed",
+        )
+        self.assertNotIn("/lovelace/", url)
+
     def test_diagnostic_waits_for_in_progress_runtime_refresh(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(
@@ -691,6 +722,67 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 await poll_task
                 await diagnostic_task
                 self.assertTrue(diagnostic_started.is_set())
+
+        asyncio.run(_run())
+
+    def test_write_capability_serializes_against_runtime_refresh(self) -> None:
+        # A control write must take the same _runtime_operation_lock the polling
+        # loop holds, so a write and a refresh never interleave on the shared
+        # transport (a mis-correlated read-back on a safety-critical write).
+        async def _run() -> None:
+            coordinator = object.__new__(
+                self.coordinator_module.EybondLocalCoordinator
+            )
+            coordinator.data = types.SimpleNamespace(
+                inverter=types.SimpleNamespace(
+                    get_capability=lambda key: types.SimpleNamespace(key=key)
+                )
+            )
+            coordinator._diagnostic_active = False
+            coordinator._runtime_operation_lock = asyncio.Lock()
+            coordinator.can_expose_capability = lambda _cap: True
+
+            poll_started = asyncio.Event()
+            release_poll = asyncio.Event()
+            write_started = asyncio.Event()
+
+            async def _poll_with_lock():
+                poll_started.set()
+                await release_poll.wait()
+                return coordinator.data
+
+            coordinator._async_update_data_with_runtime_lock = _poll_with_lock
+
+            async def _runtime_write(_key, value):
+                write_started.set()
+                # The write only runs while it holds the operation lock.
+                assert coordinator._runtime_operation_lock.locked()
+                return value
+
+            coordinator._runtime = types.SimpleNamespace(
+                async_write_capability=_runtime_write
+            )
+
+            async def _noop_refresh():
+                return None
+
+            coordinator.async_request_refresh = _noop_refresh
+
+            poll_task = asyncio.create_task(coordinator._async_update_data())
+            await poll_started.wait()  # poll now holds the lock
+
+            write_task = asyncio.create_task(
+                coordinator.async_write_capability("op2_enable", 1)
+            )
+            await asyncio.sleep(0)
+            # The write must be blocked on the lock while the poll holds it.
+            self.assertFalse(write_started.is_set())
+
+            release_poll.set()
+            await poll_task
+            result = await write_task
+            self.assertTrue(write_started.is_set())
+            self.assertEqual(result, 1)
 
         asyncio.run(_run())
 
@@ -2445,6 +2537,59 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(reload_requests, ["entry-3"])
         self.assertTrue(coordinator._entity_platform_reload_requested)
 
+    def test_remember_runtime_identity_clears_stale_0925_register_serial(self) -> None:
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+                updated_entries.append({"title": entry.title, "data": dict(entry.data)})
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-0925",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0000000000001",
+                "detected_model": "PowMr 4.2kW / VMII-NXPW5KW (SmartESS 0925)",
+                "detected_serial": "55355535553555",
+                "server_ip": "192.168.1.50",
+            },
+            options={},
+            title="Collector PN Q0000000000001",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                driver_key="smartess_local",
+                model_name="PowMr 4.2kW / VMII-NXPW5KW (SmartESS 0925)",
+                serial_number="",
+                variant_key="smartess_0925",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0000000000001",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="3.6.7.6",
+            ),
+        )
+
+        import asyncio
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertEqual(coordinator.config_entry.data["detected_serial"], "")
+        self.assertEqual(len(updated_entries), 1)
+
     def test_remember_runtime_identity_persists_effective_snapshot_in_options(self) -> None:
         updated_entries: list[dict[str, object]] = []
         from custom_components.eybond_local.metadata.compiled_detection_catalog import (
@@ -3228,6 +3373,45 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 )
 
             self.assertEqual(save_calls, [])
+            self.assertEqual(start_shadow_calls, [])
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_start_shadow_learning_fails_early_when_memory_is_low(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            start_shadow_calls: list[dict[str, object]] = []
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                self.assertFalse(require_process)
+                return None
+
+            async def _async_start_shadow_learning_route(**kwargs) -> None:
+                start_shadow_calls.append(dict(kwargs))
+
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator._runtime = types.SimpleNamespace(
+                proxy_capture_route_running=lambda: False,
+                async_start_shadow_learning_route=_async_start_shadow_learning_route,
+            )
+            coordinator._shadow_learning_process_running = lambda: False
+
+            with patch.object(
+                self.coordinator_module,
+                "read_available_memory_mib",
+                return_value=128,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "shadow_learning_preflight_blocked:insufficient_memory:128MiB",
+                ):
+                    await coordinator.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow.jsonl"),
+                        raw_capture={},
+                    )
+
             self.assertEqual(start_shadow_calls, [])
 
         import asyncio

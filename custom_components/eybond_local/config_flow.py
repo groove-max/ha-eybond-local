@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from html import escape as html_escape
 import importlib
 import ipaddress
 import json
@@ -183,6 +184,7 @@ from .smartess_cloud import (
 )
 from .support.cloud_evidence import fetch_and_export_smartess_device_bundle_cloud_evidence
 from .support.collector_registry import remember_collector_original_endpoint
+from .support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
 from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
 from .support.read_learning_binder import bind_cloud_labels_to_registers
 from .support.shadow_learning_orchestrator import (
@@ -237,25 +239,6 @@ SHADOW_LEARNING_ACTION_RUN_LEARNING = "run_learning"
 SHADOW_LEARNING_ACTION_GENERATE_OVERLAY = "generate_overlay"
 SHADOW_LEARNING_ACTION_ACTIVATE_OVERLAY = "activate_overlay"
 SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY = "export_support_only"
-# Refuse to start a learning scan when the host has less than this much memory
-# free: the scan's cloud sign-in + proxy capture + correlation spike can OOM a
-# tight box (and trip a hardware watchdog reset). Heuristic floor, not exact.
-_SHADOW_LEARNING_MIN_AVAILABLE_MIB = 400
-
-
-def _read_available_memory_mib() -> int | None:
-    """Return MemAvailable (MiB) from /proc/meminfo, or None when not knowable."""
-
-    try:
-        with open("/proc/meminfo", "r", encoding="ascii") as handle:
-            for line in handle:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) // 1024
-    except (OSError, ValueError, IndexError):
-        return None
-    return None
-
-
 SHADOW_LEARNING_MODE_MANUAL = "manual_selected_fields"
 SHADOW_LEARNING_MODE_ENUM_SWEEP = "enum_sweep"
 SHADOW_LEARNING_MODE_NUMERIC_OPT_IN = "numeric_opt_in"
@@ -2244,25 +2227,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return await self._async_show_confirm_form(
             step_id="confirm_without_cloud_assist",
             user_input=user_input,
-        )
-
-    @_with_translation_bundle
-    async def async_step_smartess_cloud_assist_choice(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        del user_input
-        if self._selected_result is None:
-            return await self.async_step_auto()
-        self._smartess_cloud_assist_mode = "auto"
-        if not self._can_offer_smartess_cloud_assist(self._selected_result):
-            return await self.async_step_confirm()
-        return self.async_show_menu(
-            step_id="smartess_cloud_assist_choice",
-            menu_options=["smartess_cloud_assist", "confirm_without_cloud_assist"],
-            description_placeholders=self._smartess_cloud_assist_placeholders(
-                self._selected_result,
-            ),
         )
 
     @_with_translation_bundle
@@ -5580,6 +5544,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._diagnostic_commands_output = ""
         self._diagnostic_commands_download_url = ""
         self._diagnostic_commands_result_path = ""
+        self._diagnostic_publish_download_copy = False
         self._collector_wifi_current_ssid = ""
         self._collector_wifi_network_diagnostics = ""
         self._collector_wifi_last_error = ""
@@ -6018,9 +5983,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             submitted.get("diagnostic_commands", self._diagnostic_commands_text) or ""
         )
         stop_on_error = bool(submitted.get("diagnostic_stop_on_error", True))
+        confirm_write = bool(submitted.get("diagnostic_confirm_write", False))
+        publish_download_copy = bool(
+            submitted.get(
+                "diagnostic_publish_download_copy",
+                self._diagnostic_publish_download_copy,
+            )
+        )
 
         if user_input is not None:
             self._diagnostic_commands_text = commands
+            self._diagnostic_publish_download_copy = publish_download_copy
             if not commands.strip():
                 errors["diagnostic_commands"] = "diagnostic_commands_required"
             else:
@@ -6034,6 +6007,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         result = await coordinator.async_run_diagnostic_commands(
                             commands=commands,
                             stop_on_error=stop_on_error,
+                            confirm_write=confirm_write,
+                            publish_download_copy=publish_download_copy,
                         )
                     except Exception:
                         logger.exception("Diagnostic command scenario failed")
@@ -6057,6 +6032,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             vol.Required(
                 "diagnostic_stop_on_error",
                 default=stop_on_error,
+            ): _BOOLEAN_SELECTOR,
+            vol.Required(
+                "diagnostic_confirm_write",
+                default=confirm_write,
+            ): _BOOLEAN_SELECTOR,
+            vol.Required(
+                "diagnostic_publish_download_copy",
+                default=publish_download_copy,
             ): _BOOLEAN_SELECTOR,
         }
         if self._diagnostic_commands_output:
@@ -7769,9 +7752,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # into the OOM killer (and a watchdog reset). Refuse up front rather than
         # risk taking the whole appliance down. Unknown memory (non-Linux) skips
         # the guard.
-        available_mib = await self.hass.async_add_executor_job(_read_available_memory_mib)
-        if available_mib is not None and available_mib < _SHADOW_LEARNING_MIN_AVAILABLE_MIB:
-            effective_blockers = [f"insufficient_memory:{available_mib}MiB"] + effective_blockers
+        available_mib = await self.hass.async_add_executor_job(read_available_memory_mib)
+        memory_blocker = shadow_learning_memory_blocker(available_mib)
+        if memory_blocker:
+            effective_blockers = [memory_blocker] + effective_blockers
             can_start = False
         route_status = self._shadow_learning_route_status(coordinator)
         return {
@@ -9002,8 +8986,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         rollback_paths = self._local_metadata_rollback_paths()
         menu_options: list[str] = [
             "create_support_package",
-            "diagnostic_commands",
         ]
+
+        # The free-form diagnostic command runner issues raw reads/writes/AT
+        # commands directly on the device; expose its UI form only in Home
+        # Assistant Advanced Mode. The run_diagnostic_commands action stays
+        # available and is itself write-gated by confirm_write.
+        if getattr(self, "show_advanced_options", False):
+            menu_options.append("diagnostic_commands")
 
         if primary_action == "reload_local_metadata":
             menu_options.append("reload_local_metadata")
@@ -9462,14 +9452,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 or ""
             ),
             "support_package_download_markdown": (
-                self._tr(
-                    "common.dynamic.download_support_archive",
-                    "[Download support archive]({url})",
-                    {
-                        "url": values.get("support_package_download_url")
+                self._download_link_markup(
+                    str(
+                        values.get("support_package_download_url")
                         or values.get("support_package_download_relative_url")
                         or ""
-                    },
+                    ),
+                    label=self._tr(
+                        "common.dynamic.download_support_archive_label",
+                        "Download support archive",
+                    ),
                 )
                 if values.get("support_package_download_url")
                 or values.get("support_package_download_relative_url")
@@ -9735,10 +9727,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "path": path or self._tr("common.dynamic.not_applicable", "Not applicable"),
             "download_url": download_url or "",
             "download_markdown": (
-                self._tr(
-                    "common.dynamic.download_file",
-                    "[Download file]({url})",
-                    {"url": download_url},
+                self._download_link_markup(
+                    download_url,
+                    label=self._tr(
+                        "common.dynamic.download_file_label",
+                        "Download file",
+                    ),
                 )
                 if download_url
                 else self._tr("common.dynamic.not_available", "Not available")
@@ -9750,3 +9744,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
         }
         return await self.async_step_diagnostics_result()
+
+    def _download_link_markup(self, url: str, *, label: str) -> str:
+        """Return a browser download link that HA frontend should not SPA-route."""
+
+        raw_url = str(url or "").strip()
+        safe_url = html_escape(raw_url, quote=True)
+        safe_label = html_escape(str(label or "").strip() or "Download", quote=False)
+        if not raw_url:
+            return self._tr("common.dynamic.not_available", "Not available")
+        return (
+            f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
+            f"download>{safe_label}</a>"
+        )

@@ -74,6 +74,7 @@ class DiagnosticRuntimeContext:
     runtime_debug: dict | None = None
     default_stop_on_error: bool = True
     default_operation_timeout: float | None = None
+    confirm_write: bool = False
     clock: Callable[[], datetime] = _default_clock
 
 
@@ -250,12 +251,29 @@ def _check_command_wire_limits(
                 )
 
 
+def _check_write_confirmation(
+    commands: tuple[Command, ...], confirm_write: bool
+) -> None:
+    """Require explicit confirmation before any scenario that writes to the device."""
+
+    if confirm_write:
+        return
+    for command in commands:
+        if command.requires in ("write", "write_bit"):
+            raise ScenarioError(
+                "scenario contains write commands; set confirm_write=true to run "
+                "writes that can change device settings",
+                line=command.line,
+            )
+
+
 def _prepare(text: str, context: DiagnosticRuntimeContext) -> _PreparedRun:
     scenario = parse_scenario(text)  # syntax validation (raises ScenarioError)
     driver_key, driver_source = _resolve_driver(scenario.directives, context)
     probe_target = _resolve_probe_target(scenario, driver_key, context)
     _check_command_support(scenario.commands, driver_key)
     _check_command_wire_limits(scenario.commands, driver_key)
+    _check_write_confirmation(scenario.commands, context.confirm_write)
 
     target = build_diagnostic_target(driver_key, context.transport, probe_target)
 
@@ -532,9 +550,10 @@ class DiagnosticSingleFlight:
     aborts the in-flight run on unload without leaving the lock held.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, busy_error: str = "diagnostic_run_in_progress") -> None:
         self._lock = asyncio.Lock()
         self._task: "asyncio.Future | None" = None
+        self._busy_error = busy_error
 
     @property
     def running(self) -> bool:
@@ -548,7 +567,7 @@ class DiagnosticSingleFlight:
         on_finish: Callable[[], None] | None = None,
     ):
         if self._lock.locked():
-            raise RuntimeError("diagnostic_run_in_progress")
+            raise RuntimeError(self._busy_error)
         async with self._lock:
             if on_start is not None:
                 on_start()

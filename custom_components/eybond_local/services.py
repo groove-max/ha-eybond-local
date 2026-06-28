@@ -89,6 +89,9 @@ _RUN_DIAGNOSTIC_COMMANDS_SCHEMA = vol.Schema(
         vol.Required("entry_id"): str,
         vol.Required("commands"): str,
         vol.Optional("stop_on_error", default=True): bool,
+        # Required to be true before a scenario containing write/write_bit runs;
+        # read-only scenarios ignore it.
+        vol.Optional("confirm_write", default=False): bool,
         # Positivity is enforced in the handler so the schema stays within the
         # validator subset shared with the test stubs.
         vol.Optional("operation_timeout"): vol.All(vol.Range(min=0)),
@@ -382,6 +385,8 @@ async def _async_handle_run_diagnostic_commands(
         stop_on_error=bool(call.data.get("stop_on_error", True)),
         operation_timeout=resolved_timeout,
         integration_version=integration_version,
+        confirm_write=bool(call.data.get("confirm_write", False)),
+        publish_download_copy=bool(call.data.get("publish_download_copy", False)),
     )
 
 

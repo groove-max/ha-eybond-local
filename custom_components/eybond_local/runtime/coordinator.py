@@ -199,6 +199,8 @@ from ..support.diagnostic_runner import (
     DiagnosticSingleFlight,
     run_scenario,
 )
+from ..support.download import sign_support_package_download_url
+from ..support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
 from ..support.package import export_support_package
 from ..support.shadow_learning_review_model import normalize_activation_selection
 from ..support.workflow import build_support_workflow_state
@@ -716,6 +718,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # normal polling quiesced while it holds the shared transport.
         self._diagnostic_active = False
         self._diagnostic_flight = DiagnosticSingleFlight()
+        self._support_package_active = False
+        self._support_package_flight = DiagnosticSingleFlight(
+            busy_error="support_package_export_in_progress"
+        )
         self._runtime_operation_lock = asyncio.Lock()
 
     @property
@@ -845,6 +851,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if self._shutdown_complete:
                 return
             await self._async_cancel_diagnostic_run()
+            await self._support_package_flight.cancel()
             self._cancel_proxy_capture_deadline_refresh()
             try:
                 await self.async_stop_shadow_learning(
@@ -874,13 +881,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         stop_on_error: bool = True,
         operation_timeout: float | None = None,
         integration_version: str = "",
+        confirm_write: bool = False,
+        publish_download_copy: bool = False,
     ) -> dict:
         """Run one diagnostic command scenario against the shared collector link.
 
         Only one scenario runs per config entry at a time; normal polling is
         quiesced while the run holds the transport. Permanent config-entry
         settings (driver hint, probe target, detection snapshot) are never
-        modified.
+        modified. Scenarios that write to the device require ``confirm_write``.
         """
 
         async def _factory() -> dict:
@@ -888,8 +897,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 stop_on_error=stop_on_error,
                 operation_timeout=operation_timeout,
                 integration_version=integration_version,
+                confirm_write=confirm_write,
             )
-            return await self._async_execute_diagnostic(commands, context)
+            return await self._async_execute_diagnostic(
+                commands,
+                context,
+                publish_download_copy=publish_download_copy,
+            )
 
         return await self._diagnostic_flight.run(
             _factory,
@@ -903,12 +917,34 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _mark_diagnostic_idle(self) -> None:
         self._diagnostic_active = False
 
+    @property
+    def support_package_export_running(self) -> bool:
+        """Return whether this entry is currently building a support archive."""
+
+        return self._support_package_active or self._support_package_flight.running
+
+    def _mark_support_package_active(self) -> None:
+        self._support_package_active = True
+        self._publish_tooling_values(
+            support_package_export_running=True,
+            support_package_export_status="running",
+            local_metadata_status="Support archive export running",
+        )
+
+    def _mark_support_package_idle(self) -> None:
+        self._support_package_active = False
+        self._publish_tooling_values(
+            support_package_export_running=False,
+            support_package_export_status="idle",
+        )
+
     def _build_diagnostic_context(
         self,
         *,
         stop_on_error: bool,
         operation_timeout: float | None,
         integration_version: str,
+        confirm_write: bool = False,
     ) -> DiagnosticRuntimeContext:
         snapshot = self.data
         inverter = snapshot.inverter if snapshot is not None else None
@@ -934,6 +970,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             runtime_debug=self._diagnostic_runtime_debug(transport),
             default_stop_on_error=stop_on_error,
             default_operation_timeout=operation_timeout,
+            confirm_write=confirm_write,
         )
 
     def _diagnostic_link_transport(self):
@@ -1061,7 +1098,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return {}
 
     async def _async_execute_diagnostic(
-        self, commands: str, context: DiagnosticRuntimeContext
+        self,
+        commands: str,
+        context: DiagnosticRuntimeContext,
+        *,
+        publish_download_copy: bool = False,
     ) -> dict:
         async with self._runtime_operation_lock:
             result = await run_scenario(commands, context)
@@ -1075,6 +1116,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 config_dir=config_dir,
                 entry_id=entry_id,
                 result=result,
+                publish_download_copy=publish_download_copy,
             )
         )
         return {
@@ -1779,10 +1821,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             detected_model = str(inverter.model_name or "").strip()
             detected_serial = str(inverter.serial_number or "").strip()
             driver_key = str(getattr(inverter, "driver_key", "") or "").strip()
+            variant_key = str(getattr(inverter, "variant_key", "") or "").strip()
             if detected_model and updated_data.get(CONF_DETECTED_MODEL) != detected_model:
                 updated_data[CONF_DETECTED_MODEL] = detected_model
             if detected_serial and updated_data.get(CONF_DETECTED_SERIAL) != detected_serial:
                 updated_data[CONF_DETECTED_SERIAL] = detected_serial
+            if (
+                not detected_serial
+                and variant_key == "smartess_0925"
+                and str(updated_data.get(CONF_DETECTED_SERIAL) or "").strip()
+            ):
+                updated_data[CONF_DETECTED_SERIAL] = ""
             if str(updated_data.get(CONF_DETECTION_CONFIDENCE) or "").strip() in {
                 "",
                 "none",
@@ -1871,6 +1920,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         if gained_inverter_identity and (not had_inverter_identity or platforms_need_identity_reload):
             self._request_entry_reload_for_late_identity()
+
+    def _support_context_title(self) -> str:
+        """Return the support artifact title, preferring confirmed inverter identity."""
+
+        inverter = self.data.inverter
+        model_name = str(getattr(inverter, "model_name", "") or "").strip()
+        serial_number = str(getattr(inverter, "serial_number", "") or "").strip()
+        if model_name and serial_number:
+            return f"{model_name} ({serial_number})"
+        if model_name:
+            return model_name
+        return str(self.config_entry.title or "").strip() or "EyeBond Local"
 
     def _build_runtime_effective_metadata_snapshot(
         self,
@@ -2260,7 +2321,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 f"capability_control_disabled:{capability.key}:{self.controls_reason}"
             )
         try:
-            written_value = await self._runtime.async_write_capability(capability_key, value)
+            # Serialize the control write against the polling loop: both take
+            # _runtime_operation_lock so a write and a refresh never interleave
+            # Modbus frames on the shared transport (which could cross-correlate
+            # the write read-back with a poll response on a safety-critical
+            # write). The follow-up refresh is only scheduled here, so it takes
+            # the lock later in its own task — no re-entrancy.
+            async with self._runtime_operation_lock:
+                written_value = await self._runtime.async_write_capability(capability_key, value)
         except Exception:
             await self.async_request_refresh()
             raise
@@ -2279,7 +2347,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 f"preset_control_disabled:{preset.key}:{self.controls_reason}"
             )
         try:
-            result = await self._runtime.async_apply_preset(preset_key)
+            # Serialize against the polling loop on the shared transport (see
+            # async_write_capability for the rationale).
+            async with self._runtime_operation_lock:
+                result = await self._runtime.async_apply_preset(preset_key)
         except Exception:
             await self.async_request_refresh()
             raise
@@ -2873,6 +2944,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             raise RuntimeError("proxy_capture_route_running")
         if self._shadow_learning_process_running():
             raise RuntimeError("shadow_learning_already_running")
+
+        add_executor_job = getattr(
+            getattr(self, "hass", None),
+            "async_add_executor_job",
+            None,
+        )
+        if callable(add_executor_job):
+            available_mib = await add_executor_job(read_available_memory_mib)
+        else:
+            available_mib = read_available_memory_mib()
+        memory_blocker = shadow_learning_memory_blocker(available_mib)
+        if memory_blocker:
+            raise RuntimeError(f"shadow_learning_preflight_blocked:{memory_blocker}")
 
         if raw_capture is None and self.data.connected:
             try:
@@ -4823,7 +4907,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             lambda: export_support_bundle(
                 config_dir=Path(self.hass.config.config_dir),
                 entry_id=self.config_entry.entry_id,
-                entry_title=self.config_entry.title,
+                entry_title=self._support_context_title(),
                 connected=support_bundle_payload["runtime"]["connected"],
                 collector=support_bundle_payload["runtime"]["collector"],
                 inverter=support_bundle_payload["runtime"]["inverter"],
@@ -4864,6 +4948,34 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         behavior is preserved when the parameter is left unset.
         """
 
+        async def _factory() -> str:
+            try:
+                return await self._async_export_support_package_with_cloud_refresh_unlocked(
+                    smartess_username=smartess_username,
+                    smartess_password=smartess_password,
+                    wants_refresh=wants_refresh,
+                )
+            except Exception:
+                self._publish_tooling_values(
+                    local_metadata_status="Support archive export failed"
+                )
+                raise
+
+        return await self._support_package_flight.run(
+            _factory,
+            on_start=self._mark_support_package_active,
+            on_finish=self._mark_support_package_idle,
+        )
+
+    async def _async_export_support_package_with_cloud_refresh_unlocked(
+        self,
+        *,
+        smartess_username: str = "",
+        smartess_password: str = "",
+        wants_refresh: bool | None = None,
+    ) -> str:
+        """Export one support archive after the single-flight guard is acquired."""
+
         if wants_refresh is None:
             wants_refresh = bool(smartess_username or smartess_password)
         if wants_refresh:
@@ -4902,7 +5014,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             lambda: export_support_package(
                 config_dir=Path(self.hass.config.config_dir),
                 entry_id=self.config_entry.entry_id,
-                entry_title=self.config_entry.title,
+                entry_title=self._support_context_title(),
                 support_bundle=support_bundle_payload,
                 raw_capture=raw_capture,
                 fixture=fixture,
@@ -4912,8 +5024,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         )
         path = export_result.path
-        relative_download_url = str(export_result.download_url or "")
-        download_url = self._absolute_local_download_url(relative_download_url)
+        if export_result.download_url:
+            relative_download_url = str(export_result.download_url)
+            download_url = self._absolute_local_download_url(relative_download_url)
+        else:
+            # Use a short-lived signed HA API path for browser navigation. A
+            # plain authenticated API URL returns 401 when opened from markdown,
+            # because the browser does not attach the HA bearer token to a
+            # normal link click. Store the HA-relative path for diagnostics, but
+            # expose an absolute URL in the UI: HA's config-flow frontend may
+            # otherwise SPA-route a relative /api link as the current Lovelace
+            # route with only the authSig query preserved.
+            relative_download_url = sign_support_package_download_url(
+                self.hass,
+                self.config_entry.entry_id,
+            )
+            download_url = self._absolute_local_download_url(relative_download_url)
         self._publish_tooling_values(
             cloud_evidence_path=str(
                 support_bundle_payload["runtime"]["values"].get("cloud_evidence_path") or ""
@@ -5574,7 +5700,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             publish(snapshot)
 
     def _absolute_local_download_url(self, relative_url: str) -> str:
-        """Return an absolute HA URL for one `/local/...` path when possible."""
+        """Return an absolute HA URL for one HA-relative download path when possible."""
 
         if not relative_url:
             return ""
@@ -5839,7 +5965,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             inverter_payload = self._inverter_payload(inverter)
         return build_support_bundle_payload(
             entry_id=self.config_entry.entry_id,
-            entry_title=self.config_entry.title,
+            entry_title=self._support_context_title(),
             connected=self.data.connected,
             collector=self._collector_payload(),
             inverter=inverter_payload,

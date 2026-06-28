@@ -578,6 +578,85 @@ class SmartEssCloudProbeTests(unittest.TestCase):
             self.assertEqual(fields_by_title[title]["bucket"], "cloud_only")
             self.assertNotIn("binding", fields_by_title[title])
 
+    def test_normalize_device_settings_maps_0925_valuecloud_field_ids(self) -> None:
+        field_ids_and_names = [
+            ("grd_ac_input_range", "AC Input Range"),
+            ("los_output_source_priority", "Output Source Priority"),
+            ("bat_charger_source_priority", "Charger Source Priority"),
+            ("los_output_voltage", "Output Voltage"),
+            ("los_output_frequency", "Output Frequency"),
+            ("bat_max_total_charge_current", "Max Total Charge Current"),
+            ("bat_max_utility_charge_current", "Max Utility Charge Current"),
+            ("bat_battery_type", "Battery Type"),
+            ("bat_sp_bulk_charging_voltage", "Bulk Charging Voltage"),
+            ("bat_sp_floting_charging_voltage", "Floating Charging Voltage"),
+            ("bat_sp_low_battery_voltage", "Low Battery Cut-off Voltage"),
+            (
+                "bat_sp_utility_mode_voltage",
+                "Comeback utility mode voltage point (SBU priority)",
+            ),
+            (
+                "bat_sp_battery_mode_voltage",
+                "Comeback battery mode voltage point (SBU priority)",
+            ),
+            ("bat_battery_equalization", "Battery Equalization"),
+            (
+                "bat_sp_battery_equalization_voltage",
+                "Battery Equalization Voltage",
+            ),
+            ("bat_sp_battery_equalized_time", "Battery Equalized Time"),
+            ("bat_sp_battery_equalized_timeout", "Battery Equalized Timeout"),
+            (
+                "bat_sp_battery_equalization_interval",
+                "Battery Equalization Interval",
+            ),
+            (
+                "bat_battery_equalization_activated_immediately",
+                "Battery Equalization Activated Immediately",
+            ),
+            ("pvs_clear_all_generation", "Clear All Historical Power Generation"),
+            ("cts_buzzer_alarm", "Buzzer Alarm"),
+            (
+                "cts_beeps_while_primary_source_interupt",
+                "Beeps While Primary Source Interrupt",
+            ),
+            ("cts_lcd_backlight", "LCD Backlight"),
+            ("cts_return_to_the_main_page", "Return To The Main LCD Page"),
+            ("los_overload_auto_restart", "Overload Auto Restart"),
+            ("cts_over_temperature_auto_restart", "Over Temperature Auto Restart"),
+            ("los_transfer_to_bypass_overload", "Transfer To Bypass Overload"),
+            ("sys_system_time", "system time"),
+            ("cts_record_fault_code", "Record Fault Code"),
+            ("cts_restore_defaults", "Restore Defaults"),
+        ]
+
+        normalized = smartess_cloud_probe.normalize_device_settings(
+            {
+                "field": [
+                    {
+                        "id": field_id,
+                        "name": name,
+                        "item": [{"key": "0", "val": "Off"}, {"key": "1", "val": "On"}],
+                    }
+                    for field_id, name in field_ids_and_names
+                ],
+                "two_tier": {},
+            }
+        )
+
+        assert normalized is not None
+        self.assertEqual(normalized["field_count"], 30)
+        self.assertEqual(normalized["mapped_field_count"], 29)
+        self.assertEqual(normalized["exact_0925_field_count"], 29)
+        self.assertEqual(normalized["cloud_only_field_count"], 1)
+
+        by_id = {field["cloud_id"]: field for field in normalized["fields"]}
+        self.assertEqual(by_id["los_output_source_priority"]["binding"]["register"], 4537)
+        self.assertEqual(by_id["grd_ac_input_range"]["binding"]["register"], 4538)
+        self.assertEqual(by_id["cts_buzzer_alarm"]["binding"]["register"], 5002)
+        self.assertEqual(by_id["cts_restore_defaults"]["binding"]["register"], 5016)
+        self.assertEqual(by_id["sys_system_time"]["bucket"], "cloud_only")
+
     def test_device_bundle_exports_cloud_evidence_into_ha_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             args = argparse.Namespace(

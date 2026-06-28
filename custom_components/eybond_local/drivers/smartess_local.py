@@ -282,6 +282,19 @@ class SmartEssLocalDriver(InverterDriver):
         for block in schema.blocks:
             if block.count <= 0:
                 continue
+            if block.key in _SMARTESS_0925_CONFIG_BLOCKS:
+                captured, failed = await _capture_individual_control_registers(
+                    self,
+                    transport,
+                    inverter.probe_target,
+                    self.write_capabilities,
+                    block_start=block.start,
+                    block_count=block.count,
+                    block_key=block.key,
+                )
+                captured_ranges.extend(captured)
+                failures.extend(failed)
+                continue
             target = _target_for_block(inverter.probe_target, block.key)
             session = self._session(transport, target)
             try:
@@ -327,9 +340,19 @@ class SmartEssLocalDriver(InverterDriver):
             "capture_notes": [
                 "SmartESS 0925 uses Modbus RTU frames routed through the legacy EyeBond binary tunnel.",
                 "Write controls are exposed from the SmartESS 0925 profile for this runtime.",
+                "Configuration-only 500x registers are captured individually because some 0925 devices reject wide config block reads.",
             ],
             "planned_ranges": [
-                {"start": block.start, "count": block.count, "block": block.key}
+                {
+                    "start": block.start,
+                    "count": block.count,
+                    "block": block.key,
+                    "read_strategy": (
+                        "individual_non_action_control_registers"
+                        if block.key in _SMARTESS_0925_CONFIG_BLOCKS
+                        else "bulk_read_holding"
+                    ),
+                }
                 for block in schema.blocks
                 if block.count > 0
             ],
@@ -439,6 +462,59 @@ async def _read_capability_register_fallbacks(
             continue
         if words:
             register_cache[register] = int(words[0])
+
+
+async def _capture_individual_control_registers(
+    driver: SmartEssLocalDriver,
+    transport,
+    target: ProbeTarget,
+    capabilities: tuple[WriteCapability, ...],
+    *,
+    block_start: int,
+    block_count: int,
+    block_key: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Capture readable control registers without relying on unsupported bulk reads."""
+
+    captured: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    block_end = block_start + block_count
+    for capability in capabilities:
+        if capability.value_kind == "action":
+            continue
+        register = int(capability.register)
+        if not block_start <= register < block_end:
+            continue
+        target_for_register = _target_for_register(target, register)
+        session = driver._session(transport, target_for_register)
+        try:
+            words = _normalize_register_words(
+                register,
+                await session.read_holding(register, 1),
+            )
+        except Exception as exc:
+            failures.append(
+                {
+                    "start": register,
+                    "count": 1,
+                    "block": block_key,
+                    "capability": capability.key,
+                    "collector_addr": target_for_register.collector_addr,
+                    "error": str(exc),
+                }
+            )
+            continue
+        captured.append(
+            {
+                "start": register,
+                "count": 1,
+                "block": block_key,
+                "capability": capability.key,
+                "collector_addr": target_for_register.collector_addr,
+                "words": list(words),
+            }
+        )
+    return captured, failures
 
 
 def _looks_like_smartess_0925(live_words: list[int], lcd_backlight: list[int]) -> bool:

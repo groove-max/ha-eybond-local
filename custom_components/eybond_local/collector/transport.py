@@ -38,6 +38,8 @@ from .protocol import (
 
 logger = logging.getLogger(__name__)
 
+_COLLECTOR_PN_PREFIX_MATCH_MIN_LEN = 14
+
 
 class CollectorListenerBindError(RuntimeError):
     """Raised when the shared collector listener cannot bind its socket."""
@@ -594,6 +596,7 @@ class _CollectorConnection:
         initial_bytes: bytes = b"",
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
+        disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
         if self.connected:
             self._collector.connection_replace_count += 1
@@ -622,6 +625,8 @@ class _CollectorConnection:
             await self._reader_task
         finally:
             await self._disconnect(skip_task=current_task)
+            if disconnect_callback is not None:
+                disconnect_callback(self)
 
     async def _heartbeat_loop(self) -> None:
         try:
@@ -1064,6 +1069,7 @@ class _CollectorAtConnection:
         initial_bytes: bytes = b"",
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
+        disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
         if self.connected:
             self._collector.connection_replace_count += 1
@@ -1094,6 +1100,8 @@ class _CollectorAtConnection:
             await self._reader_task
         finally:
             await self._disconnect(skip_task=current_task)
+            if disconnect_callback is not None:
+                disconnect_callback(self)
 
     async def disconnect(self) -> None:
         await self._disconnect(reason="manual_disconnect")
@@ -1479,6 +1487,7 @@ class _SharedEybondListener:
         self._session_protocol_owner_counts: dict[str, int] = {}
         self._session_seq = 0
         self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
+        self._pending_route_lock = asyncio.Lock()
 
     async def acquire(self) -> None:
         self._ref_count += 1
@@ -1695,9 +1704,7 @@ class _SharedEybondListener:
 
         candidates: list[object] = []
         for known_pn, connection in connections_by_pn.items():
-            if not known_pn:
-                continue
-            if known_pn.startswith(normalized_pn) or normalized_pn.startswith(known_pn):
+            if self._collector_pn_matches(normalized_pn, known_pn):
                 candidates.append(connection)
         unique_candidates = {id(candidate): candidate for candidate in candidates}
         if len(unique_candidates) != 1:
@@ -1960,33 +1967,38 @@ class _SharedEybondListener:
         collector_pn: str = "",
         session_protocol: str = "",
     ) -> _PendingCollectorSocket | None:
-        normalized_pn = str(collector_pn or "").strip()
-        if not normalized_pn:
-            return self.pop_pending_socket(collector_ip)
+        async with self._pending_route_lock:
+            normalized_pn = str(collector_pn or "").strip()
+            if not normalized_pn:
+                return self.pop_pending_socket(collector_ip)
 
-        matched = self._select_pending_socket_by_collector_pn(normalized_pn)
-        if matched is not None:
-            return self._claim_pending_socket(matched)
+            matched = self._select_pending_socket_by_collector_pn(normalized_pn)
+            if matched is not None:
+                return self._claim_pending_socket(matched)
 
-        candidates = self._route_identity_candidates(collector_ip)
-        if not candidates:
+            candidates = self._route_identity_candidates(collector_ip)
+            if not candidates:
+                return None
+
+            for pending in candidates:
+                if not self._pending_socket_still_registered(pending):
+                    continue
+                await self._pause_pending_sniff(pending)
+                if not self._pending_socket_still_registered(pending):
+                    continue
+                pending_pn = await self._identify_pending_socket_for_route(
+                    pending,
+                    session_protocol=session_protocol,
+                )
+                if not self._pending_socket_still_registered(pending):
+                    continue
+                if self._collector_pn_matches(normalized_pn, pending_pn):
+                    return self._claim_pending_socket(pending)
+                if pending_pn:
+                    self._mark_session_state(pending.session_id, "route_identity_mismatch")
+                    continue
+                self._mark_session_state(pending.session_id, "waiting_for_route_identity")
             return None
-
-        for pending in candidates:
-            if not self._pending_socket_still_registered(pending):
-                continue
-            await self._pause_pending_sniff(pending)
-            pending_pn = await self._identify_pending_socket_for_route(
-                pending,
-                session_protocol=session_protocol,
-            )
-            if self._collector_pn_matches(normalized_pn, pending_pn):
-                return self._claim_pending_socket(pending)
-            if pending_pn:
-                self._mark_session_state(pending.session_id, "route_identity_mismatch")
-                continue
-            self._mark_session_state(pending.session_id, "waiting_for_route_identity")
-        return None
 
     def _claim_pending_socket(self, pending: _PendingCollectorSocket) -> _PendingCollectorSocket:
         self._remove_pending_socket(pending)
@@ -2069,11 +2081,13 @@ class _SharedEybondListener:
         observed = str(observed_pn or "").strip()
         if not expected or not observed:
             return False
-        return bool(
-            expected == observed
-            or expected.startswith(observed)
-            or observed.startswith(expected)
-        )
+        if expected == observed:
+            return True
+        if len(expected) < _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN:
+            return False
+        if len(observed) < _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN:
+            return False
+        return bool(expected.startswith(observed) or observed.startswith(expected))
 
     def _select_pending_socket(self, collector_ip: str) -> _PendingCollectorSocket | None:
         if collector_ip:
@@ -2161,11 +2175,40 @@ class _SharedEybondListener:
         for owner_pn, count in owner_counts.items():
             if count <= 0:
                 continue
-            if owner_pn == normalized_pn:
-                return True
-            if owner_pn.startswith(normalized_pn) or normalized_pn.startswith(owner_pn):
+            if self._collector_pn_matches(normalized_pn, owner_pn):
                 return True
         return False
+
+    def _drop_connection_indexes_for_connection(self, connection: object) -> None:
+        """Remove every listener index that still points at a disconnected connection."""
+
+        selected_id = id(connection)
+        payload_removed = False
+        at_removed = False
+        for mapping, is_payload in (
+            (self._connections, True),
+            (self._connections_by_pn, True),
+            (self._session_payload_connections, True),
+            (self._at_connections, False),
+            (self._at_connections_by_pn, False),
+            (self._session_at_connections, False),
+        ):
+            for key, candidate in tuple(mapping.items()):
+                if id(candidate) == selected_id:
+                    mapping.pop(key, None)
+                    if is_payload:
+                        payload_removed = True
+                    else:
+                        at_removed = True
+
+        if payload_removed and not any(
+            id(candidate) == selected_id for candidate in self._connections.values()
+        ):
+            self._last_connection_ip = ""
+        if at_removed and not any(
+            id(candidate) == selected_id for candidate in self._at_connections.values()
+        ):
+            self._last_at_connection_ip = ""
 
     def _connection_keys_for_collector(
         self,
@@ -2398,6 +2441,7 @@ class _SharedEybondListener:
                 pending.writer,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
+                disconnect_callback=self._drop_connection_indexes_for_connection,
             ),
             name=f"collector_at_{remote_ip}",
         )
@@ -2439,6 +2483,7 @@ class _SharedEybondListener:
                 pending.writer,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
+                disconnect_callback=self._drop_connection_indexes_for_connection,
             ),
             name=f"collector_framed_{remote_ip}",
         )
@@ -2628,6 +2673,7 @@ class _SharedEybondListener:
                 initial_bytes=chunk,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
+                disconnect_callback=self._drop_connection_indexes_for_connection,
             )
             return
 
@@ -2683,6 +2729,7 @@ class _SharedEybondListener:
             initial_bytes=chunk,
             session_id=pending.session_id,
             session_identity_callback=self._mark_session_identity,
+            disconnect_callback=self._drop_connection_indexes_for_connection,
         )
 
     async def _handle_connection(

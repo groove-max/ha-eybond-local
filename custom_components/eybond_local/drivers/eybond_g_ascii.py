@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..metadata.device_catalog_loader import resolve_catalog_surface_binding
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import (
     DetectedInverter,
@@ -21,6 +22,10 @@ from ..payload.ascii_line import (
 )
 from .base import InverterDriver
 
+
+_EYBOND_G_ASCII_DRIVER_KEY = "eybond_g_ascii"
+_EYBOND_G_ASCII_VARIANT_KEY = "g_ascii_family"
+_EYBOND_G_ASCII_FALLBACK_SCHEMA_NAME = "eybond_g_ascii/base.json"
 
 _EYBOND_G_ASCII_PROBE_TARGETS: tuple[ProbeTarget, ...] = (
     ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
@@ -39,12 +44,36 @@ _COMMAND_SCHEMA_PATH = (
 )
 
 
-_REGISTER_SCHEMA_NAME = "eybond_g_ascii/base.json"
+@lru_cache(maxsize=1)
+def _eybond_g_ascii_catalog_binding() -> tuple[str, str, str]:
+    binding = resolve_catalog_surface_binding(
+        _EYBOND_G_ASCII_DRIVER_KEY,
+        variant_key=_EYBOND_G_ASCII_VARIANT_KEY,
+    )
+    if binding is None:
+        return (_EYBOND_G_ASCII_VARIANT_KEY, "", _EYBOND_G_ASCII_FALLBACK_SCHEMA_NAME)
+    return (
+        binding.variant_key,
+        binding.profile_name,
+        binding.register_schema_name or _EYBOND_G_ASCII_FALLBACK_SCHEMA_NAME,
+    )
+
+
+def _eybond_g_ascii_variant_key() -> str:
+    return _eybond_g_ascii_catalog_binding()[0]
+
+
+def _eybond_g_ascii_profile_name() -> str:
+    return _eybond_g_ascii_catalog_binding()[1]
+
+
+def _eybond_g_ascii_register_schema_name() -> str:
+    return _eybond_g_ascii_catalog_binding()[2]
 
 
 @lru_cache(maxsize=1)
 def _eybond_g_ascii_register_schema():
-    return load_register_schema(_REGISTER_SCHEMA_NAME)
+    return load_register_schema(_eybond_g_ascii_register_schema_name())
 
 
 def _eybond_g_ascii_measurements():
@@ -58,7 +87,7 @@ def _eybond_g_ascii_binary_sensors():
 class EybondGAsciiDriver(InverterDriver):
     """Read-only driver for the EyeBond G-command ASCII protocol family."""
 
-    key = "eybond_g_ascii"
+    key = _EYBOND_G_ASCII_DRIVER_KEY
     name = "EyeBond G-ASCII"
     probe_timeout = 12.0
     signature_timeout = 4.0
@@ -123,12 +152,12 @@ class EybondGAsciiDriver(InverterDriver):
             driver_key=self.key,
             protocol_family="eybond_g_ascii",
             model_name="EyeBond G-ASCII inverter",
-            variant_key="family_fallback",
+            variant_key=_eybond_g_ascii_variant_key(),
             serial_number=serial_number,
             probe_target=target,
             details=details,
-            profile_name="",
-            register_schema_name=_REGISTER_SCHEMA_NAME,
+            profile_name=_eybond_g_ascii_profile_name(),
+            register_schema_name=_eybond_g_ascii_register_schema_name(),
             capability_groups=(),
             capabilities=(),
             capability_presets=(),

@@ -9,6 +9,8 @@
 
 > **Companion dashboard card:** [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) adds a ready-made Home Assistant dashboard with power flow and history charts.
 
+> **No factory collector?** [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) is a community firmware bridge for connecting supported inverters directly to EyeBond Local without a SmartESS / EyeBond cloud logger.
+
 **EyeBond Local** is a Home Assistant integration for hybrid inverters that work through SmartESS / EyeBond Wi-Fi collectors.
 
 It lets Home Assistant read live inverter data over your local network. On supported models it can also expose safe controls such as charge settings, output mode, beeper settings, and model-specific switches.
@@ -145,7 +147,7 @@ The inverter device may include:
 
 <p align="center"><img src="docs/images/inverter-sensors.png" alt="Inverter sensors after setup" width="320"></p>
 
-You can change collector mode and control mode later from **Runtime settings**.
+You can change collector mode and control mode later from **Connection and polling**.
 
 <p align="center"><img src="docs/images/runtime-settings.png" alt="Runtime settings with control mode and collector operation mode" width="480"></p>
 
@@ -182,7 +184,7 @@ For the full walkthrough, see [Device Learning](docs/DEVICE_LEARNING.md).
 If the integration does not work as expected:
 
 1. Open the integration in **Settings → Devices & Services**.
-2. Click **Configure → Diagnostics and experimental metadata**.
+2. Click **Configure → Diagnostics and service tools**.
 3. Click **Create support archive**.
 4. Open a [GitHub issue](https://github.com/groove-max/ha-eybond-local/issues) and attach the ZIP.
 
@@ -194,6 +196,7 @@ Use these issue templates:
 
 - **Bug Report** — something regressed on already-supported hardware.
 - **Support Archive / Hardware Diagnostics** — new hardware, failed setup, missing sensors, or missing controls.
+- **Device Contribution** — share a learned partial/unrecognized device (with its Support Archive) to get it added to the built-in catalog.
 - **Feature Request** — UX improvements or broader feature requests.
 
 ---

@@ -13,21 +13,24 @@ body:
 
         Before submitting:
 
-        1. In the integration options, run **Learning**, then **Share to improve support**.
-        2. Download the generated **contribution record** (a small JSON file).
-        3. Attach it to this issue.
+        1. In the integration options, run **Add controls (device learning)** to discover
+           the device's sensors and controls.
+        2. Create a **Support Archive**: *Configure → Diagnostics and service tools →
+           Create support archive*.
+        3. Attach the downloaded Support Archive (a `.zip`) to this issue.
 
-        The record contains only the device fingerprint, the register map, and the
-        label correlations. It carries **no** part number, serial number, IP, or
-        account — those are stripped on your device before the file is written.
+        The archive carries the device fingerprint, register map, and label correlations,
+        with **no** part number, serial number, IP, or account — those are stripped on your
+        device before the file is written. A maintainer turns the archive into a catalog
+        contribution.
   - type: checkboxes
     id: preflight
     attributes:
       label: Preflight
       options:
-        - label: I generated the contribution record from a learning session.
+        - label: I ran device learning on this device.
           required: true
-        - label: I will attach the record JSON to this issue.
+        - label: I will attach the Support Archive (.zip) to this issue.
           required: true
         - label: I searched existing issues first.
           required: true

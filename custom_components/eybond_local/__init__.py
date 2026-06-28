@@ -196,6 +196,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Initialize shared loader state for the integration."""
 
     from .services import async_setup_services
+    from .support.download import async_register_support_package_download_view
 
     try:
         _configure_local_metadata_roots(hass)
@@ -203,6 +204,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
             _prime_metadata_caches, _eybond_config_data_root(hass)
         )
         await async_setup_services(hass)
+        async_register_support_package_download_view(hass)
     except Exception:
         logger.exception("Failed to initialize EyeBond Local integration bootstrap")
         raise
@@ -1174,11 +1176,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     from .runtime.coordinator import EybondLocalCoordinator
     from .services import async_setup_services
+    from .support.download import async_register_support_package_download_view
 
     coordinator = None
     try:
         _configure_local_metadata_roots(hass)
         await async_setup_services(hass)
+        async_register_support_package_download_view(hass)
         await _async_self_heal_server_ip(hass, entry)
         await _async_self_heal_collector_operation_mode(hass, entry)
         await _async_self_heal_collector_cloud_family(hass, entry)

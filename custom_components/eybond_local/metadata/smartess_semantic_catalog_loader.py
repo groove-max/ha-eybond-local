@@ -239,7 +239,7 @@ def _build_smartess_cloud_alias_map(entries: dict[str, SmartEssSemanticEntry]) -
             continue
         aliases[semantic_key] = semantic_key
         titles = binding.titles or (entry.canonical_title,)
-        for title in (*titles, *binding.title_aliases):
+        for title in (*titles, *binding.title_aliases, *binding.cloud_field_ids):
             normalized = _normalize_title(title)
             if not normalized:
                 continue

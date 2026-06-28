@@ -66,6 +66,7 @@ class DiagnosticServiceTests(unittest.IsolatedAsyncioTestCase):
                 "commands": "read 171 14\n",
                 "stop_on_error": False,
                 "operation_timeout": 2.5,
+                "publish_download_copy": True,
             }
         )
         result = await _async_handle_run_diagnostic_commands(hass, call)
@@ -85,6 +86,7 @@ class DiagnosticServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(forwarded["commands"], "read 171 14\n")
         self.assertEqual(forwarded["stop_on_error"], False)
         self.assertEqual(forwarded["operation_timeout"], 2.5)
+        self.assertEqual(forwarded["publish_download_copy"], True)
 
     async def test_operation_timeout_defaults_to_none(self) -> None:
         coordinator = _FakeCoordinator()
@@ -93,6 +95,7 @@ class DiagnosticServiceTests(unittest.IsolatedAsyncioTestCase):
         await _async_handle_run_diagnostic_commands(hass, call)
         self.assertIsNone(coordinator.calls[0]["operation_timeout"])
         self.assertEqual(coordinator.calls[0]["stop_on_error"], True)
+        self.assertEqual(coordinator.calls[0]["publish_download_copy"], False)
 
     async def test_unknown_entry_raises(self) -> None:
         coordinator = _FakeCoordinator()
