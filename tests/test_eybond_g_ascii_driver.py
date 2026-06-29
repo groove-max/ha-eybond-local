@@ -69,6 +69,20 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(EybondGAsciiDriver.measurements, schema.measurement_descriptions)
         self.assertEqual(EybondGAsciiDriver.binary_sensors, schema.binary_sensor_descriptions)
 
+    def test_sparse_temperature_descriptions_are_disabled_by_default(self) -> None:
+        descriptions = {description.key: description for description in EybondGAsciiDriver.measurements}
+
+        self.assertTrue(descriptions["eybond_g_ascii_operating_mode_code"].diagnostic)
+        self.assertFalse(descriptions["eybond_g_ascii_operating_mode_code"].enabled_default)
+        self.assertFalse(descriptions["operating_mode"].diagnostic)
+        self.assertTrue(descriptions["operating_mode"].enabled_default)
+        self.assertTrue(descriptions["dcdc_control_status"].diagnostic)
+        self.assertFalse(descriptions["dcdc_control_status"].enabled_default)
+        self.assertTrue(descriptions["inverter_temperature"].diagnostic)
+        self.assertFalse(descriptions["inverter_temperature"].enabled_default)
+        self.assertTrue(descriptions["low_voltage_mppt_temperature_2"].diagnostic)
+        self.assertFalse(descriptions["low_voltage_mppt_temperature_2"].enabled_default)
+
     def test_family_match_requires_structural_g_command_payload(self) -> None:
         self.assertFalse(
             _looks_like_eybond_g_ascii(
@@ -166,7 +180,10 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         values = asyncio.run(_async_collect_eybond_g_ascii_values(session, probe=False))
 
         self.assertEqual(values["eybond_g_ascii_operating_mode_code"], "B")
-        self.assertEqual(values["dcdc_control_status"], "Charge")
+        self.assertEqual(values["operating_mode"], "Battery")
+        self.assertEqual(values["gdat0_communication_status_code"], "0")
+        self.assertEqual(values["gdat0_operating_mode_code"], "5")
+        self.assertNotIn("dcdc_control_status", values)
         self.assertEqual(values["inverter_voltage"], 219.7)
         self.assertEqual(values["inverter_frequency"], 50.01)
         self.assertEqual(values["grid_voltage"], 0.0)
@@ -188,7 +205,61 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(values["pv_energy_today"], 5.89)
         self.assertEqual(values["pv_energy_total"], 363.63)
         self.assertEqual(values["battery_voltage"], 27.5)
-        self.assertEqual(values["battery_current"], 0.0)
+        self.assertEqual(values["battery_current"], 15.8)
+
+    def test_gbat_zero_does_not_replace_live_gdat0_battery_current(self) -> None:
+        session = _FakeEybondGAsciiSession(
+            {
+                "GMOD": "B",
+                "GPDAT0": (
+                    "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                    "04.11 26.4 014.7 025 0904 0904 100 172.8 014.7 0844 048.0"
+                ),
+                "GPV": (
+                    "183.1 027.6 14.71 05.31 00972 03 1 0 448.0 449.0 "
+                    "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                    "00589 00000 36363 0000000000000000"
+                ),
+                "GBAT": "027.5 000.00 02 21.6 23.2",
+            }
+        )
+
+        values = asyncio.run(_async_collect_eybond_g_ascii_values(session, probe=False))
+
+        self.assertEqual(values["battery_current"], 14.7)
+
+    def test_gmod_operating_mode_codes_follow_protocol_document(self) -> None:
+        expected = {
+            "P": "Power On",
+            "S": "Standby",
+            "L": "Line",
+            "B": "Battery",
+            "F": "Fault",
+            "D": "Shutdown",
+            "X": "Test",
+        }
+
+        for code, mode in expected.items():
+            with self.subTest(code=code):
+                session = _FakeEybondGAsciiSession(
+                    {
+                        "GMOD": code,
+                        "GPDAT0": (
+                            "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                            "04.11 26.4 000.0 025 0904 0904 100 172.8 000.0 0844 048.0"
+                        ),
+                        "GPV": (
+                            "183.1 027.6 00.00 05.31 00972 03 1 0 448.0 449.0 "
+                            "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                            "00589 00000 36363 0000000000000000"
+                        ),
+                    }
+                )
+
+                values = asyncio.run(_async_collect_eybond_g_ascii_values(session, probe=False))
+
+                self.assertEqual(values["eybond_g_ascii_operating_mode_code"], code)
+                self.assertEqual(values["operating_mode"], mode)
 
     def test_decodes_documented_read_only_commands(self) -> None:
         session = _FakeEybondGAsciiSession(
@@ -291,6 +362,29 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertNotIn("bms_voltage", values)
         self.assertNotIn("eybond_g_ascii_gbms_fields", values)
 
+    def test_short_gbms_response_is_ignored_as_non_bms_payload(self) -> None:
+        session = _FakeEybondGAsciiSession(
+            {
+                "GMOD": "B",
+                "GPDAT0": (
+                    "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                    "04.11 26.4 015.8 025 0904 0904 100 172.8 015.8 0844 048.0"
+                ),
+                "GPV": (
+                    "183.1 027.6 00.43 05.31 00972 03 1 0 448.0 449.0 "
+                    "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                    "00589 00001 36363 0000000000000000."
+                ),
+                "GBMS": "17 03 13",
+            }
+        )
+
+        values = asyncio.run(_async_collect_eybond_g_ascii_values(session, probe=False))
+
+        self.assertNotIn("bms_voltage", values)
+        self.assertNotIn("bms_communication_status_code", values)
+        self.assertNotIn("eybond_g_ascii_gbms_fields", values)
+
     def test_decodes_gbms_only_when_real_bms_values_are_present(self) -> None:
         session = _FakeEybondGAsciiSession(
             {
@@ -375,7 +469,8 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         values = asyncio.run(read_fixture_values(context))
 
         self.assertEqual(context.inverter.serial_number, "A0000000000001")
-        self.assertEqual(values["dcdc_control_status"], "Charge")
+        self.assertEqual(values["operating_mode"], "Battery")
+        self.assertNotIn("dcdc_control_status", values)
         self.assertEqual(values["rated_output_voltage"], 220.0)
         self.assertEqual(values["output_active_power"], 244.0)
         self.assertEqual(values["battery_capacity"], 50.0)
@@ -443,6 +538,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertGreater(probe["failure_count"], 0)
         by_command = {item["command"]: item for item in probe["commands"]}
         self.assertEqual(by_command["GPDAT0"]["field_count"], 22)
+        self.assertIsInstance(by_command["GPDAT0"]["duration_ms"], int)
         self.assertGreater(by_command["GPDAT0"]["known_field_count"], 0)
         self.assertIn("known_fields", by_command["GPDAT0"])
         self.assertEqual(by_command["GPDAT0"]["unknown_field_count"], 5)

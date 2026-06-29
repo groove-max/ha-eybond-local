@@ -283,6 +283,9 @@ def _install_coordinator_stubs() -> None:
     support_bundle.export_support_bundle = lambda *args, **kwargs: None
 
     support_cloud = _ensure_module("custom_components.eybond_local.support.cloud_evidence")
+    support_cloud.fetch_and_export_device_bundle_cloud_evidence = (
+        lambda *args, **kwargs: None
+    )
     support_cloud.fetch_and_export_smartess_device_bundle_cloud_evidence = (
         lambda *args, **kwargs: None
     )
@@ -633,6 +636,62 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             notification_id,
             "eybond_local_proxy_capture_entry-1_session_bundle",
         )
+
+    def test_smartess_cloud_export_available_requires_smartess_provider(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_pn": "A0000000000001",
+                "collector_cloud_family": "valuecloud_at",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._runtime = types.SimpleNamespace(
+            collector_server_endpoint_rollback_target="",
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+
+        self.assertFalse(coordinator.smartess_cloud_export_available)
+        self.assertEqual(coordinator.cloud_evidence_provider, "valuecloud")
+        self.assertTrue(coordinator.cloud_evidence_export_available)
+
+    def test_smartess_cloud_export_available_keeps_smartess_profiles(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_pn": "E5000020000000",
+                "collector_cloud_family": "smartess_at",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._runtime = types.SimpleNamespace(
+            collector_server_endpoint_rollback_target="",
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+
+        self.assertTrue(coordinator.smartess_cloud_export_available)
+        self.assertEqual(coordinator.cloud_evidence_provider, "smartess")
+        self.assertTrue(coordinator.cloud_evidence_export_available)
+
+    def test_cloud_evidence_export_available_rejects_unknown_provider(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_pn": "A9999999999999",
+                "collector_cloud_family": "unknown",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._runtime = types.SimpleNamespace(
+            collector_server_endpoint_rollback_target="",
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+
+        self.assertEqual(coordinator.cloud_evidence_provider, "")
+        self.assertFalse(coordinator.cloud_evidence_export_available)
 
     def test_absolute_local_download_url_makes_signed_api_link_browser_safe(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -4934,6 +4993,125 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertEqual(calls, [("update", {"data": {"control_mode": "full"}, "options": {"control_mode": "full"}})])
 
         asyncio.run(_run())
+
+    def test_poll_recommended_interval_keeps_headroom_after_overrun(self) -> None:
+        recommended = self.coordinator_module._poll_recommended_interval_seconds(
+            current_interval=10,
+            observed_duration=11.2,
+        )
+
+        self.assertEqual(recommended, 16)
+
+    def test_poll_metrics_auto_adjusts_interval_after_stable_overrun(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        entry = types.SimpleNamespace(
+            entry_id="entry-poll",
+            options={"poll_interval": 10},
+        )
+        updates: list[dict[str, object]] = []
+        notifications: list[dict[str, object]] = []
+
+        def _async_update_entry(config_entry, **kwargs) -> None:
+            updates.append(dict(kwargs))
+            if "options" in kwargs:
+                config_entry.options = dict(kwargs["options"])
+
+        def _async_create(hass, body, *, title, notification_id) -> None:
+            del hass
+            notifications.append(
+                {
+                    "body": body,
+                    "title": title,
+                    "notification_id": notification_id,
+                }
+            )
+
+        coordinator.config_entry = entry
+        coordinator.hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(language="en"),
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry),
+        )
+        coordinator._suppress_entry_reload_count = 0
+        coordinator._poll_duration_ewma_seconds = 0.0
+        coordinator._poll_duration_max_seconds = 0.0
+        coordinator._poll_recent_durations_seconds = []
+        coordinator._collector_poll_overrun_streak = 0
+        coordinator._collector_poll_high_utilization_streak = 0
+        coordinator._poll_last_notification_monotonic = 0.0
+        self.coordinator_module.persistent_notification.async_create = _async_create
+
+        snapshots = [
+            self.RuntimeSnapshot(values={"collector_poll_duration_ms": 12000})
+            for _ in range(3)
+        ]
+        for snapshot in snapshots:
+            coordinator._record_poll_cycle_metrics(
+                snapshot,
+                poll_interval_seconds=10,
+            )
+
+        self.assertEqual(entry.options["poll_interval"], 18)
+        self.assertEqual(int(coordinator.update_interval.total_seconds()), 18)
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0]["options"]["poll_interval"], 18)
+        self.assertEqual(len(notifications), 1)
+        self.assertTrue(snapshots[-1].values["collector_poll_interval_auto_adjusted"])
+        self.assertEqual(
+            snapshots[-1].values["collector_poll_interval_auto_adjusted_from_seconds"],
+            10,
+        )
+        self.assertEqual(
+            snapshots[-1].values["collector_poll_interval_auto_adjusted_to_seconds"],
+            18,
+        )
+
+    def test_poll_metrics_warns_high_utilization_without_auto_adjust(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        entry = types.SimpleNamespace(
+            entry_id="entry-poll",
+            options={"poll_interval": 10},
+        )
+        updates: list[dict[str, object]] = []
+        notifications: list[dict[str, object]] = []
+
+        def _async_create(hass, body, *, title, notification_id) -> None:
+            del hass
+            notifications.append(
+                {
+                    "body": body,
+                    "title": title,
+                    "notification_id": notification_id,
+                }
+            )
+
+        coordinator.config_entry = entry
+        coordinator.hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(language="en"),
+            config_entries=types.SimpleNamespace(
+                async_update_entry=lambda *_args, **kwargs: updates.append(dict(kwargs))
+            ),
+        )
+        coordinator._poll_duration_ewma_seconds = 0.0
+        coordinator._poll_duration_max_seconds = 0.0
+        coordinator._poll_recent_durations_seconds = []
+        coordinator._collector_poll_overrun_streak = 0
+        coordinator._collector_poll_high_utilization_streak = 0
+        coordinator._poll_last_notification_monotonic = 0.0
+        self.coordinator_module.persistent_notification.async_create = _async_create
+
+        async def _run() -> None:
+            for _ in range(3):
+                coordinator._record_poll_cycle_metrics(
+                    self.RuntimeSnapshot(values={"collector_poll_duration_ms": 9200}),
+                    poll_interval_seconds=10,
+                )
+
+        asyncio.run(_run())
+
+        self.assertEqual(updates, [])
+        self.assertEqual(entry.options["poll_interval"], 10)
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("polling cycle is using", notifications[0]["body"])
 
 
 if __name__ == "__main__":

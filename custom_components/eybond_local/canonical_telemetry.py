@@ -451,12 +451,17 @@ def _compute_eybond_g_ascii_battery_power(
 
     voltage_value = float(voltage)
     current_value = float(current)
+    mode_code = str(mode).strip().upper() if mode is not None else ""
+    if current_value == 0.0 and mode_code.startswith("B"):
+        current_value = _positive_numeric(
+            values.get("pv_charging_current"),
+            values.get("charging_current"),
+        )
     if current_value == 0.0:
         return 0.0
     if current_value < 0.0:
         return round(voltage_value * current_value, 4)
 
-    mode_code = str(mode).strip().upper() if mode is not None else ""
     if mode_code.startswith("B"):
         return round(voltage_value * current_value, 4)
     if mode_code.startswith("0"):
@@ -531,6 +536,14 @@ def _non_negative_numeric(value: Any) -> float | None:
     if numeric is None:
         return None
     return max(0.0, numeric)
+
+
+def _positive_numeric(*values: Any) -> float:
+    for value in values:
+        numeric = _numeric(value)
+        if numeric is not None and numeric > 0.0:
+            return numeric
+    return 0.0
 
 
 def _grid_present(values: dict[str, Any]) -> bool | None:

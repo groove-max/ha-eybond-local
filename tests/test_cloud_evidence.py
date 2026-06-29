@@ -15,7 +15,9 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.support.cloud_evidence import (
     build_cloud_evidence_payload,
     export_cloud_evidence,
+    fetch_and_export_device_bundle_cloud_evidence,
     fetch_and_export_smartess_device_bundle_cloud_evidence,
+    fetch_and_export_valuecloud_device_bundle_cloud_evidence,
     load_latest_cloud_evidence,
 )
 
@@ -171,7 +173,7 @@ class CloudEvidenceTests(unittest.TestCase):
             }
 
             with patch(
-                "custom_components.eybond_local.support.cloud_evidence.fetch_device_bundle_for_collector",
+                "custom_components.eybond_local.support.cloud_evidence.fetch_smartess_device_bundle_for_collector",
                 return_value=bundle_payload,
             ):
                 record = fetch_and_export_smartess_device_bundle_cloud_evidence(
@@ -185,6 +187,73 @@ class CloudEvidenceTests(unittest.TestCase):
             self.assertTrue(record.path.exists())
             self.assertEqual(record.payload["match"]["collector_pn"], "E5000020000000")
             self.assertEqual(record.payload["summary"]["settings_write_action"], "ctrlDevice")
+
+    def test_fetch_and_export_valuecloud_device_bundle_cloud_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            bundle_payload = {
+                "request": {
+                    "command": "valuecloud-device-bundle",
+                    "provider": "valuecloud",
+                    "params": {
+                        "collector_pn": "A0000000000001",
+                        "pn": "A0000000000001",
+                        "sn": "TY-SIC-3.6KBE-W1",
+                        "devcode": 2452,
+                        "devaddr": 255,
+                    },
+                },
+                "responses": {
+                    "device_list": {},
+                    "device_detail": {},
+                    "device_pars": {},
+                    "control_strategy": {},
+                    "device_ctrl": {"status": "error", "error": "timeout"},
+                },
+                "normalized": {
+                    "device_list": {"device_count": 1},
+                    "device_detail": {"section_counts": {"gd_": 3, "pv_": 4}},
+                    "device_pars": {"field_count": 7, "current_values_included": True},
+                    "control_strategy": {"field_count": 2, "current_values_included": False},
+                },
+            }
+
+            with patch(
+                "custom_components.eybond_local.support.cloud_evidence.fetch_valuecloud_device_bundle_for_collector",
+                return_value=bundle_payload,
+            ):
+                record = fetch_and_export_valuecloud_device_bundle_cloud_evidence(
+                    config_dir=config_dir,
+                    username="test-user",
+                    password="secret",
+                    collector_pn="A0000000000001",
+                    source="valuecloud_cloud_diagnostics",
+                )
+
+            self.assertTrue(record.path.exists())
+            self.assertEqual(record.payload["source"], "valuecloud_cloud_diagnostics")
+            self.assertEqual(record.payload["summary"]["provider"], "valuecloud")
+            self.assertEqual(record.payload["summary"]["parameter_field_count"], 7)
+            self.assertEqual(record.payload["summary"]["optional_action_error_count"], 1)
+
+    def test_generic_fetch_and_export_dispatches_valuecloud(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            with patch(
+                "custom_components.eybond_local.support.cloud_evidence.fetch_and_export_valuecloud_device_bundle_cloud_evidence",
+                return_value="sentinel",
+            ) as fetch:
+                record = fetch_and_export_device_bundle_cloud_evidence(
+                    provider="valuecloud",
+                    config_dir=config_dir,
+                    username="test-user",
+                    password="secret",
+                    collector_pn="A0000000000001",
+                    source="valuecloud_cloud_diagnostics",
+                )
+
+            self.assertEqual(record, "sentinel")
+            fetch.assert_called_once()
 
 
 if __name__ == "__main__":

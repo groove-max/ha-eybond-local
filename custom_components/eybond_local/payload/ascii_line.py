@@ -107,3 +107,20 @@ class AsciiLineSession:
             raise AsciiLineError("request_timeout") from exc
 
         return response
+
+    def last_transport_timing(self) -> dict[str, int]:
+        """Return timing metrics from transports that expose raw passthrough data."""
+
+        collector = getattr(self._transport, "collector_info", None)
+        if collector is None:
+            return {}
+        timing: dict[str, int] = {}
+        for attr, key in (
+            ("raw_last_spacing_wait_ms", "spacing_wait_ms"),
+            ("raw_last_response_duration_ms", "response_duration_ms"),
+            ("raw_last_total_duration_ms", "transport_total_duration_ms"),
+        ):
+            value = getattr(collector, attr, None)
+            if isinstance(value, int):
+                timing[key] = value
+        return timing

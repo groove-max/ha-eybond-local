@@ -1,4 +1,4 @@
-"""Helpers for storing external SmartESS cloud evidence under one HA config dir."""
+"""Helpers for storing external cloud evidence under one HA config dir."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ..const import LOCAL_CLOUD_EVIDENCE_DIR, LOCAL_METADATA_DIR
-from ..smartess_cloud import fetch_device_bundle_for_collector
+from ..smartess_cloud import fetch_device_bundle_for_collector as fetch_smartess_device_bundle_for_collector
+from ..valuecloud_cloud import fetch_device_bundle_for_collector as fetch_valuecloud_device_bundle_for_collector
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,7 @@ def fetch_and_export_smartess_device_bundle_cloud_evidence(
     if not normalized_collector_pn:
         raise RuntimeError("smartess_collector_pn_not_available")
 
-    bundle_payload = fetch_device_bundle_for_collector(
+    bundle_payload = fetch_smartess_device_bundle_for_collector(
         username=username,
         password=password,
         collector_pn=normalized_collector_pn,
@@ -51,6 +52,73 @@ def fetch_and_export_smartess_device_bundle_cloud_evidence(
         evidence=evidence,
     )
     return CloudEvidenceRecord(path=path, payload=evidence)
+
+
+def fetch_and_export_valuecloud_device_bundle_cloud_evidence(
+    *,
+    config_dir: Path,
+    username: str,
+    password: str,
+    collector_pn: str,
+    source: str,
+    entry_id: str = "",
+) -> CloudEvidenceRecord:
+    """Fetch one ValueCloud device bundle by collector PN and persist it as cloud evidence."""
+
+    normalized_collector_pn = str(collector_pn or "").strip()
+    if not normalized_collector_pn:
+        raise RuntimeError("valuecloud_collector_pn_not_available")
+
+    bundle_payload = fetch_valuecloud_device_bundle_for_collector(
+        username=username,
+        password=password,
+        collector_pn=normalized_collector_pn,
+    )
+    evidence = build_valuecloud_device_bundle_cloud_evidence(
+        bundle_payload,
+        source=source,
+        entry_id=entry_id,
+        collector_pn=normalized_collector_pn,
+    )
+    path = export_cloud_evidence(
+        config_dir=config_dir,
+        evidence=evidence,
+    )
+    return CloudEvidenceRecord(path=path, payload=evidence)
+
+
+def fetch_and_export_device_bundle_cloud_evidence(
+    *,
+    provider: str,
+    config_dir: Path,
+    username: str,
+    password: str,
+    collector_pn: str,
+    source: str,
+    entry_id: str = "",
+) -> CloudEvidenceRecord:
+    """Fetch and persist one provider-specific cloud-evidence bundle."""
+
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "smartess":
+        return fetch_and_export_smartess_device_bundle_cloud_evidence(
+            config_dir=config_dir,
+            username=username,
+            password=password,
+            collector_pn=collector_pn,
+            source=source,
+            entry_id=entry_id,
+        )
+    if normalized_provider == "valuecloud":
+        return fetch_and_export_valuecloud_device_bundle_cloud_evidence(
+            config_dir=config_dir,
+            username=username,
+            password=password,
+            collector_pn=collector_pn,
+            source=source,
+            entry_id=entry_id,
+        )
+    raise RuntimeError(f"cloud_evidence_provider_not_supported:{normalized_provider or 'unknown'}")
 
 
 def cloud_evidence_root(config_dir: Path) -> Path:
@@ -155,6 +223,62 @@ def build_smartess_device_bundle_cloud_evidence(
     )
 
 
+def build_valuecloud_device_bundle_cloud_evidence(
+    bundle_payload: dict[str, Any],
+    *,
+    source: str,
+    entry_id: str = "",
+    collector_pn: str = "",
+) -> dict[str, Any]:
+    """Build one normalized cloud-evidence payload from a ValueCloud device bundle."""
+
+    params = bundle_payload.get("request", {}).get("params", {})
+    normalized = bundle_payload.get("normalized", {})
+    normalized_list = normalized.get("device_list") if isinstance(normalized, dict) else None
+    normalized_detail = normalized.get("device_detail") if isinstance(normalized, dict) else None
+    normalized_pars = normalized.get("device_pars") if isinstance(normalized, dict) else None
+    normalized_strategy = normalized.get("control_strategy") if isinstance(normalized, dict) else None
+    normalized_ctrl = normalized.get("device_ctrl") if isinstance(normalized, dict) else None
+    section_counts = (
+        normalized_detail.get("section_counts") if isinstance(normalized_detail, dict) else None
+    )
+    responses = bundle_payload.get("responses") or {}
+    optional_errors = sum(
+        1
+        for response in responses.values()
+        if isinstance(response, dict) and response.get("status") == "error"
+    )
+    return build_cloud_evidence_payload(
+        source=source,
+        payload=bundle_payload,
+        entry_id=entry_id,
+        collector_pn=collector_pn or str(params.get("collector_pn") or params.get("pn") or ""),
+        pn=str(params.get("pn") or ""),
+        sn=str(params.get("sn") or ""),
+        devcode=_maybe_int(params.get("devcode")),
+        devaddr=_maybe_int(params.get("devaddr")),
+        summary={
+            "provider": "valuecloud",
+            "actions": list(responses.keys()),
+            "device_count": normalized_list.get("device_count") if isinstance(normalized_list, dict) else None,
+            "detail_sections": sorted(section_counts.keys()) if isinstance(section_counts, dict) else [],
+            "parameter_field_count": (
+                normalized_pars.get("field_count") if isinstance(normalized_pars, dict) else None
+            ),
+            "control_strategy_field_count": (
+                normalized_strategy.get("field_count") if isinstance(normalized_strategy, dict) else None
+            ),
+            "device_ctrl_field_count": (
+                normalized_ctrl.get("field_count") if isinstance(normalized_ctrl, dict) else None
+            ),
+            "current_values_included": any(
+                bool(item.get("current_values_included"))
+                for item in (normalized_pars, normalized_strategy, normalized_ctrl)
+                if isinstance(item, dict)
+            ),
+            "optional_action_error_count": optional_errors,
+        },
+    )
 def export_cloud_evidence(
     *,
     config_dir: Path,

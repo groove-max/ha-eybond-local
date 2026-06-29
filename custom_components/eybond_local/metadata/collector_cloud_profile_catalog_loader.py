@@ -38,6 +38,7 @@ class CollectorCloudProfileCatalog:
     """Declarative collector cloud profile catalog with lookup indexes."""
 
     profiles: dict[str, CollectorCloudProfileCatalogEntry]
+    providers: dict[str, str]
     families_by_host: dict[str, str]
     families_by_port: dict[int, str]
     default_hosts: dict[str, str]
@@ -63,6 +64,7 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
     )
 
     profiles: dict[str, CollectorCloudProfileCatalogEntry] = {}
+    providers: dict[str, str] = {}
     families_by_host: dict[str, str] = {}
     families_by_port: dict[int, str] = {}
     default_hosts: dict[str, str] = {}
@@ -81,6 +83,8 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
             continue
 
         profiles[family] = entry
+        if entry.provider:
+            providers[family] = entry.provider
         if entry.default_host:
             default_hosts[family] = entry.default_host
         if entry.default_port:
@@ -109,6 +113,7 @@ def load_collector_cloud_profile_catalog() -> CollectorCloudProfileCatalog:
 
     return CollectorCloudProfileCatalog(
         profiles=profiles,
+        providers=providers,
         families_by_host=families_by_host,
         families_by_port=families_by_port,
         default_hosts=default_hosts,
@@ -149,6 +154,17 @@ def resolve_collector_cloud_family_by_port(port: object) -> str:
 
     catalog = load_collector_cloud_profile_catalog()
     return catalog.families_by_port.get(normalized_port, "")
+
+
+def resolve_collector_cloud_provider(cloud_family: object) -> str:
+    """Resolve the cloud-account provider for one collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if not normalized_family:
+        return ""
+
+    catalog = load_collector_cloud_profile_catalog()
+    return catalog.providers.get(normalized_family, "")
 
 
 def resolve_collector_cloud_default_host(cloud_family: object) -> str:

@@ -117,7 +117,7 @@ def export_support_package(
             "note": (
                 "Send this ZIP file to the developer. It includes runtime metadata, "
                 "raw capture evidence, an anonymized replay fixture, and any "
-                "matching SmartESS cloud evidence exported into the HA config dir."
+                "matching cloud evidence exported into the HA config dir."
             ),
         },
         "archive_members": {
@@ -174,7 +174,7 @@ def export_support_package(
     readme_lines.extend(
         [
             "",
-            "When SmartESS cloud evidence is present, support_bundle.json references evidence/cloud_evidence.json instead of duplicating the full payload.",
+            "When cloud evidence is present, support_bundle.json references evidence/cloud_evidence.json instead of duplicating the full payload.",
             "",
             "raw_capture.json may include supplemental family-level discovery ranges when the driver collects extra evidence for nearby variants.",
         ]

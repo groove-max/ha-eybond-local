@@ -57,7 +57,7 @@
       "identity_strategy": "at_dtupn",
       "raw_passthrough_bootstrap": "none",
       "raw_passthrough_frame_format": "plain_line",
-      "raw_passthrough_min_interval_ms": 1000
+      "raw_passthrough_min_interval_ms": 0
     }
   ]
 }

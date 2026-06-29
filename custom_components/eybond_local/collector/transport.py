@@ -279,6 +279,9 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             raw_last_timeout_request_ascii=collector.raw_last_timeout_request_ascii,
             raw_last_parser=collector.raw_last_parser,
             raw_last_frame_format=collector.raw_last_frame_format,
+            raw_last_spacing_wait_ms=collector.raw_last_spacing_wait_ms,
+            raw_last_response_duration_ms=collector.raw_last_response_duration_ms,
+            raw_last_total_duration_ms=collector.raw_last_total_duration_ms,
             collector_cloud_family=collector.collector_cloud_family,
             collector_cloud_family_source=collector.collector_cloud_family_source,
             collector_cloud_family_confidence=collector.collector_cloud_family_confidence,
@@ -927,6 +930,7 @@ class _CollectorAtConnection:
             raise ConnectionError("collector_not_connected")
 
         async with self._request_lock:
+            total_started = asyncio.get_running_loop().time()
             await self._async_bootstrap_raw_passthrough_locked(
                 request_timeout=min(float(request_timeout), 2.0),
             )
@@ -937,6 +941,7 @@ class _CollectorAtConnection:
             self._collector.raw_last_request_hex = payload.hex()
             self._collector.raw_last_request_ascii = _short_ascii(payload)
             self._collector.raw_last_frame_format = self._raw_passthrough_frame_format
+            spacing_wait_ms = 0
             try:
                 logger.debug(
                     "EyeBond raw passthrough write remote=%s frame=%s payload=%r",
@@ -944,15 +949,24 @@ class _CollectorAtConnection:
                     self._raw_passthrough_frame_format or "default",
                     payload,
                 )
-                await self._async_wait_raw_passthrough_spacing_locked()
+                spacing_wait_ms = await self._async_wait_raw_passthrough_spacing_locked()
+                response_started = asyncio.get_running_loop().time()
                 await self._async_write(payload)
                 self._raw_passthrough_last_write_monotonic = (
                     asyncio.get_running_loop().time()
                 )
                 response = await asyncio.wait_for(future, timeout=request_timeout)
+                finished = asyncio.get_running_loop().time()
                 self._collector.raw_response_count += 1
                 self._collector.raw_last_response_hex = response.hex()
                 self._collector.raw_last_response_ascii = _short_ascii(response)
+                self._collector.raw_last_spacing_wait_ms = spacing_wait_ms
+                self._collector.raw_last_response_duration_ms = int(
+                    round((finished - response_started) * 1000.0)
+                )
+                self._collector.raw_last_total_duration_ms = int(
+                    round((finished - total_started) * 1000.0)
+                )
                 logger.debug(
                     "EyeBond raw passthrough response remote=%s parser=%s payload=%r",
                     self._collector.remote_ip,
@@ -961,8 +975,13 @@ class _CollectorAtConnection:
                 )
                 return response
             except asyncio.TimeoutError:
+                finished = asyncio.get_running_loop().time()
                 self._collector.raw_timeout_count += 1
                 self._collector.raw_last_timeout_request_ascii = _short_ascii(payload)
+                self._collector.raw_last_spacing_wait_ms = spacing_wait_ms
+                self._collector.raw_last_total_duration_ms = int(
+                    round((finished - total_started) * 1000.0)
+                )
                 logger.debug(
                     "EyeBond raw passthrough timeout remote=%s frame=%s payload=%r last_parser=%s last_response=%r",
                     self._collector.remote_ip,
@@ -976,14 +995,17 @@ class _CollectorAtConnection:
                 if self._pending_raw_response is future:
                     self._pending_raw_response = None
 
-    async def _async_wait_raw_passthrough_spacing_locked(self) -> None:
+    async def _async_wait_raw_passthrough_spacing_locked(self) -> int:
         interval = self._raw_passthrough_min_interval
         if interval <= 0:
-            return
+            return 0
         elapsed = asyncio.get_running_loop().time() - self._raw_passthrough_last_write_monotonic
         remaining = interval - elapsed
         if remaining > 0:
+            started = asyncio.get_running_loop().time()
             await asyncio.sleep(remaining)
+            return int(round((asyncio.get_running_loop().time() - started) * 1000.0))
+        return 0
 
     async def _async_query_locked(
         self,

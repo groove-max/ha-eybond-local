@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 import logging
+import math
 from pathlib import Path
 import socket
 from typing import Any
@@ -45,6 +46,9 @@ from ..collector.capabilities import (
 from ..collector.transport_profile import (
     collector_cloud_family_from_entry_context,
     resolve_collector_transport_profile,
+)
+from ..metadata.collector_cloud_profile_catalog_loader import (
+    resolve_collector_cloud_provider,
 )
 from ..const import (
     CONF_COLLECTOR_IP,
@@ -142,7 +146,7 @@ from ..schema import (
 )
 from ..support.bundle import build_support_bundle_payload, export_support_bundle
 from ..support.cloud_evidence import (
-    fetch_and_export_smartess_device_bundle_cloud_evidence,
+    fetch_and_export_device_bundle_cloud_evidence,
     load_latest_cloud_evidence,
 )
 from ..support.collector_registry import (
@@ -218,6 +222,13 @@ _DEFAULT_PROXY_CAPTURE_PORT = 18899
 _COLLECTOR_HA_PRIMARY_RECONCILE_COOLDOWN_SECONDS = 300.0
 _EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY = "effective_metadata_snapshot"
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
+_POLL_INTERVAL_MIN_SECONDS = 2
+_POLL_INTERVAL_MAX_SECONDS = 3600
+_POLL_UTILIZATION_WARNING_RATIO = 0.9
+_POLL_OVERRUN_RATIO = 1.0
+_POLL_STABLE_STREAK_THRESHOLD = 3
+_POLL_RECOMMENDED_TARGET_UTILIZATION = 0.7
+_POLL_NOTIFICATION_COOLDOWN_SECONDS = 12 * 60 * 60
 def _bounded_shadow_learning_artifact_path(
     *,
     config_dir: Path,
@@ -280,6 +291,26 @@ _LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
         "ru": "Архив поддержки готов.\n\n[Скачать архив поддержки]({download_url})",
         "uk": "Архів підтримки готовий.\n\n[Завантажити архів підтримки]({download_url})",
     },
+    "poll_interval_auto_adjust_title": {
+        "en": "EyeBond Local adjusted polling interval",
+        "ru": "EyeBond Local изменил интервал опроса",
+        "uk": "EyeBond Local змінив інтервал опитування",
+    },
+    "poll_interval_auto_adjust_body": {
+        "en": "The device polling cycle was consistently slower than the configured interval. EyeBond Local changed the polling interval from {old_interval}s to {new_interval}s to keep the data channel stable.\n\nLast cycle: {duration_ms} ms. Utilization before change: {utilization_percent}%.",
+        "ru": "Цикл опроса устройства стабильно занимал больше времени, чем настроенный интервал. EyeBond Local изменил интервал опроса с {old_interval}s на {new_interval}s, чтобы канал данных работал стабильно.\n\nПоследний цикл: {duration_ms} ms. Загрузка до изменения: {utilization_percent}%.",
+        "uk": "Цикл опитування пристрою стабільно тривав довше, ніж налаштований інтервал. EyeBond Local змінив інтервал опитування з {old_interval}s на {new_interval}s, щоб канал даних працював стабільно.\n\nОстанній цикл: {duration_ms} ms. Завантаження до зміни: {utilization_percent}%.",
+    },
+    "poll_interval_high_utilization_title": {
+        "en": "EyeBond Local polling interval is tight",
+        "ru": "EyeBond Local: интервал опроса близок к пределу",
+        "uk": "EyeBond Local: інтервал опитування близький до межі",
+    },
+    "poll_interval_high_utilization_body": {
+        "en": "The device polling cycle is using about {utilization_percent}% of the configured {poll_interval}s interval. If this continues or increases, EyeBond Local may automatically raise the polling interval. Recommended minimum for this device is about {recommended_interval}s.",
+        "ru": "Цикл опроса устройства использует около {utilization_percent}% настроенного интервала {poll_interval}s. Если это продолжится или усилится, EyeBond Local может автоматически увеличить интервал опроса. Рекомендуемый минимум для этого устройства — около {recommended_interval}s.",
+        "uk": "Цикл опитування пристрою використовує близько {utilization_percent}% налаштованого інтервалу {poll_interval}s. Якщо це продовжиться або посилиться, EyeBond Local може автоматично збільшити інтервал опитування. Рекомендований мінімум для цього пристрою — близько {recommended_interval}s.",
+    },
 }
 
 
@@ -299,6 +330,40 @@ def _localized_runtime_text(hass, key: str, **placeholders: Any) -> str:
 def _proxy_capture_notification_id(entry_id: str, bundle_path: Path | str) -> str:
     stem = Path(str(bundle_path or "capture")).stem or "capture"
     return f"{DOMAIN}_proxy_capture_{entry_id}_{stem}"
+
+
+def _clamp_poll_interval_seconds(value: object) -> int:
+    try:
+        interval = int(math.ceil(float(value)))
+    except (TypeError, ValueError, OverflowError):
+        interval = DEFAULT_POLL_INTERVAL
+    return min(
+        _POLL_INTERVAL_MAX_SECONDS,
+        max(_POLL_INTERVAL_MIN_SECONDS, interval),
+    )
+
+
+def _poll_recommended_interval_seconds(
+    *,
+    current_interval: float,
+    observed_duration: float,
+) -> int:
+    """Return a safe minimum poll interval for the observed refresh duration."""
+
+    try:
+        duration = max(0.0, float(observed_duration))
+    except (TypeError, ValueError):
+        duration = 0.0
+    try:
+        current = max(0.0, float(current_interval))
+    except (TypeError, ValueError):
+        current = float(DEFAULT_POLL_INTERVAL)
+    if duration <= 0.0:
+        return _clamp_poll_interval_seconds(current)
+    recommended = math.ceil(duration / _POLL_RECOMMENDED_TARGET_UTILIZATION)
+    if duration >= current:
+        recommended = max(recommended, math.ceil(current) + 1)
+    return _clamp_poll_interval_seconds(recommended)
 
 
 def _format_collector_server_endpoint(
@@ -723,6 +788,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             busy_error="support_package_export_in_progress"
         )
         self._runtime_operation_lock = asyncio.Lock()
+        self._poll_duration_ewma_seconds = 0.0
+        self._poll_duration_max_seconds = 0.0
+        self._poll_recent_durations_seconds: list[float] = []
+        self._collector_poll_overrun_streak = 0
+        self._collector_poll_high_utilization_streak = 0
+        self._poll_last_notification_monotonic = 0.0
 
     @property
     def proxy_capture_configured_duration_minutes(self) -> int:
@@ -1003,6 +1074,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                         "raw_unhandled_line_count": getattr(
                             collector,
                             "raw_unhandled_line_count",
+                            0,
+                        ),
+                        "raw_last_spacing_wait_ms": getattr(
+                            collector,
+                            "raw_last_spacing_wait_ms",
+                            0,
+                        ),
+                        "raw_last_response_duration_ms": getattr(
+                            collector,
+                            "raw_last_response_duration_ms",
+                            0,
+                        ),
+                        "raw_last_total_duration_ms": getattr(
+                            collector,
+                            "raw_last_total_duration_ms",
                             0,
                         ),
                         "raw_last_request_ascii": getattr(
@@ -2159,7 +2245,203 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         async with self._runtime_operation_lock:
             if self._diagnostic_active and self.data is not None:
                 return self.data
-            return await self._async_update_data_with_runtime_lock()
+            poll_interval = self._configured_poll_interval_seconds()
+            snapshot = await self._async_update_data_with_runtime_lock()
+            self._record_poll_cycle_metrics(
+                snapshot,
+                poll_interval_seconds=poll_interval,
+            )
+            return snapshot
+
+    def _configured_poll_interval_seconds(self) -> int:
+        config_entry = getattr(self, "config_entry", None)
+        options = getattr(config_entry, "options", {}) or {}
+        return _clamp_poll_interval_seconds(
+            options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
+        )
+
+    def _record_poll_cycle_metrics(
+        self,
+        snapshot: RuntimeSnapshot,
+        *,
+        poll_interval_seconds: int,
+    ) -> None:
+        """Publish poll-pipeline utilization and protect against stable overruns."""
+
+        values = getattr(snapshot, "values", None)
+        if not isinstance(values, dict):
+            return
+        try:
+            duration = max(0.0, float(values.get("collector_poll_duration_ms")) / 1000.0)
+        except (TypeError, ValueError):
+            return
+        interval = _clamp_poll_interval_seconds(poll_interval_seconds)
+        self._poll_duration_max_seconds = max(
+            float(getattr(self, "_poll_duration_max_seconds", 0.0) or 0.0),
+            duration,
+        )
+        current_ewma = float(getattr(self, "_poll_duration_ewma_seconds", 0.0) or 0.0)
+        if current_ewma <= 0.0:
+            self._poll_duration_ewma_seconds = duration
+        else:
+            self._poll_duration_ewma_seconds = (
+                current_ewma * 0.7 + duration * 0.3
+            )
+        recent = list(getattr(self, "_poll_recent_durations_seconds", []) or [])
+        recent.append(duration)
+        self._poll_recent_durations_seconds = recent
+        if len(self._poll_recent_durations_seconds) > 20:
+            self._poll_recent_durations_seconds = self._poll_recent_durations_seconds[-20:]
+
+        utilization_ratio = duration / float(interval) if interval > 0 else 0.0
+        if utilization_ratio >= _POLL_OVERRUN_RATIO:
+            self._collector_poll_overrun_streak = (
+                int(getattr(self, "_collector_poll_overrun_streak", 0) or 0) + 1
+            )
+        else:
+            self._collector_poll_overrun_streak = 0
+
+        if utilization_ratio >= _POLL_UTILIZATION_WARNING_RATIO:
+            self._collector_poll_high_utilization_streak = (
+                int(getattr(self, "_collector_poll_high_utilization_streak", 0) or 0) + 1
+            )
+        else:
+            self._collector_poll_high_utilization_streak = 0
+
+        recent_peak = max(self._poll_recent_durations_seconds[-5:] or [duration])
+        recommended = _poll_recommended_interval_seconds(
+            current_interval=interval,
+            observed_duration=recent_peak,
+        )
+        values.update(
+            {
+                "collector_poll_interval_configured_seconds": interval,
+                "collector_poll_duration_ms": int(round(duration * 1000.0)),
+                "collector_poll_duration_avg_ms": int(
+                    round(self._poll_duration_ewma_seconds * 1000.0)
+                ),
+                "collector_poll_duration_max_ms": int(
+                    round(self._poll_duration_max_seconds * 1000.0)
+                ),
+                "collector_poll_utilization_percent": int(round(utilization_ratio * 100.0)),
+                "collector_poll_overrun_streak": self._collector_poll_overrun_streak,
+                "collector_poll_high_utilization_streak": self._collector_poll_high_utilization_streak,
+                "collector_poll_recommended_min_interval_seconds": recommended,
+            }
+        )
+
+        if (
+            self._collector_poll_overrun_streak >= _POLL_STABLE_STREAK_THRESHOLD
+            and recommended > interval
+        ):
+            self._apply_poll_interval_auto_adjust(
+                snapshot,
+                old_interval=interval,
+                new_interval=recommended,
+                duration_seconds=duration,
+                utilization_ratio=utilization_ratio,
+            )
+            return
+
+        if self._collector_poll_high_utilization_streak >= _POLL_STABLE_STREAK_THRESHOLD:
+            self._notify_poll_high_utilization(
+                poll_interval=interval,
+                recommended_interval=recommended,
+                utilization_ratio=utilization_ratio,
+            )
+
+    def _apply_poll_interval_auto_adjust(
+        self,
+        snapshot: RuntimeSnapshot,
+        *,
+        old_interval: int,
+        new_interval: int,
+        duration_seconds: float,
+        utilization_ratio: float,
+    ) -> None:
+        new_interval = _clamp_poll_interval_seconds(new_interval)
+        if new_interval <= old_interval:
+            return
+        options = dict(self.config_entry.options)
+        options[CONF_POLL_INTERVAL] = new_interval
+        self.update_interval = timedelta(seconds=new_interval)
+        self._async_update_entry_without_reload(options=options)
+        self._collector_poll_overrun_streak = 0
+        self._collector_poll_high_utilization_streak = 0
+        snapshot.values.update(
+            {
+                "collector_poll_interval_configured_seconds": new_interval,
+                "collector_poll_interval_auto_adjusted": True,
+                "collector_poll_interval_auto_adjusted_from_seconds": old_interval,
+                "collector_poll_interval_auto_adjusted_to_seconds": new_interval,
+                "collector_poll_recommended_min_interval_seconds": new_interval,
+                "collector_poll_overrun_streak": 0,
+                "collector_poll_high_utilization_streak": 0,
+            }
+        )
+        self._notify_collector_poll_interval_auto_adjusted(
+            old_interval=old_interval,
+            new_interval=new_interval,
+            duration_seconds=duration_seconds,
+            utilization_ratio=utilization_ratio,
+        )
+
+    def _notify_collector_poll_interval_auto_adjusted(
+        self,
+        *,
+        old_interval: int,
+        new_interval: int,
+        duration_seconds: float,
+        utilization_ratio: float,
+    ) -> None:
+        persistent_notification.async_create(
+            self.hass,
+            _localized_runtime_text(
+                self.hass,
+                "poll_interval_auto_adjust_body",
+                old_interval=old_interval,
+                new_interval=new_interval,
+                duration_ms=int(round(duration_seconds * 1000.0)),
+                utilization_percent=int(round(utilization_ratio * 100.0)),
+            ),
+            title=_localized_runtime_text(
+                self.hass,
+                "poll_interval_auto_adjust_title",
+            ),
+            notification_id=f"{DOMAIN}_poll_interval_auto_adjust_{self.config_entry.entry_id}",
+        )
+
+    def _notify_poll_high_utilization(
+        self,
+        *,
+        poll_interval: int,
+        recommended_interval: int,
+        utilization_ratio: float,
+    ) -> None:
+        now = asyncio.get_running_loop().time()
+        if (
+            float(getattr(self, "_poll_last_notification_monotonic", 0.0) or 0.0)
+            > 0.0
+            and now - float(getattr(self, "_poll_last_notification_monotonic", 0.0) or 0.0)
+            < _POLL_NOTIFICATION_COOLDOWN_SECONDS
+        ):
+            return
+        self._poll_last_notification_monotonic = now
+        persistent_notification.async_create(
+            self.hass,
+            _localized_runtime_text(
+                self.hass,
+                "poll_interval_high_utilization_body",
+                poll_interval=poll_interval,
+                recommended_interval=recommended_interval,
+                utilization_percent=int(round(utilization_ratio * 100.0)),
+            ),
+            title=_localized_runtime_text(
+                self.hass,
+                "poll_interval_high_utilization_title",
+            ),
+            notification_id=f"{DOMAIN}_poll_interval_high_utilization_{self.config_entry.entry_id}",
+        )
 
     async def _async_update_data_with_runtime_lock(self) -> RuntimeSnapshot:
         """Refresh runtime data while holding the shared transport operation lock."""
@@ -4279,7 +4561,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def smartess_cloud_export_available(self) -> bool:
         """Return whether SmartESS cloud export can be attempted for this entry."""
 
-        return bool(self.smartess_collector_pn)
+        return (
+            bool(self.smartess_collector_pn)
+            and resolve_collector_cloud_provider(self.collector_cloud_family) == "smartess"
+        )
+
+    @property
+    def cloud_evidence_provider(self) -> str:
+        """Return the account/cloud provider used for support cloud evidence."""
+
+        return resolve_collector_cloud_provider(self.collector_cloud_family)
+
+    @property
+    def cloud_evidence_export_available(self) -> bool:
+        """Return whether provider-specific cloud evidence can be attempted."""
+
+        return bool(self.smartess_collector_pn) and self.cloud_evidence_provider in {
+            "smartess",
+            "valuecloud",
+        }
 
     @property
     def smartess_cloud_evidence_path(self) -> str:
@@ -4869,17 +5169,38 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> str:
         """Fetch and persist one SmartESS cloud-evidence bundle for this entry."""
 
+        if self.cloud_evidence_provider != "smartess":
+            raise RuntimeError(
+                f"cloud_evidence_provider_not_supported:{self.cloud_evidence_provider or 'unknown'}"
+            )
+        return await self.async_export_cloud_evidence(
+            username=username,
+            password=password,
+        )
+
+    async def async_export_cloud_evidence(
+        self,
+        *,
+        username: str,
+        password: str,
+    ) -> str:
+        """Fetch and persist one provider-specific cloud-evidence bundle for this entry."""
+
         collector_pn = self.smartess_collector_pn
         if not collector_pn:
-            raise RuntimeError("smartess_collector_pn_not_available")
+            raise RuntimeError("cloud_evidence_collector_pn_not_available")
+        provider = self.cloud_evidence_provider
+        if provider not in {"smartess", "valuecloud"}:
+            raise RuntimeError(f"cloud_evidence_provider_not_supported:{provider or 'unknown'}")
 
         record = await self.hass.async_add_executor_job(
-            lambda: fetch_and_export_smartess_device_bundle_cloud_evidence(
+            lambda: fetch_and_export_device_bundle_cloud_evidence(
+                provider=provider,
                 config_dir=Path(self.hass.config.config_dir),
                 username=username,
                 password=password,
                 collector_pn=collector_pn,
-                source="smartess_cloud_diagnostics",
+                source=f"{provider}_cloud_diagnostics",
                 entry_id=self.config_entry.entry_id,
             )
         )
@@ -4887,7 +5208,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._cached_smartess_cloud_evidence_warmed = True
         self._publish_tooling_values(
             cloud_evidence_path=str(record.path),
-            local_metadata_status="SmartESS cloud evidence exported",
+            local_metadata_status=(
+                "SmartESS cloud evidence exported"
+                if provider == "smartess"
+                else "Cloud evidence exported"
+            ),
         )
         return str(record.path)
 
@@ -4980,9 +5305,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             wants_refresh = bool(smartess_username or smartess_password)
         if wants_refresh:
             if not smartess_username or not smartess_password:
-                raise RuntimeError("smartess_credentials_required")
+                raise RuntimeError("cloud_credentials_required")
             try:
-                await self.async_export_smartess_cloud_evidence(
+                await self.async_export_cloud_evidence(
                     username=smartess_username,
                     password=smartess_password,
                 )
@@ -4990,12 +5315,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 if self._cached_smartess_cloud_evidence_record is None:
                     raise
                 logger.warning(
-                    "SmartESS cloud refresh failed; building archive with last saved evidence: %s",
+                    "Cloud evidence refresh failed; building archive with last saved evidence: %s",
                     exc,
                 )
                 self._publish_tooling_values(
                     local_metadata_status=(
-                        "SmartESS cloud refresh failed; using last saved evidence"
+                        "Cloud evidence refresh failed; using last saved evidence"
                     ),
                 )
 

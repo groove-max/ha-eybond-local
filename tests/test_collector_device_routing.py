@@ -119,6 +119,7 @@ from custom_components.eybond_local.sensor import EybondValueSensor  # noqa: E40
 class CollectorEntityScopeTests(unittest.TestCase):
     def test_is_collector_entity_key_matches_current_namespace_and_future_smartess_keys(self) -> None:
         self.assertTrue(is_collector_entity_key("collector_pn"))
+        self.assertTrue(is_collector_entity_key("collector_poll_utilization_percent"))
         self.assertTrue(is_collector_entity_key("configured_collector_ip"))
         self.assertTrue(is_collector_entity_key("smartess_protocol_asset_id"))
         self.assertFalse(is_collector_entity_key("model_name"))

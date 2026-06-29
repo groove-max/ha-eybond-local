@@ -438,6 +438,9 @@ class CollectorInfo:
     raw_last_timeout_request_ascii: str = ""
     raw_last_parser: str = ""
     raw_last_frame_format: str = ""
+    raw_last_spacing_wait_ms: int = 0
+    raw_last_response_duration_ms: int = 0
+    raw_last_total_duration_ms: int = 0
     last_disconnect_reason: str = ""
     discovery_restart_count: int = 0
     last_discovery_reason: str = ""

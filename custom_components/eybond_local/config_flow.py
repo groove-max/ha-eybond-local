@@ -268,6 +268,8 @@ _LOCAL_METADATA_STATUS_TRANSLATION_KEYS = {
     "Collector proxy capture stopped": "proxy_capture_stopped",
     "Recovered interrupted collector proxy capture": "recovered_interrupted_proxy_capture",
     "SmartESS cloud evidence exported": "smartess_cloud_evidence_exported",
+    "Cloud evidence exported": "cloud_evidence_exported",
+    "Cloud evidence refresh failed; using last saved evidence": "cloud_evidence_refresh_failed_using_saved",
     "Support bundle exported": "support_bundle_exported",
     "Support archive exported": "support_archive_exported",
     "Local profile draft created": "local_profile_draft_created",
@@ -6080,7 +6082,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         Replaces the former technical action dropdown (now
         ``async_step_shadow_learning_advanced``) with one linear user-facing
         workflow: intro/consent -> credentials -> progress -> review -> result.
-        No live SmartESS operation runs until the user gives explicit consent.
+        No live cloud operation runs until the user gives explicit consent.
         """
         coordinator = self._coordinator()
         if coordinator is None:
@@ -6126,12 +6128,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders=self._control_discovery_placeholders(
                 coordinator,
                 "common.dynamic.control_discovery_intro_hint",
-                "Home Assistant will briefly sign in to SmartESS to find which "
-                "settings it can control on this device. Your login is used only "
-                "for this check and is not saved.\n\n"
-                "⚠️ Before you continue, fully CLOSE the SmartESS mobile app. If it "
-                "stays open it competes with this check for the device and can "
-                "disrupt the scan or interfere with the inverter.\n\n"
+                "Home Assistant will briefly sign in to {cloud_provider_label} to "
+                "find which settings it can control on this device. Your login is "
+                "used only for this check and is not saved.\n\n"
+                "⚠️ Before you continue, fully CLOSE the {cloud_app_label} mobile "
+                "app. If it stays open it competes with this check for the device "
+                "and can disrupt the scan or interfere with the inverter.\n\n"
                 "Confirm below to continue.",
             ),
         )
@@ -6141,9 +6143,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Guided control-discovery wizard — step 2: SmartESS credentials.
+        """Guided control-discovery wizard — step 2: cloud credentials.
 
-        Asks only for the SmartESS username/password. Credentials are held in
+        Asks only for the cloud username/password. Credentials are held in
         transient flow state for the current run only and are never written to
         the config entry or its options.
         """
@@ -6183,8 +6185,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders=self._control_discovery_placeholders(
                 coordinator,
                 "common.dynamic.control_discovery_credentials_hint",
-                "Enter your SmartESS username and password. They are used only "
-                "for this one check and are not saved.",
+                "Enter your {cloud_provider_label} username and password. They "
+                "are used only for this one check and are not saved.",
             ),
         )
 
@@ -6278,7 +6280,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         Executed as the progress-step background task. In one pass — and with no
         preview-plan, manual field-id, numeric-value, or action-sequencing step —
         it performs: preflight -> start the fail-closed shadow session -> fetch
-        SmartESS settings -> build a bounded automatic plan -> run learning ->
+        cloud settings -> build a bounded automatic plan -> run learning ->
         generate the device-scoped overlay draft -> stop the session and restore
         the collector endpoint -> publish support artifacts.
 
@@ -6337,8 +6339,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             }
             self._shadow_learning_state["status"] = self._tr(
                 "common.dynamic.control_discovery_failed",
-                "Control discovery could not finish. The temporary SmartESS "
-                "connection was closed.",
+                "Control discovery could not finish. The temporary cloud "
+                "connection was closed if it had been opened.",
             )
             # Preserve whatever trace/support evidence already exists.
             with suppress(Exception):
@@ -6375,6 +6377,22 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "shadow_learning_preflight_blocked:" + ",".join(str(item) for item in blockers)
                 if blockers
                 else "shadow_learning_preflight_blocked"
+            )
+
+        provider = self._control_discovery_cloud_provider(coordinator)
+        if provider != "smartess":
+            raise RuntimeError(
+                self._tr(
+                    "common.dynamic.control_discovery_provider_not_supported",
+                    "Automatic control discovery is not available for "
+                    "{cloud_provider_label} yet. Local read-only support and "
+                    "support packages still work.",
+                    {
+                        "cloud_provider_label": self._control_discovery_cloud_provider_label(
+                            coordinator
+                        )
+                    },
+                )
             )
 
         self._set_control_discovery_progress(0.10, "connecting")
@@ -6532,7 +6550,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             raise RuntimeError(
                 self._tr(
                     "common.dynamic.control_discovery_degraded",
-                    "The temporary SmartESS connection dropped during the scan. The scan was "
+                    "The temporary cloud connection dropped during the scan. The scan was "
                     "stopped before adding controls. Please try again.",
                 )
             )
@@ -6540,7 +6558,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             raise RuntimeError(
                 self._tr(
                     "common.dynamic.control_discovery_run_incomplete",
-                    "The device could not be fully checked this time. The temporary SmartESS "
+                    "The device could not be fully checked this time. The temporary cloud "
                     "connection was closed before the scan finished. Please try again.",
                 )
             )
@@ -6577,7 +6595,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._set_control_discovery_progress(1.0, "finalizing")
         self._shadow_learning_state["status"] = self._tr(
             "common.dynamic.control_discovery_done",
-            "Control discovery finished. The temporary SmartESS connection is closed.",
+            "Control discovery finished. The temporary cloud connection is closed.",
         )
         found_controls = int(
             dict(self._shadow_learning_state.get("overlay") or {}).get(
@@ -6596,7 +6614,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "status": "error",
                 "reason": self._tr(
                     "common.dynamic.control_discovery_run_incomplete",
-                    "The device could not be probed this time (the temporary SmartESS "
+                    "The device could not be probed this time (the temporary cloud "
                     "connection did not come up). Please try the scan again.",
                 ),
                 "found_controls": 0,
@@ -7455,7 +7473,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             if can_activate:
                 body_key = "common.dynamic.control_discovery_result_intro"
                 body_default = (
-                    "Discovery finished and the temporary SmartESS connection is "
+                    "Discovery finished and the temporary cloud connection is "
                     "closed. {control_discovery_selected_count} control(s) are "
                     "turned on. Apply them, download the support package, or return "
                     "to the menu."
@@ -7463,7 +7481,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             else:
                 body_key = "common.dynamic.control_discovery_result_intro_none_selected"
                 body_default = (
-                    "Discovery finished and the temporary SmartESS connection is "
+                    "Discovery finished and the temporary cloud connection is "
                     "closed. You did not turn on any of the discovered controls, so "
                     "there is nothing to apply. Download the support package, or "
                     "return to the menu."
@@ -7474,7 +7492,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             # still worthwhile, so offer Apply instead of a dead-end.
             body_key = "common.dynamic.control_discovery_result_reads_only"
             body_default = (
-                "Discovery finished and the temporary SmartESS connection is "
+                "Discovery finished and the temporary cloud connection is "
                 "closed. {control_discovery_read_count} read sensor(s) were "
                 "discovered. Apply them, download the support package, or return "
                 "to the menu."
@@ -7491,7 +7509,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         else:
             body_key = "common.dynamic.control_discovery_result_empty_with_support"
             body_default = (
-                "The check has finished and the temporary SmartESS connection is "
+                "The check has finished and the temporary cloud connection is "
                 "closed. No controls were found to add this time. Download the "
                 "support package so the developer can inspect what happened, or "
                 "return to the menu."
@@ -7692,11 +7710,43 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         placeholders = dict(self._shadow_learning_placeholders(coordinator))
         placeholders["control_discovery_hint"] = self._tr(
-            hint_key, hint_default, hint_placeholders
+            hint_key,
+            hint_default,
+            {**placeholders, **(hint_placeholders or {})},
         )
         if extra:
             placeholders.update(extra)
         return placeholders
+
+    @staticmethod
+    def _control_discovery_cloud_provider(coordinator) -> str:
+        provider = str(getattr(coordinator, "cloud_evidence_provider", "") or "").strip().lower()
+        if provider:
+            return provider
+        family = str(getattr(coordinator, "collector_cloud_family", "") or "").strip().lower()
+        if "value" in family:
+            return "valuecloud"
+        if "smartess" in family:
+            return "smartess"
+        # Historical entries only had the SmartESS-specific cloud-learning
+        # implementation, so unknown legacy entries keep the previous behavior.
+        return "smartess"
+
+    def _control_discovery_cloud_provider_label(self, coordinator) -> str:
+        provider = self._control_discovery_cloud_provider(coordinator)
+        if provider == "valuecloud":
+            return "ValueCloud"
+        if provider == "smartess":
+            return "SmartESS"
+        return provider or self._tr("common.dynamic.cloud_provider", "cloud service")
+
+    def _control_discovery_cloud_app_label(self, coordinator) -> str:
+        provider = self._control_discovery_cloud_provider(coordinator)
+        if provider == "valuecloud":
+            return "SmartValue"
+        if provider == "smartess":
+            return "SmartESS"
+        return self._control_discovery_cloud_provider_label(coordinator)
 
     @staticmethod
     def _preflight_effective_metadata(coordinator) -> dict[str, Any]:
@@ -8068,6 +8118,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if not session_state:
             session_state = str(session.get("status") or preflight.get("shadow_session_state") or "").strip()
         return {
+            "cloud_provider": self._control_discovery_cloud_provider(coordinator),
+            "cloud_provider_label": self._control_discovery_cloud_provider_label(coordinator),
+            "cloud_app_label": self._control_discovery_cloud_app_label(coordinator),
             "shadow_learning_status": str(state.get("status") or self._tr("common.dynamic.not_run_yet", "Not run yet")),
             "shadow_learning_preflight": self._tr(
                 "common.dynamic.shadow_learning_preflight_summary",
@@ -8095,7 +8148,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             "shadow_learning_warning": self._tr(
                 "common.dynamic.shadow_learning_warning",
-                "Control discovery is advanced and optional. It briefly uses SmartESS to test which settings Home Assistant can control. Testing all option values or numeric settings can trigger cloud-side actions and requires explicit preview and confirmation.",
+                "Control discovery is advanced and optional. It briefly uses {cloud_provider_label} to test which settings Home Assistant can control. Testing all option values or numeric settings can trigger cloud-side actions and requires explicit preview and confirmation.",
+                {
+                    "cloud_provider_label": self._control_discovery_cloud_provider_label(
+                        coordinator
+                    )
+                },
             ),
         }
 
@@ -8340,7 +8398,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         capabilities = self._collector_capabilities()
         is_bridge = capabilities.virtual_bridge
         can_refresh_cloud_evidence = (
-            bool(getattr(coordinator, "smartess_cloud_export_available", False))
+            self._cloud_evidence_export_available(coordinator)
             and capabilities.cloud_evidence
         )
         saved_cloud_evidence_path = self._current_cloud_evidence_path(coordinator)
@@ -8408,7 +8466,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         else "support_archive_failed_next"
                     ),
                     (
-                        "Check the SmartESS credentials, or rerun Create support archive and choose a different SmartESS cloud evidence mode."
+                        "Check the cloud account credentials, or rerun Create support archive and choose a different cloud evidence mode."
                         if archive_cloud_mode == SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH
                         else "Check whether the entry is loaded and the Home Assistant config directory is writable, then try again."
                     ),
@@ -8427,7 +8485,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             status=self._diagnostics_result_tr(
                 "support_archive_created_status",
-                "A combined support archive with runtime data, raw capture evidence, an anonymized replay fixture, and matching SmartESS cloud evidence when available was written to the Home Assistant config directory.\n\n{support_archive_cloud_detail}",
+                "A combined support archive with runtime data, raw capture evidence, an anonymized replay fixture, and matching cloud evidence when available was written to the Home Assistant config directory.\n\n{support_archive_cloud_detail}",
                 {
                     "support_archive_cloud_detail": self._support_archive_cloud_result_detail(
                         archive_cloud_mode=archive_cloud_mode,
@@ -9010,8 +9068,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             menu_options.append("proxy_capture")
         return menu_options
 
+    def _cloud_evidence_export_available(self, coordinator) -> bool:
+        """Return whether this entry can fetch provider-specific cloud evidence."""
+
+        generic_available = getattr(coordinator, "cloud_evidence_export_available", None)
+        if generic_available is not None:
+            return bool(generic_available)
+        return bool(getattr(coordinator, "smartess_cloud_export_available", False))
+
     def _current_cloud_evidence_path(self, coordinator=None) -> str:
-        """Return the latest SmartESS cloud evidence path visible to diagnostics."""
+        """Return the latest cloud evidence path visible to diagnostics."""
 
         coordinator = coordinator or self._coordinator()
         if coordinator is None:
@@ -9033,15 +9099,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return {
             SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED: self._tr(
                 "common.dynamic.support_archive_cloud_mode_use_saved",
-                "Use saved SmartESS cloud evidence",
+                "Use saved cloud evidence",
             ),
             SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH: self._tr(
                 "common.dynamic.support_archive_cloud_mode_refresh",
-                "Fetch or refresh SmartESS cloud evidence now",
+                "Fetch or refresh cloud evidence now",
             ),
             SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY: self._tr(
                 "common.dynamic.support_archive_cloud_mode_archive_only",
-                "Create the archive without SmartESS cloud evidence",
+                "Create the archive without cloud evidence",
             ),
         }.get(archive_cloud_mode, archive_cloud_mode)
 
@@ -9095,21 +9161,21 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if had_saved_cloud_evidence and can_refresh_cloud_evidence:
             return self._tr(
                 "common.dynamic.support_archive_cloud_plan_saved_refreshable",
-                "Saved SmartESS cloud evidence will be included automatically, or you can refresh it in this same step before the archive is built.",
+                "Saved cloud evidence will be included automatically, or you can refresh it in this same step before the archive is built.",
             )
         if had_saved_cloud_evidence:
             return self._tr(
                 "common.dynamic.support_archive_cloud_plan_saved_only",
-                "Saved SmartESS cloud evidence will be included automatically when it matches this entry.",
+                "Saved cloud evidence will be included automatically when it matches this entry.",
             )
         if can_refresh_cloud_evidence:
             return self._tr(
                 "common.dynamic.support_archive_cloud_plan_refreshable",
-                "No SmartESS cloud evidence is saved yet. You can fetch it in this step and include it in the same archive, or continue without it.",
+                "No cloud evidence is saved yet. You can fetch it in this step and include it in the same archive, or continue without it.",
             )
         return self._tr(
             "common.dynamic.support_archive_cloud_plan_unavailable",
-            "No SmartESS cloud evidence is currently available for this entry.",
+            "No cloud evidence is currently available for this entry.",
         )
 
     def _support_archive_cloud_result_detail(
@@ -9121,16 +9187,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if archive_cloud_mode == SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH:
             return self._tr(
                 "common.dynamic.support_archive_cloud_result_refreshed",
-                "Fresh SmartESS cloud evidence was fetched in this step and included in the archive.",
+                "Fresh cloud evidence was fetched in this step and included in the archive.",
             )
         if had_saved_cloud_evidence:
             return self._tr(
                 "common.dynamic.support_archive_cloud_result_saved",
-                "Saved SmartESS cloud evidence was included in the archive.",
+                "Saved cloud evidence was included in the archive.",
             )
         return self._tr(
             "common.dynamic.support_archive_cloud_result_none",
-            "No SmartESS cloud evidence was included in the archive.",
+            "No cloud evidence was included in the archive.",
         )
 
     def _show_create_support_package_form(
@@ -9144,7 +9210,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         capabilities = self._collector_capabilities()
         had_saved_cloud_evidence = bool(saved_cloud_evidence_path) and capabilities.cloud_evidence
         can_refresh_cloud_evidence = (
-            bool(getattr(coordinator, "smartess_cloud_export_available", False))
+            self._cloud_evidence_export_available(coordinator)
             and capabilities.cloud_evidence
         )
         if not capabilities.cloud_evidence:

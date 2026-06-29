@@ -6,6 +6,7 @@ import asyncio
 from functools import lru_cache
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 from ..metadata.device_catalog_loader import resolve_catalog_surface_binding
@@ -31,9 +32,23 @@ _EYBOND_G_ASCII_PROBE_TARGETS: tuple[ProbeTarget, ...] = (
     ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
 )
 
-_DCDC_STATUS_BY_MODE: dict[str, str] = {
-    "B": "Charge",
-    "0": "Discharge soft start",
+_OPERATING_MODE_BY_CODE: dict[str, str] = {
+    "P": "Power On",
+    "S": "Standby",
+    "L": "Line",
+    "B": "Battery",
+    "F": "Fault",
+    "D": "Shutdown",
+    "X": "Test",
+}
+_GPDAT_OPERATING_MODE_BY_CODE: dict[str, str] = {
+    "0": "Power On",
+    "1": "Shutdown",
+    "2": "Fault",
+    "3": "Standby",
+    "4": "Line",
+    "5": "Battery",
+    "6": "Test",
 }
 _COMMAND_SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
@@ -227,9 +242,12 @@ async def _async_capture_eybond_g_ascii_support_evidence(
         source = str(spec.get("source") or "")
         description = str(spec.get("description") or "")
         known_fields = list(spec.get("fields") or [])
+        started = time.monotonic()
+        timing: dict[str, int] = {}
         try:
             raw_response = await session.request_raw(command)
         except Exception as exc:
+            duration_ms = int(round((time.monotonic() - started) * 1000.0))
             failures[command] = str(exc)
             command_results.append(
                 {
@@ -237,10 +255,13 @@ async def _async_capture_eybond_g_ascii_support_evidence(
                     "source": source,
                     "description": description,
                     "status": "error",
+                    "duration_ms": duration_ms,
                     "error": str(exc),
                 }
             )
             continue
+        duration_ms = int(round((time.monotonic() - started) * 1000.0))
+        timing = session.last_transport_timing()
 
         raw_ascii = raw_response.decode("ascii", errors="replace")
         parsed_payload = ""
@@ -258,6 +279,7 @@ async def _async_capture_eybond_g_ascii_support_evidence(
             "source": source,
             "description": description,
             "status": _support_response_status(parsed_payload),
+            "duration_ms": duration_ms,
             "raw_response_ascii": raw_ascii,
             "raw_response_hex": raw_response.hex(),
             "parsed_payload": parsed_payload,
@@ -267,6 +289,8 @@ async def _async_capture_eybond_g_ascii_support_evidence(
             "known_field_count": len(known_fields),
             "unknown_field_count": max(0, len(fields) - len(known_field_indexes & set(range(len(fields))))),
         }
+        if timing:
+            result["transport_timing"] = timing
         if parse_error:
             result["parse_error"] = parse_error
         command_results.append(result)
@@ -392,50 +416,10 @@ async def _async_collect_eybond_g_ascii_values(
 ) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
-    gmod = await _optional_request(session, "GMOD")
-    if gmod:
-        mode_code = gmod.strip()
-        values["eybond_g_ascii_operating_mode_code"] = mode_code
-        values["dcdc_control_status"] = _DCDC_STATUS_BY_MODE.get(mode_code, mode_code)
+    await _async_collect_eybond_g_ascii_core_values(session, values)
 
-    gdat0 = await _optional_request(session, "GPDAT0")
-    if gdat0:
-        fields = parse_space_fields(gdat0)
-        values["eybond_g_ascii_gdat0_fields"] = " ".join(fields)
-        _set_float(values, "inverter_voltage", fields, 5)
-        _set_float(values, "inverter_frequency", fields, 6)
-        _set_float(values, "grid_voltage", fields, 7)
-        _set_float(values, "grid_frequency", fields, 8)
-        _set_float(values, "mains_input_voltage", fields, 7)
-        _set_float(values, "mains_frequency", fields, 8)
-        _set_float(values, "output_voltage", fields, 9)
-        _set_float(values, "output_frequency", fields, 10)
-        _set_float(values, "output_current", fields, 11)
-        _set_float_if_absent(values, "battery_voltage", fields, 12)
-        _set_float_if_absent(values, "battery_current", fields, 13)
-        _set_float(values, "output_load_percentage", fields, 14)
-        _set_float(values, "output_apparent_power", fields, 15)
-        _set_float(values, "output_active_power", fields, 16)
-        _set_float(values, "battery_capacity", fields, 17)
-        _set_float_if_absent(values, "pv_input_voltage", fields, 18)
-        _set_float_if_absent(values, "pv_charging_current", fields, 19)
-        _set_float_if_absent(values, "pv_power", fields, 20)
-        _set_float(values, "mainboard_temperature", fields, 21)
-
-    gpv = await _optional_request(session, "GPV")
-    if gpv:
-        fields = parse_space_fields(gpv)
-        values["eybond_g_ascii_gpv_fields"] = " ".join(fields)
-        _set_float(values, "pv_input_voltage", fields, 0)
-        _set_float_if_absent(values, "battery_voltage", fields, 1)
-        _set_float(values, "pv_charging_current", fields, 2)
-        _set_float(values, "pv_current", fields, 3)
-        _set_float(values, "pv_power", fields, 4)
-        _set_str(values, "pv_tracking_status", fields, 5)
-        _set_str(values, "pv_chargeable_status", fields, 6)
-        _set_scaled_float(values, "pv_energy_today", fields, 20, divisor=100.0)
-        _set_combined_scaled_counter(values, "pv_energy_total", fields, 21, 22, divisor=100.0)
-        _set_str(values, "warning_status_1", fields, 23)
+    if probe:
+        return values
 
     if not probe:
         rated = await _optional_request(session, "F")
@@ -483,7 +467,7 @@ async def _async_collect_eybond_g_ascii_values(
             fields = parse_space_fields(gbat)
             values["eybond_g_ascii_gbat_fields"] = " ".join(fields)
             _set_float(values, "battery_voltage", fields, 0)
-            _set_float(values, "battery_current", fields, 1)
+            _set_float_preserve_existing_nonzero(values, "battery_current", fields, 1)
             _set_float(values, "battery_cell_count", fields, 2)
             _set_float(values, "battery_discharge_cutoff_voltage", fields, 3)
             _set_float(values, "battery_discharge_alarm_voltage", fields, 4)
@@ -617,6 +601,70 @@ async def _async_collect_eybond_g_ascii_values(
     return values
 
 
+async def _async_collect_eybond_g_ascii_core_values(
+    session: AsciiLineSession,
+    values: dict[str, Any],
+) -> None:
+    """Collect core fields used by probe and regular runtime reads."""
+
+    gmod = await _optional_request(session, "GMOD")
+    if gmod:
+        mode_code = gmod.strip()
+        values["eybond_g_ascii_operating_mode_code"] = mode_code
+        values["operating_mode"] = _OPERATING_MODE_BY_CODE.get(
+            mode_code.upper(),
+            f"Unknown ({mode_code})",
+        )
+
+    gdat0 = await _optional_request(session, "GPDAT0")
+    if gdat0:
+        fields = parse_space_fields(gdat0)
+        values["eybond_g_ascii_gdat0_fields"] = " ".join(fields)
+        _set_str(values, "gdat0_communication_status_code", fields, 0)
+        _set_mapped_str_if_absent(
+            values,
+            "operating_mode",
+            fields,
+            1,
+            _GPDAT_OPERATING_MODE_BY_CODE,
+        )
+        _set_str(values, "gdat0_operating_mode_code", fields, 1)
+        _set_float(values, "inverter_voltage", fields, 5)
+        _set_float(values, "inverter_frequency", fields, 6)
+        _set_float(values, "grid_voltage", fields, 7)
+        _set_float(values, "grid_frequency", fields, 8)
+        _set_float(values, "mains_input_voltage", fields, 7)
+        _set_float(values, "mains_frequency", fields, 8)
+        _set_float(values, "output_voltage", fields, 9)
+        _set_float(values, "output_frequency", fields, 10)
+        _set_float(values, "output_current", fields, 11)
+        _set_float_if_absent(values, "battery_voltage", fields, 12)
+        _set_float_if_absent(values, "battery_current", fields, 13)
+        _set_float(values, "output_load_percentage", fields, 14)
+        _set_float(values, "output_apparent_power", fields, 15)
+        _set_float(values, "output_active_power", fields, 16)
+        _set_float(values, "battery_capacity", fields, 17)
+        _set_float_if_absent(values, "pv_input_voltage", fields, 18)
+        _set_float_if_absent(values, "pv_charging_current", fields, 19)
+        _set_float_if_absent(values, "pv_power", fields, 20)
+        _set_float(values, "mainboard_temperature", fields, 21)
+
+    gpv = await _optional_request(session, "GPV")
+    if gpv:
+        fields = parse_space_fields(gpv)
+        values["eybond_g_ascii_gpv_fields"] = " ".join(fields)
+        _set_float(values, "pv_input_voltage", fields, 0)
+        _set_float_if_absent(values, "battery_voltage", fields, 1)
+        _set_float(values, "pv_charging_current", fields, 2)
+        _set_float(values, "pv_current", fields, 3)
+        _set_float(values, "pv_power", fields, 4)
+        _set_str(values, "pv_tracking_status", fields, 5)
+        _set_str(values, "pv_chargeable_status", fields, 6)
+        _set_scaled_float(values, "pv_energy_today", fields, 20, divisor=100.0)
+        _set_combined_scaled_counter(values, "pv_energy_total", fields, 21, 22, divisor=100.0)
+        _set_str(values, "warning_status_1", fields, 23)
+
+
 async def _optional_request(session: AsciiLineSession, command: str) -> str:
     try:
         return await session.request(command)
@@ -645,6 +693,25 @@ def _set_str(values: dict[str, Any], key: str, fields: list[str], index: int) ->
     text = str(raw).strip()
     if text:
         values[key] = text
+
+
+def _set_mapped_str_if_absent(
+    values: dict[str, Any],
+    key: str,
+    fields: list[str],
+    index: int,
+    mapping: dict[str, str],
+) -> None:
+    if key in values:
+        return
+    try:
+        raw = fields[index]
+    except IndexError:
+        return
+    code = str(raw).strip().upper()
+    if not code:
+        return
+    values[key] = mapping.get(code, f"Unknown ({code})")
 
 
 def _set_str_unless_unavailable(
@@ -714,6 +781,34 @@ def _set_float_if_absent(
     if key in values:
         return
     _set_float(values, key, fields, index)
+
+
+def _set_float_preserve_existing_nonzero(
+    values: dict[str, Any],
+    key: str,
+    fields: list[str],
+    index: int,
+) -> None:
+    """Set a float value without replacing a previous live value by zero.
+
+    Some EyeBond G-ASCII firmwares report ``GBAT[1]`` as ``0.00`` even while
+    ``GPDAT0``/``GPV`` expose a real charge current.  Treat the later zero as a
+    missing value in that specific case, but still allow non-zero GBAT values to
+    override earlier telemetry.
+    """
+
+    try:
+        raw = _clean_numeric_field(fields[index])
+    except IndexError:
+        return
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return
+    existing = values.get(key)
+    if value == 0.0 and isinstance(existing, (int, float)) and float(existing) != 0.0:
+        return
+    values[key] = value
 
 
 def _set_bool_flag(values: dict[str, Any], key: str, fields: list[str], index: int) -> None:
@@ -831,7 +926,10 @@ def _gbms_has_live_values(fields: list[str]) -> bool:
     measurement/configuration field that represents actual BMS data is present.
     """
 
-    meaningful_indexes = (2, 3, 4, 5, 6, 7, 10, 11, 12)
+    if len(fields) < 12:
+        return False
+
+    meaningful_indexes = (2, 3, 4, 5, 6, 7, 10, 11)
     for index in meaningful_indexes:
         try:
             raw = fields[index]

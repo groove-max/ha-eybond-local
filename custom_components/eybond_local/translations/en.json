@@ -334,7 +334,7 @@
       },
       "diagnostics": {
         "title": "Diagnostics And Experimental Metadata",
-        "description": "**{support_archive_action_label}** builds one ZIP with everything needed to help: runtime data, capture evidence, an anonymized replay fixture, and saved SmartESS cloud evidence.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}",
+        "description": "**{support_archive_action_label}** builds one ZIP with everything needed to help: runtime data, capture evidence, an anonymized replay fixture, and saved cloud evidence.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}",
         "menu_options": {
           "create_support_package": "Create support archive",
           "diagnostic_commands": "Run diagnostic commands",
@@ -414,16 +414,16 @@
       },
       "create_support_package": {
         "title": "Create Support Archive",
-        "description": "Builds the support archive in one step. Saved SmartESS cloud evidence is included automatically; choose **{refresh_mode_label}** to fetch a fresh copy with your SmartESS login.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
+        "description": "Builds the support archive in one step. Saved cloud evidence is included automatically; choose **{refresh_mode_label}** to fetch a fresh copy with your cloud account login.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
         "data": {
-          "smartess_cloud_mode": "SmartESS cloud evidence",
-          "username": "SmartESS username",
-          "password": "SmartESS password"
+          "smartess_cloud_mode": "Cloud evidence",
+          "username": "Cloud account username",
+          "password": "Cloud account password"
         },
         "data_description": {
-          "smartess_cloud_mode": "Choose whether to use saved SmartESS cloud evidence, refresh it now inside this step, or build the archive without it.",
-          "username": "Only needed when fetching or refreshing SmartESS cloud evidence in this step.",
-          "password": "Only needed when fetching or refreshing SmartESS cloud evidence in this step. It is used only for this live action."
+          "smartess_cloud_mode": "Choose whether to use saved cloud evidence, refresh it now inside this step, or build the archive without it.",
+          "username": "Only needed when fetching or refreshing cloud evidence in this step.",
+          "password": "Only needed when fetching or refreshing cloud evidence in this step. It is used only for this live action."
         }
       },
       "rollback_local_metadata": {

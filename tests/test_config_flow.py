@@ -248,6 +248,7 @@ from custom_components.eybond_local.config_flow import (
     SHADOW_LEARNING_MODE_MANUAL,
     SHADOW_LEARNING_MODE_SUPPORT_ONLY,
     SETUP_MODE_DEEP_SCAN,
+    SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED,
     _get_ipv4_interfaces,
@@ -5584,6 +5585,33 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_create_support_package_shows_refresh_for_valuecloud_evidence(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            cloud_evidence_export_available=True,
+            smartess_cloud_export_available=False,
+            smartess_cloud_evidence_path="",
+            smartess_collector_pn="A0000000000001",
+            data=types.SimpleNamespace(values={"collector_cloud_family": "valuecloud_at"}),
+        )
+
+        result = await options.async_step_create_support_package()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "create_support_package")
+        selector = result["data_schema"].schema[CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE]
+        option_values = [
+            option["value"]
+            for option in selector.config.kwargs["options"]
+        ]
+        self.assertEqual(
+            option_values,
+            [
+                SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY,
+                SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
+            ],
+        )
+
     async def test_create_support_package_refresh_requires_credentials(self) -> None:
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -5649,7 +5677,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "/config/support/support_archive.zip",
         )
         self.assertIn(
-            "Fresh SmartESS cloud evidence was fetched",
+            "Fresh cloud evidence was fetched",
             result["description_placeholders"]["status"],
         )
 
@@ -5698,7 +5726,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["password"], "")
         self.assertIs(captured["wants_refresh"], False)
         self.assertIn(
-            "No SmartESS cloud evidence was included",
+            "No cloud evidence was included",
             result["description_placeholders"]["status"],
         )
 
@@ -5921,7 +5949,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "shadow_learning_credentials")
         self.assertTrue(options._shadow_learning_state["wizard_consent"])
-        # Credentials step asks only for SmartESS username/password.
+        # Credentials step asks only for cloud username/password.
         self.assertEqual(set(result["data_schema"].schema), {"username", "password"})
 
     async def test_control_discovery_credentials_require_username_and_password(self) -> None:
@@ -6708,6 +6736,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     class _RunnerCoordinator:
         smartess_collector_pn = "E5000020000000"
+        cloud_evidence_provider = "smartess"
+        collector_cloud_family = "dtu_ess"
         effective_profile_name = "smg_modbus.json"
         effective_register_schema_name = "modbus_smg/models/smg_6200.json"
 
@@ -6880,6 +6910,31 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         orchestrate_mock.assert_not_called()
         # Session was started fail-closed then stopped; no overlay drafted.
         self.assertEqual(len(coordinator.stopped), 1)
+
+    async def test_control_discovery_runner_blocks_valuecloud_before_smartess_cloud(self) -> None:
+        # ValueCloud has local read support and cloud evidence, but the automatic
+        # control-discovery writer/orchestrator is provider-specific and still
+        # SmartESS-only. It must fail closed before starting a shadow session or
+        # calling SmartESS cloud helpers; otherwise ValueCloud devices surface
+        # misleading ERR_NOT_FOUND_DEVICE errors from the wrong cloud API.
+        coordinator = self._RunnerCoordinator(ready=True)
+        coordinator.cloud_evidence_provider = "valuecloud"
+        coordinator.collector_cloud_family = "valuecloud_at"
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+
+        with login_p as login_mock, fetch_p as fetch_mock, orchestrate_p as orchestrate_mock, overlay_p as overlay_mock:
+            await options._async_run_control_discovery()
+
+        self.assertEqual(len(coordinator.started), 0)
+        login_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+        orchestrate_mock.assert_not_called()
+        overlay_mock.assert_not_called()
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
+        self.assertIn("ValueCloud", options._shadow_learning_state["discovery"]["reason"])
+        self.assertNotIn("ERR_NOT_FOUND_DEVICE", options._shadow_learning_state["discovery"]["reason"])
 
     async def test_control_discovery_runner_runs_full_pipeline_without_preview_plan(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)

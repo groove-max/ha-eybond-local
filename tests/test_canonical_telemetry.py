@@ -193,6 +193,21 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["grid_to_home_power"], 0.0)
         self.assertEqual(values["grid_to_battery_power"], 0.0)
 
+    def test_apply_canonical_measurements_uses_eybond_g_ascii_pv_charge_current_fallback(self) -> None:
+        values = {
+            "eybond_g_ascii_operating_mode_code": "B",
+            "output_active_power": 85.0,
+            "battery_voltage": 27.0,
+            "battery_current": 0.0,
+            "pv_charging_current": 14.71,
+            "pv_power": 420.0,
+        }
+
+        apply_canonical_measurements("eybond_g_ascii", values)
+
+        self.assertEqual(values["battery_power"], 397.17)
+        self.assertEqual(values["pv_to_battery_power"], 335.0)
+
     def test_apply_canonical_measurements_signs_eybond_g_ascii_discharge_power(self) -> None:
         values = {
             "eybond_g_ascii_operating_mode_code": "0",

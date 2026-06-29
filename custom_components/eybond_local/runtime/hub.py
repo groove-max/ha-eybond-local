@@ -751,14 +751,23 @@ class EybondHub:
             self._last_snapshot = snapshot
             return snapshot
 
-        try:
-            runtime_values = await self._driver.async_read_values(
+        async def _async_read_driver_values() -> dict[str, object]:
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            values = await self._driver.async_read_values(
                 self._link_manager.transport,
                 self._inverter,
                 runtime_state=self._runtime_read_state,
                 poll_interval=poll_interval,
-                now_monotonic=asyncio.get_running_loop().time() if poll_interval is not None else None,
+                now_monotonic=loop.time() if poll_interval is not None else None,
             )
+            duration = max(0.0, loop.time() - started)
+            runtime_values = dict(values)
+            runtime_values["collector_poll_duration_ms"] = int(round(duration * 1000.0))
+            return runtime_values
+
+        try:
+            runtime_values = await _async_read_driver_values()
         except Exception as exc:
             if _is_retryable_collector_error(exc):
                 logger.warning("Runtime refresh failed: %s; retrying after collector reconnect", exc)
@@ -766,13 +775,7 @@ class EybondHub:
                     self._record_recovery_attempt(reason=_error_code(exc))
                     await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
                     self._runtime_read_state.clear()
-                    runtime_values = await self._driver.async_read_values(
-                        self._link_manager.transport,
-                        self._inverter,
-                        runtime_state=self._runtime_read_state,
-                        poll_interval=poll_interval,
-                        now_monotonic=asyncio.get_running_loop().time() if poll_interval is not None else None,
-                    )
+                    runtime_values = await _async_read_driver_values()
                 except Exception as retry_exc:
                     logger.warning("Runtime refresh failed after retry: %s", retry_exc)
                     self._runtime_read_state.clear()
@@ -794,13 +797,7 @@ class EybondHub:
                     await self._link_manager.async_reset_connection(reason=str(exc))
                     await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
                     self._runtime_read_state.clear()
-                    runtime_values = await self._driver.async_read_values(
-                        self._link_manager.transport,
-                        self._inverter,
-                        runtime_state=self._runtime_read_state,
-                        poll_interval=poll_interval,
-                        now_monotonic=asyncio.get_running_loop().time() if poll_interval is not None else None,
-                    )
+                    runtime_values = await _async_read_driver_values()
                 except Exception as retry_exc:
                     logger.warning("Runtime refresh failed after forced reconnect: %s", retry_exc)
                     self._runtime_read_state.clear()
@@ -1576,6 +1573,15 @@ class EybondHub:
         values["collector_raw_response_count"] = collector.raw_response_count
         values["collector_raw_timeout_count"] = collector.raw_timeout_count
         values["collector_raw_unhandled_line_count"] = collector.raw_unhandled_line_count
+        values["collector_raw_last_spacing_wait_ms"] = (
+            collector.raw_last_spacing_wait_ms
+        )
+        values["collector_raw_last_response_duration_ms"] = (
+            collector.raw_last_response_duration_ms
+        )
+        values["collector_raw_last_total_duration_ms"] = (
+            collector.raw_last_total_duration_ms
+        )
         for key, value in (
             ("collector_raw_last_request_ascii", collector.raw_last_request_ascii),
             ("collector_raw_last_request_hex", collector.raw_last_request_hex),

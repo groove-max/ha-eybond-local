@@ -16,6 +16,7 @@ from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loa
     resolve_collector_cloud_default_protocol,
     resolve_collector_cloud_endpoint_write_format,
     resolve_collector_cloud_identity_strategy,
+    resolve_collector_cloud_provider,
     resolve_collector_cloud_raw_passthrough_bootstrap,
     resolve_collector_cloud_raw_passthrough_frame_format,
     resolve_collector_cloud_session_protocol,
@@ -99,7 +100,7 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(valuecloud.identity_strategy, "at_dtupn")
         self.assertEqual(valuecloud.raw_passthrough_bootstrap, "none")
         self.assertEqual(valuecloud.raw_passthrough_frame_format, "plain_line")
-        self.assertEqual(valuecloud.raw_passthrough_min_interval_ms, 1000)
+        self.assertEqual(valuecloud.raw_passthrough_min_interval_ms, 0)
 
     def test_resolves_known_families_by_host(self) -> None:
         self.assertEqual(resolve_collector_cloud_family_by_host("ess.eybond.com"), "legacy_binary")
@@ -123,8 +124,15 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
         self.assertEqual(resolve_collector_cloud_endpoint_write_format("unknown"), "")
         self.assertEqual(resolve_collector_cloud_session_protocol("unknown"), "")
         self.assertEqual(resolve_collector_cloud_identity_strategy("unknown"), "")
+        self.assertEqual(resolve_collector_cloud_provider("unknown"), "")
         self.assertEqual(resolve_collector_cloud_raw_passthrough_bootstrap("unknown"), "")
         self.assertEqual(resolve_collector_cloud_raw_passthrough_frame_format("unknown"), "")
+
+    def test_resolves_known_providers(self) -> None:
+        self.assertEqual(resolve_collector_cloud_provider("legacy_binary"), "smartess")
+        self.assertEqual(resolve_collector_cloud_provider("SMARTESS_AT"), "smartess")
+        self.assertEqual(resolve_collector_cloud_provider("smartvalue_at"), "smartvalue")
+        self.assertEqual(resolve_collector_cloud_provider("valuecloud_at"), "valuecloud")
 
     def test_resolves_known_default_hosts(self) -> None:
         self.assertEqual(resolve_collector_cloud_default_host("legacy_binary"), "ess.eybond.com")
