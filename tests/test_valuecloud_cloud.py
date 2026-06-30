@@ -16,11 +16,16 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.valuecloud_cloud import (  # noqa: E402
     LOGIN_PATH,
+    VALUECLOUD_BATCH_SETUP_PATH,
+    VALUECLOUD_CTRL_DEVICE_PATH,
     ValueCloudEnvelope,
     ValueCloudSession,
     _headers_for_path,
+    ctrl_device_value,
     fetch_device_bundle_for_collector_with_session,
     login_with_password,
+    normalize_batch_control_groups,
+    setup_batch_control_value,
 )
 
 
@@ -141,6 +146,7 @@ class ValueCloudCloudTests(unittest.TestCase):
                 ]
             ),
             _envelope([]),
+            _envelope([]),
         ]
 
         with patch(
@@ -161,9 +167,114 @@ class ValueCloudCloudTests(unittest.TestCase):
         )
         self.assertEqual(payload["normalized"]["device_pars"]["field_count"], 1)
         self.assertEqual(payload["normalized"]["control_strategy"]["current_value_count"], 1)
+        self.assertEqual(payload["normalized"]["batch_control"]["parameter_count"], 0)
         serialized = json.dumps(payload)
         self.assertNotIn("plain-password", serialized)
         self.assertNotIn("user@example.com", serialized)
+
+    def test_normalizes_batch_control_groups_with_write_identity(self) -> None:
+        normalized = normalize_batch_control_groups(
+            [
+                {
+                    "controlItemId": 10,
+                    "name": "Settings",
+                    "parameters": [
+                        {
+                            "id": "cltd_lcd_backlight",
+                            "detailsId": 20,
+                            "order": 3,
+                            "name": "LCD Backlight",
+                            "readwrite": "RW",
+                            "datatype": "enum",
+                            "item": {"0": "Off", "1": "On"},
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertIsNotNone(normalized)
+        assert normalized is not None
+        self.assertEqual(normalized["group_count"], 1)
+        self.assertEqual(normalized["parameter_count"], 1)
+        self.assertEqual(normalized["writable_parameter_count"], 1)
+        parameter = normalized["groups"][0]["parameters"][0]
+        self.assertEqual(parameter["controlItemId"], 10)
+        self.assertEqual(parameter["detailsId"], 20)
+        self.assertEqual(parameter["order"], 3)
+        self.assertEqual(parameter["item"], {"0": "Off", "1": "On"})
+
+    def test_setup_batch_control_value_posts_single_item_body(self) -> None:
+        session = ValueCloudSession(token="token-123", secret="secret-456", auth="auth-789")
+        with patch(
+            "custom_components.eybond_local.valuecloud_cloud._http_json",
+            return_value=_envelope({}),
+        ) as http_json:
+            setup_batch_control_value(
+                session=session,
+                pn="I200",
+                sn="DEV1",
+                devcode=2506,
+                devaddr=1,
+                control_item_id=10,
+                control_id="cltd_lcd_backlight",
+                details_id=20,
+                order=3,
+                value="1",
+            )
+
+        self.assertEqual(http_json.call_args.kwargs["method"], "POST")
+        self.assertEqual(http_json.call_args.kwargs["path"], VALUECLOUD_BATCH_SETUP_PATH)
+        self.assertEqual(
+            http_json.call_args.kwargs["body"],
+            {
+                "pn": "I200",
+                "sn": "DEV1",
+                "devcode": 2506,
+                "devaddr": 1,
+                "controlItemId": 10,
+                "ids": [
+                    {
+                        "id": "cltd_lcd_backlight",
+                        "detailsId": 20,
+                        "order": 3,
+                        "val": "1",
+                    }
+                ],
+            },
+        )
+
+    def test_ctrl_device_value_uses_legacy_valuecloud_query_shape(self) -> None:
+        session = ValueCloudSession(token="token-123", secret="secret-456", auth="auth-789")
+        with patch(
+            "custom_components.eybond_local.valuecloud_cloud._http_json",
+            return_value=_envelope({}),
+        ) as http_json:
+            ctrl_device_value(
+                session=session,
+                pn="I200",
+                sn="DEV1",
+                devcode=2506,
+                devaddr=1,
+                control_id="cltd_inverter_remote_switch",
+                value="1",
+                datatype=3,
+            )
+
+        self.assertEqual(http_json.call_args.kwargs["method"], "GET")
+        self.assertEqual(http_json.call_args.kwargs["path"], VALUECLOUD_CTRL_DEVICE_PATH)
+        self.assertEqual(
+            http_json.call_args.kwargs["params"],
+            {
+                "pn": "I200",
+                "sn": "DEV1",
+                "devcode": 2506,
+                "devaddr": 1,
+                "id": "cltd_inverter_remote_switch",
+                "val": "1",
+                "datatype": 3,
+            },
+        )
 
 
 if __name__ == "__main__":

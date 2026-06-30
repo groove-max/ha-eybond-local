@@ -5002,7 +5002,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(recommended, 16)
 
-    def test_poll_metrics_auto_adjusts_interval_after_stable_overrun(self) -> None:
+    def test_poll_metrics_reports_overrun_without_auto_adjusting_interval(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         entry = types.SimpleNamespace(
             entry_id="entry-poll",
@@ -5040,30 +5040,76 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator._poll_last_notification_monotonic = 0.0
         self.coordinator_module.persistent_notification.async_create = _async_create
 
-        snapshots = [
-            self.RuntimeSnapshot(values={"collector_poll_duration_ms": 12000})
-            for _ in range(3)
-        ]
-        for snapshot in snapshots:
-            coordinator._record_poll_cycle_metrics(
-                snapshot,
-                poll_interval_seconds=10,
-            )
+        async def _run() -> list[object]:
+            snapshots = [
+                self.RuntimeSnapshot(values={"collector_poll_duration_ms": 12000})
+                for _ in range(3)
+            ]
+            for snapshot in snapshots:
+                coordinator._record_poll_cycle_metrics(
+                    snapshot,
+                    poll_interval_seconds=10,
+                )
+            return snapshots
 
-        self.assertEqual(entry.options["poll_interval"], 18)
-        self.assertEqual(int(coordinator.update_interval.total_seconds()), 18)
-        self.assertEqual(len(updates), 1)
-        self.assertEqual(updates[0]["options"]["poll_interval"], 18)
+        snapshots = asyncio.run(_run())
+
+        self.assertEqual(entry.options["poll_interval"], 10)
+        self.assertEqual(updates, [])
         self.assertEqual(len(notifications), 1)
-        self.assertTrue(snapshots[-1].values["collector_poll_interval_auto_adjusted"])
+        self.assertNotIn("collector_poll_interval_auto_adjusted", snapshots[-1].values)
         self.assertEqual(
-            snapshots[-1].values["collector_poll_interval_auto_adjusted_from_seconds"],
-            10,
-        )
-        self.assertEqual(
-            snapshots[-1].values["collector_poll_interval_auto_adjusted_to_seconds"],
+            snapshots[-1].values["collector_poll_recommended_min_interval_seconds"],
             18,
         )
+
+    def test_poll_metrics_can_use_full_coordinator_cycle_duration(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._poll_duration_ewma_seconds = 0.0
+        coordinator._poll_duration_max_seconds = 0.0
+        coordinator._poll_recent_durations_seconds = []
+        coordinator._collector_poll_overrun_streak = 0
+        coordinator._collector_poll_high_utilization_streak = 0
+        coordinator._poll_last_notification_monotonic = 0.0
+        snapshot = self.RuntimeSnapshot(
+            values={"collector_poll_duration_ms": 700}
+        )
+
+        coordinator._record_poll_cycle_metrics(
+            snapshot,
+            poll_interval_seconds=10,
+            duration_seconds=5.2,
+            start_interval_seconds=10.1,
+        )
+
+        self.assertEqual(snapshot.values["collector_driver_poll_duration_ms"], 700)
+        self.assertEqual(snapshot.values["collector_poll_duration_ms"], 5200)
+        self.assertEqual(snapshot.values["collector_poll_utilization_percent"], 52)
+        self.assertEqual(snapshot.values["collector_poll_start_interval_ms"], 10100)
+        self.assertEqual(snapshot.values["collector_poll_target_start_interval_seconds"], 10)
+
+    def test_fixed_rate_poll_scheduler_sets_remaining_post_refresh_delay(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        snapshot = self.RuntimeSnapshot(values={})
+
+        coordinator._sync_fixed_rate_poll_update_interval(
+            snapshot,
+            poll_interval_seconds=10,
+            duration_seconds=5.2,
+        )
+
+        self.assertAlmostEqual(coordinator.update_interval.total_seconds(), 4.8)
+        self.assertEqual(snapshot.values["collector_poll_scheduler_mode"], "fixed_rate")
+        self.assertEqual(snapshot.values["collector_poll_effective_update_delay_ms"], 4800)
+
+        coordinator._sync_fixed_rate_poll_update_interval(
+            snapshot,
+            poll_interval_seconds=10,
+            duration_seconds=12.0,
+        )
+
+        self.assertEqual(coordinator.update_interval.total_seconds(), 1.0)
+        self.assertEqual(snapshot.values["collector_poll_effective_update_delay_ms"], 1000)
 
     def test_poll_metrics_warns_high_utilization_without_auto_adjust(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)

@@ -280,13 +280,16 @@ def _parse_capability(
     if not choices:
         choices = tuple(_parse_choice(item) for item in resolved_raw.get("choices", []))
     enum_map = _parse_enum_map(resolved_raw.get("enum_map"))
+    command_map = _parse_command_map(resolved_raw.get("command_map"))
     tested = bool(resolved_raw.get("tested", False))
     provenance = _parse_capability_provenance(resolved_raw.get("provenance"), tested=tested)
     return WriteCapability(
         key=str(resolved_raw["key"]),
-        register=int(resolved_raw["register"]),
+        register=int(resolved_raw.get("register", -1)),
         value_kind=str(resolved_raw["value_kind"]),
         note=str(resolved_raw.get("note", "")),
+        command=str(resolved_raw.get("command", "")),
+        command_map=command_map,
         word_count=int(resolved_raw.get("word_count", 1)),
         combine=str(resolved_raw.get("combine", "u16")),
         bitmask=_optional_bitmask(
@@ -302,6 +305,8 @@ def _parse_capability(
         divisor=_optional_int(resolved_raw.get("divisor")),
         minimum=_optional_int(resolved_raw.get("minimum")),
         maximum=_optional_int(resolved_raw.get("maximum")),
+        command_width=_optional_int(resolved_raw.get("command_width")),
+        command_precision=_optional_int(resolved_raw.get("command_precision")),
         enum_map=enum_map,
         choices=choices,
         recommendations=tuple(
@@ -387,6 +392,18 @@ def _parse_choice(raw: Mapping[str, Any]) -> CapabilityChoice:
     )
 
 
+def _parse_command_map(raw: Any) -> dict[int, str] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    parsed: dict[int, str] = {}
+    for key, value in raw.items():
+        command = str(value or "").strip().upper()
+        if not command:
+            continue
+        parsed[int(key)] = command
+    return parsed or None
+
+
 def _parse_recommendation(
     raw: Mapping[str, Any],
     named_conditions: Mapping[str, CapabilityCondition],
@@ -451,6 +468,7 @@ def _parse_condition(raw: Mapping[str, Any]) -> CapabilityCondition:
         operator=str(raw.get("operator", "eq")),
         value=raw.get("value", True),
         reason=str(raw.get("reason", "")),
+        effect=str(raw.get("effect", "warning")),
     )
 
 
@@ -622,6 +640,10 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
             raise ValueError(
                 f"profile:{profile.key}:unknown_group_for_capability:"
                 f"{capability.key}:{capability.group}"
+            )
+        if capability.register < 0 and not capability.command and not capability.command_map:
+            raise ValueError(
+                f"profile:{profile.key}:capability_requires_register_or_command:{capability.key}"
             )
         if capability.word_count < 1:
             raise ValueError(

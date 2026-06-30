@@ -229,6 +229,7 @@ _POLL_OVERRUN_RATIO = 1.0
 _POLL_STABLE_STREAK_THRESHOLD = 3
 _POLL_RECOMMENDED_TARGET_UTILIZATION = 0.7
 _POLL_NOTIFICATION_COOLDOWN_SECONDS = 12 * 60 * 60
+_POLL_FIXED_RATE_MIN_DELAY_SECONDS = 1.0
 def _bounded_shadow_learning_artifact_path(
     *,
     config_dir: Path,
@@ -291,25 +292,15 @@ _LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
         "ru": "Архив поддержки готов.\n\n[Скачать архив поддержки]({download_url})",
         "uk": "Архів підтримки готовий.\n\n[Завантажити архів підтримки]({download_url})",
     },
-    "poll_interval_auto_adjust_title": {
-        "en": "EyeBond Local adjusted polling interval",
-        "ru": "EyeBond Local изменил интервал опроса",
-        "uk": "EyeBond Local змінив інтервал опитування",
-    },
-    "poll_interval_auto_adjust_body": {
-        "en": "The device polling cycle was consistently slower than the configured interval. EyeBond Local changed the polling interval from {old_interval}s to {new_interval}s to keep the data channel stable.\n\nLast cycle: {duration_ms} ms. Utilization before change: {utilization_percent}%.",
-        "ru": "Цикл опроса устройства стабильно занимал больше времени, чем настроенный интервал. EyeBond Local изменил интервал опроса с {old_interval}s на {new_interval}s, чтобы канал данных работал стабильно.\n\nПоследний цикл: {duration_ms} ms. Загрузка до изменения: {utilization_percent}%.",
-        "uk": "Цикл опитування пристрою стабільно тривав довше, ніж налаштований інтервал. EyeBond Local змінив інтервал опитування з {old_interval}s на {new_interval}s, щоб канал даних працював стабільно.\n\nОстанній цикл: {duration_ms} ms. Завантаження до зміни: {utilization_percent}%.",
-    },
     "poll_interval_high_utilization_title": {
         "en": "EyeBond Local polling interval is tight",
         "ru": "EyeBond Local: интервал опроса близок к пределу",
         "uk": "EyeBond Local: інтервал опитування близький до межі",
     },
     "poll_interval_high_utilization_body": {
-        "en": "The device polling cycle is using about {utilization_percent}% of the configured {poll_interval}s interval. If this continues or increases, EyeBond Local may automatically raise the polling interval. Recommended minimum for this device is about {recommended_interval}s.",
-        "ru": "Цикл опроса устройства использует около {utilization_percent}% настроенного интервала {poll_interval}s. Если это продолжится или усилится, EyeBond Local может автоматически увеличить интервал опроса. Рекомендуемый минимум для этого устройства — около {recommended_interval}s.",
-        "uk": "Цикл опитування пристрою використовує близько {utilization_percent}% налаштованого інтервалу {poll_interval}s. Якщо це продовжиться або посилиться, EyeBond Local може автоматично збільшити інтервал опитування. Рекомендований мінімум для цього пристрою — близько {recommended_interval}s.",
+        "en": "The device polling cycle is using about {utilization_percent}% of the configured {poll_interval}s interval. If updates are delayed, increase the polling interval manually. Recommended minimum for this device is about {recommended_interval}s.",
+        "ru": "Цикл опроса устройства использует около {utilization_percent}% настроенного интервала {poll_interval}s. Если обновления задерживаются, увеличьте интервал опроса вручную. Рекомендуемый минимум для этого устройства — около {recommended_interval}s.",
+        "uk": "Цикл опитування пристрою використовує близько {utilization_percent}% налаштованого інтервалу {poll_interval}s. Якщо оновлення затримуються, збільште інтервал опитування вручну. Рекомендований мінімум для цього пристрою — близько {recommended_interval}s.",
     },
 }
 
@@ -791,6 +782,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._poll_duration_ewma_seconds = 0.0
         self._poll_duration_max_seconds = 0.0
         self._poll_recent_durations_seconds: list[float] = []
+        self._poll_last_cycle_started_monotonic = 0.0
         self._collector_poll_overrun_streak = 0
         self._collector_poll_high_utilization_streak = 0
         self._poll_last_notification_monotonic = 0.0
@@ -2246,10 +2238,29 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if self._diagnostic_active and self.data is not None:
                 return self.data
             poll_interval = self._configured_poll_interval_seconds()
+            loop = asyncio.get_running_loop()
+            cycle_started = loop.time()
+            previous_started = float(
+                getattr(self, "_poll_last_cycle_started_monotonic", 0.0) or 0.0
+            )
+            self._poll_last_cycle_started_monotonic = cycle_started
             snapshot = await self._async_update_data_with_runtime_lock()
+            cycle_duration = max(0.0, loop.time() - cycle_started)
+            start_interval = (
+                max(0.0, cycle_started - previous_started)
+                if previous_started > 0.0
+                else None
+            )
             self._record_poll_cycle_metrics(
                 snapshot,
                 poll_interval_seconds=poll_interval,
+                duration_seconds=cycle_duration,
+                start_interval_seconds=start_interval,
+            )
+            self._sync_fixed_rate_poll_update_interval(
+                snapshot,
+                poll_interval_seconds=self._configured_poll_interval_seconds(),
+                duration_seconds=cycle_duration,
             )
             return snapshot
 
@@ -2265,16 +2276,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot: RuntimeSnapshot,
         *,
         poll_interval_seconds: int,
+        duration_seconds: float | None = None,
+        start_interval_seconds: float | None = None,
     ) -> None:
         """Publish poll-pipeline utilization and protect against stable overruns."""
 
         values = getattr(snapshot, "values", None)
         if not isinstance(values, dict):
             return
-        try:
-            duration = max(0.0, float(values.get("collector_poll_duration_ms")) / 1000.0)
-        except (TypeError, ValueError):
-            return
+        driver_duration_ms = values.get("collector_poll_duration_ms")
+        if duration_seconds is None:
+            try:
+                duration = max(0.0, float(driver_duration_ms) / 1000.0)
+            except (TypeError, ValueError):
+                return
+        else:
+            try:
+                duration = max(0.0, float(duration_seconds))
+            except (TypeError, ValueError):
+                return
         interval = _clamp_poll_interval_seconds(poll_interval_seconds)
         self._poll_duration_max_seconds = max(
             float(getattr(self, "_poll_duration_max_seconds", 0.0) or 0.0),
@@ -2313,9 +2333,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             current_interval=interval,
             observed_duration=recent_peak,
         )
+        if duration_seconds is not None:
+            try:
+                values["collector_driver_poll_duration_ms"] = int(driver_duration_ms)
+            except (TypeError, ValueError):
+                values.pop("collector_driver_poll_duration_ms", None)
+        if start_interval_seconds is not None:
+            values["collector_poll_start_interval_ms"] = int(
+                round(max(0.0, start_interval_seconds) * 1000.0)
+            )
         values.update(
             {
                 "collector_poll_interval_configured_seconds": interval,
+                "collector_poll_target_start_interval_seconds": interval,
                 "collector_poll_duration_ms": int(round(duration * 1000.0)),
                 "collector_poll_duration_avg_ms": int(
                     round(self._poll_duration_ewma_seconds * 1000.0)
@@ -2330,19 +2360,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             }
         )
 
-        if (
-            self._collector_poll_overrun_streak >= _POLL_STABLE_STREAK_THRESHOLD
-            and recommended > interval
-        ):
-            self._apply_poll_interval_auto_adjust(
-                snapshot,
-                old_interval=interval,
-                new_interval=recommended,
-                duration_seconds=duration,
-                utilization_ratio=utilization_ratio,
-            )
-            return
-
         if self._collector_poll_high_utilization_streak >= _POLL_STABLE_STREAK_THRESHOLD:
             self._notify_poll_high_utilization(
                 poll_interval=interval,
@@ -2350,66 +2367,36 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 utilization_ratio=utilization_ratio,
             )
 
-    def _apply_poll_interval_auto_adjust(
+    def _sync_fixed_rate_poll_update_interval(
         self,
         snapshot: RuntimeSnapshot,
         *,
-        old_interval: int,
-        new_interval: int,
+        poll_interval_seconds: int,
         duration_seconds: float,
-        utilization_ratio: float,
     ) -> None:
-        new_interval = _clamp_poll_interval_seconds(new_interval)
-        if new_interval <= old_interval:
-            return
-        options = dict(self.config_entry.options)
-        options[CONF_POLL_INTERVAL] = new_interval
-        self.update_interval = timedelta(seconds=new_interval)
-        self._async_update_entry_without_reload(options=options)
-        self._collector_poll_overrun_streak = 0
-        self._collector_poll_high_utilization_streak = 0
-        snapshot.values.update(
-            {
-                "collector_poll_interval_configured_seconds": new_interval,
-                "collector_poll_interval_auto_adjusted": True,
-                "collector_poll_interval_auto_adjusted_from_seconds": old_interval,
-                "collector_poll_interval_auto_adjusted_to_seconds": new_interval,
-                "collector_poll_recommended_min_interval_seconds": new_interval,
-                "collector_poll_overrun_streak": 0,
-                "collector_poll_high_utilization_streak": 0,
-            }
-        )
-        self._notify_collector_poll_interval_auto_adjusted(
-            old_interval=old_interval,
-            new_interval=new_interval,
-            duration_seconds=duration_seconds,
-            utilization_ratio=utilization_ratio,
-        )
+        """Keep configured poll interval as start-to-start target.
 
-    def _notify_collector_poll_interval_auto_adjusted(
-        self,
-        *,
-        old_interval: int,
-        new_interval: int,
-        duration_seconds: float,
-        utilization_ratio: float,
-    ) -> None:
-        persistent_notification.async_create(
-            self.hass,
-            _localized_runtime_text(
-                self.hass,
-                "poll_interval_auto_adjust_body",
-                old_interval=old_interval,
-                new_interval=new_interval,
-                duration_ms=int(round(duration_seconds * 1000.0)),
-                utilization_percent=int(round(utilization_ratio * 100.0)),
-            ),
-            title=_localized_runtime_text(
-                self.hass,
-                "poll_interval_auto_adjust_title",
-            ),
-            notification_id=f"{DOMAIN}_poll_interval_auto_adjust_{self.config_entry.entry_id}",
-        )
+        Home Assistant's DataUpdateCoordinator sleeps ``update_interval`` after
+        ``_async_update_data`` completes.  Without compensating for the refresh
+        duration, a configured 10s poll with a 5s refresh becomes a ~15s
+        start-to-start cadence.  Store the configured poll interval as the user
+        target and make HA's internal post-refresh delay the remaining time.
+        """
+
+        interval = _clamp_poll_interval_seconds(poll_interval_seconds)
+        try:
+            duration = max(0.0, float(duration_seconds))
+        except (TypeError, ValueError):
+            duration = 0.0
+        delay = max(_POLL_FIXED_RATE_MIN_DELAY_SECONDS, float(interval) - duration)
+        self.update_interval = timedelta(seconds=delay)
+        values = getattr(snapshot, "values", None)
+        if isinstance(values, dict):
+            values["collector_poll_effective_update_delay_ms"] = int(
+                round(delay * 1000.0)
+            )
+            values["collector_poll_effective_update_delay_seconds"] = round(delay, 3)
+            values["collector_poll_scheduler_mode"] = "fixed_rate"
 
     def _notify_poll_high_utilization(
         self,

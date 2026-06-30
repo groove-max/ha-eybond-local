@@ -126,8 +126,8 @@
         "title": "SmartESS Cloud Assist",
         "description": "Увійдіть в акаунт SmartESS, щоб підтвердити ідентичність пристрою для колектора `{collector_pn}`. Логін використовується один раз для цього кроку; результат зберігається як повторно використовувані дані онбордингу.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
         "data": {
-          "username": "Ім'я користувача SmartESS",
-          "password": "Пароль SmartESS"
+          "username": "Ім'я користувача хмари",
+          "password": "Пароль хмари"
         },
         "data_description": {
           "username": "Ім'я облікового запису SmartESS, що використовується в мобільному застосунку.",
@@ -255,7 +255,7 @@
         "description": "Виберіть, чим саме ви хочете керувати для цього запису.{bridge_note}",
         "menu_options": {
           "runtime": "Підключення та опитування",
-          "shadow_learning": "Додати керування (навчання пристрою)",
+          "shadow_learning": "Розширити підтримку пристрою",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "collector_uart": "Змінити швидкість UART інвертора",
           "diagnostics": "Діагностика та сервісні інструменти"
@@ -361,39 +361,39 @@
         }
       },
       "shadow_learning": {
-        "title": "Додати елементи керування для цього пристрою",
+        "title": "Розширити підтримку цього пристрою",
         "description": "{control_discovery_hint}",
         "data": {
-          "shadow_learning_confirm_cloud_write": "Так, ненадовго надсилати на цей пристрій тестові команди, щоб знайти його елементи керування"
+          "shadow_learning_confirm_cloud_write": "Так, ненадовго перевірити, які додаткові сенсори та елементи керування підтримує пристрій"
         },
         "data_description": {
-          "shadow_learning_confirm_cloud_write": "Щоб знайти елементи керування, Home Assistant ненадовго надсилає на цей пристрій тестові команди через SmartESS. Налаштування пристрою не змінюються."
+          "shadow_learning_confirm_cloud_write": "Home Assistant ненадовго перевіряє пристрій через його хмарний сервіс, щоб знайти додаткові елементи керування та дані для сенсорів. Налаштування пристрою не змінюються."
         }
       },
       "shadow_learning_credentials": {
-        "title": "Додати елементи керування для цього пристрою",
+        "title": "Розширити підтримку цього пристрою",
         "description": "{control_discovery_hint}",
         "data": {
-          "username": "Ім'я користувача SmartESS",
-          "password": "Пароль SmartESS"
+          "username": "Ім'я користувача хмари",
+          "password": "Пароль хмари"
         },
         "data_description": {
-          "username": "Використовується лише для поточного виявлення елементів керування.",
-          "password": "Використовується лише для поточного виявлення елементів керування."
+          "username": "Використовується лише для поточного виявлення можливостей пристрою.",
+          "password": "Використовується лише для поточного виявлення можливостей пристрою."
         }
       },
       "shadow_learning_review": {
-        "title": "Додати елементи керування для цього пристрою",
+        "title": "Розширити підтримку цього пристрою",
         "description": "{control_discovery_hint}",
         "data": {
-          "enabled_controls": "Які елементи керування додати"
+          "enabled_controls": "Які додаткові елементи керування додати"
         },
         "data_description": {
-          "enabled_controls": "Позначте елементи керування, які хочете бачити в Home Assistant. Ризиковані типово вимкнено."
+          "enabled_controls": "Позначте додаткові елементи керування, які хочете бачити в Home Assistant. Ризиковані типово вимкнено."
         }
       },
       "shadow_learning_result": {
-        "title": "Додати елементи керування для цього пристрою",
+        "title": "Розширити підтримку цього пристрою",
         "description": "{control_discovery_hint}",
         "data": {
           "result_action": "Що ви хочете зробити?"

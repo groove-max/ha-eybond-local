@@ -6911,30 +6911,115 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # Session was started fail-closed then stopped; no overlay drafted.
         self.assertEqual(len(coordinator.stopped), 1)
 
-    async def test_control_discovery_runner_blocks_valuecloud_before_smartess_cloud(self) -> None:
-        # ValueCloud has local read support and cloud evidence, but the automatic
-        # control-discovery writer/orchestrator is provider-specific and still
-        # SmartESS-only. It must fail closed before starting a shadow session or
-        # calling SmartESS cloud helpers; otherwise ValueCloud devices surface
-        # misleading ERR_NOT_FOUND_DEVICE errors from the wrong cloud API.
+    async def test_control_discovery_runner_uses_valuecloud_provider_runner(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)
         coordinator.cloud_evidence_provider = "valuecloud"
         coordinator.collector_cloud_family = "valuecloud_at"
+        coordinator.effective_profile_name = "eybond_g_ascii/base.json"
+        coordinator.effective_register_schema_name = "eybond_g_ascii/base.json"
         options = self._runner_options_flow(coordinator)
         captured: dict = {}
         login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+        valuecloud_session = types.SimpleNamespace(token="vc-token", secret="vc-secret", auth="")
+        valuecloud_bundle = {
+            "request": {
+                "params": {
+                    "pn": "A0000000000001",
+                    "sn": "DEV19E27F1B2345DA3",
+                    "devcode": 2506,
+                    "devaddr": 1,
+                }
+            },
+            "normalized": {
+                "batch_control": {
+                    "groups": [
+                        {
+                            "controlItemId": 10,
+                            "parameters": [
+                                {
+                                    "id": "cltd_lcd_backlight",
+                                    "detailsId": 20,
+                                    "order": 3,
+                                    "name": "LCD Backlight",
+                                    "readwrite": "RW",
+                                    "item": {"1": "On"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
 
-        with login_p as login_mock, fetch_p as fetch_mock, orchestrate_p as orchestrate_mock, overlay_p as overlay_mock:
+        with (
+            login_p as smartess_login_mock,
+            fetch_p as smartess_fetch_mock,
+            orchestrate_p as smartess_orchestrate_mock,
+            overlay_p as overlay_mock,
+            patch.object(
+                config_flow_module.valuecloud_cloud_module,
+                "login_with_password",
+                return_value=(object(), valuecloud_session),
+            ) as valuecloud_login_mock,
+            patch.object(
+                config_flow_module.valuecloud_cloud_module,
+                "fetch_device_bundle_for_collector_with_session",
+                return_value=valuecloud_bundle,
+            ) as valuecloud_fetch_mock,
+            patch.object(
+                config_flow_module,
+                "async_orchestrate_valuecloud_shadow_learning",
+                side_effect=lambda **kwargs: captured.update(kwargs)
+                or {
+                    "planned_write_count": 1,
+                    "executed_result_count": 1,
+                    "sent_count": 1,
+                    "captured_not_applied_count": 1,
+                    "error_count": 0,
+                    "degraded_count": 0,
+                    "leaked_count": 0,
+                    "unknown_field_count": 0,
+                    "results": [],
+                    "correlation": {
+                        "matched_count": 1,
+                        "matched": [
+                            {
+                                "field_id": "cltd_lcd_backlight",
+                                "field_name": "LCD Backlight",
+                                "requested_value": "1",
+                                "value_label": "On",
+                                "value_source": "choice",
+                                "observation": {
+                                    "register": -1,
+                                    "values": [],
+                                    "protocol": "eybond_g_ascii",
+                                    "command": "PBL",
+                                    "value": "1",
+                                },
+                            }
+                        ],
+                        "unmatched_attempt_count": 0,
+                        "unmatched_write_count": 0,
+                    },
+                    "read_map": {},
+                },
+            ) as valuecloud_orchestrate_mock,
+        ):
             await options._async_run_control_discovery()
 
-        self.assertEqual(len(coordinator.started), 0)
-        login_mock.assert_not_called()
-        fetch_mock.assert_not_called()
-        orchestrate_mock.assert_not_called()
-        overlay_mock.assert_not_called()
-        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
-        self.assertIn("ValueCloud", options._shadow_learning_state["discovery"]["reason"])
-        self.assertNotIn("ERR_NOT_FOUND_DEVICE", options._shadow_learning_state["discovery"]["reason"])
+        self.assertEqual(len(coordinator.started), 1)
+        smartess_login_mock.assert_not_called()
+        smartess_fetch_mock.assert_not_called()
+        smartess_orchestrate_mock.assert_not_called()
+        valuecloud_login_mock.assert_called_once()
+        valuecloud_fetch_mock.assert_called_once()
+        valuecloud_orchestrate_mock.assert_called_once()
+        overlay_mock.assert_called_once()
+        self.assertEqual(captured["session"], valuecloud_session)
+        self.assertEqual(captured["batch_control"], valuecloud_bundle["normalized"]["batch_control"])
+        self.assertEqual(captured["pn"], "A0000000000001")
+        self.assertEqual(captured["devcode"], 2506)
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "ok")
 
     async def test_control_discovery_runner_runs_full_pipeline_without_preview_plan(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)

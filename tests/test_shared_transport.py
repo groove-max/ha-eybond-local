@@ -2224,6 +2224,52 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await connection.disconnect()
             run_task.cancel()
 
+    async def test_valuecloud_plain_line_unhandled_numeric_line_does_not_desync_reader(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="plain_line",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_valuecloud_unhandled_numeric_line",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+
+            reader.feed_data(b"229.9 49.98 264.0 185.0\r")
+            deadline = monotonic() + 1.0
+            while connection.collector_info.raw_unhandled_line_count != 1:
+                if monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(connection.collector_info.raw_unhandled_line_count, 1)
+            self.assertEqual(
+                connection.collector_info.raw_last_parser,
+                "raw_plain_line_stale_unhandled",
+            )
+            self.assertEqual(
+                connection.collector_info.raw_last_response_ascii,
+                "229.9 49.98 264.0 185.0.",
+            )
+
+            gmod_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    build_ascii_line_request("GMOD"),
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(writer, b"GMOD\r")
+            reader.feed_data(b"B\r")
+            self.assertEqual(await gmod_task, b"B\r")
+            self.assertEqual(connection.collector_info.raw_response_count, 1)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
     async def test_valuecloud_plain_line_partial_unknown_fragment_does_not_stall_reader(self) -> None:
         reader = asyncio.StreamReader()
         writer = _FakeWriter()

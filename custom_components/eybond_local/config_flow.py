@@ -191,12 +191,16 @@ from .support.shadow_learning_orchestrator import (
     async_orchestrate_shadow_learning_settings,
     orchestrate_shadow_learning_settings,
 )
+from .support.valuecloud_shadow_learning_orchestrator import (
+    async_orchestrate_valuecloud_shadow_learning,
+)
 from .support.shadow_learning_proxy import route_status_indicates_control_write_ready
 from .support.shadow_learning_overlay_generator import generate_shadow_learning_overlay_drafts
 from .support.shadow_learning_review_model import (
     build_activation_selection,
     default_learned_control_label,
 )
+from . import valuecloud_cloud as valuecloud_cloud_module
 
 CONF_RESULT_KEY = "result_key"
 CONF_COLLECTOR_NETWORK_STATUS = "collector_network_status"
@@ -2172,8 +2176,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "the catalog yet. Base read sensors will be added; controls stay "
                 "locked for safety.\n\n"
                 "Next step: after you finish here, open this integration and choose "
-                "**Configure → Add controls (device learning)** to discover its "
-                "controls and extra sensors.",
+                "**Configure → Expand device support** to discover extra "
+                "controls and sensor evidence.",
             )
         elif match is not None:
             headline = self._tr(
@@ -6089,7 +6093,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return await self._async_show_diagnostics_result(
                 action_title=self._diagnostics_result_tr(
                     "shadow_learning_title",
-                    "Add controls for this device",
+                    "Expand support for this device",
                 ),
                 status=self._diagnostics_result_tr(
                     "coordinator_not_loaded",
@@ -6270,7 +6274,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders=self._control_discovery_placeholders(
                 coordinator,
                 "common.dynamic.control_discovery_progress_status",
-                "Checking which controls are available…",
+                "Checking which extra device features are available…",
             ),
         )
 
@@ -6366,9 +6370,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # value, so the determinate scale renders correctly from the start instead
         # of mis-drawing the very first fill (an HA progress-dialog quirk).
         await asyncio.sleep(0.5)
-        self._set_control_discovery_progress(0.03, "preflight")
+        self._set_control_discovery_progress(0.01, "preflight")
+        preflight_started = time.monotonic()
         preflight = await self._build_shadow_learning_preflight_snapshot(coordinator)
+        preflight = dict(preflight)
+        preflight["duration_ms"] = int(round((time.monotonic() - preflight_started) * 1000.0))
         self._shadow_learning_state["preflight"] = preflight
+        self._set_control_discovery_progress(0.03, "preflight")
         if not bool(preflight.get("can_start")):
             blockers = preflight.get("blockers") or []
             if not isinstance(blockers, list):
@@ -6380,7 +6388,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             )
 
         provider = self._control_discovery_cloud_provider(coordinator)
-        if provider != "smartess":
+        if provider not in {"smartess", "valuecloud"}:
             raise RuntimeError(
                 self._tr(
                     "common.dynamic.control_discovery_provider_not_supported",
@@ -6403,117 +6411,27 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if not self._shadow_learning_route_accepts_control(coordinator):
             raise RuntimeError("shadow_learning_session_not_ready")
 
-        self._set_control_discovery_progress(0.18, "fetching")
-        cloud_bundle = await self.hass.async_add_executor_job(
-            lambda: fetch_device_bundle_for_collector(
-                username=username,
-                password=password,
-                collector_pn=str(coordinator.smartess_collector_pn or ""),
-            )
-        )
-        identity = (
-            self._shadow_learning_cloud_identity_from_bundle(cloud_bundle)
-            or self._shadow_learning_cloud_identity(coordinator)
-        )
-        if identity is None:
-            raise RuntimeError("shadow_learning_identity_unavailable")
-        self._shadow_learning_state["identity"] = identity
-        self._publish_shadow_learning_artifacts(coordinator)
-
-        _login_envelope, cloud_session = await self.hass.async_add_executor_job(
-            lambda: login_with_password(
+        if provider == "valuecloud":
+            identity, result, read_bindings = await self._async_execute_valuecloud_control_discovery(
+                coordinator,
                 username=username,
                 password=password,
             )
-        )
-        settings_dat = self._shadow_learning_settings_dat_from_bundle(cloud_bundle)
-        if settings_dat is None:
-            settings_envelope = await self.hass.async_add_executor_job(
-                lambda: fetch_signed_action(
-                    action=build_device_settings_action(
-                        pn=identity["pn"],
-                        sn=identity["sn"],
-                        devcode=identity["devcode"],
-                        devaddr=identity["devaddr"],
-                    ),
-                    session=SessionCredentials(
-                        token=cloud_session.token,
-                        secret=cloud_session.secret,
-                        uid=cloud_session.uid,
-                        usr=cloud_session.usr,
-                        role=cloud_session.role,
-                        expire=cloud_session.expire,
-                    ),
-                ),
-            )
-            settings_dat = settings_envelope.dat
-
-        observation_source = self._shadow_learning_observation_source(coordinator)
-        self._shadow_learning_state["session"] = {
-            **dict(self._shadow_learning_state.get("session") or {}),
-            "status": "learning",
-        }
-
-        def _on_test_progress(done: int, total: int) -> None:
-            # The learning sweep is the long phase; map its 0..1 share onto the
-            # 0.30..0.85 slice of the overall progress bar and surface a counter.
-            fraction = 0.30 + 0.55 * (done / total) if total > 0 else 0.30
-            self._set_control_discovery_progress(
-                fraction, "testing", done=min(done + 1, total) if total else 0, total=total
+        else:
+            identity, result, read_bindings = await self._async_execute_smartess_control_discovery(
+                coordinator,
+                username=username,
+                password=password,
             )
 
-        self._set_control_discovery_progress(0.30, "testing")
-        result = await async_orchestrate_shadow_learning_settings(
-            settings_dat=settings_dat,
-            session=cloud_session,
-            pn=identity["pn"],
-            sn=identity["sn"],
-            devcode=identity["devcode"],
-            devaddr=identity["devaddr"],
-            dry_run=False,
-            confirm_cloud_write=True,
-            shadow_session_state="ready",
-            # Full automatic plan: every choice/enum setting is swept across all of its values
-            # so the overlay learns each control's value set. Pure-numeric fields are now
-            # included too -- a single (NACK'd, observe-only) write per field reveals its
-            # register and the cloud's display divisor (raw register / written value), so they
-            # materialize as number entities with correct read scaling. No min/max is learned:
-            # the device validates the value, not the front-end.
-            field_ids=[],
-            include_numeric=True,
-            all_choice_values=True,
-            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
-            continue_on_error=True,
-            delay_seconds=0.0,
-            observation_cursor=(
-                getattr(observation_source, "observation_cursor", None)
-                if observation_source is not None
-                else None
-            ),
-            current_observations_since=(
-                getattr(observation_source, "observations_since", None)
-                if observation_source is not None
-                else None
-            ),
-            wait_for_observations_since=(
-                (lambda cursor, timeout_seconds: observation_source.wait_for_observations_since(
-                    cursor,
-                    timeout_seconds=timeout_seconds,
-                ))
-                if observation_source is not None
-                and callable(getattr(observation_source, "wait_for_observations_since", None))
-                else None
-            ),
-            is_session_ready=lambda: self._shadow_learning_route_accepts_control(coordinator),
-            read_map_snapshot=(
-                (lambda: observation_source.read_map)
-                if observation_source is not None
-                and hasattr(observation_source, "read_map")
-                else None
-            ),
-            on_progress=_on_test_progress,
-        )
         self._shadow_learning_state["orchestration"] = result
+        plan = result.get("plan") if isinstance(result, dict) else None
+        if isinstance(plan, list):
+            self._shadow_learning_state["plan"] = {
+                "source": f"{provider}_orchestration_plan",
+                "items": plan,
+                "count": len(plan),
+            }
         self._shadow_learning_state["session"] = {
             **dict(self._shadow_learning_state.get("session") or {}),
             "status": "degraded"
@@ -6566,18 +6484,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._set_control_discovery_progress(0.88, "building")
         correlation = result.get("correlation")
         read_map = result.get("read_map")
-        read_bindings: dict[str, Any] | None = None
-        if isinstance(read_map, dict) and read_map.get("registers"):
-            # The cloud rendered its labeled "last data" FROM our seed register
-            # bank during this session, so value correlation is structurally
-            # aligned. Failures here must never fail the discovery run.
-            read_bindings = await self._async_bind_session_read_labels(
-                cloud_session=cloud_session,
-                identity=identity,
-                read_map=read_map,
-            )
-            if read_bindings:
-                self._shadow_learning_state["read_bindings"] = read_bindings
         if isinstance(correlation, dict):
             await self._async_generate_control_discovery_overlay(
                 coordinator,
@@ -6604,12 +6510,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             or 0
         )
         sent_count = int(orchestration.get("sent_count") or 0)
+        read_map_for_result = orchestration.get("read_map")
+        read_event_count = int(
+            read_map_for_result.get("read_event_count") or 0
+        ) if isinstance(read_map_for_result, dict) else 0
         # A run that found nothing AND transmitted no probes at all did not actually
         # observe the device -- it stalled on the connection (e.g. the collector never
         # reconnected through the temporary proxy). That is a retryable error, not a
         # genuine "this device has no controls" result, so surface it as a failure with a
         # clear retry hint instead of the misleading "nothing found this time" message.
-        if found_controls == 0 and sent_count == 0:
+        if found_controls == 0 and sent_count == 0 and read_event_count == 0:
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
                 "reason": self._tr(
@@ -6625,6 +6535,214 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "found_controls": found_controls,
             }
         return None
+
+    async def _async_execute_smartess_control_discovery(
+        self,
+        coordinator,
+        *,
+        username: str,
+        password: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+        """Execute SmartESS-specific cloud control discovery."""
+
+        self._set_control_discovery_progress(0.18, "fetching")
+        cloud_bundle = await self.hass.async_add_executor_job(
+            lambda: fetch_device_bundle_for_collector(
+                username=username,
+                password=password,
+                collector_pn=str(coordinator.smartess_collector_pn or ""),
+            )
+        )
+        identity = (
+            self._shadow_learning_cloud_identity_from_bundle(cloud_bundle)
+            or self._shadow_learning_cloud_identity(coordinator)
+        )
+        if identity is None:
+            raise RuntimeError("shadow_learning_identity_unavailable")
+        self._shadow_learning_state["identity"] = identity
+        self._publish_shadow_learning_artifacts(coordinator)
+
+        _login_envelope, cloud_session = await self.hass.async_add_executor_job(
+            lambda: login_with_password(username=username, password=password)
+        )
+        settings_dat = self._shadow_learning_settings_dat_from_bundle(cloud_bundle)
+        if settings_dat is None:
+            settings_envelope = await self.hass.async_add_executor_job(
+                lambda: fetch_signed_action(
+                    action=build_device_settings_action(
+                        pn=identity["pn"],
+                        sn=identity["sn"],
+                        devcode=identity["devcode"],
+                        devaddr=identity["devaddr"],
+                    ),
+                    session=SessionCredentials(
+                        token=cloud_session.token,
+                        secret=cloud_session.secret,
+                        uid=cloud_session.uid,
+                        usr=cloud_session.usr,
+                        role=cloud_session.role,
+                        expire=cloud_session.expire,
+                    ),
+                ),
+            )
+            settings_dat = settings_envelope.dat
+
+        observation_source = self._shadow_learning_observation_source(coordinator)
+        self._shadow_learning_state["session"] = {
+            **dict(self._shadow_learning_state.get("session") or {}),
+            "status": "learning",
+        }
+        self._set_control_discovery_progress(0.30, "testing")
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=cloud_session,
+            pn=identity["pn"],
+            sn=identity["sn"],
+            devcode=identity["devcode"],
+            devaddr=identity["devaddr"],
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=True,
+            all_choice_values=True,
+            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
+            continue_on_error=True,
+            delay_seconds=0.0,
+            **self._shadow_learning_orchestrator_callbacks(coordinator, observation_source),
+        )
+
+        read_map = result.get("read_map")
+        read_bindings: dict[str, Any] | None = None
+        if isinstance(read_map, dict) and read_map.get("registers"):
+            read_bindings = await self._async_bind_session_read_labels(
+                cloud_session=cloud_session,
+                identity=identity,
+                read_map=read_map,
+            )
+            if read_bindings:
+                self._shadow_learning_state["read_bindings"] = read_bindings
+        return identity, result, read_bindings
+
+    async def _async_execute_valuecloud_control_discovery(
+        self,
+        coordinator,
+        *,
+        username: str,
+        password: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+        """Execute ValueCloud-specific cloud control discovery."""
+
+        self._set_control_discovery_progress(0.18, "fetching")
+        _login_envelope, cloud_session = await self.hass.async_add_executor_job(
+            lambda: valuecloud_cloud_module.login_with_password(
+                username=username,
+                password=password,
+            )
+        )
+        cloud_bundle = await self.hass.async_add_executor_job(
+            lambda: valuecloud_cloud_module.fetch_device_bundle_for_collector_with_session(
+                session=cloud_session,
+                collector_pn=str(coordinator.smartess_collector_pn or ""),
+            )
+        )
+        identity = (
+            self._shadow_learning_cloud_identity_from_bundle(cloud_bundle)
+            or self._shadow_learning_cloud_identity(coordinator)
+        )
+        if identity is None:
+            raise RuntimeError("shadow_learning_identity_unavailable")
+        self._shadow_learning_state["identity"] = identity
+        self._publish_shadow_learning_artifacts(coordinator)
+
+        normalized = cloud_bundle.get("normalized") if isinstance(cloud_bundle, dict) else None
+        batch_control = (
+            normalized.get("batch_control")
+            if isinstance(normalized, dict) and isinstance(normalized.get("batch_control"), dict)
+            else None
+        )
+        control_strategy = (
+            normalized.get("control_strategy")
+            if isinstance(normalized, dict) and isinstance(normalized.get("control_strategy"), dict)
+            else None
+        )
+        device_ctrl = (
+            normalized.get("device_ctrl")
+            if isinstance(normalized, dict) and isinstance(normalized.get("device_ctrl"), dict)
+            else None
+        )
+        if not isinstance(batch_control, dict) and not isinstance(control_strategy, dict) and not isinstance(device_ctrl, dict):
+            raise RuntimeError("valuecloud_batch_control_unavailable")
+
+        observation_source = self._shadow_learning_observation_source(coordinator)
+        self._shadow_learning_state["session"] = {
+            **dict(self._shadow_learning_state.get("session") or {}),
+            "status": "learning",
+        }
+        self._set_control_discovery_progress(0.30, "testing")
+        result = await async_orchestrate_valuecloud_shadow_learning(
+            batch_control=batch_control,
+            control_strategy=control_strategy,
+            device_ctrl=device_ctrl,
+            session=cloud_session,
+            pn=identity["pn"],
+            sn=identity["sn"],
+            devcode=identity["devcode"],
+            devaddr=identity["devaddr"],
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=True,
+            all_choice_values=True,
+            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
+            continue_on_error=True,
+            delay_seconds=0.0,
+            **self._shadow_learning_orchestrator_callbacks(coordinator, observation_source),
+        )
+        return identity, result, None
+
+    def _shadow_learning_orchestrator_callbacks(self, coordinator, observation_source) -> dict[str, Any]:
+        """Return shared shadow-observation callbacks for provider runners."""
+
+        def _on_test_progress(done: int, total: int) -> None:
+            fraction = 0.30 + 0.55 * (done / total) if total > 0 else 0.30
+            self._set_control_discovery_progress(
+                fraction,
+                "testing",
+                done=min(done + 1, total) if total else 0,
+                total=total,
+            )
+
+        return {
+            "observation_cursor": (
+                getattr(observation_source, "observation_cursor", None)
+                if observation_source is not None
+                else None
+            ),
+            "current_observations_since": (
+                getattr(observation_source, "observations_since", None)
+                if observation_source is not None
+                else None
+            ),
+            "wait_for_observations_since": (
+                (lambda cursor, timeout_seconds: observation_source.wait_for_observations_since(
+                    cursor,
+                    timeout_seconds=timeout_seconds,
+                ))
+                if observation_source is not None
+                and callable(getattr(observation_source, "wait_for_observations_since", None))
+                else None
+            ),
+            "is_session_ready": lambda: self._shadow_learning_route_accepts_control(coordinator),
+            "read_map_snapshot": (
+                (lambda: observation_source.read_map)
+                if observation_source is not None
+                and hasattr(observation_source, "read_map")
+                else None
+            ),
+            "on_progress": _on_test_progress,
+        }
 
     async def _async_bind_session_read_labels(
         self,
@@ -6832,10 +6950,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 description_placeholders=self._control_discovery_placeholders(
                     coordinator,
                     "common.dynamic.control_discovery_overview_intro",
-                    "Found {control_discovery_count} control(s) for this device — "
+                    "Found {control_discovery_count} extra control(s) for this device — "
                     "{control_discovery_new_count} new, "
                     "{control_discovery_existing_count} already in Home Assistant. "
-                    "Continue to choose which new controls to add.\n\n"
+                    "Continue to choose which new items to add.\n\n"
                     "{control_discovery_overview}",
                     hint_placeholders=overview_placeholders,
                     extra=overview_placeholders,
@@ -6908,8 +7026,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders=self._control_discovery_placeholders(
                 coordinator,
                 "common.dynamic.control_discovery_review_intro",
-                "Turn on the controls and read sensors you want to add to Home "
-                "Assistant. Risky controls are left off — turn them on only if "
+                "Choose the extra controls and read sensors you want to add to Home "
+                "Assistant. Risky controls are left off — enable them only if "
                 "you know what they do.",
                 hint_placeholders=review_placeholders,
                 extra=review_placeholders,

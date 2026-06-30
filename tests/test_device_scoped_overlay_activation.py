@@ -110,6 +110,44 @@ class DeviceScopedOverlayActivationTests(unittest.TestCase):
             self.assertEqual(selection.profile_name, profile_name)
             self.assertEqual(selection.register_schema_name, schema_name)
 
+    def test_placeholder_protocol_asset_id_does_not_suppress_overlay(self) -> None:
+        # Regression: ValueCloud / AT collectors can record "0000" in the
+        # activation scope as a placeholder protocol asset id while the local
+        # runtime exposes the same absence of identity as an empty string. This
+        # must not suppress the learned overlay after reload.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_name, schema_name = _write_local_overlay_files(Path(temp_dir))
+            selection = resolve_effective_metadata_selection(
+                inverter=types.SimpleNamespace(
+                    driver_key="modbus_smg",
+                    profile_name="smg_modbus.json",
+                    register_schema_name="modbus_smg/models/smg_6200.json",
+                    serial_number="SN-001",
+                ),
+                collector=CollectorInfo(
+                    collector_pn="E5000020000000",
+                    smartess_device_address=1,
+                    smartess_protocol_asset_id="",
+                    smartess_protocol_profile_key="",
+                ),
+                entry_options={
+                    "device_scoped_overlay_activation": {
+                        "profile_name": profile_name,
+                        "register_schema_name": schema_name,
+                        "scope": "device",
+                        "activation_scope": {
+                            "effective_owner_key": "modbus_smg",
+                            "base_profile_name": "smg_modbus.json",
+                            "base_register_schema_name": "modbus_smg/models/smg_6200.json",
+                            "smartess_protocol_asset_id": "0000",
+                        },
+                    }
+                },
+            )
+
+            self.assertTrue(selection.device_scoped_overlay_active)
+            self.assertEqual(selection.profile_name, profile_name)
+
     def test_overlay_applies_despite_cloud_sn_vs_modbus_serial_mismatch(self) -> None:
         # Regression: session.cloud_sn is the SmartESS device serial (e.g.
         # "SN-001") and never equals inverter.serial_number (the Modbus serial),

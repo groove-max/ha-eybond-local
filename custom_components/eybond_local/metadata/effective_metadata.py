@@ -383,7 +383,9 @@ def _device_scope_matches_runtime(
             builtin_base_schema_name(base_register_schema_name)
         ):
             return False
-        expected_asset_id = _normalized_name(activation_scope.get("smartess_protocol_asset_id", ""))
+        expected_asset_id = _normalized_protocol_asset_id(
+            activation_scope.get("smartess_protocol_asset_id", "")
+        )
         runtime_asset_id = _normalized_name(
             getattr(smartess_protocol, "asset_id", "")
             or getattr(collector, "smartess_protocol_asset_id", "")
@@ -505,6 +507,19 @@ def _smartess_driver_name(protocol: SmartEssProtocolCatalogEntry) -> str:
 
 def _normalized_name(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _normalized_protocol_asset_id(value: Any) -> str:
+    """Normalize protocol asset ids used for device-overlay scope matching.
+
+    Some AT collectors report ``0000`` as a placeholder protocol id when no real
+    SmartESS protocol asset has been resolved. Treating that placeholder as a
+    concrete identity silently suppresses activated learned overlays after reload
+    because the runtime often has the equivalent value as an empty string.
+    """
+
+    normalized = _normalized_name(value)
+    return "" if normalized in {"0", "00", "000", "0000"} else normalized
 
 
 def _effective_owner_name_from_key(driver_key: str) -> str:

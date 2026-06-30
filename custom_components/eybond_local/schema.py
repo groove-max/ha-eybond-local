@@ -293,6 +293,8 @@ def serialize_capability(
     return {
         "key": capability.key,
         "register": capability.register,
+        "command": capability.command or None,
+        "command_map": capability.command_map or None,
         "status": status,
         "entity_kind": entity_kind,
         "value_kind": capability.value_kind,

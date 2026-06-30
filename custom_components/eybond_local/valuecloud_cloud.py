@@ -18,6 +18,11 @@ DEFAULT_PROJECT = "IOT"
 DEFAULT_APP_VERSION = "2.28.1.1"
 DEFAULT_TIMEOUT = 15.0
 LOGIN_PATH = "ppr/app/login/pub/login"
+VALUECLOUD_BATCH_READ_BULK_PATH = "ppe/api/auth/web/batch/control/item/readBulkControl"
+VALUECLOUD_BATCH_READ_ALL_PATH = "ppe/api/auth/web/batch/control/item/readAll"
+VALUECLOUD_BATCH_SETUP_PATH = "ppe/api/auth/web/batch/control/item/setUp"
+VALUECLOUD_CTRL_DEVICE_PATH = "ppe/api/auth/web/ctrlDevice"
+VALUECLOUD_QUERY_CTRL_FIELD_KEY_PATH = "ppe/api/auth/web/queryCtrlFieldKey"
 
 
 class ValueCloudError(RuntimeError):
@@ -309,6 +314,230 @@ def fetch_authenticated_envelope(
     return envelope
 
 
+def post_authenticated_envelope(
+    *,
+    action: str,
+    path: str,
+    session: ValueCloudSession,
+    body: dict[str, Any] | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ValueCloudEnvelope:
+    """Post one authenticated ValueCloud endpoint and validate the envelope."""
+
+    envelope = _http_json(
+        method="POST",
+        path=path,
+        body=body or {},
+        session=session,
+        base_url=base_url,
+        language=language,
+        app_version=app_version,
+        timeout=timeout,
+    )
+    _raise_for_envelope(envelope, action=action)
+    return envelope
+
+
+def fetch_batch_control_groups(
+    *,
+    session: ValueCloudSession,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    role: int | str = 0,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ValueCloudEnvelope:
+    """Fetch ValueCloud batch-control metadata groups for one device."""
+
+    return fetch_authenticated_envelope(
+        action="readBulkControl",
+        path=VALUECLOUD_BATCH_READ_BULK_PATH,
+        params={
+            "pn": pn,
+            "sn": sn,
+            "devcode": devcode,
+            "devaddr": devaddr,
+            "role": role,
+        },
+        session=session,
+        base_url=base_url,
+        language=language,
+        app_version=app_version,
+        timeout=timeout,
+    )
+
+
+def read_batch_control_values(
+    *,
+    session: ValueCloudSession,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    control_item_id: Any,
+    ids: list[dict[str, Any]],
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ValueCloudEnvelope:
+    """Read current values for one ValueCloud batch-control group."""
+
+    return post_authenticated_envelope(
+        action="readAll",
+        path=VALUECLOUD_BATCH_READ_ALL_PATH,
+        body={
+            "pn": pn,
+            "sn": sn,
+            "devcode": devcode,
+            "devaddr": devaddr,
+            "controlItemId": control_item_id,
+            "ids": [
+                {
+                    "id": item.get("id"),
+                    "detailsId": item.get("detailsId"),
+                    "order": item.get("order"),
+                }
+                for item in ids
+            ],
+        },
+        session=session,
+        base_url=base_url,
+        language=language,
+        app_version=app_version,
+        timeout=timeout,
+    )
+
+
+def setup_batch_control_value(
+    *,
+    session: ValueCloudSession,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    control_item_id: Any,
+    control_id: Any,
+    details_id: Any,
+    order: Any,
+    value: Any,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ValueCloudEnvelope:
+    """Send one ValueCloud batch-control setUp item.
+
+    The official UI posts one group body with an ``ids`` list.  The learning
+    runner deliberately sends a single item per request so every cloud write can
+    be correlated with exactly one local shadow observation.
+    """
+
+    return post_authenticated_envelope(
+        action="setUp",
+        path=VALUECLOUD_BATCH_SETUP_PATH,
+        body={
+            "pn": pn,
+            "sn": sn,
+            "devcode": devcode,
+            "devaddr": devaddr,
+            "controlItemId": control_item_id,
+            "ids": [
+                {
+                    "id": control_id,
+                    "detailsId": details_id,
+                    "order": order,
+                    "val": value,
+                }
+            ],
+        },
+        session=session,
+        base_url=base_url,
+        language=language,
+        app_version=app_version,
+        timeout=timeout,
+    )
+
+
+def ctrl_device_value(
+    *,
+    session: ValueCloudSession,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    control_id: Any,
+    value: Any,
+    datatype: Any,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ValueCloudEnvelope:
+    """Send one legacy ValueCloud ctrlDevice control request."""
+
+    return fetch_authenticated_envelope(
+        action="ctrlDevice",
+        path=VALUECLOUD_CTRL_DEVICE_PATH,
+        params={
+            "pn": pn,
+            "sn": sn,
+            "devcode": devcode,
+            "devaddr": devaddr,
+            "id": control_id,
+            "val": value,
+            "datatype": datatype,
+        },
+        session=session,
+        base_url=base_url,
+        language=language,
+        app_version=app_version,
+        timeout=timeout,
+    )
+
+
+def query_ctrl_field_key(
+    *,
+    session: ValueCloudSession,
+    pn: str,
+    sn: str,
+    devcode: int,
+    devaddr: int,
+    control_id: Any,
+    datatype: Any,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ValueCloudEnvelope:
+    """Read one legacy ValueCloud control field value."""
+
+    return fetch_authenticated_envelope(
+        action="queryCtrlFieldKey",
+        path=VALUECLOUD_QUERY_CTRL_FIELD_KEY_PATH,
+        params={
+            "pn": pn,
+            "sn": sn,
+            "devcode": devcode,
+            "devaddr": devaddr,
+            "id": control_id,
+            "datatype": datatype,
+        },
+        session=session,
+        base_url=base_url,
+        language=language,
+        app_version=app_version,
+        timeout=timeout,
+    )
+
+
 def fetch_device_bundle_for_collector(
     *,
     username: str,
@@ -451,6 +680,13 @@ def fetch_device_bundle_for_collector_with_session(
             identity_params,
             normalize_valuecloud_fields,
         ),
+        (
+            "batch_control",
+            "readBulkControl",
+            VALUECLOUD_BATCH_READ_BULK_PATH,
+            control_params,
+            normalize_batch_control_groups,
+        ),
     )
     for key, action, path, params, normalizer in optional_specs:
         response = _fetch_optional_response_block(
@@ -478,6 +714,7 @@ def fetch_device_bundle_for_collector_with_session(
                 "device_pars": "queryDevicePars",
                 "control_strategy": "queryDeviceCtrlStrategy",
                 "device_ctrl": "queryDeviceCtrl",
+                "batch_control": "readBulkControl",
             },
             "params": {
                 "collector_pn": normalized_collector_pn,
@@ -716,6 +953,11 @@ def normalize_valuecloud_fields(data: Any) -> dict[str, Any] | None:
 def _normalize_cloud_field(raw_item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": raw_item.get("id"),
+        "detailsId": raw_item.get("detailsId"),
+        "controlItemId": raw_item.get("controlItemId"),
+        "order": raw_item.get("order"),
+        "num": raw_item.get("num"),
+        "groupNumber": raw_item.get("groupNumber"),
         "name": raw_item.get("name") or raw_item.get("title"),
         "par": raw_item.get("par"),
         "unit": raw_item.get("unit"),
@@ -723,6 +965,14 @@ def _normalize_cloud_field(raw_item: dict[str, Any]) -> dict[str, Any]:
         "displayValue": raw_item.get("displayValue"),
         "hint": raw_item.get("hint"),
         "item": raw_item.get("item"),
+        "datatype": raw_item.get("datatype"),
+        "dateType": raw_item.get("dateType"),
+        "readwrite": raw_item.get("readwrite"),
+        "type": raw_item.get("type"),
+        "rangeConfigFlag": raw_item.get("rangeConfigFlag"),
+        "visable": raw_item.get("visable"),
+        "visableDist": raw_item.get("visableDist"),
+        "viewable": raw_item.get("viewable"),
         "packet": raw_item.get("packet"),
         "packetname": raw_item.get("packetname"),
         "tag": raw_item.get("tag"),
@@ -730,3 +980,77 @@ def _normalize_cloud_field(raw_item: dict[str, Any]) -> dict[str, Any]:
         "maximum": raw_item.get("maximum"),
         "enumMap": raw_item.get("enumMap"),
     }
+
+
+def normalize_batch_control_groups(data: Any) -> dict[str, Any] | None:
+    """Normalize ValueCloud readBulkControl metadata into stable groups."""
+
+    raw_groups: Any = data
+    if isinstance(data, dict):
+        raw_groups = (
+            data.get("items")
+            or data.get("list")
+            or data.get("data")
+            or data.get("controlItems")
+            or data.get("controlItem")
+        )
+    if not isinstance(raw_groups, list):
+        return None
+
+    groups: list[dict[str, Any]] = []
+    parameter_count = 0
+    writable_count = 0
+    choice_count = 0
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, dict):
+            continue
+        raw_parameters = (
+            raw_group.get("parameters")
+            or raw_group.get("parameter")
+            or raw_group.get("items")
+            or raw_group.get("field")
+            or []
+        )
+        if not isinstance(raw_parameters, list):
+            raw_parameters = []
+        parameters: list[dict[str, Any]] = []
+        for raw_parameter in raw_parameters:
+            if not isinstance(raw_parameter, dict):
+                continue
+            field = _normalize_cloud_field(raw_parameter)
+            if field.get("controlItemId") in (None, ""):
+                field["controlItemId"] = raw_group.get("controlItemId") or raw_group.get("id")
+            parameters.append(field)
+            parameter_count += 1
+            if _field_is_writable(field):
+                writable_count += 1
+            if field.get("item") or field.get("enumMap"):
+                choice_count += 1
+        groups.append(
+            {
+                "id": raw_group.get("id"),
+                "controlItemId": raw_group.get("controlItemId") or raw_group.get("id"),
+                "name": raw_group.get("name") or raw_group.get("title"),
+                "date": raw_group.get("date"),
+                "parameters": parameters,
+                "parameter_count": len(parameters),
+            }
+        )
+
+    return {
+        "group_count": len(groups),
+        "parameter_count": parameter_count,
+        "writable_parameter_count": writable_count,
+        "choice_parameter_count": choice_count,
+        "groups": groups,
+    }
+
+
+def _field_is_writable(field: dict[str, Any]) -> bool:
+    readwrite = str(field.get("readwrite") or "").strip().upper()
+    if readwrite in {"RW", "R/W", "WRITE", "WRITABLE"}:
+        return True
+    if readwrite in {"R", "RO", "READ", "READONLY", "READ_ONLY"}:
+        return False
+    value_type = str(field.get("type") or field.get("datatype") or "").strip().lower()
+    return "write" in value_type or "ctrl" in value_type or bool(field.get("detailsId"))

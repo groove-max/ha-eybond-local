@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,10 +22,17 @@ from custom_components.eybond_local.fixtures.replay import (  # noqa: E402
     detect_fixture_payload,
     read_fixture_values,
 )
+from custom_components.eybond_local.metadata.profile_loader import load_driver_profile  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
     load_register_schema,
 )
-from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
+from custom_components.eybond_local.models import (  # noqa: E402
+    CapabilityCondition,
+    DetectedInverter,
+    ProbeTarget,
+    WriteCapability,
+)
+from custom_components.eybond_local.payload.ascii_line import AsciiLineError  # noqa: E402
 
 
 class _FakeEybondGAsciiSession:
@@ -41,7 +49,64 @@ class _FakeEybondGAsciiSession:
         return self.responses[command].encode("ascii")
 
 
+class _DefaultingFakeEybondGAsciiSession(_FakeEybondGAsciiSession):
+    async def request(self, command: str) -> str:
+        self.commands.append(command)
+        return self.responses.get(command, "")
+
+    async def request_raw(self, command: str) -> bytes:
+        self.commands.append(command)
+        return self.responses.get(command, "").encode("ascii")
+
+
 class EybondGAsciiDriverTests(unittest.TestCase):
+    def test_capability_visible_if_controls_runtime_visibility(self) -> None:
+        capability = WriteCapability(
+            key="bms_communication",
+            register=-1,
+            value_kind="bool",
+            note="",
+            visible_if=(
+                CapabilityCondition(
+                    key="g_ascii_bms_available",
+                    operator="truthy",
+                    effect="hide",
+                    reason="BMS telemetry is not available on this device.",
+                ),
+            ),
+        )
+
+        unavailable = capability.runtime_state({"g_ascii_bms_available": False})
+        self.assertFalse(unavailable.visible)
+        self.assertFalse(unavailable.editable)
+        self.assertIn("BMS telemetry is not available on this device.", unavailable.warnings)
+
+        available = capability.runtime_state({"g_ascii_bms_available": True})
+        self.assertTrue(available.visible)
+        self.assertTrue(available.editable)
+
+    def test_capability_editable_if_does_not_hide_capability(self) -> None:
+        capability = WriteCapability(
+            key="standby_only",
+            register=-1,
+            value_kind="bool",
+            note="",
+            editable_if=(
+                CapabilityCondition(
+                    key="operating_mode",
+                    operator="eq",
+                    value="Standby",
+                    effect="disable",
+                    reason="This setting can only be changed in standby.",
+                ),
+            ),
+        )
+
+        state = capability.runtime_state({"operating_mode": "Battery"})
+        self.assertTrue(state.visible)
+        self.assertFalse(state.editable)
+        self.assertIn("This setting can only be changed in standby.", state.warnings)
+
     def test_entity_descriptions_are_loaded_from_command_schema_via_register_schema(self) -> None:
         command_schema = json.loads(
             (
@@ -152,13 +217,72 @@ class EybondGAsciiDriverTests(unittest.TestCase):
 
         self.assertIsNotNone(detected)
         self.assertEqual(detected.variant_key, "g_ascii_family")
-        self.assertEqual(detected.profile_name, "")
+        self.assertEqual(detected.profile_name, "eybond_g_ascii/base.json")
         self.assertEqual(detected.register_schema_name, "eybond_g_ascii/base.json")
         evidence = detected.details["catalog_detection"]["evidence"]
         self.assertEqual(evidence["protocol.protocol_id"], "EYBOND_G_ASCII")
         self.assertEqual(evidence["collector.cloud_family"], "valuecloud_at")
         self.assertEqual(evidence["shape.gdat0_field_count"], 22)
         self.assertEqual(evidence["shape.gpv_field_count"], 24)
+
+    def test_probe_resolves_lvyuan_profile_from_offline_fingerprint(self) -> None:
+        class _CollectorInfo:
+            collector_pn = "E5000020000000"
+            collector_cloud_family = "valuecloud_at"
+
+        class _Transport:
+            collector_info = _CollectorInfo()
+
+            async def async_send_payload(self, payload, *, route):
+                responses = {
+                    b"GMOD\r": b"(B\r",
+                    b"GPDAT0\r": (
+                        b"(0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 "
+                        b"50.00 04.11 26.4 015.8 025 0904 0904 100 172.8 "
+                        b"015.8 0844 048.0\r"
+                    ),
+                    b"GPV\r": (
+                        b"(183.1 027.6 00.43 05.31 00972 03 1 0 448.0 "
+                        b"449.0 424.0 426.0 176.0 01 01039 01039 1193 "
+                        b"3422 1823 0050 00589 00000 36363 0000000000000000\r"
+                    ),
+                    b"F\r": b"#220.0 016 024.0 50.0\r",
+                    b"SVFW\r": b"(4.003 (20250217\r",
+                }
+                return responses[payload]
+
+            def select_payload_route(self, route, *, payload_family=""):
+                return route
+
+        detected = asyncio.run(
+            EybondGAsciiDriver().async_probe(
+                _Transport(),
+                ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
+            )
+        )
+
+        self.assertIsNotNone(detected)
+        self.assertEqual(detected.model_name, "LVYUAN TY-SIC-3.6KBE-W1")
+        self.assertEqual(detected.variant_key, "lvyuan_ty_sic_3_6kbe_w1")
+        self.assertEqual(
+            detected.profile_name,
+            "eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json",
+        )
+        self.assertEqual(detected.register_schema_name, "eybond_g_ascii/base.json")
+        self.assertEqual(len(detected.capabilities), 34)
+        self.assertEqual(
+            detected.details["catalog_detection"]["resolution"],
+            "exact",
+        )
+        self.assertNotIn("battery_current", detected.details)
+        self.assertNotIn("output_apparent_power", detected.details)
+        self.assertNotIn("output_active_power", detected.details)
+        evidence = detected.details["catalog_detection"]["evidence"]
+        self.assertEqual(evidence["rating.output_voltage"], 220.0)
+        self.assertEqual(evidence["rating.output_current"], 16.0)
+        self.assertEqual(evidence["rating.battery_voltage"], 24.0)
+        self.assertEqual(evidence["rating.frequency"], 50.0)
+        self.assertEqual(evidence["firmware.software_version"], "4.003")
 
     def test_decodes_eybond_g_ascii_runtime_mapping_without_short_gmod_leak(self) -> None:
         session = _FakeEybondGAsciiSession(
@@ -227,6 +351,100 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         values = asyncio.run(_async_collect_eybond_g_ascii_values(session, probe=False))
 
         self.assertEqual(values["battery_current"], 14.7)
+
+    def test_runtime_poll_reads_full_g_ascii_runtime_set_every_cycle(self) -> None:
+        responses = {
+            "GMOD": "B",
+            "GPDAT0": (
+                "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                "04.11 26.4 015.8 025 0904 0904 100 172.8 015.8 0844 048.0"
+            ),
+            "GPV": (
+                "183.1 027.6 00.43 05.31 00972 03 1 0 448.0 449.0 "
+                "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                "00589 00000 36363 0000000000000000"
+            ),
+            "F": "#220.0 016 024.0 50.0",
+            "SVFW": "4.003 (20250217.",
+            "GTMP": "044.0 015.0 031.0 000.0 000.0",
+            "GLINE": "219.7 50.01 264.0 185.0 255.0 194.0 60.00 40.00 00000 008 00006 00000 00046",
+            "GBAT": "027.5 000.00 02 21.6 23.2",
+            "GBUS": "408.5 380.0 380.0",
+            "GCHG": "408.3 026.0 02 000.0 020.46 000.00 28.4 27.6 28.0 060.00 0480 060 120 720 0 4 3 0 000.00 000.00 000.00 000.0 2",
+            "GOP": "220.5 50.01 001.38 01.23 00244 00244 00304 00202 00000 008 09896 00008 00046 00000 25483",
+            "GINV": "219.9 49.94 000.9",
+            "GWS": "00 0000000000000000 0000000000000000",
+            "BL": "BL050",
+            "FAN???": "050 00020 00020 0 1",
+            "TCQN????": "0048",
+            "DATE??????": "26 06 27",
+            "TIME??????": "12 34 56",
+            "GBMS": "00000 65535 65535 65535 65535 65535 65535 65535 00000 00000 65535 65535 65535 65535 00000 65535 65535",
+        }
+        runtime_state: dict[str, object] = {}
+        session = _FakeEybondGAsciiSession(responses)
+
+        first = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                runtime_state=runtime_state,
+                poll_interval=10,
+                now_monotonic=1000.0,
+            )
+        )
+
+        expected_commands = [
+            "GMOD",
+            "GPDAT0",
+            "GPV",
+            "F",
+            "SVFW",
+            "GTMP",
+            "GLINE",
+            "GBAT",
+            "GBUS",
+            "GCHG",
+            "GOP",
+            "GINV",
+            "GWS",
+            "BL",
+            "FAN???",
+            "TCQN????",
+            "DATE??????",
+            "TIME??????",
+            "GBMS",
+        ]
+
+        self.assertEqual(session.commands, expected_commands)
+        self.assertEqual(
+            first["eybond_g_ascii_runtime_polled_groups"],
+            "core, fingerprint, secondary",
+        )
+        self.assertIn("F", session.commands)
+        self.assertIn("GOP", session.commands)
+        self.assertEqual(first["rated_output_voltage"], 220.0)
+        self.assertEqual(first["output_energy_today"], 0.46)
+
+        session.commands.clear()
+        second = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                runtime_state=runtime_state,
+                poll_interval=10,
+                now_monotonic=1010.0,
+            )
+        )
+
+        self.assertEqual(session.commands, expected_commands[:-1])
+        self.assertEqual(
+            second["eybond_g_ascii_runtime_polled_groups"],
+            "core, fingerprint, secondary",
+        )
+        self.assertEqual(second["eybond_g_ascii_gbms_skipped_reason"], "recent_timeout")
+        self.assertEqual(second["rated_output_voltage"], 220.0)
+        self.assertEqual(second["output_energy_today"], 0.46)
 
     def test_gmod_operating_mode_codes_follow_protocol_document(self) -> None:
         expected = {
@@ -297,6 +515,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
 
         self.assertEqual(values["rated_output_voltage"], 220.0)
         self.assertEqual(values["rated_output_current"], 16.0)
+        self.assertEqual(values["rated_battery_voltage"], 24.0)
         self.assertEqual(values["rated_frequency"], 50.0)
         self.assertEqual(values["eybond_g_ascii_software_version"], "4.003")
         self.assertEqual(values["eybond_g_ascii_software_date"], "2025-02-17")
@@ -384,6 +603,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertNotIn("bms_voltage", values)
         self.assertNotIn("bms_communication_status_code", values)
         self.assertNotIn("eybond_g_ascii_gbms_fields", values)
+        self.assertFalse(values["g_ascii_bms_available"])
 
     def test_decodes_gbms_only_when_real_bms_values_are_present(self) -> None:
         session = _FakeEybondGAsciiSession(
@@ -419,7 +639,99 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(values["bms_warning_code"], "00001")
         self.assertEqual(values["bms_max_charging_current"], 5.0)
         self.assertEqual(values["bms_constant_voltage_point"], 53.2)
+        self.assertTrue(values["g_ascii_bms_available"])
         self.assertIn("eybond_g_ascii_gbms_fields", values)
+
+    def test_skips_gbms_when_bms_communication_readback_is_disabled(self) -> None:
+        session = _FakeEybondGAsciiSession(
+            {
+                "GMOD": "B",
+                "GPDAT0": (
+                    "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                    "04.11 26.4 000.0 025 0904 0904 100 172.8 000.0 0844 048.0"
+                ),
+                "GPV": (
+                    "183.1 027.6 00.00 05.31 00972 03 1 0 448.0 449.0 "
+                    "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                    "00589 00001 36363 0000000000000000."
+                ),
+                "TE?": "",
+                "TD?": "S",
+            }
+        )
+        bms_capability = WriteCapability(
+            key="bms_communication",
+            register=-1,
+            value_kind="bool",
+            note="",
+            enum_map={0: "Disabled", 1: "Enabled"},
+            read_key="g_ascii_setting_bms_communication",
+        )
+
+        values = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                capabilities=(bms_capability,),
+            )
+        )
+
+        self.assertEqual(values["g_ascii_setting_bms_communication"], "Disabled")
+        self.assertEqual(
+            values["eybond_g_ascii_gbms_skipped_reason"],
+            "bms_communication_disabled",
+        )
+        self.assertFalse(values["g_ascii_bms_available"])
+        self.assertNotIn("GBMS", session.commands)
+
+    def test_backs_off_gbms_after_timeout_to_avoid_repeated_cycle_stalls(self) -> None:
+        class _TimeoutGbmsSession(_FakeEybondGAsciiSession):
+            async def request(self, command: str) -> str:
+                self.commands.append(command)
+                if command == "GBMS":
+                    raise AsciiLineError("request_timeout")
+                return self.responses[command]
+
+        session = _TimeoutGbmsSession(
+            {
+                "GMOD": "B",
+                "GPDAT0": (
+                    "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                    "04.11 26.4 000.0 025 0904 0904 100 172.8 000.0 0844 048.0"
+                ),
+                "GPV": (
+                    "183.1 027.6 00.00 05.31 00972 03 1 0 448.0 449.0 "
+                    "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                    "00589 00001 36363 0000000000000000."
+                ),
+            }
+        )
+        runtime_state: dict[str, object] = {}
+
+        asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                runtime_state=runtime_state,
+                now_monotonic=100.0,
+            )
+        )
+        self.assertIn("GBMS", session.commands)
+
+        session.commands.clear()
+        values = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                runtime_state=runtime_state,
+                now_monotonic=110.0,
+            )
+        )
+
+        self.assertNotIn("GBMS", session.commands)
+        self.assertEqual(values["eybond_g_ascii_gbms_skipped_reason"], "recent_timeout")
+        self.assertFalse(values["g_ascii_bms_available"])
+        self.assertGreater(values["eybond_g_ascii_gbms_retry_after_s"], 0)
 
     def test_replays_support_fixture_raw_ascii_frames(self) -> None:
         fixture = {
@@ -462,6 +774,36 @@ class EybondGAsciiDriverTests(unittest.TestCase):
                 "DATE??????": "26 06 27\r",
                 "TIME??????": "12 34 56\r",
                 "GBMS": "(00000 65535 65535 65535 65535 65535 65535 65535 00000 00000 65535 65535 65535 65535 00000 65535 65535\r",
+                "OPR??": "(00\r",
+                "TBAT?": "(2\r",
+                "V???": "(220\r",
+                "HV?": "(0\r",
+                "OPM??": "(01\r",
+                "CPR??": "(01\r",
+                "TE?": "(CDEHKOX\r",
+                "TD?": "(ABFGIJLMNPQRTUVYZ\r",
+                "CHGC???": "(020\r",
+                "GCC???": "(030\r",
+                "CST??": "(00\r",
+                "TCCV????": "(28.4\r",
+                "TCFV????": "(27.6\r",
+                "TCQV????": "(28.0\r",
+                "TCVT????": "(0480\r",
+                "TCQT????": "(0060\r",
+                "TCQO????": "(0120\r",
+                "TCQI????": "(0720\r",
+                "EOD????": "(21.6\r",
+                "TBLV????": "(23.2\r",
+                "LWDT????": "(0480\r",
+                "BTG????": "(23.0\r",
+                "BTB????": "(26.0\r",
+                "BTO????": "(30.0\r",
+                "OVP???": "(280\r",
+                "LVP???": "(154\r",
+                "CI1??": "(12\r",
+                "BSOCU???": "(030\r",
+                "BSOCG???": "(075\r",
+                "BSOCB???": "(090\r",
             },
         }
 
@@ -474,6 +816,9 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(values["rated_output_voltage"], 220.0)
         self.assertEqual(values["output_active_power"], 244.0)
         self.assertEqual(values["battery_capacity"], 50.0)
+        self.assertEqual(values["g_ascii_setting_max_charging_current"], 20)
+        self.assertEqual(values["g_ascii_setting_constant_voltage_charging_voltage"], 28.4)
+        self.assertEqual(values["g_ascii_setting_charging_method"], "Auto")
         self.assertEqual(values["fan_speed_percentage"], 50.0)
         self.assertTrue(values["fan2_stopped"])
 
@@ -545,6 +890,386 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(by_command["GPDAT0"]["status"], "ok")
         self.assertEqual(by_command["Q1"]["status"], "negative_response")
         self.assertEqual(by_command["Q1"]["response_kind"], "NAK")
+
+    def test_learned_command_capability_writes_plain_ascii_command(self) -> None:
+        session = _FakeEybondGAsciiSession({"PBL1": "ACK"})
+        target = ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0)
+        inverter = DetectedInverter(
+            driver_key="eybond_g_ascii",
+            protocol_family="eybond_g_ascii",
+            model_name="EyeBond G-ASCII inverter",
+            serial_number="A0000000000001",
+            probe_target=target,
+            register_schema_name="eybond_g_ascii/base.json",
+            capabilities=(
+                WriteCapability(
+                    key="learned_lcd_backlight",
+                    register=-1,
+                    command="PBL",
+                    value_kind="bool",
+                    note="learned",
+                    enum_map={0: "Off", 1: "On"},
+                ),
+            ),
+        )
+        driver = EybondGAsciiDriver()
+
+        with patch.object(driver, "_session", return_value=session):
+            written = asyncio.run(
+                driver.async_write_capability(
+                    object(),
+                    inverter,
+                    "learned_lcd_backlight",
+                    "On",
+                )
+            )
+
+        self.assertEqual(session.commands, ["PBL1"])
+        self.assertIs(written, True)
+        self.assertIs(inverter.details["learned_lcd_backlight"], True)
+
+    def test_learned_command_capability_can_use_exact_command_map(self) -> None:
+        session = _FakeEybondGAsciiSession({"OPR00": "ACK"})
+        target = ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0)
+        inverter = DetectedInverter(
+            driver_key="eybond_g_ascii",
+            protocol_family="eybond_g_ascii",
+            model_name="EyeBond G-ASCII inverter",
+            serial_number="A0000000000001",
+            probe_target=target,
+            register_schema_name="eybond_g_ascii/base.json",
+            capabilities=(
+                WriteCapability(
+                    key="learned_output_priority",
+                    register=-1,
+                    command="OPR",
+                    command_map={12336: "OPR00", 12337: "OPR01"},
+                    value_kind="enum",
+                    note="learned",
+                    enum_map={
+                        12336: "Mains output is preferred",
+                        12337: "Photovoltaic output is preferred",
+                    },
+                ),
+            ),
+        )
+        driver = EybondGAsciiDriver()
+
+        with patch.object(driver, "_session", return_value=session):
+            written = asyncio.run(
+                driver.async_write_capability(
+                    object(),
+                    inverter,
+                    "learned_output_priority",
+                    "Mains output is preferred",
+                )
+            )
+
+        self.assertEqual(session.commands, ["OPR00"])
+        self.assertEqual(written, "Mains output is preferred")
+        self.assertEqual(
+            inverter.details["learned_output_priority"],
+            "Mains output is preferred",
+        )
+
+    def test_document_backed_g_ascii_capabilities_write_fixed_width_commands(self) -> None:
+        profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")
+        capabilities = (
+            profile.get_capability("max_charging_current_setting"),
+            profile.get_capability("constant_voltage_charging_voltage_setting"),
+        )
+        session = _FakeEybondGAsciiSession(
+            {
+                "CHGC020": "ACK",
+                "TCCV28.3": "ACK",
+            }
+        )
+        inverter = DetectedInverter(
+            driver_key="eybond_g_ascii",
+            protocol_family="eybond_g_ascii",
+            model_name="LVYUAN TY-SIC-3.6KBE-W1",
+            serial_number="A0000000000001",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
+            register_schema_name="eybond_g_ascii/base.json",
+            capabilities=capabilities,
+        )
+        driver = EybondGAsciiDriver()
+
+        with patch.object(driver, "_session", return_value=session):
+            charging_current = asyncio.run(
+                driver.async_write_capability(
+                    object(),
+                    inverter,
+                    "max_charging_current_setting",
+                    20,
+                )
+            )
+            bulk_voltage = asyncio.run(
+                driver.async_write_capability(
+                    object(),
+                    inverter,
+                    "constant_voltage_charging_voltage_setting",
+                    28.3,
+                )
+            )
+
+        self.assertEqual(session.commands, ["CHGC020", "TCCV28.3"])
+        self.assertEqual(charging_current, 20)
+        self.assertEqual(bulk_voltage, 28.3)
+
+    def test_document_backed_g_ascii_capabilities_are_full_control_only(self) -> None:
+        profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")
+        capability = profile.get_capability("max_charging_current_setting")
+
+        self.assertFalse(capability.tested)
+        self.assertEqual(capability.provenance, "doc_backed")
+        self.assertTrue(capability.enabled_default)
+        self.assertTrue(capability.advanced)
+
+    def test_document_backed_g_ascii_capabilities_live_in_base_profile(self) -> None:
+        base_raw = json.loads(
+            (
+                REPO_ROOT
+                / "custom_components/eybond_local/protocol_catalogs/profiles/eybond_g_ascii/base.json"
+            ).read_text(encoding="utf-8")
+        )
+        model_raw = json.loads(
+            (
+                REPO_ROOT
+                / "custom_components/eybond_local/protocol_catalogs/profiles/eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        base_keys = {item["key"] for item in base_raw["capabilities"]}
+        model_keys = {item["key"] for item in model_raw["capabilities"]}
+
+        self.assertIn("max_charging_current_setting", base_keys)
+        self.assertIn("bms_low_soc_shutdown_setting", base_keys)
+        self.assertNotIn("max_charging_current_setting", model_keys)
+        self.assertNotIn("bms_low_soc_shutdown_setting", model_keys)
+        self.assertIn("output_priority", model_keys)
+        self.assertIn("remote_inverter_switch", model_keys)
+
+    def test_bms_soc_controls_are_hidden_without_live_bms(self) -> None:
+        profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")
+        capability = profile.get_capability("bms_low_soc_shutdown_setting")
+
+        self.assertFalse(
+            capability.runtime_state({"g_ascii_bms_available": False}).visible
+        )
+        self.assertTrue(
+            capability.runtime_state({"g_ascii_bms_available": True}).visible
+        )
+
+    def test_bms_soc_readbacks_are_deferred_until_gbms_has_live_values(self) -> None:
+        profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")
+        common_responses = {
+            "GMOD": "B",
+            "GPDAT0": (
+                "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                "04.11 26.4 015.8 025 0904 0904 100 172.8 015.8 0844 048.0"
+            ),
+            "GPV": (
+                "183.1 027.6 00.43 05.31 00972 03 1 0 448.0 449.0 "
+                "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                "00589 00001 36363 0000000000000000."
+            ),
+        }
+
+        no_bms_session = _DefaultingFakeEybondGAsciiSession(
+            {
+                **common_responses,
+                "GBMS": (
+                    "00000 65535 65535 65535 65535 65535 65535 65535 "
+                    "00000 00000 65535 65535 65535 65535 00000 65535 65535"
+                ),
+            }
+        )
+        no_bms_values = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                no_bms_session,
+                probe=False,
+                capabilities=profile.capabilities,
+            )
+        )
+        self.assertFalse(no_bms_values["g_ascii_bms_available"])
+        self.assertNotIn("BSOCU???", no_bms_session.commands)
+        self.assertNotIn("BSOCG???", no_bms_session.commands)
+        self.assertNotIn("BSOCB???", no_bms_session.commands)
+
+        live_bms_session = _DefaultingFakeEybondGAsciiSession(
+            {
+                **common_responses,
+                "GBMS": (
+                    "00001 00002 0521 01234 0265 00080 01050 02000 "
+                    "00000 00001 00500 0532 00000 65535 00000 65535 65535"
+                ),
+                "BSOCU???": "030",
+                "BSOCG???": "075",
+                "BSOCB???": "090",
+            }
+        )
+        live_bms_values = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                live_bms_session,
+                probe=False,
+                capabilities=profile.capabilities,
+            )
+        )
+        self.assertTrue(live_bms_values["g_ascii_bms_available"])
+        self.assertIn("BSOCU???", live_bms_session.commands)
+        self.assertEqual(live_bms_values["g_ascii_setting_bms_low_soc_shutdown"], 30)
+        self.assertEqual(live_bms_values["g_ascii_setting_bms_low_soc_switch_to_grid"], 75)
+        self.assertEqual(live_bms_values["g_ascii_setting_bms_high_soc_switch_to_battery"], 90)
+
+    def test_capability_readback_is_suppressed_after_three_live_timeouts(self) -> None:
+        class _TimeoutChargeCurrentReadbackSession(_DefaultingFakeEybondGAsciiSession):
+            async def request(self, command: str) -> str:
+                self.commands.append(command)
+                if command == "CHGC???":
+                    raise AsciiLineError("request_timeout")
+                return self.responses.get(command, "")
+
+        profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")
+        common_responses = {
+            "GMOD": "B",
+            "GPDAT0": (
+                "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                "04.11 26.4 015.8 025 0904 0904 100 172.8 015.8 0844 048.0"
+            ),
+            "GPV": (
+                "183.1 027.6 00.43 05.31 00972 03 1 0 448.0 449.0 "
+                "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                "00589 00001 36363 0000000000000000."
+            ),
+        }
+        runtime_state: dict[str, object] = {}
+        values: dict[str, object] = {}
+
+        for index in range(3):
+            session = _TimeoutChargeCurrentReadbackSession(common_responses)
+            values = asyncio.run(
+                _async_collect_eybond_g_ascii_values(
+                    session,
+                    probe=False,
+                    capabilities=profile.capabilities,
+                    runtime_state=runtime_state,
+                    now_monotonic=1000.0 + index,
+                )
+            )
+            self.assertIn("CHGC???", session.commands)
+
+        capability = profile.get_capability("max_charging_current_setting")
+        state = capability.runtime_state(values)
+        self.assertFalse(state.visible)
+        self.assertIn("CHGC???", values["eybond_g_ascii_suppressed_readback_commands"])
+
+        session = _TimeoutChargeCurrentReadbackSession(common_responses)
+        values = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                capabilities=profile.capabilities,
+                runtime_state=runtime_state,
+                now_monotonic=1004.0,
+            )
+        )
+        self.assertNotIn("CHGC???", session.commands)
+        self.assertFalse(capability.runtime_state(values).visible)
+
+    def test_reads_learned_g_ascii_setting_readbacks(self) -> None:
+        session = _FakeEybondGAsciiSession(
+            {
+                "GMOD": "B",
+                "GPDAT0": "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 04.11 26.4 015.8 025 0904 0904 100 172.8 015.8 0844 048.0",
+                "GPV": "183.1 027.6 00.43 05.31 00972 03 1 0 448.0 449.0 424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 00589 00000 36363 0",
+                "F": "#220.0 016 024.0 50.0",
+                "SVFW": "4.003 (20250217",
+                "GTMP": "",
+                "GLINE": "",
+                "GBAT": "",
+                "GBUS": "",
+                "GCHG": "",
+                "GOP": "",
+                "GINV": "",
+                "GWS": "",
+                "BL": "",
+                "FAN???": "",
+                "TCQN????": "",
+                "DATE??????": "",
+                "TIME??????": "",
+                "GBMS": "",
+                "OPR??": "01",
+                "TBAT?": "2",
+                "V???": "220 120",
+                "HV?": "1",
+                "TE?": "IO",
+                "TD?": "SY",
+            }
+        )
+        capabilities = (
+            WriteCapability(
+                key="learned_output_priority",
+                register=-1,
+                command="OPR",
+                command_map={12336: "OPR00", 12337: "OPR01"},
+                value_kind="enum",
+                note="learned",
+                enum_map={12336: "Utility first", 12337: "PV first"},
+                read_key="g_ascii_setting_output_priority",
+            ),
+            WriteCapability(
+                key="learned_battery_type",
+                register=-1,
+                command="TBAT",
+                command_map={48: "TBAT0", 50: "TBAT2"},
+                value_kind="enum",
+                note="learned",
+                enum_map={48: "Lead-acid", 50: "Lithium"},
+                read_key="g_ascii_setting_battery_type",
+            ),
+            WriteCapability(
+                key="learned_output_voltage",
+                register=-1,
+                command="V",
+                value_kind="enum",
+                note="learned",
+                enum_map={120: "120 V display", 220: "220 V"},
+                read_key="g_ascii_setting_output_voltage",
+            ),
+            WriteCapability(
+                key="learned_energy_saving",
+                register=-1,
+                command_map={68: "TDI", 69: "TEI"},
+                value_kind="enum",
+                note="learned",
+                enum_map={68: "Disabled", 69: "Enabled"},
+                read_key="g_ascii_setting_energy_saving_mode",
+            ),
+            WriteCapability(
+                key="learned_bms_communication",
+                register=-1,
+                command_map={68: "TDS", 69: "TES"},
+                value_kind="enum",
+                note="learned",
+                enum_map={68: "Disabled", 69: "Enabled"},
+                read_key="g_ascii_setting_bms_communication",
+            ),
+        )
+
+        values = asyncio.run(
+            _async_collect_eybond_g_ascii_values(
+                session,
+                probe=False,
+                capabilities=capabilities,
+            )
+        )
+
+        self.assertEqual(values["g_ascii_setting_output_priority"], "PV first")
+        self.assertEqual(values["g_ascii_setting_battery_type"], "Lithium")
+        self.assertEqual(values["g_ascii_setting_output_voltage"], "120 V display")
+        self.assertEqual(values["g_ascii_setting_energy_saving_mode"], "Enabled")
+        self.assertEqual(values["g_ascii_setting_bms_communication"], "Disabled")
 
     def test_command_schema_support_probe_plan_is_read_only(self) -> None:
         schema_path = (

@@ -7,45 +7,47 @@
   "lifecycle": "experimental",
   "variants": [
     {
-      "variant_key": "eybond_g_ascii_valuecloud",
-      "label": "ValueCloud EyeBond G-ASCII read-only runtime",
+      "variant_key": "eybond_g_ascii_lvyuan_fingerprint",
+      "label": "ValueCloud EyeBond G-ASCII fingerprint-bound control profile",
       "device_descriptor_keys": [
-        "eybond_g_ascii_family"
+        "lvyuan_ty_sic_3_6kbe_w1"
       ],
       "known_firmware": [
         "collector FW 8-50-12-3",
         "collector AT 1-11",
-        "inverter SVFW 4-003 (20250217)"
+        "inverter F 220V 16A 24V 50Hz",
+        "inverter SVFW 4.003 (20250217)"
       ]
     }
   ],
   "validation": {
     "hardware": "captured",
     "telemetry": "confirmed",
-    "controls": "none"
+    "controls": "partial"
   },
   "coverage": {
-    "runtime_control_surface": "read_only",
-    "smartess_control_surface": "unknown",
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "correlated",
     "vendor_register_map": "documented",
     "notes": [
       "Runtime support is based on captured ValueCloud/EyeBond G-ASCII command polling and a matching JsdSolar G-command ASCII protocol document.",
-      "The G-command protocol is documented for read-only telemetry and settings commands, but the commercial LVYUAN identity is still user-reported rather than uniquely fingerprinted by the protocol document.",
+      "The model is identified offline by the local G-ASCII rated-info/software fingerprint: F=220V/16A/24V/50Hz plus SVFW 4.003.",
       "Support archives now include a schema-driven extended EyeBond G-ASCII read-only protocol probe so future user packages can report command support and unknown fields without changing runtime behavior.",
-      "Write controls have not been validated and are not exposed for this model."
+      "A fingerprint-bound control profile is exposed from ValueCloud shadow-learning evidence. The captured cloud write attempts were correlated to local G-ASCII setting commands without applying the writes during learning."
     ]
   },
   "known_limitations": [
-    "No write controls are exposed.",
-    "Commercial model identity is user-reported; available runtime captures identify the protocol family and telemetry shape, not a unique LVYUAN model fingerprint.",
+    "Control support is partial: the exposed write surface is the cloud-known user settings set, not the full manufacturer/MCU register map.",
+    "Commercial model name is still user-reported, while runtime binding uses the offline F/SVFW fingerprint.",
     "The documented G-ASCII command family is distinct from PI30 ASCII despite superficial line-oriented ASCII similarities.",
     "Extended protocol-probe evidence is maintainer input only; runtime entities are added only after the command schema/driver decoder is explicitly updated.",
     "ValueCloud public XML catalog checks found adjacent OEM/SMK Modbus or mixed profiles, but no direct LVYUAN TY-SIC-3.6KBE-W1 manufacturer register map."
   ],
-  "knowledge_summary": "LVYUAN TY-SIC-3.6KBE-W1 was reported behind an EyeBond/ValueCloud Wi-Fi logger using iot.eybond.com-style cloud connectivity and 9600 8N1 serial settings. Proxy/support captures show a plain G-command ASCII polling family with GPDAT0, GPV, GBAT, GMOD, and related commands, and a matching JsdSolar protocol document defines the read-only telemetry field layout. The integration support state is documented read-only telemetry; controls remain disabled until hardware write behavior is validated.",
+  "knowledge_summary": "LVYUAN TY-SIC-3.6KBE-W1 was reported behind an EyeBond/ValueCloud Wi-Fi logger using iot.eybond.com-style cloud connectivity and 9600 8N1 serial settings. Proxy/support captures show a plain G-command ASCII polling family with GPDAT0, GPV, GBAT, GMOD, and related commands; a matching JsdSolar protocol document defines the telemetry layout. The current runtime binding uses the local offline fingerprint F=220V/16A/24V/50Hz plus SVFW 4.003 and exposes a partial, fingerprint-bound control profile derived from ValueCloud shadow-learning evidence.",
   "source_keys": [
     "private_message_lvyuan_ty_sic_3_6kbe_w1_identity",
     "support_archive_valuecloud_lvyuan_20260625",
+    "support_archive_valuecloud_lvyuan_shadow_learning_20260629",
     "proxy_capture_valuecloud_g_ascii_20260625",
     "documentation_jsdsolar_g_ascii_protocol",
     "github_comment_jsdsolar_g_ascii_family"

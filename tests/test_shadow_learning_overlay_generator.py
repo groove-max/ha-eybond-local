@@ -222,6 +222,190 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         self.assertEqual(result.manifest["read_map"], {})
         self.assertEqual(result.manifest["read_bindings"], {})
 
+    def test_generates_command_based_capability_for_eybond_g_ascii_learning(self) -> None:
+        correlation = {
+            "matched_count": 2,
+            "unmatched_attempt_count": 0,
+            "unmatched_write_count": 0,
+            "matched": [
+                {
+                    "sequence_index": 0,
+                    "field_id": "cltd_lcd_backlight",
+                    "field_name": "LCD Backlight",
+                    "requested_value": "0",
+                    "value_label": "Off",
+                    "value_source": "choice",
+                    "requested_at": "2026-06-29T12:00:00+00:00",
+                    "observation": {
+                        "timestamp": "2026-06-29T12:00:00.100000+00:00",
+                        "source": "shadow_learning",
+                        "unit": 0,
+                        "function_code": 0,
+                        "register": -1,
+                        "values": [],
+                        "protocol": "eybond_g_ascii",
+                        "command": "PBL",
+                        "value": "0",
+                        "raw_payload_hex": "50424c300d",
+                    },
+                },
+                {
+                    "sequence_index": 1,
+                    "field_id": "cltd_lcd_backlight",
+                    "field_name": "LCD Backlight",
+                    "requested_value": "1",
+                    "value_label": "On",
+                    "value_source": "choice",
+                    "requested_at": "2026-06-29T12:00:01+00:00",
+                    "observation": {
+                        "timestamp": "2026-06-29T12:00:01.100000+00:00",
+                        "source": "shadow_learning",
+                        "unit": 0,
+                        "function_code": 0,
+                        "register": -1,
+                        "values": [],
+                        "protocol": "eybond_g_ascii",
+                        "command": "PBL",
+                        "value": "1",
+                        "raw_payload_hex": "50424c310d",
+                    },
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="eybond_g_ascii/base.json",
+                source_schema_name="eybond_g_ascii/base.json",
+                session_manifest=_sample_session_manifest(),
+                correlation=correlation,
+            )
+            profile_raw = json.loads(result.profile_path.read_text(encoding="utf-8"))
+            schema_raw = json.loads(result.schema_path.read_text(encoding="utf-8"))
+
+        capability = profile_raw["capabilities"][0]
+        self.assertEqual(result.generated_capability_count, 1)
+        self.assertEqual(capability["register"], -1)
+        self.assertEqual(capability["command"], "PBL")
+        self.assertEqual(capability["value_kind"], "bool")
+        self.assertEqual(capability["enum_map"], {"0": "Off", "1": "On"})
+        self.assertEqual(result.manifest["learned_capabilities"][0]["command"], "PBL")
+        self.assertEqual(schema_raw["learned_write_commands"], ["PBL"])
+
+    def test_g_ascii_learning_groups_one_field_with_different_command_lines(self) -> None:
+        correlation = {
+            "matched_count": 4,
+            "unmatched_attempt_count": 0,
+            "unmatched_write_count": 0,
+            "matched": [
+                {
+                    "sequence_index": 0,
+                    "field_id": "cltd_energy_saving_mode",
+                    "field_name": "Battery energy-saving mode",
+                    "requested_value": "68",
+                    "value_label": "disable",
+                    "value_source": "choice",
+                    "requested_at": "2026-06-29T12:00:00+00:00",
+                    "observation": {
+                        "timestamp": "2026-06-29T12:00:00.100000+00:00",
+                        "source": "shadow_learning",
+                        "register": -1,
+                        "protocol": "eybond_g_ascii",
+                        "command": "TDI",
+                        "raw_payload_hex": "5444490d",
+                    },
+                },
+                {
+                    "sequence_index": 1,
+                    "field_id": "cltd_energy_saving_mode",
+                    "field_name": "Battery energy-saving mode",
+                    "requested_value": "69",
+                    "value_label": "encode",
+                    "value_source": "choice",
+                    "requested_at": "2026-06-29T12:00:01+00:00",
+                    "observation": {
+                        "timestamp": "2026-06-29T12:00:01.100000+00:00",
+                        "source": "shadow_learning",
+                        "register": -1,
+                        "protocol": "eybond_g_ascii",
+                        "command": "TEI",
+                        "raw_payload_hex": "5445490d",
+                    },
+                },
+                {
+                    "sequence_index": 2,
+                    "field_id": "cltd_set_output_priority",
+                    "field_name": "Output priority",
+                    "requested_value": "12336",
+                    "value_label": "Mains output is preferred",
+                    "value_source": "choice",
+                    "read_key": "g_ascii_setting_output_priority",
+                    "requested_at": "2026-06-29T12:00:02+00:00",
+                    "observation": {
+                        "timestamp": "2026-06-29T12:00:02.100000+00:00",
+                        "source": "shadow_learning",
+                        "register": -1,
+                        "protocol": "eybond_g_ascii",
+                        "command": "OPR",
+                        "value": "00",
+                        "raw_payload_hex": "4f505230300d",
+                    },
+                },
+                {
+                    "sequence_index": 3,
+                    "field_id": "cltd_set_output_priority",
+                    "field_name": "Output priority",
+                    "requested_value": "12337",
+                    "value_label": "Photovoltaic output is preferred",
+                    "value_source": "choice",
+                    "read_key": "g_ascii_setting_output_priority",
+                    "requested_at": "2026-06-29T12:00:03+00:00",
+                    "observation": {
+                        "timestamp": "2026-06-29T12:00:03.100000+00:00",
+                        "source": "shadow_learning",
+                        "register": -1,
+                        "protocol": "eybond_g_ascii",
+                        "command": "OPR",
+                        "value": "01",
+                        "raw_payload_hex": "4f505230310d",
+                    },
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="eybond_g_ascii/base.json",
+                source_schema_name="eybond_g_ascii/base.json",
+                session_manifest=_sample_session_manifest(),
+                correlation=correlation,
+            )
+            profile_raw = json.loads(result.profile_path.read_text(encoding="utf-8"))
+            schema_raw = json.loads(result.schema_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.generated_capability_count, 2)
+        by_field = {
+            capability["learned_provenance"]["cloud_field_id"]: capability
+            for capability in profile_raw["capabilities"]
+        }
+        energy = by_field["cltd_energy_saving_mode"]
+        self.assertEqual(energy["value_kind"], "bool")
+        self.assertEqual(energy["enum_map"], {"0": "disable", "1": "encode"})
+        self.assertEqual(energy["command_map"], {"0": "TDI", "1": "TEI"})
+        self.assertEqual(energy["read_key"], "g_ascii_setting_energy_saving_mode")
+
+        output_priority = by_field["cltd_set_output_priority"]
+        self.assertEqual(output_priority["command"], "OPR")
+        self.assertEqual(output_priority["read_key"], "g_ascii_setting_output_priority")
+        self.assertEqual(
+            output_priority["command_map"],
+            {"12336": "OPR00", "12337": "OPR01"},
+        )
+        self.assertEqual(
+            schema_raw["learned_write_commands"],
+            ["OPR00", "OPR01", "TDI", "TEI"],
+        )
+
     def test_generates_inactive_profile_and_schema_drafts_with_manifest_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             result = generate_shadow_learning_overlay_drafts(
@@ -269,7 +453,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
             provenance = reset_capability.get("learned_provenance")
             self.assertIsInstance(provenance, dict)
             assert isinstance(provenance, dict)
-            self.assertEqual(str(provenance.get("source") or ""), "smartess_shadow_learning")
+            self.assertEqual(str(provenance.get("source") or ""), "cloud_shadow_learning")
             self.assertEqual(str(provenance.get("scope") or ""), "device")
             self.assertEqual(str(provenance.get("safety_class") or ""), "destructive_action")
             self.assertTrue(bool(str(provenance.get("evidence_hash") or "")))

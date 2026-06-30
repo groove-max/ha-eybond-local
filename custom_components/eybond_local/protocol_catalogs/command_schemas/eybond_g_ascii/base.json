@@ -232,6 +232,11 @@
           "unit": "A"
         },
         {
+          "index": 2,
+          "key": "rated_battery_voltage",
+          "unit": "V"
+        },
+        {
           "index": 3,
           "key": "rated_frequency",
           "unit": "Hz"
@@ -1685,6 +1690,15 @@
       "diagnostic": true,
       "live": false,
       "suggested_display_precision": 0
+    },
+    {
+      "key": "rated_battery_voltage",
+      "name": "Rated Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "live": false,
+      "suggested_display_precision": 1
     },
     {
       "key": "rated_frequency",

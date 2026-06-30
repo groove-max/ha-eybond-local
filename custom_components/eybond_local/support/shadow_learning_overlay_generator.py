@@ -21,6 +21,7 @@ from ..metadata.device_catalog_loader import force_unsupported_models
 from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
 from ..metadata.semantic_titles_loader import resolve_semantic_title
 from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
+from ..eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
 from .read_learning_binder import match_enum_bindings
 from .shadow_learning import (
     coerce_optional_int as _to_int,
@@ -143,7 +144,7 @@ def generate_shadow_learning_overlay_drafts(
     manifest = {
         "kind": "shadow_learning_device_overlay",
         "generated_at": generated_at,
-        "source": "smartess_shadow_learning",
+        "source": "cloud_shadow_learning",
         "scope": "device",
         "session": normalized_manifest,
         "source_profile_name": str(source_profile_name),
@@ -192,7 +193,7 @@ def generate_shadow_learning_overlay_drafts(
                 "key": _LEARNED_CAPABILITY_GROUP_KEY,
                 "title": "Learned controls",
                 "order": 900,
-                "description": "Controls discovered from SmartESS shadow-learning.",
+                "description": "Controls discovered from cloud shadow-learning.",
                 "icon": "mdi:cog-outline",
             }
         ],
@@ -216,6 +217,19 @@ def generate_shadow_learning_overlay_drafts(
                 # admits it (rejects only register < 0), so excluding it here left
                 # the schema's write-register list inconsistent with the controls.
                 if int(item.get("register", 0)) >= 0
+            }
+        ),
+        "learned_write_commands": sorted(
+            {
+                str(item.get("command") or "")
+                for item in learned_summary["generated"]
+                if str(item.get("command") or "") and not item.get("command_map")
+            }
+            | {
+                str(command or "")
+                for item in learned_summary["generated"]
+                for command in (item.get("command_map") or {}).values()
+                if str(command or "")
             }
         ),
         **learned_read["schema_fragment"],
@@ -496,23 +510,35 @@ def _build_learned_capabilities(
         # unique; learned keys are prefixed and never collide with built-in keys anyway.)
         existing_titles: set[str] = set()
         existing_registers: set[int] = set()
+        existing_commands: set[str] = set()
     else:
         existing_titles = {_normalize_title(capability.title or capability.key) for capability in source_profile.capabilities}
         existing_registers = {int(capability.register) for capability in source_profile.capabilities}
+        existing_commands = {
+            str(getattr(capability, "command", "") or "").strip().upper()
+            for capability in source_profile.capabilities
+            if str(getattr(capability, "command", "") or "").strip()
+        }
 
-    grouped = _group_matched_records(correlation)
+    grouped = [*_group_matched_records(correlation), *_group_matched_command_records(correlation)]
     generated: list[dict[str, Any]] = []
     generated_summary: list[dict[str, Any]] = []
     skipped_summary: list[dict[str, Any]] = []
 
     next_order = 9000
     for group in grouped:
-        register = int(group["register"])
+        register = int(group.get("register", -1))
+        command = str(group.get("command") or "").strip().upper()
+        command_map = {
+            int(key): str(value).strip().upper()
+            for key, value in dict(group.get("command_map") or {}).items()
+            if str(value or "").strip()
+        }
         field_name = str(group["field_name"])
         field_id = str(group["field_id"])
         title_key = _normalize_title(field_name)
 
-        if register in existing_registers:
+        if register >= 0 and register in existing_registers:
             skipped_summary.append(
                 {
                     "field_id": field_id,
@@ -522,26 +548,49 @@ def _build_learned_capabilities(
                 }
             )
             continue
+        if command and not command_map and command in existing_commands:
+            skipped_summary.append(
+                {
+                    "field_id": field_id,
+                    "field_name": field_name,
+                    "command": command,
+                    "reason": "command_already_mapped",
+                }
+            )
+            continue
         if title_key and title_key in existing_titles:
             skipped_summary.append(
                 {
                     "field_id": field_id,
                     "field_name": field_name,
                     "register": register,
+                    "command": command,
                     "reason": "title_already_mapped",
                 }
             )
             continue
 
-        base_key = _capability_key(field_id=field_id, field_name=field_name, register=register)
+        base_key = (
+            _capability_key(field_id=field_id, field_name=field_name, register=register)
+            if register >= 0
+            else _command_capability_key(field_id=field_id, field_name=field_name, command=command)
+        )
         capability_key = _unique_capability_key(base_key, existing_keys)
         existing_keys.add(capability_key)
 
+        read_key = _g_ascii_read_key_for_group(group)
         classification = _classify_learned_control(group)
+        classification, command_map = _normalize_g_ascii_feature_flag_capability(
+            group=group,
+            classification=classification,
+            command_map=command_map,
+            read_key=read_key,
+        )
         provenance = {
-            "source": "smartess_shadow_learning",
+            "source": "cloud_shadow_learning",
             "scope": "device",
             "cloud_field_id": field_id,
+            "write_command": command,
             "evidence_hash": str(group["evidence_hash"]),
             "learned_at": str(group["learned_at"]),
             "confidence": str(classification["confidence"]),
@@ -554,7 +603,7 @@ def _build_learned_capabilities(
             "title": field_name,
             "register": register,
             "value_kind": str(classification["value_kind"]),
-            "note": "Learned from SmartESS shadow-learning write correlation.",
+            "note": "Learned from shadow-learning write correlation.",
             "word_count": int(classification["word_count"]),
             "combine": str(classification["combine"]),
             "tested": False,
@@ -589,6 +638,12 @@ def _build_learned_capabilities(
             capability["unit"] = str(unit)
         if isinstance(enum_map, dict):
             capability["enum_map"] = {int(key): str(value) for key, value in enum_map.items()}
+        if command:
+            capability["command"] = command
+        if command_map:
+            capability["command_map"] = {int(key): value for key, value in sorted(command_map.items())}
+        if read_key:
+            capability["read_key"] = read_key
 
         generated.append(capability)
         generated_summary.append(
@@ -597,6 +652,9 @@ def _build_learned_capabilities(
                 "field_id": field_id,
                 "field_name": field_name,
                 "register": register,
+                "command": command,
+                "command_map": capability.get("command_map", {}),
+                "read_key": read_key,
                 "value_kind": capability["value_kind"],
                 "safety_class": provenance["safety_class"],
                 "confidence": provenance["confidence"],
@@ -693,6 +751,206 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(output, key=lambda item: (int(item["register"]), str(item["field_name"])))
 
 
+def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
+    matched = correlation.get("matched")
+    if not isinstance(matched, list):
+        return []
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in matched:
+        if not isinstance(item, dict):
+            continue
+        observation = item.get("observation")
+        if not isinstance(observation, dict):
+            continue
+        protocol = str(observation.get("protocol") or "").strip()
+        command = str(observation.get("command") or "").strip().upper()
+        if protocol != "eybond_g_ascii" or not command:
+            continue
+
+        field_id = str(item.get("field_id") or "").strip()
+        field_name = str(item.get("field_name") or field_id or command).strip()
+        key = f"{field_id}::command_field" if field_id else f"command_{command}_{_slugify(field_name)}"
+        requested_value = str(item.get("requested_value") or "").strip()
+
+        entry = grouped.setdefault(
+            key,
+            {
+                "field_id": field_id,
+                "field_name": field_name,
+                "register": -1,
+                "command": "",
+                "read_key": str(item.get("read_key") or "").strip(),
+                "samples": [],
+            },
+        )
+        entry["samples"].append(
+            {
+                "sequence_index": _to_int(item.get("sequence_index")) or 0,
+                "requested_value": requested_value,
+                "value_label": str(item.get("value_label") or "").strip(),
+                "value_source": str(item.get("value_source") or "").strip(),
+                "requested_at": str(item.get("requested_at") or "").strip(),
+                "observation": {
+                    "register": -1,
+                    "function_code": 0,
+                    "values": [],
+                    "protocol": protocol,
+                    "command": command,
+                    "value": str(observation.get("value") or "").strip(),
+                    "devcode": _to_int(observation.get("devcode")),
+                    "devaddr": _to_int(observation.get("devaddr")),
+                    "timestamp": str(observation.get("timestamp") or "").strip(),
+                },
+            }
+        )
+
+    output: list[dict[str, Any]] = []
+    for item in grouped.values():
+        samples = sorted(item["samples"], key=lambda sample: int(sample.get("sequence_index", 0)))
+        if not samples:
+            continue
+        commands = {
+            str(sample.get("observation", {}).get("command") or "").strip().upper()
+            for sample in samples
+            if str(sample.get("observation", {}).get("command") or "").strip()
+        }
+        common_command = next(iter(commands)) if len(commands) == 1 else ""
+        command_map = _command_map_for_samples(samples, common_command=common_command)
+        learned_at = _first_non_empty(
+            [str(sample["observation"].get("timestamp") or "") for sample in samples]
+        ) or _first_non_empty([str(sample.get("requested_at") or "") for sample in samples])
+        sample_payload = {
+            "field_id": str(item["field_id"]),
+            "field_name": str(item["field_name"]),
+            "command": common_command,
+            "command_map": command_map,
+            "read_key": str(item.get("read_key") or ""),
+            "samples": samples,
+        }
+        output.append(
+            {
+                "field_id": str(item["field_id"]),
+                "field_name": str(item["field_name"]),
+                "register": -1,
+                "command": common_command,
+                "command_map": command_map,
+                "read_key": str(item.get("read_key") or ""),
+                "samples": samples,
+                "learned_at": learned_at or datetime.now(timezone.utc).isoformat(),
+                "evidence_hash": deterministic_evidence_hash(sample_payload),
+            }
+        )
+    return sorted(output, key=lambda item: (str(item["field_name"]), str(item["command"])))
+
+
+def _command_map_for_samples(
+    samples: list[dict[str, Any]],
+    *,
+    common_command: str,
+) -> dict[int, str]:
+    """Return raw UI value -> full ASCII command when prefix+value is insufficient.
+
+    ValueCloud legacy controls can expose cloud-side option values that do not match the
+    inverter command suffix (for example 12336 -> OPR00, 48 -> TBAT0). The learned profile
+    must preserve the actual captured command line instead of rebuilding it from the cloud value.
+    """
+
+    mapped: dict[int, str] = {}
+    needs_map = not common_command
+    for sample in samples:
+        raw_value = _to_int(sample.get("requested_value"))
+        if raw_value is None:
+            continue
+        observation = sample.get("observation", {})
+        if not isinstance(observation, dict):
+            continue
+        observed = _observed_ascii_command_line(observation)
+        if not observed:
+            continue
+        mapped[raw_value] = observed
+        expected = f"{common_command}{raw_value}" if common_command else ""
+        if observed != expected:
+            needs_map = True
+    return mapped if needs_map else {}
+
+
+def _g_ascii_read_key_for_group(group: dict[str, Any]) -> str:
+    read_key = str(group.get("read_key") or "").strip()
+    if read_key:
+        return read_key
+    field_id = str(group.get("field_id") or "").strip()
+    definition = G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD.get(field_id)
+    return definition.read_key if definition is not None else ""
+
+
+def _normalize_g_ascii_feature_flag_capability(
+    *,
+    group: dict[str, Any],
+    classification: dict[str, Any],
+    command_map: dict[int, str],
+    read_key: str,
+) -> tuple[dict[str, Any], dict[int, str]]:
+    """Normalize G-ASCII feature toggles from cloud ASCII codes to bool 0/1.
+
+    ValueCloud exposes some feature flags as option values 68/69 (ASCII D/E),
+    while the inverter command lines are ``TDx``/``TEx``. Our runtime bool
+    capabilities are intentionally keyed by 0/1, so the generated profile must
+    keep 68/69 only as cloud evidence, not as capability values.
+    """
+
+    definition = None
+    if read_key:
+        for candidate in G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD.values():
+            if candidate.read_key == read_key:
+                definition = candidate
+                break
+    if definition is None:
+        definition = G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD.get(
+            str(group.get("field_id") or "").strip()
+        )
+    if definition is None or definition.readback_kind != "feature_flag":
+        return classification, command_map
+    if not command_map:
+        return classification, command_map
+
+    normalized_command_map: dict[int, str] = {}
+    disabled_label = "Disabled"
+    enabled_label = "Enabled"
+    enum_map = classification.get("enum_map")
+    if isinstance(enum_map, dict):
+        for raw_value, label in enum_map.items():
+            command = command_map.get(int(raw_value)) if _to_int(raw_value) is not None else ""
+            command = str(command or "").strip().upper()
+            if command.startswith("TD"):
+                disabled_label = str(label)
+            elif command.startswith("TE"):
+                enabled_label = str(label)
+
+    for command in command_map.values():
+        normalized = str(command or "").strip().upper()
+        if normalized.startswith("TD"):
+            normalized_command_map[0] = normalized
+        elif normalized.startswith("TE"):
+            normalized_command_map[1] = normalized
+
+    if set(normalized_command_map) != {0, 1}:
+        return classification, command_map
+
+    normalized_classification = dict(classification)
+    normalized_classification["value_kind"] = "bool"
+    normalized_classification["enum_map"] = {0: disabled_label, 1: enabled_label}
+    return normalized_classification, normalized_command_map
+
+
+def _observed_ascii_command_line(observation: dict[str, Any]) -> str:
+    command = str(observation.get("command") or "").strip().upper()
+    if not command:
+        return ""
+    value = str(observation.get("value") or "").strip()
+    return f"{command}{value}" if value else command
+
+
 _ON_OFF_OFF_RE = re.compile(r"\boff\b")
 _ON_OFF_ON_RE = re.compile(r"\bon\b")
 
@@ -741,9 +999,14 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
     for sample in samples:
         label = str(sample.get("value_label") or "").strip()
         values = list(sample.get("observation", {}).get("values") or [])
-        if not label or not values:
+        if not label:
             continue
-        observed = int(values[0])
+        if values:
+            observed = int(values[0])
+        else:
+            observed = _to_int(sample.get("requested_value"))
+            if observed is None:
+                continue
         if observed not in option_label_by_value:
             option_label_by_value[observed] = label
             option_order.append(observed)
@@ -844,6 +1107,18 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
         value_kind = "scaled_u16"
     else:
         value_kind = "u16"
+    if max_word_count == 1 and not any(
+        list(sample.get("observation", {}).get("values") or []) for sample in samples
+    ):
+        requested_numeric = [str(value).strip() for value in requested_values if str(value).strip()]
+        decimal_places = [
+            len(value.split(".", 1)[1])
+            for value in requested_numeric
+            if "." in value and _looks_numeric(value)
+        ]
+        if decimal_places:
+            divisor = 10 ** min(max(decimal_places), 3)
+            value_kind = "scaled_u16"
     classification = {
         "value_kind": value_kind,
         "word_count": 2 if max_word_count == 2 else 1,
@@ -873,6 +1148,14 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
             classification["unit"] = unit
             break
     return classification
+
+
+def _looks_numeric(value: str) -> bool:
+    try:
+        float(str(value))
+    except ValueError:
+        return False
+    return True
 
 
 def _normalize_read_map(read_map: dict[str, Any] | None) -> dict[str, Any]:
@@ -997,6 +1280,14 @@ def _capability_key(*, field_id: str, field_name: str, register: int) -> str:
     if not base.startswith("learned_"):
         base = f"learned_{base}"
     return f"{base}_{int(register)}"
+
+
+def _command_capability_key(*, field_id: str, field_name: str, command: str) -> str:
+    base = _slugify(field_id or field_name)
+    if not base.startswith("learned_"):
+        base = f"learned_{base}"
+    command_key = _slugify(command) or "command"
+    return f"{base}_{command_key}"
 
 
 def _unique_capability_key(base_key: str, existing_keys: set[str]) -> str:

@@ -678,6 +678,17 @@
       "support_capture_policy": "must_pv_ph18"
     },
     {
+      "key": "eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1",
+      "protocol_key": "eybond_g_ascii",
+      "driver_key": "eybond_g_ascii",
+      "variant_key": "lvyuan_ty_sic_3_6kbe_w1",
+      "profile_name": "eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json",
+      "register_schema_name": "eybond_g_ascii/base.json",
+      "tier": "full",
+      "read_only": false,
+      "support_capture_policy": "eybond_g_ascii"
+    },
+    {
       "key": "eybond_g_ascii_read_only",
       "protocol_key": "eybond_g_ascii",
       "driver_key": "eybond_g_ascii",
@@ -1196,6 +1207,28 @@
           "private register map: SRNE-compatible Modbus product-info and telemetry ranges"
         ],
         "confidence": "third-party-map-unconfirmed"
+      }
+    },
+    {
+      "entry_key": "lvyuan_ty_sic_3_6kbe_w1",
+      "surface_key": "eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1",
+      "model_name": "LVYUAN TY-SIC-3.6KBE-W1",
+      "priority": 120,
+      "family_fallback": false,
+      "anchors": [
+        {"key": "protocol.protocol_id", "equals": "EYBOND_G_ASCII"},
+        {"key": "rating.output_voltage", "equals": 220},
+        {"key": "rating.output_current", "equals": 16},
+        {"key": "rating.battery_voltage", "equals": 24},
+        {"key": "rating.frequency", "equals": 50},
+        {"key": "firmware.software_version", "equals": "4.003"}
+      ],
+      "provenance": {
+        "sources": [
+          "Private ValueCloud support archive 01KW4GB9F4A7W81NCMKJK46EBB_20260629T213351481467Z.zip: local G-ASCII F/SVFW fingerprint 220V/16A/24V/50Hz + SVFW 4.003; commercial model name is user-reported.",
+          "ValueCloud shadow-learning evidence from the same device correlated 36 cloud write attempts to 12 local G-ASCII setting commands without applying them to the inverter."
+        ],
+        "confidence": "offline-fingerprint-user-reported-model"
       }
     },
     {

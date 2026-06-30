@@ -175,6 +175,8 @@ class WriteCapability:
     register: int
     value_kind: str
     note: str
+    command: str = ""
+    command_map: dict[int, str] | None = None
     word_count: int = 1
     combine: str = "u16"
     # When set, the capability owns ONLY these bits of a single shared 16-bit
@@ -190,6 +192,8 @@ class WriteCapability:
     divisor: int | None = None
     minimum: int | None = None
     maximum: int | None = None
+    command_width: int | None = None
+    command_precision: int | None = None
     enum_map: dict[int, str] | None = None
     choices: tuple[CapabilityChoice, ...] = ()
     recommendations: tuple[CapabilityRecommendation, ...] = ()
@@ -324,9 +328,17 @@ class WriteCapability:
 
         _, visible_warnings = _evaluate_conditions(self.visible_if, values)
         _, editable_warnings = _evaluate_conditions(self.editable_if, values)
-        visible = True
-        editable = True
+        visible_ok = _conditions_met_for_effects(self.visible_if, values, {"hide", "block"})
+        editable_ok = _conditions_met_for_effects(self.editable_if, values, {"disable", "block"})
+        visible = visible_ok
+        editable = visible_ok and editable_ok
         runtime_reasons: list[str] = []
+
+        hidden_reason = values.get(f"capability_hidden_reason_{self.key}")
+        if hidden_reason:
+            visible = False
+            editable = False
+            runtime_reasons.append(str(hidden_reason))
 
         blocked_reason = values.get(f"capability_block_reason_{self.key}")
         blocked_action = values.get(f"capability_block_action_{self.key}")
@@ -359,6 +371,7 @@ class CapabilityCondition:
     operator: str = "eq"
     value: Any = True
     reason: str = ""
+    effect: str = "warning"
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,6 +638,20 @@ def _evaluate_conditions(
             continue
         reasons.append(condition.reason or _default_condition_reason(condition, actual))
     return (not reasons, tuple(reasons))
+
+
+def _conditions_met_for_effects(
+    conditions: tuple[CapabilityCondition, ...],
+    values: Mapping[str, Any],
+    effects: set[str],
+) -> bool:
+    for condition in conditions:
+        if condition.effect not in effects:
+            continue
+        actual = values.get(condition.key)
+        if not _match_condition(condition, actual):
+            return False
+    return True
 
 
 def _match_condition(condition: CapabilityCondition, actual: Any) -> bool:

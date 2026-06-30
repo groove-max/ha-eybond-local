@@ -403,6 +403,7 @@ class EybondHub:
         self._driver_hint = driver_hint
         self._connection = connection
         self._connection_mode = connection_mode
+        self._collector_cloud_family = str(connection.collector_cloud_family or "").strip().lower()
         self._link_manager = EybondRuntimeLinkManager(
             server_ip=connection.server_ip,
             advertised_server_ip=connection.advertised_server_ip,
@@ -869,7 +870,10 @@ class EybondHub:
             or now_monotonic - self._collector_at_runtime_last_refresh_monotonic >= refresh_interval
         ):
             try:
-                values = await query_runtime_collector_at_values(at_transport)
+                values = await query_runtime_collector_at_values(
+                    at_transport,
+                    collector_cloud_family=self._collector_cloud_family,
+                )
             except Exception as exc:
                 logger.debug("Collector runtime AT query failed: %s", exc)
             else:

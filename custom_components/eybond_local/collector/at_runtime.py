@@ -134,6 +134,14 @@ RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
     ),
 )
 
+_FACTORY_COLLECTOR_CLOUD_FAMILIES = frozenset(
+    {
+        "legacy_binary",
+        "smartess_at",
+        "valuecloud_at",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CollectorVirtualBridgeInfo:
@@ -212,11 +220,20 @@ def parse_collector_vdtu(raw: object) -> CollectorVirtualBridgeInfo:
 
 async def query_runtime_collector_at_values(
     transport: CollectorAtQueryTransport,
+    *,
+    collector_cloud_family: str = "",
 ) -> dict[str, object]:
     """Read a safe read-only collector metadata set over the plain AT session."""
 
     values: dict[str, object] = {}
+    normalized_family = str(collector_cloud_family or "").strip().lower()
     for definition in RUNTIME_COLLECTOR_AT_DEFINITIONS:
+        if definition.command == "VDTU":
+            effective_family = str(
+                values.get("collector_cloud_family") or normalized_family
+            ).strip().lower()
+            if effective_family in _FACTORY_COLLECTOR_CLOUD_FAMILIES:
+                continue
         try:
             response = await transport.async_query(definition.command)
         except Exception:

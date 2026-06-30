@@ -1223,6 +1223,23 @@ class _CollectorAtConnection:
                     header_bytes = prefix + header_tail
                     header = decode_header(header_bytes)
                     if not self._looks_like_mixed_frame_header(header):
+                        if (
+                            self._raw_passthrough_frame_format == "plain_line"
+                            and _looks_like_plain_raw_response_start(header_bytes[:1])
+                        ):
+                            try:
+                                line = header_bytes + await asyncio.wait_for(
+                                    reader.readuntil(b"\r"),
+                                    timeout=_AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
+                                )
+                            except asyncio.TimeoutError:
+                                self._record_unhandled_raw_fragment(
+                                    header_bytes,
+                                    parser="raw_plain_line_stale_timeout",
+                                )
+                                continue
+                            self._handle_raw_ascii_line(line, parser="raw_plain_line_stale")
+                            continue
                         self._record_unhandled_raw_fragment(
                             header_bytes,
                             parser="mixed_frame_header_invalid",

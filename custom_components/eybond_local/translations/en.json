@@ -126,8 +126,8 @@
         "title": "SmartESS Cloud Assist",
         "description": "Sign in with your SmartESS account to confirm the device identity for collector `{collector_pn}`. The login is used once for this step; the result is saved as reusable onboarding evidence.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
         "data": {
-          "username": "SmartESS username",
-          "password": "SmartESS password"
+          "username": "Cloud username",
+          "password": "Cloud password"
         },
         "data_description": {
           "username": "The SmartESS account name used by the mobile app.",
@@ -255,7 +255,7 @@
         "description": "Choose what you want to manage for this entry.{bridge_note}",
         "menu_options": {
           "runtime": "Connection and polling",
-          "shadow_learning": "Add controls (device learning)",
+          "shadow_learning": "Expand device support",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
           "diagnostics": "Diagnostics and service tools"
@@ -361,39 +361,39 @@
         }
       },
       "shadow_learning": {
-        "title": "Add controls for this device",
+        "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
-          "shadow_learning_confirm_cloud_write": "Yes, briefly send test commands to this device to find its controls"
+          "shadow_learning_confirm_cloud_write": "Yes, briefly check which extra sensors and controls this device supports"
         },
         "data_description": {
-          "shadow_learning_confirm_cloud_write": "To find the controls, Home Assistant briefly sends test commands to this device through SmartESS. The device's settings are not changed."
+          "shadow_learning_confirm_cloud_write": "Home Assistant briefly checks this device through its cloud service to discover extra controls and sensor evidence. The device's settings are not changed."
         }
       },
       "shadow_learning_credentials": {
-        "title": "Add controls for this device",
+        "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
-          "username": "SmartESS username",
-          "password": "SmartESS password"
+          "username": "Cloud username",
+          "password": "Cloud password"
         },
         "data_description": {
-          "username": "Used only for the current control discovery action.",
-          "password": "Used only for the current control discovery action."
+          "username": "Used only for the current device-support discovery action.",
+          "password": "Used only for the current device-support discovery action."
         }
       },
       "shadow_learning_review": {
-        "title": "Add controls for this device",
+        "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
-          "enabled_controls": "Controls to add"
+          "enabled_controls": "Extra controls to add"
         },
         "data_description": {
-          "enabled_controls": "Tick the controls you want in Home Assistant. Risky ones are left off by default."
+          "enabled_controls": "Tick the extra controls you want in Home Assistant. Risky ones are left off by default."
         }
       },
       "shadow_learning_result": {
-        "title": "Add controls for this device",
+        "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
           "result_action": "What would you like to do?"

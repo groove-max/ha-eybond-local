@@ -408,6 +408,7 @@ def summarize_shadow_learning_attempts(
                     # select vs button) instead of guessing from raw swept values.
                     "value_label": str(attempt.get("value_label") or ""),
                     "value_source": str(attempt.get("value_source") or ""),
+                    "read_key": str(attempt.get("read_key") or ""),
                     "requested_at": str(attempt.get("requested_at") or ""),
                     "unknown_field": bool(attempt.get("unknown_field")),
                     "observation": observation,
@@ -498,6 +499,7 @@ def correlate_cloud_attempts_with_shadow_writes(
                 "requested_value": str(attempt.get("requested_value") or ""),
                 "value_label": str(attempt.get("value_label") or ""),
                 "value_source": str(attempt.get("value_source") or ""),
+                "read_key": str(attempt.get("read_key") or ""),
                 "requested_at": str(attempt.get("requested_at") or ""),
                 "unknown_field": bool(attempt.get("unknown_field")),
                 "observation": observation.to_json_dict(),
