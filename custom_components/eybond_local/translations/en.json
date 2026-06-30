@@ -126,6 +126,16 @@
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
+      "confirm_poll_interval": {
+        "title": "Manual refresh interval",
+        "description": "Manual refresh mode uses the exact interval below.",
+        "data": {
+          "poll_interval": "Poll interval"
+        },
+        "data_description": {
+          "poll_interval": "How often to read sensor values from the inverter."
+        }
+      },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
         "description": "Sign in with your SmartESS account to confirm the device identity for collector `{collector_pn}`. The login is used once for this step; the result is saved as reusable onboarding evidence.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
@@ -336,6 +346,16 @@
               "driver_hint": "Auto-detect works for most inverters."
             }
           }
+        }
+      },
+      "runtime_poll_interval": {
+        "title": "Manual refresh interval",
+        "description": "Manual refresh mode uses the exact interval below.",
+        "data": {
+          "poll_interval": "Poll interval"
+        },
+        "data_description": {
+          "poll_interval": "How often to read sensor values from the inverter."
         }
       },
       "diagnostics": {

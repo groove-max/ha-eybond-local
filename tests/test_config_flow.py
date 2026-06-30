@@ -2301,7 +2301,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "choose")
 
-    async def test_confirm_step_exposes_poll_interval_field(self) -> None:
+    async def test_confirm_step_exposes_poll_mode_field(self) -> None:
         flow = self._make_flow()
         flow._selected_result = OnboardingResult(
             collector=CollectorCandidate(target_ip="192.168.1.55", source="udp", ip="192.168.1.55", connected=True),
@@ -2319,8 +2319,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "confirm")
-        self.assertIn("poll_interval", result["data_schema"].schema)
+        self.assertIn("poll_mode", result["data_schema"].schema)
+        self.assertNotIn("poll_interval", result["data_schema"].schema)
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+
+        manual_result = await flow.async_step_confirm({"poll_mode": "manual"})
+
+        self.assertEqual(manual_result["type"], "form")
+        self.assertEqual(manual_result["step_id"], "confirm_poll_interval")
+        self.assertIn("poll_interval", manual_result["data_schema"].schema)
 
     async def test_confirm_step_placeholders_render_split_collector_and_inverter_tables(self) -> None:
         flow = self._make_flow()
@@ -2943,7 +2950,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "confirm")
-        self.assertIn("poll_interval", result["data_schema"].schema)
+        self.assertIn("poll_mode", result["data_schema"].schema)
+        self.assertNotIn("poll_interval", result["data_schema"].schema)
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertTrue(
             result["description_placeholders"]["collector_operation_mode_note"].strip()

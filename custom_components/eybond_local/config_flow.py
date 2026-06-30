@@ -1511,6 +1511,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._smartess_cloud_assist_last_error = ""
         self._smartess_cloud_assist_last_error_code = ""
         self._detection_summary_context = "auto"
+        self._confirm_poll_interval_pending_input: dict[str, Any] = {}
+        self._confirm_poll_interval_pending_step_id = "confirm"
 
     @staticmethod
     @callback
@@ -2340,6 +2342,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         errors: dict[str, str] = {}
         if user_input is not None:
+            flat_input = _flatten_sections(user_input)
+            poll_mode = str(flat_input.get(CONF_POLL_MODE, DEFAULT_POLL_MODE) or DEFAULT_POLL_MODE)
+            if poll_mode not in {POLL_MODE_AUTO, POLL_MODE_MANUAL}:
+                errors[CONF_POLL_MODE] = "invalid_selection"
+            elif poll_mode == POLL_MODE_MANUAL and CONF_POLL_INTERVAL not in flat_input:
+                self._confirm_poll_interval_pending_input = dict(flat_input)
+                self._confirm_poll_interval_pending_step_id = step_id
+                return await self.async_step_confirm_poll_interval()
             if is_bridge:
                 mode = COLLECTOR_OPERATION_HA_ONLY
             else:
@@ -2363,10 +2373,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     errors["base"] = "collector_endpoint_write_failed"
                 else:
                     self._collector_endpoint_bind_applied = True
-                    return await self._async_create_entry_from_result(user_input)
+                    return await self._async_create_entry_from_result(flat_input)
             else:
                 self._collector_operation_mode = mode
-                return await self._async_create_entry_from_result(user_input)
+                return await self._async_create_entry_from_result(flat_input)
 
         description_placeholders = dict(self._collector_operation_placeholders())
         if is_bridge:
@@ -2381,13 +2391,44 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_POLL_MODE, default=DEFAULT_POLL_MODE): _poll_mode_selector(
                 self._translation_bundle,
             ),
-            vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
         }
         return self.async_show_form(
             step_id=step_id,
             data_schema=vol.Schema(schema),
             errors=errors,
             description_placeholders=description_placeholders,
+        )
+
+    @_with_translation_bundle
+    async def async_step_confirm_poll_interval(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        if self._selected_result is None:
+            return await self.async_step_auto()
+        pending = dict(self._confirm_poll_interval_pending_input)
+        step_id = self._confirm_poll_interval_pending_step_id or "confirm"
+        if user_input is not None:
+            flat_input = _flatten_sections(user_input)
+            pending[CONF_POLL_INTERVAL] = flat_input.get(
+                CONF_POLL_INTERVAL,
+                DEFAULT_POLL_INTERVAL,
+            )
+            return await self._async_show_confirm_form(
+                step_id=step_id,
+                user_input=pending,
+            )
+        return self.async_show_form(
+            step_id="confirm_poll_interval",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_POLL_INTERVAL,
+                        default=pending.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+                    ): _POLL_INTERVAL_SELECTOR,
+                }
+            ),
+            errors={},
         )
 
     # ---- step: manual ----
@@ -5580,6 +5621,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._diagnostic_commands_download_url = ""
         self._diagnostic_commands_result_path = ""
         self._diagnostic_publish_download_copy = False
+        self._runtime_poll_interval_pending_input: dict[str, Any] = {}
         self._collector_wifi_current_ssid = ""
         self._collector_wifi_network_diagnostics = ""
         self._collector_wifi_last_error = ""
@@ -5879,34 +5921,30 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     ),
                 ),
             )
+            flat_input.setdefault(
+                CONF_POLL_MODE,
+                self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
+            )
+            if flat_input.get(CONF_POLL_MODE) not in {POLL_MODE_AUTO, POLL_MODE_MANUAL}:
+                errors[CONF_POLL_MODE] = "invalid_selection"
             connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
             branch = get_connection_branch(connection_type)
-            errors = EybondLocalConfigFlow._validate_connection_inputs(
+            errors.update(EybondLocalConfigFlow._validate_connection_inputs(
                 flat_input,
                 fields=branch.form_layout.runtime_fields,
-            )
+            ))
             if flat_input.get(CONF_COLLECTOR_OPERATION_MODE) not in COLLECTOR_OPERATION_MODES:
                 errors[CONF_COLLECTOR_OPERATION_MODE] = "invalid_selection"
             if not errors:
-                persisted_options = build_runtime_option_settings(connection_type, flat_input)
-                persisted_options[CONF_POLL_INTERVAL] = flat_input[CONF_POLL_INTERVAL]
-                persisted_options[CONF_POLL_MODE] = flat_input.get(
-                    CONF_POLL_MODE,
-                    self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
-                )
-                persisted_options[CONF_CONTROL_MODE] = flat_input[CONF_CONTROL_MODE]
-                persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input[
-                    CONF_COLLECTOR_OPERATION_MODE
-                ]
-                for key in (
-                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
-                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
-                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
-                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+                if (
+                    flat_input.get(CONF_POLL_MODE) == POLL_MODE_MANUAL
+                    and CONF_POLL_INTERVAL not in flat_input
                 ):
-                    if key in self._config_entry.options:
-                        persisted_options[key] = self._config_entry.options[key]
-                return self.async_create_entry(data=persisted_options)
+                    self._runtime_poll_interval_pending_input = dict(flat_input)
+                    return await self.async_step_runtime_poll_interval()
+                return self.async_create_entry(
+                    data=self._build_runtime_options_from_flat_input(flat_input)
+                )
 
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
         branch = get_connection_branch(connection_type)
@@ -5938,7 +5976,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             vol.Required(CONF_POLL_MODE, default=poll_mode): _poll_mode_selector(
                 self._translation_bundle,
             ),
-            vol.Required(CONF_POLL_INTERVAL, default=poll_interval): _POLL_INTERVAL_SELECTOR,
             vol.Required(CONF_CONTROL_MODE, default=control_mode): _control_mode_selector(
                 self._translation_bundle,
             ),
@@ -6013,6 +6050,64 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             step_id="diagnostics",
             menu_options=menu_options,
             description_placeholders=placeholders,
+        )
+
+    def _build_runtime_options_from_flat_input(self, flat_input: dict[str, Any]) -> dict[str, Any]:
+        connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
+        persisted_options = build_runtime_option_settings(connection_type, flat_input)
+        persisted_options[CONF_POLL_INTERVAL] = flat_input.get(
+            CONF_POLL_INTERVAL,
+            self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+        )
+        persisted_options[CONF_POLL_MODE] = flat_input.get(
+            CONF_POLL_MODE,
+            self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
+        )
+        persisted_options[CONF_CONTROL_MODE] = flat_input[CONF_CONTROL_MODE]
+        persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input[
+            CONF_COLLECTOR_OPERATION_MODE
+        ]
+        for key in (
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+        ):
+            if key in self._config_entry.options:
+                persisted_options[key] = self._config_entry.options[key]
+        return persisted_options
+
+    @_with_translation_bundle
+    async def async_step_runtime_poll_interval(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        pending = dict(self._runtime_poll_interval_pending_input)
+        if not pending:
+            return await self.async_step_runtime()
+        if user_input is not None:
+            flat_input = _flatten_sections(user_input)
+            pending[CONF_POLL_INTERVAL] = flat_input.get(
+                CONF_POLL_INTERVAL,
+                self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+            )
+            return self.async_create_entry(
+                data=self._build_runtime_options_from_flat_input(pending)
+            )
+        return self.async_show_form(
+            step_id="runtime_poll_interval",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_POLL_INTERVAL,
+                        default=self._config_entry.options.get(
+                            CONF_POLL_INTERVAL,
+                            DEFAULT_POLL_INTERVAL,
+                        ),
+                    ): _POLL_INTERVAL_SELECTOR,
+                }
+            ),
+            errors={},
         )
 
     @_with_translation_bundle
