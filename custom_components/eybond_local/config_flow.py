@@ -92,6 +92,7 @@ from .const import (
     CONF_DRIVER_HINT,
     CONF_HEARTBEAT_INTERVAL,
     CONF_POLL_INTERVAL,
+    CONF_POLL_MODE,
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_SERVER_IP,
     CONF_TCP_PORT,
@@ -101,6 +102,7 @@ from .const import (
     DEFAULT_DISCOVERY_TARGET,
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_POLL_MODE,
     DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_TCP_PORT,
@@ -109,6 +111,8 @@ from .const import (
     DRIVER_HINT_AUTO,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
+    POLL_MODE_AUTO,
+    POLL_MODE_MANUAL,
 )
 from .control_policy import control_mode_options
 from .collector.discovery import async_probe_target
@@ -972,6 +976,23 @@ def _control_mode_selector(bundle: dict[str, Any] | None = None) -> SelectSelect
             label=_selector_option_label(bundle, "control_mode", opt, labels.get(opt, opt)),
         )
         for opt in control_mode_options()
+    ]
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=options,
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _poll_mode_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
+    labels = {POLL_MODE_AUTO: "Automatic", POLL_MODE_MANUAL: "Manual"}
+    options = [
+        SelectOptionDict(
+            value=opt,
+            label=_selector_option_label(bundle, "poll_mode", opt, labels.get(opt, opt)),
+        )
+        for opt in (POLL_MODE_AUTO, POLL_MODE_MANUAL)
     ]
     return SelectSelector(
         SelectSelectorConfig(
@@ -2357,6 +2378,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         else:
             description_placeholders.setdefault("collector_operation_mode_note", "")
         schema: dict[Any, Any] = {
+            vol.Required(CONF_POLL_MODE, default=DEFAULT_POLL_MODE): _poll_mode_selector(
+                self._translation_bundle,
+            ),
             vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): _POLL_INTERVAL_SELECTOR,
         }
         return self.async_show_form(
@@ -2562,8 +2586,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         poll_interval = int((user_input or {}).get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
+        poll_mode = str((user_input or {}).get(CONF_POLL_MODE, DEFAULT_POLL_MODE) or DEFAULT_POLL_MODE)
+        if poll_mode not in {POLL_MODE_AUTO, POLL_MODE_MANUAL}:
+            poll_mode = DEFAULT_POLL_MODE
         options = {
             CONF_POLL_INTERVAL: poll_interval,
+            CONF_POLL_MODE: poll_mode,
             CONF_COLLECTOR_OPERATION_MODE: (
                 COLLECTOR_OPERATION_HA_ONLY
                 if collector_capabilities.ha_only_required
@@ -2687,6 +2715,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         _apply_smartess_cloud_assist_metadata(data, assist_state)
         options = {
             CONF_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
+            CONF_POLL_MODE: DEFAULT_POLL_MODE,
             CONF_COLLECTOR_OPERATION_MODE: (
                 COLLECTOR_OPERATION_HA_ONLY
                 if collector_capabilities.ha_only_required
@@ -5861,6 +5890,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             if not errors:
                 persisted_options = build_runtime_option_settings(connection_type, flat_input)
                 persisted_options[CONF_POLL_INTERVAL] = flat_input[CONF_POLL_INTERVAL]
+                persisted_options[CONF_POLL_MODE] = flat_input.get(
+                    CONF_POLL_MODE,
+                    self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
+                )
                 persisted_options[CONF_CONTROL_MODE] = flat_input[CONF_CONTROL_MODE]
                 persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input[
                     CONF_COLLECTOR_OPERATION_MODE
@@ -5884,6 +5917,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             default_broadcast=DEFAULT_DISCOVERY_TARGET,
         )
         poll_interval = self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
+        poll_mode = self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL)
+        if poll_mode not in {POLL_MODE_AUTO, POLL_MODE_MANUAL}:
+            poll_mode = POLL_MODE_MANUAL
         control_mode = self._config_entry.options.get(
             CONF_CONTROL_MODE,
             self._config_entry.data.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE),
@@ -5899,6 +5935,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             collector_operation_mode = DEFAULT_COLLECTOR_OPERATION_MODE
 
         schema_fields: dict[Any, Any] = {
+            vol.Required(CONF_POLL_MODE, default=poll_mode): _poll_mode_selector(
+                self._translation_bundle,
+            ),
             vol.Required(CONF_POLL_INTERVAL, default=poll_interval): _POLL_INTERVAL_SELECTOR,
             vol.Required(CONF_CONTROL_MODE, default=control_mode): _control_mode_selector(
                 self._translation_bundle,

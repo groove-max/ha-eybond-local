@@ -103,10 +103,12 @@
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Collector operating mode",
+          "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
           "collector_operation_mode": "Cloud app + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
+          "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
@@ -115,10 +117,12 @@
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Collector operating mode",
+          "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
           "collector_operation_mode": "Cloud app + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
+          "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
@@ -292,11 +296,13 @@
         "title": "Runtime Settings",
         "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
           "collector_operation_mode": "Collector operation mode",
           "control_mode": "Control mode"
         },
         "data_description": {
+          "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter.",
           "collector_operation_mode": "Cloud app + HA keeps the collector visible in the vendor cloud app while Home Assistant also talks to it locally. Home Assistant only makes that collector reconnect to Home Assistant.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
@@ -646,6 +652,12 @@
         "auto": "Auto",
         "read_only": "Read only",
         "full": "Full control"
+      }
+    },
+    "poll_mode": {
+      "options": {
+        "auto": "Automatic",
+        "manual": "Manual"
       }
     }
   }

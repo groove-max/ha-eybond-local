@@ -70,6 +70,7 @@ from ..const import (
     CONF_DRIVER_HINT,
     CONF_HEARTBEAT_INTERVAL,
     CONF_POLL_INTERVAL,
+    CONF_POLL_MODE,
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_SERVER_IP,
     CONF_SMARTESS_COLLECTOR_VERSION,
@@ -85,6 +86,7 @@ from ..const import (
     DEFAULT_DISCOVERY_TARGET,
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_POLL_MODE,
     DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
     DEFAULT_TCP_PORT,
     DEFAULT_UDP_PORT,
@@ -99,6 +101,7 @@ from ..const import (
     LOCAL_METADATA_DIR,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
+    POLL_MODE_MANUAL,
 )
 from ..connection.models import build_connection_spec
 from ..collector.entity_scope import is_collector_entity_key
@@ -139,6 +142,8 @@ from ..models import CapabilityPreset, RuntimeSnapshot, WriteCapability
 from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
+from .poll_policy import poll_policy_for_driver
+from .poll_scheduler import PollDecision, PollScheduler, clamp_interval, normalize_poll_mode
 from ..schema import (
     build_runtime_ui_schema,
     capability_write_exposure_allowed,
@@ -324,10 +329,7 @@ def _proxy_capture_notification_id(entry_id: str, bundle_path: Path | str) -> st
 
 
 def _clamp_poll_interval_seconds(value: object) -> int:
-    try:
-        interval = int(math.ceil(float(value)))
-    except (TypeError, ValueError, OverflowError):
-        interval = DEFAULT_POLL_INTERVAL
+    interval = int(math.ceil(clamp_interval(value)))
     return min(
         _POLL_INTERVAL_MAX_SECONDS,
         max(_POLL_INTERVAL_MIN_SECONDS, interval),
@@ -786,6 +788,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._collector_poll_overrun_streak = 0
         self._collector_poll_high_utilization_streak = 0
         self._poll_last_notification_monotonic = 0.0
+        self._poll_scheduler_driver_key = str(
+            entry.options.get(CONF_DRIVER_HINT, entry.data.get(CONF_DRIVER_HINT, "auto"))
+            or "auto"
+        )
+        self._poll_scheduler = PollScheduler(
+            policy=poll_policy_for_driver(self._poll_scheduler_driver_key),
+            mode=self._configured_poll_mode(),
+            manual_interval=self._configured_poll_interval_seconds(),
+        )
 
     @property
     def proxy_capture_configured_duration_minutes(self) -> int:
@@ -2237,15 +2248,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         async with self._runtime_operation_lock:
             if self._diagnostic_active and self.data is not None:
                 return self.data
-            poll_interval = self._configured_poll_interval_seconds()
+            self._configure_poll_scheduler_from_options()
+            poll_interval = self._poll_scheduler.current_interval()
             loop = asyncio.get_running_loop()
             cycle_started = loop.time()
             previous_started = float(
                 getattr(self, "_poll_last_cycle_started_monotonic", 0.0) or 0.0
             )
             self._poll_last_cycle_started_monotonic = cycle_started
-            snapshot = await self._async_update_data_with_runtime_lock()
+            snapshot = await self._async_update_data_with_runtime_lock(
+                poll_interval_seconds=poll_interval
+            )
             cycle_duration = max(0.0, loop.time() - cycle_started)
+            self._update_poll_scheduler_policy_from_snapshot(snapshot)
+            decision = self._poll_scheduler.observe(cycle_duration)
             start_interval = (
                 max(0.0, cycle_started - previous_started)
                 if previous_started > 0.0
@@ -2256,11 +2272,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 poll_interval_seconds=poll_interval,
                 duration_seconds=cycle_duration,
                 start_interval_seconds=start_interval,
+                decision=decision,
             )
             self._sync_fixed_rate_poll_update_interval(
                 snapshot,
-                poll_interval_seconds=self._configured_poll_interval_seconds(),
+                poll_interval_seconds=decision.effective_interval,
                 duration_seconds=cycle_duration,
+                scheduler_mode=decision.mode,
             )
             return snapshot
 
@@ -2271,13 +2289,39 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
         )
 
+    def _configured_poll_mode(self) -> str:
+        config_entry = getattr(self, "config_entry", None)
+        options = getattr(config_entry, "options", {}) or {}
+        if CONF_POLL_MODE not in options:
+            return POLL_MODE_MANUAL
+        return normalize_poll_mode(options.get(CONF_POLL_MODE, DEFAULT_POLL_MODE))
+
+    def _configure_poll_scheduler_from_options(self) -> None:
+        self._poll_scheduler.configure(
+            mode=self._configured_poll_mode(),
+            manual_interval=self._configured_poll_interval_seconds(),
+        )
+
+    def _update_poll_scheduler_policy_from_snapshot(self, snapshot: RuntimeSnapshot) -> None:
+        values = getattr(snapshot, "values", None)
+        if not isinstance(values, dict):
+            return
+        driver_key = str(values.get("driver_key") or "").strip()
+        if not driver_key:
+            return
+        if driver_key == getattr(self, "_poll_scheduler_driver_key", ""):
+            return
+        self._poll_scheduler_driver_key = driver_key
+        self._poll_scheduler.configure(policy=poll_policy_for_driver(driver_key))
+
     def _record_poll_cycle_metrics(
         self,
         snapshot: RuntimeSnapshot,
         *,
-        poll_interval_seconds: int,
+        poll_interval_seconds: float,
         duration_seconds: float | None = None,
         start_interval_seconds: float | None = None,
+        decision: PollDecision | None = None,
     ) -> None:
         """Publish poll-pipeline utilization and protect against stable overruns."""
 
@@ -2295,7 +2339,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 duration = max(0.0, float(duration_seconds))
             except (TypeError, ValueError):
                 return
-        interval = _clamp_poll_interval_seconds(poll_interval_seconds)
+        interval = clamp_interval(poll_interval_seconds)
         self._poll_duration_max_seconds = max(
             float(getattr(self, "_poll_duration_max_seconds", 0.0) or 0.0),
             duration,
@@ -2329,9 +2373,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self._collector_poll_high_utilization_streak = 0
 
         recent_peak = max(self._poll_recent_durations_seconds[-5:] or [duration])
-        recommended = _poll_recommended_interval_seconds(
-            current_interval=interval,
-            observed_duration=recent_peak,
+        recommended = (
+            int(math.ceil(decision.recommended_interval))
+            if decision is not None
+            else _poll_recommended_interval_seconds(
+                current_interval=interval,
+                observed_duration=recent_peak,
+            )
         )
         if duration_seconds is not None:
             try:
@@ -2344,7 +2392,38 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         values.update(
             {
-                "collector_poll_interval_configured_seconds": interval,
+                "collector_poll_interval_configured_seconds": self._configured_poll_interval_seconds(),
+                "collector_poll_manual_interval_seconds": self._configured_poll_interval_seconds(),
+                "collector_poll_mode": (
+                    decision.mode if decision is not None else self._configured_poll_mode()
+                ),
+                "collector_poll_policy_driver_key": getattr(
+                    self,
+                    "_poll_scheduler_driver_key",
+                    "",
+                ),
+                "collector_poll_policy_min_interval_seconds": (
+                    decision.policy_min_interval
+                    if decision is not None
+                    else getattr(
+                        getattr(self, "_poll_scheduler", None),
+                        "policy",
+                        poll_policy_for_driver(""),
+                    ).min_auto_interval
+                ),
+                "collector_poll_policy_max_interval_seconds": (
+                    decision.policy_max_interval
+                    if decision is not None
+                    else getattr(
+                        getattr(self, "_poll_scheduler", None),
+                        "policy",
+                        poll_policy_for_driver(""),
+                    ).max_auto_interval
+                ),
+                "collector_poll_current_interval_seconds": interval,
+                "collector_poll_next_interval_seconds": (
+                    decision.effective_interval if decision is not None else interval
+                ),
                 "collector_poll_target_start_interval_seconds": interval,
                 "collector_poll_duration_ms": int(round(duration * 1000.0)),
                 "collector_poll_duration_avg_ms": int(
@@ -2360,9 +2439,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             }
         )
 
-        if self._collector_poll_high_utilization_streak >= _POLL_STABLE_STREAK_THRESHOLD:
+        if (
+            self._configured_poll_mode() == POLL_MODE_MANUAL
+            and self._collector_poll_high_utilization_streak
+            >= _POLL_STABLE_STREAK_THRESHOLD
+        ):
             self._notify_poll_high_utilization(
-                poll_interval=interval,
+                poll_interval=int(math.ceil(interval)),
                 recommended_interval=recommended,
                 utilization_ratio=utilization_ratio,
             )
@@ -2371,8 +2454,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self,
         snapshot: RuntimeSnapshot,
         *,
-        poll_interval_seconds: int,
+        poll_interval_seconds: float,
         duration_seconds: float,
+        scheduler_mode: str = POLL_MODE_MANUAL,
     ) -> None:
         """Keep configured poll interval as start-to-start target.
 
@@ -2383,7 +2467,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         target and make HA's internal post-refresh delay the remaining time.
         """
 
-        interval = _clamp_poll_interval_seconds(poll_interval_seconds)
+        interval = clamp_interval(poll_interval_seconds)
         try:
             duration = max(0.0, float(duration_seconds))
         except (TypeError, ValueError):
@@ -2430,28 +2514,26 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             notification_id=f"{DOMAIN}_poll_interval_high_utilization_{self.config_entry.entry_id}",
         )
 
-    async def _async_update_data_with_runtime_lock(self) -> RuntimeSnapshot:
+    async def _async_update_data_with_runtime_lock(
+        self,
+        *,
+        poll_interval_seconds: float | None = None,
+    ) -> RuntimeSnapshot:
         """Refresh runtime data while holding the shared transport operation lock."""
 
+        poll_interval = float(
+            poll_interval_seconds
+            if poll_interval_seconds is not None
+            else self._poll_scheduler.current_interval()
+        )
         await self._async_reconcile_network(reason="refresh")
         await self._async_reconcile_collector_session_profile(reason="refresh")
-        snapshot = await self._runtime.async_refresh(
-            poll_interval=float(
-                self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
-            )
-        )
+        snapshot = await self._runtime.async_refresh(poll_interval=poll_interval)
         snapshot = await self._async_prepare_runtime_snapshot_profile(snapshot)
         if await self._async_reconcile_collector_session_profile(
             reason="post_refresh_profile_discovery"
         ):
-            snapshot = await self._runtime.async_refresh(
-                poll_interval=float(
-                    self.config_entry.options.get(
-                        CONF_POLL_INTERVAL,
-                        DEFAULT_POLL_INTERVAL,
-                    )
-                )
-            )
+            snapshot = await self._runtime.async_refresh(poll_interval=poll_interval)
             snapshot = await self._async_prepare_runtime_snapshot_profile(snapshot)
         await self._async_reconcile_collector_operation_mode_endpoint(snapshot)
         snapshot.values["connection_type"] = self.config_entry.data.get(CONF_CONNECTION_TYPE, "eybond")
@@ -4849,9 +4931,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             request_refresh=False,
         )
         return await self._runtime.async_refresh(
-            poll_interval=float(
-                self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
-            )
+            poll_interval=self._poll_scheduler.current_interval()
         )
 
     async def _async_reconcile_shadow_learning_session(
@@ -4884,9 +4964,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             raise_when_not_running=False,
         )
         return await self._runtime.async_refresh(
-            poll_interval=float(
-                self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
-            )
+            poll_interval=self._poll_scheduler.current_interval()
         )
 
     def _proxy_capture_process_running(self) -> bool:

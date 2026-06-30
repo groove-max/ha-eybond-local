@@ -103,10 +103,12 @@
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Режим работы коллектора",
+          "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
           "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
@@ -115,10 +117,12 @@
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Режим работы коллектора",
+          "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
           "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
@@ -292,11 +296,13 @@
         "title": "Параметры работы",
         "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса",
           "collector_operation_mode": "Режим работы коллектора",
           "control_mode": "Режим управления"
         },
         "data_description": {
+          "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора.",
           "collector_operation_mode": "Cloud app + HA оставляет коллектор доступным в исходном облачном приложении, а Home Assistant при этом тоже работает с ним локально. Только Home Assistant переводит коллектор в режим подключения только к Home Assistant.",
           "control_mode": "Авто включает проверенные элементы управления, когда уверенность обнаружения высока. Только чтение отключает все управление. Полный режим включает всё."
@@ -646,6 +652,12 @@
         "auto": "Авто",
         "read_only": "Только чтение",
         "full": "Полный контроль"
+      }
+    },
+    "poll_mode": {
+      "options": {
+        "auto": "Автоматически",
+        "manual": "Вручную"
       }
     }
   }

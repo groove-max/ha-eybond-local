@@ -116,6 +116,7 @@ def _install_coordinator_stubs() -> None:
     const.CONF_DRIVER_HINT = "driver_hint"
     const.CONF_HEARTBEAT_INTERVAL = "heartbeat_interval"
     const.CONF_POLL_INTERVAL = "poll_interval"
+    const.CONF_POLL_MODE = "poll_mode"
     const.CONF_PROXY_CAPTURE_DURATION_MINUTES = "proxy_capture_duration_minutes"
     const.CONF_SERVER_IP = "server_ip"
     const.CONF_SMARTESS_COLLECTOR_VERSION = "smartess_collector_version"
@@ -132,6 +133,7 @@ def _install_coordinator_stubs() -> None:
     const.DEFAULT_DISCOVERY_TARGET = ""
     const.DEFAULT_HEARTBEAT_INTERVAL = 30
     const.DEFAULT_POLL_INTERVAL = 30
+    const.DEFAULT_POLL_MODE = "auto"
     const.DEFAULT_PROXY_CAPTURE_DURATION_MINUTES = 10
     const.DEFAULT_TCP_PORT = 8899
     const.DEFAULT_UDP_PORT = 48899
@@ -142,6 +144,8 @@ def _install_coordinator_stubs() -> None:
     const.CONTROL_MODE_READ_ONLY = "read_only"
     const.DOMAIN = "eybond_local"
     const.DRIVER_HINT_AUTO = "auto"
+    const.POLL_MODE_AUTO = "auto"
+    const.POLL_MODE_MANUAL = "manual"
     const.LOCAL_DIAGNOSTIC_RUNS_DIR = "diagnostic_runs"
     const.LOCAL_METADATA_DIR = "eybond_local"
     const.COLLECTOR_OPERATION_MODES = (
