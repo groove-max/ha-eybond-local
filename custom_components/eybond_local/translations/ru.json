@@ -501,6 +501,13 @@
           "home_assistant_only": "Только Home Assistant"
         }
       },
+      "collector_poll_mode": {
+        "name": "Режим опроса",
+        "state": {
+          "auto": "Автоматический",
+          "manual": "Ручной"
+        }
+      },
       "collector_signal_quality": {
         "state": {
           "unknown": "Неизвестно",

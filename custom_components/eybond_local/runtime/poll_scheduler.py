@@ -151,6 +151,7 @@ class PollScheduler:
     def observe(self, duration_seconds: object, *, success: bool = True) -> PollDecision:
         """Record one completed poll cycle and return the next decision."""
 
+        cycle_interval = self._effective_interval
         try:
             duration = max(0.0, float(duration_seconds))
         except (TypeError, ValueError, OverflowError):
@@ -176,6 +177,7 @@ class PollScheduler:
             observed_duration=observed,
             last_duration=duration,
             recommended_interval=recommended,
+            utilization_interval=cycle_interval,
         )
         return self._last_decision
 
@@ -209,6 +211,13 @@ class PollScheduler:
         else:
             shrink_floor = current * min(1.0, max(0.0, self._policy.shrink_step_limit))
             next_interval = max(target, shrink_floor)
+        if self._mode == POLL_MODE_AUTO:
+            rounded = (
+                math.floor(next_interval)
+                if next_interval < current
+                else math.ceil(next_interval)
+            )
+            return self._clamp_effective(rounded)
         return self._clamp_effective(next_interval)
 
     def _build_decision(
@@ -217,6 +226,7 @@ class PollScheduler:
         observed_duration: float,
         last_duration: float | None = None,
         recommended_interval: float | None = None,
+        utilization_interval: float | None = None,
     ) -> PollDecision:
         recommended = (
             recommended_interval
@@ -228,9 +238,14 @@ class PollScheduler:
             )
         )
         duration = observed_duration if last_duration is None else last_duration
+        interval = (
+            self._effective_interval
+            if utilization_interval is None
+            else clamp_interval(utilization_interval)
+        )
         utilization = (
-            int(round((duration / self._effective_interval) * 100.0))
-            if self._effective_interval > 0.0
+            int(round((duration / interval) * 100.0))
+            if interval > 0.0
             else 0
         )
         return PollDecision(

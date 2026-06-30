@@ -2827,12 +2827,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="known_ip",
         )
 
-        result = await flow.async_step_confirm(
-            {
-                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_SMARTESS_AND_HA,
-                "poll_interval": 15,
-            }
-        )
+        interval_form = await flow.async_step_confirm({"poll_mode": "manual"})
+        self.assertEqual(interval_form["step_id"], "confirm_poll_interval")
+        result = await flow.async_step_confirm_poll_interval({"poll_interval": 15})
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["options"]["poll_interval"], 15)
@@ -3125,7 +3122,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._selected_result = self._collector_only_bridge_result()
         flow._collector_endpoint_bind_applied = True
 
-        result = await flow.async_step_confirm({"poll_interval": 15})
+        result = await flow.async_step_confirm({"poll_mode": "auto"})
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(
@@ -4221,7 +4218,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("SBU", placeholders["smartess_cloud_highlights_table"])
             self.assertIn("reg 4537", placeholders["smartess_cloud_highlights_table"])
 
-            created = await flow.async_step_confirm({"poll_interval": 15})
+            created = await flow.async_step_confirm({"poll_mode": "auto"})
 
             self.assertEqual(created["type"], "create_entry")
             self.assertEqual(created["data"][CONF_SMARTESS_PROTOCOL_ASSET_ID], "0925")
@@ -4702,8 +4699,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_options_runtime_step_serializes_branch_aware_option_payload(self) -> None:
         options = self._make_options_flow()
 
+        form = await options.async_step_runtime()
+
+        self.assertIn("poll_mode", form["data_schema"].schema)
+        self.assertIn("poll_interval", form["data_schema"].schema)
+
         result = await options.async_step_runtime(
             {
+                "poll_mode": "manual",
                 "poll_interval": 15,
                 "control_mode": "full",
                 "connection": {
@@ -4722,12 +4725,78 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["poll_mode"], "manual")
         self.assertEqual(result["data"]["poll_interval"], 15)
         self.assertEqual(result["data"]["control_mode"], "full")
         self.assertEqual(result["data"]["advertised_server_ip"], "203.0.113.10")
         self.assertEqual(result["data"]["advertised_tcp_port"], 9443)
         self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
         self.assertNotIn("connection", result["data"])
+
+    async def test_options_runtime_auto_mode_hides_poll_interval_and_preserves_fallback(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.options = {"poll_interval": 15, "poll_mode": "auto"}
+
+        form = await options.async_step_runtime()
+
+        self.assertIn("poll_mode", form["data_schema"].schema)
+        self.assertNotIn("poll_interval", form["data_schema"].schema)
+
+        result = await options.async_step_runtime(
+            {
+                "poll_mode": "auto",
+                "control_mode": "full",
+                "connection": {
+                    "server_ip": "192.168.1.60",
+                    "collector_ip": "192.168.1.56",
+                    "tcp_port": 8899,
+                    "advertised_server_ip": "203.0.113.10",
+                    "advertised_tcp_port": "9443",
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 4,
+                    "heartbeat_interval": 30,
+                    "driver_hint": "modbus_smg",
+                },
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["poll_mode"], "auto")
+        self.assertEqual(result["data"]["poll_interval"], 15)
+
+    async def test_options_runtime_switching_auto_to_manual_requests_interval(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.options = {"poll_interval": 15, "poll_mode": "auto"}
+
+        result = await options.async_step_runtime(
+            {
+                "poll_mode": "manual",
+                "control_mode": "full",
+                "connection": {
+                    "server_ip": "192.168.1.60",
+                    "collector_ip": "192.168.1.56",
+                    "tcp_port": 8899,
+                    "advertised_server_ip": "203.0.113.10",
+                    "advertised_tcp_port": "9443",
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 4,
+                    "heartbeat_interval": 30,
+                    "driver_hint": "modbus_smg",
+                },
+            }
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "runtime_poll_interval")
+        self.assertIn("poll_interval", result["data_schema"].schema)
+
+        created = await options.async_step_runtime_poll_interval({"poll_interval": 20})
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["poll_mode"], "manual")
+        self.assertEqual(created["data"]["poll_interval"], 20)
 
     async def test_diagnostics_menu_exposes_reload_and_capture_actions(self) -> None:
         options = self._make_options_flow()

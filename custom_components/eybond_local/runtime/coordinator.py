@@ -303,9 +303,9 @@ _LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
         "uk": "EyeBond Local: інтервал опитування близький до межі",
     },
     "poll_interval_high_utilization_body": {
-        "en": "The device polling cycle is using about {utilization_percent}% of the configured {poll_interval}s interval. If updates are delayed, increase the polling interval manually. Recommended minimum for this device is about {recommended_interval}s.",
-        "ru": "Цикл опроса устройства использует около {utilization_percent}% настроенного интервала {poll_interval}s. Если обновления задерживаются, увеличьте интервал опроса вручную. Рекомендуемый минимум для этого устройства — около {recommended_interval}s.",
-        "uk": "Цикл опитування пристрою використовує близько {utilization_percent}% налаштованого інтервалу {poll_interval}s. Якщо оновлення затримуються, збільште інтервал опитування вручну. Рекомендований мінімум для цього пристрою — близько {recommended_interval}s.",
+        "en": "The device polling cycle is using about {utilization_percent}% of the configured {poll_interval}s interval. If updates are delayed, increase the manual polling interval or switch Sensor refresh mode to Automatic. Recommended minimum for this device is about {recommended_interval}s.",
+        "ru": "Цикл опроса устройства использует около {utilization_percent}% настроенного интервала {poll_interval}s. Если обновления задерживаются, увеличьте ручной интервал опроса или переключите режим обновления сенсоров на автоматический. Рекомендуемый минимум для этого устройства — около {recommended_interval}s.",
+        "uk": "Цикл опитування пристрою використовує близько {utilization_percent}% налаштованого інтервалу {poll_interval}s. Якщо оновлення затримуються, збільште ручний інтервал опитування або перемкніть режим оновлення сенсорів на автоматичний. Рекомендований мінімум для цього пристрою — близько {recommended_interval}s.",
     },
 }
 
@@ -2248,6 +2248,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         async with self._runtime_operation_lock:
             if self._diagnostic_active and self.data is not None:
                 return self.data
+            self._ensure_poll_scheduler()
             self._configure_poll_scheduler_from_options()
             poll_interval = self._poll_scheduler.current_interval()
             loop = asyncio.get_running_loop()
@@ -2296,7 +2297,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return POLL_MODE_MANUAL
         return normalize_poll_mode(options.get(CONF_POLL_MODE, DEFAULT_POLL_MODE))
 
+    def _ensure_poll_scheduler(self) -> None:
+        if isinstance(getattr(self, "_poll_scheduler", None), PollScheduler):
+            return
+        config_entry = getattr(self, "config_entry", None)
+        options = getattr(config_entry, "options", {}) or {}
+        driver_key = str(
+            getattr(self, "_poll_scheduler_driver_key", "")
+            or options.get(CONF_DRIVER_HINT, "auto")
+            or "auto"
+        )
+        self._poll_scheduler_driver_key = driver_key
+        self._poll_scheduler = PollScheduler(
+            policy=poll_policy_for_driver(driver_key),
+            mode=self._configured_poll_mode(),
+            manual_interval=self._configured_poll_interval_seconds(),
+        )
+
     def _configure_poll_scheduler_from_options(self) -> None:
+        self._ensure_poll_scheduler()
         self._poll_scheduler.configure(
             mode=self._configured_poll_mode(),
             manual_interval=self._configured_poll_interval_seconds(),
@@ -2357,6 +2376,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if len(self._poll_recent_durations_seconds) > 20:
             self._poll_recent_durations_seconds = self._poll_recent_durations_seconds[-20:]
 
+        next_interval = (
+            clamp_interval(decision.effective_interval)
+            if decision is not None
+            else interval
+        )
         utilization_ratio = duration / float(interval) if interval > 0 else 0.0
         if utilization_ratio >= _POLL_OVERRUN_RATIO:
             self._collector_poll_overrun_streak = (
@@ -2421,10 +2445,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     ).max_auto_interval
                 ),
                 "collector_poll_current_interval_seconds": interval,
-                "collector_poll_next_interval_seconds": (
-                    decision.effective_interval if decision is not None else interval
-                ),
-                "collector_poll_target_start_interval_seconds": interval,
+                "collector_poll_next_interval_seconds": next_interval,
+                "collector_poll_target_start_interval_seconds": next_interval,
                 "collector_poll_duration_ms": int(round(duration * 1000.0)),
                 "collector_poll_duration_avg_ms": int(
                     round(self._poll_duration_ewma_seconds * 1000.0)
@@ -2521,6 +2543,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> RuntimeSnapshot:
         """Refresh runtime data while holding the shared transport operation lock."""
 
+        self._ensure_poll_scheduler()
         poll_interval = float(
             poll_interval_seconds
             if poll_interval_seconds is not None
@@ -4930,6 +4953,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             prefer_proxy_restore_trigger=stop_reason == "expired_lease",
             request_refresh=False,
         )
+        self._ensure_poll_scheduler()
         return await self._runtime.async_refresh(
             poll_interval=self._poll_scheduler.current_interval()
         )
@@ -4963,6 +4987,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             request_refresh=False,
             raise_when_not_running=False,
         )
+        self._ensure_poll_scheduler()
         return await self._runtime.async_refresh(
             poll_interval=self._poll_scheduler.current_interval()
         )

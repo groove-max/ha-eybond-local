@@ -228,6 +228,9 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
     MeasurementDescription(
         key="collector_poll_mode",
         name="Poll Mode",
+        translation_key="collector_poll_mode",
+        device_class="enum",
+        options=("auto", "manual"),
         icon="mdi:timer-cog",
         diagnostic=True,
         enabled_default=True,

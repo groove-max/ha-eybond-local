@@ -5980,6 +5980,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 self._translation_bundle,
             ),
         }
+        if poll_mode == POLL_MODE_MANUAL:
+            schema_fields[vol.Required(CONF_POLL_INTERVAL, default=poll_interval)] = (
+                _POLL_INTERVAL_SELECTOR
+            )
         if not is_bridge:
             # Only a factory collector / unanswered probe gets the SmartESS+HA vs
             # HA-only choice. A bridge has no SmartESS cloud side, so the selector

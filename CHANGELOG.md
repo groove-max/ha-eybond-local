@@ -7,6 +7,23 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Added
+
+- Added an adaptive sensor refresh scheduler. New entries default to
+  **Automatic** refresh, where EyeBond Local chooses the next poll interval from
+  the observed device response time and protocol-specific limits; **Manual**
+  refresh keeps the existing fixed-interval behavior for upgraded entries and
+  users who want a fixed cadence.
+- Added collector diagnostics for poll mode, current/next interval, poll
+  duration, utilization, recommended interval, and scheduler delay.
+
+### Changed
+
+- The runtime settings flow now hides the fixed poll interval while Automatic
+  refresh is selected and shows it only for Manual refresh.
+- High-utilization warnings now point Manual-mode users either to a larger
+  interval or to Automatic refresh.
+
 ## [0.2.0-beta.2] - 2026-06-28
 
 ### Added

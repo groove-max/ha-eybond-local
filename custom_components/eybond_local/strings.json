@@ -501,6 +501,13 @@
           "home_assistant_only": "Home Assistant only"
         }
       },
+      "collector_poll_mode": {
+        "name": "Poll mode",
+        "state": {
+          "auto": "Automatic",
+          "manual": "Manual"
+        }
+      },
       "collector_signal_quality": {
         "state": {
           "unknown": "Unknown",

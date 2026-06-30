@@ -234,7 +234,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `lvyuan_ty_sic_3_6kbe_w1` → surface `eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1` (driver eybond_g_ascii, variant lvyuan_ty_sic_3_6kbe_w1)
       - Protocol: eybond_g_ascii | Detection: anchors (protocol.protocol_id=EYBOND_G_ASCII; rating.output_voltage=220; rating.output_current=16; rating.battery_voltage=24; rating.frequency=50; firmware.software_version=4.003)
       - Tier: full | Read-only: no | Profile: eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json | Schema: eybond_g_ascii/base.json
-      - Capabilities: 12 (tested 12); support tiers: conditional 12 | Telemetry: 104 measurements, 3 binary sensors
+      - Capabilities: 34 (tested 12, untested 22); support tiers: conditional 34 | Telemetry: 104 measurements, 3 binary sensors
 - Known limitations:
   - Control support is partial: the exposed write surface is the cloud-known user settings set, not the full manufacturer/MCU register map.
   - Commercial model name is still user-reported, while runtime binding uses the offline F/SVFW fingerprint.

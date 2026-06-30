@@ -143,11 +143,21 @@ The inverter device may include:
 - Energy totals for Home Assistant Energy Dashboard.
 - Alarms, fault states, and operating mode sensors.
 - Safe controls supported by your exact model.
-- Polling interval setting from `2` to `3600` seconds.
+- Sensor refresh mode: **Automatic** lets the integration choose a safe interval
+  from device response time; **Manual** uses your fixed interval from `2` to
+  `3600` seconds.
 
 <p align="center"><img src="docs/images/inverter-sensors.png" alt="Inverter sensors after setup" width="320"></p>
 
-You can change collector mode and control mode later from **Connection and polling**.
+You can change collector mode, control mode, and sensor refresh mode later from
+**Connection and polling**.
+
+In Automatic refresh mode, EyeBond Local keeps a small pause between polling
+cycles and applies protocol-specific limits. For example, fast Modbus devices
+can refresh more often than slower ASCII devices. In Manual mode, the
+diagnostic sensors **Poll Utilization**, **Poll Duration**, and **Recommended
+Poll Interval** show whether the chosen interval is realistic; if utilization
+stays high, increase the interval or switch back to Automatic.
 
 <p align="center"><img src="docs/images/runtime-settings.png" alt="Runtime settings with control mode and collector operation mode" width="480"></p>
 
