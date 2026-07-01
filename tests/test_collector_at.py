@@ -107,7 +107,7 @@ class CollectorAtTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_runtime_query_skips_vdtu_after_factory_endpoint_family(self) -> None:
+    def test_runtime_query_never_sends_vdtu_after_factory_endpoint_family(self) -> None:
         class _Transport:
             commands: list[str]
 
@@ -119,7 +119,7 @@ class CollectorAtTests(unittest.TestCase):
                 if command == "CLDSRVHOST1":
                     return parse_at_response("AT+CLDSRVHOST1:iot.eybond.com,18899,TCP")
                 if command == "VDTU":
-                    raise AssertionError("VDTU must not be queried for known factory families")
+                    raise AssertionError("VDTU must not be queried")
                 return parse_at_response(f"AT+{command}:")
 
         async def _run() -> None:
@@ -131,7 +131,7 @@ class CollectorAtTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_runtime_query_can_skip_vdtu_from_family_hint(self) -> None:
+    def test_runtime_query_never_sends_vdtu_from_family_hint(self) -> None:
         class _Transport:
             commands: list[str]
 
@@ -141,7 +141,7 @@ class CollectorAtTests(unittest.TestCase):
             async def async_query(self, command: str):
                 self.commands.append(command)
                 if command == "VDTU":
-                    raise AssertionError("VDTU must not be queried for known factory families")
+                    raise AssertionError("VDTU must not be queried")
                 return parse_at_response(f"AT+{command}:")
 
         async def _run() -> None:
@@ -151,7 +151,6 @@ class CollectorAtTests(unittest.TestCase):
                 collector_cloud_family="valuecloud_at",
             )
 
-            self.assertNotIn("collector_vdtu_raw", values)
             self.assertNotIn("VDTU", transport.commands)
 
         asyncio.run(_run())

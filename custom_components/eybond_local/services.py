@@ -7,7 +7,37 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import voluptuous as vol
+try:
+    import voluptuous as vol
+except ModuleNotFoundError:
+    class _VoluptuousImportStub:
+        """Small import-time stub used by local tests without HA dependencies."""
+
+        @staticmethod
+        def Schema(schema):
+            return schema
+
+        @staticmethod
+        def Required(key):
+            return key
+
+        @staticmethod
+        def Optional(key, default=None):
+            return key
+
+        @staticmethod
+        def All(*validators):
+            return validators[0] if validators else (lambda value: value)
+
+        @staticmethod
+        def Range(**_kwargs):
+            return lambda value: value
+
+        @staticmethod
+        def In(_container):
+            return lambda value: value
+
+    vol = _VoluptuousImportStub()
 
 from .const import (
     CONF_PROXY_CAPTURE_DURATION_MINUTES,

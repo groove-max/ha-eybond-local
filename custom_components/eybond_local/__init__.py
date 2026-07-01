@@ -664,6 +664,11 @@ def _default_enabled_unique_ids(entry_id: str) -> set[str]:
     return expected
 
 
+def _coordinator_proxy_capture_allowed(coordinator: object) -> bool:
+    capabilities = getattr(coordinator, "collector_capabilities", None)
+    return bool(getattr(capabilities, "proxy_capture", True))
+
+
 def _default_enabled_unique_ids_for_current_runtime(
     entry_id: str,
     coordinator,
@@ -742,13 +747,19 @@ def _default_enabled_unique_ids_for_current_runtime(
     ):
         expected.add(_entity_unique_id(entry_id, "select", key))
 
-    if hasattr(coordinator, "async_set_proxy_capture_duration_minutes"):
+    collector_proxy_capture_allowed = _coordinator_proxy_capture_allowed(coordinator)
+
+    if (
+        collector_proxy_capture_allowed
+        and hasattr(coordinator, "async_set_proxy_capture_duration_minutes")
+    ):
         expected.add(_entity_unique_id(entry_id, "number", CONF_PROXY_CAPTURE_DURATION_MINUTES))
 
     for key in default_enabled_tooling_button_keys_for_runtime(
         capability_keys,
         profile_name,
         has_inverter_identity=has_inverter_identity,
+        collector_proxy_capture_allowed=collector_proxy_capture_allowed,
     ):
         expected.add(_tool_unique_id(entry_id, key))
 
@@ -1049,6 +1060,7 @@ async def _async_cleanup_obsolete_entities(
         register_schema_name=register_schema_name,
         include_all_drivers_when_unknown=False,
     )
+    collector_proxy_capture_allowed = _coordinator_proxy_capture_allowed(coordinator)
     measurement_keys = {description.key for description in measurement_descriptions}
     runtime_keys = measurement_keys | {
         description.key for description in binary_sensor_descriptions
@@ -1091,6 +1103,7 @@ async def _async_cleanup_obsolete_entities(
             capability_keys,
             profile_name,
             has_inverter_identity=has_inverter_identity,
+            collector_proxy_capture_allowed=collector_proxy_capture_allowed,
         )
     )
     expected_unique_ids.update(
@@ -1103,6 +1116,13 @@ async def _async_cleanup_obsolete_entities(
             has_inverter_identity=has_inverter_identity,
         )
     )
+    if (
+        collector_proxy_capture_allowed
+        and hasattr(coordinator, "async_set_proxy_capture_duration_minutes")
+    ):
+        expected_unique_ids.add(
+            _entity_unique_id(entry.entry_id, "number", CONF_PROXY_CAPTURE_DURATION_MINUTES)
+        )
     for capability in capabilities:
         if not coordinator.can_expose_capability(capability):
             continue

@@ -37,6 +37,9 @@ class RuntimeManager(Protocol):
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
         ...
 
+    def invalidate_collector_runtime_values(self) -> None:
+        ...
+
     async def async_write_capability(self, capability_key: str, value: Any) -> Any:
         ...
 

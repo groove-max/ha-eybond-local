@@ -508,6 +508,22 @@
           "manual": "Manual"
         }
       },
+      "collector_poll_context": {
+        "name": "Poll context",
+        "state": {
+          "runtime": "Runtime polling",
+          "detection": "Inverter detection",
+          "collector": "Collector connection"
+        }
+      },
+      "runtime_driver_state": {
+        "name": "Runtime driver state",
+        "state": {
+          "driver_bound": "Driver bound",
+          "driver_unbound": "Driver not detected",
+          "collector_offline": "Collector offline"
+        }
+      },
       "collector_signal_quality": {
         "state": {
           "unknown": "Unknown",

@@ -170,7 +170,10 @@ class PollScheduler:
             fallback_interval=self._effective_interval,
         )
         if self._mode == POLL_MODE_AUTO:
-            self._effective_interval = self._smooth_auto_interval(recommended)
+            if success:
+                self._effective_interval = self._smooth_auto_interval(recommended)
+            else:
+                self._effective_interval = self._clamp_effective(self._effective_interval)
         else:
             self._effective_interval = self._manual_interval
         self._last_decision = self._build_decision(

@@ -101,6 +101,7 @@ from ..const import (
     LOCAL_METADATA_DIR,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
+    POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
 from ..connection.models import build_connection_spec
@@ -235,6 +236,14 @@ _POLL_STABLE_STREAK_THRESHOLD = 3
 _POLL_RECOMMENDED_TARGET_UTILIZATION = 0.7
 _POLL_NOTIFICATION_COOLDOWN_SECONDS = 12 * 60 * 60
 _POLL_FIXED_RATE_MIN_DELAY_SECONDS = 1.0
+_RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE = "collector_offline"
+_RUNTIME_DRIVER_STATE_DRIVER_UNBOUND = "driver_unbound"
+_RUNTIME_DRIVER_STATE_DRIVER_BOUND = "driver_bound"
+_COLLECTOR_POLL_CONTEXT_COLLECTOR = "collector"
+_COLLECTOR_POLL_CONTEXT_DETECTION = "detection"
+_COLLECTOR_POLL_CONTEXT_RUNTIME = "runtime"
+
+
 def _bounded_shadow_learning_artifact_path(
     *,
     config_dir: Path,
@@ -357,6 +366,64 @@ def _poll_recommended_interval_seconds(
     if duration >= current:
         recommended = max(recommended, math.ceil(current) + 1)
     return _clamp_poll_interval_seconds(recommended)
+
+
+def _runtime_driver_state_from_snapshot(snapshot: RuntimeSnapshot) -> str:
+    values = getattr(snapshot, "values", None)
+    if isinstance(values, Mapping):
+        state = str(values.get("runtime_driver_state") or "").strip()
+        if state in {
+            _RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE,
+            _RUNTIME_DRIVER_STATE_DRIVER_UNBOUND,
+            _RUNTIME_DRIVER_STATE_DRIVER_BOUND,
+        }:
+            return state
+    if not bool(getattr(snapshot, "connected", False)):
+        return _RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE
+    if getattr(snapshot, "inverter", None) is not None:
+        return _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+    return _RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
+
+
+def _poll_context_for_runtime_driver_state(runtime_driver_state: str) -> str:
+    if runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND:
+        return _COLLECTOR_POLL_CONTEXT_RUNTIME
+    if runtime_driver_state == _RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE:
+        return _COLLECTOR_POLL_CONTEXT_COLLECTOR
+    return _COLLECTOR_POLL_CONTEXT_DETECTION
+
+
+def _poll_non_runtime_retry_interval_seconds(
+    *,
+    current_interval: float,
+    observed_duration: float,
+    decision: PollDecision,
+) -> int:
+    """Return a temporary auto retry interval for non-runtime poll contexts."""
+
+    current = clamp_interval(
+        current_interval,
+        minimum=decision.policy_min_interval,
+        maximum=decision.policy_max_interval,
+    )
+    try:
+        duration = max(0.0, float(observed_duration))
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if not math.isfinite(duration):
+        duration = 0.0
+    if duration <= 0.0:
+        return int(math.ceil(current))
+    retry = max(current, math.ceil(duration * 1.3))
+    return int(
+        math.ceil(
+            clamp_interval(
+                retry,
+                minimum=decision.policy_min_interval,
+                maximum=decision.policy_max_interval,
+            )
+        )
+    )
 
 
 def _format_collector_server_endpoint(
@@ -788,6 +855,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._collector_poll_overrun_streak = 0
         self._collector_poll_high_utilization_streak = 0
         self._poll_last_notification_monotonic = 0.0
+        self._poll_non_runtime_retry_interval_seconds = 0
         self._poll_scheduler_driver_key = str(
             entry.options.get(CONF_DRIVER_HINT, entry.data.get(CONF_DRIVER_HINT, "auto"))
             or "auto"
@@ -1504,13 +1572,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if capabilities.virtual_bridge and not options.get("collector_virtual_bridge"):
             options["collector_virtual_bridge"] = True
             changed = True
+        if capabilities.virtual_bridge and data.get("collector_bridge_kind") != "esp-collector":
+            data["collector_bridge_kind"] = "esp-collector"
+            changed = True
+        if capabilities.virtual_bridge and options.get("collector_bridge_kind") != "esp-collector":
+            options["collector_bridge_kind"] = "esp-collector"
+            changed = True
         if changed:
             self._async_update_entry_without_reload(data=data, options=options)
 
     def _collector_is_virtual_bridge(self) -> bool:
         """Return True when the running collector is a detected virtual bridge.
 
-        Positive-only: reads the runtime snapshot's parsed AT+VDTU verdict and
+        Positive-only: reads the runtime snapshot's parsed hardware-version token and
         defaults to False when the snapshot is unavailable, so a factory
         collector behaves exactly as before.
         """
@@ -2250,7 +2324,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 return self.data
             self._ensure_poll_scheduler()
             self._configure_poll_scheduler_from_options()
-            poll_interval = self._poll_scheduler.current_interval()
+            poll_interval = self._current_poll_cycle_interval_seconds()
+            previous_runtime_driver_state = (
+                _runtime_driver_state_from_snapshot(self.data)
+                if isinstance(self.data, RuntimeSnapshot)
+                else ""
+            )
             loop = asyncio.get_running_loop()
             cycle_started = loop.time()
             previous_started = float(
@@ -2262,7 +2341,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
             cycle_duration = max(0.0, loop.time() - cycle_started)
             self._update_poll_scheduler_policy_from_snapshot(snapshot)
-            decision = self._poll_scheduler.observe(cycle_duration)
+            runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)
+            poll_context = _poll_context_for_runtime_driver_state(runtime_driver_state)
+            runtime_poll_success = (
+                runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+                and previous_runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+            )
+            decision = self._poll_scheduler.observe(
+                cycle_duration,
+                success=runtime_poll_success,
+            )
+            next_poll_interval = self._next_poll_cycle_interval_seconds(
+                current_interval=poll_interval,
+                duration_seconds=cycle_duration,
+                poll_context=poll_context,
+                decision=decision,
+            )
             start_interval = (
                 max(0.0, cycle_started - previous_started)
                 if previous_started > 0.0
@@ -2274,10 +2368,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 duration_seconds=cycle_duration,
                 start_interval_seconds=start_interval,
                 decision=decision,
+                runtime_driver_state=runtime_driver_state,
+                poll_context=poll_context,
+                next_interval_seconds=next_poll_interval,
             )
             self._sync_fixed_rate_poll_update_interval(
                 snapshot,
-                poll_interval_seconds=decision.effective_interval,
+                poll_interval_seconds=next_poll_interval,
                 duration_seconds=cycle_duration,
                 scheduler_mode=decision.mode,
             )
@@ -2320,6 +2417,47 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             mode=self._configured_poll_mode(),
             manual_interval=self._configured_poll_interval_seconds(),
         )
+        if self._configured_poll_mode() != POLL_MODE_AUTO:
+            self._poll_non_runtime_retry_interval_seconds = 0
+
+    def _current_poll_cycle_interval_seconds(self) -> float:
+        self._ensure_poll_scheduler()
+        scheduler_interval = self._poll_scheduler.current_interval()
+        if self._configured_poll_mode() != POLL_MODE_AUTO:
+            return scheduler_interval
+        retry_interval = float(
+            getattr(self, "_poll_non_runtime_retry_interval_seconds", 0.0) or 0.0
+        )
+        if retry_interval <= 0.0:
+            return scheduler_interval
+        policy = getattr(self._poll_scheduler, "policy", poll_policy_for_driver(""))
+        return clamp_interval(
+            retry_interval,
+            minimum=policy.min_auto_interval,
+            maximum=policy.max_auto_interval,
+        )
+
+    def _next_poll_cycle_interval_seconds(
+        self,
+        *,
+        current_interval: float,
+        duration_seconds: float,
+        poll_context: str,
+        decision: PollDecision,
+    ) -> float:
+        if decision.mode != POLL_MODE_AUTO:
+            self._poll_non_runtime_retry_interval_seconds = 0
+            return decision.effective_interval
+        if poll_context == _COLLECTOR_POLL_CONTEXT_RUNTIME:
+            self._poll_non_runtime_retry_interval_seconds = 0
+            return decision.effective_interval
+        retry_interval = _poll_non_runtime_retry_interval_seconds(
+            current_interval=current_interval,
+            observed_duration=duration_seconds,
+            decision=decision,
+        )
+        self._poll_non_runtime_retry_interval_seconds = retry_interval
+        return retry_interval
 
     def _update_poll_scheduler_policy_from_snapshot(self, snapshot: RuntimeSnapshot) -> None:
         values = getattr(snapshot, "values", None)
@@ -2341,6 +2479,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         duration_seconds: float | None = None,
         start_interval_seconds: float | None = None,
         decision: PollDecision | None = None,
+        runtime_driver_state: str | None = None,
+        poll_context: str | None = None,
+        next_interval_seconds: float | None = None,
     ) -> None:
         """Publish poll-pipeline utilization and protect against stable overruns."""
 
@@ -2376,20 +2517,29 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if len(self._poll_recent_durations_seconds) > 20:
             self._poll_recent_durations_seconds = self._poll_recent_durations_seconds[-20:]
 
+        if not runtime_driver_state:
+            runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)
+        if not poll_context:
+            poll_context = _poll_context_for_runtime_driver_state(runtime_driver_state)
+        runtime_poll = poll_context == _COLLECTOR_POLL_CONTEXT_RUNTIME
         next_interval = (
-            clamp_interval(decision.effective_interval)
-            if decision is not None
-            else interval
+            clamp_interval(next_interval_seconds)
+            if next_interval_seconds is not None
+            else (
+                clamp_interval(decision.effective_interval)
+                if decision is not None
+                else interval
+            )
         )
         utilization_ratio = duration / float(interval) if interval > 0 else 0.0
-        if utilization_ratio >= _POLL_OVERRUN_RATIO:
+        if runtime_poll and utilization_ratio >= _POLL_OVERRUN_RATIO:
             self._collector_poll_overrun_streak = (
                 int(getattr(self, "_collector_poll_overrun_streak", 0) or 0) + 1
             )
         else:
             self._collector_poll_overrun_streak = 0
 
-        if utilization_ratio >= _POLL_UTILIZATION_WARNING_RATIO:
+        if runtime_poll and utilization_ratio >= _POLL_UTILIZATION_WARNING_RATIO:
             self._collector_poll_high_utilization_streak = (
                 int(getattr(self, "_collector_poll_high_utilization_streak", 0) or 0) + 1
             )
@@ -2444,6 +2594,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                         poll_policy_for_driver(""),
                     ).max_auto_interval
                 ),
+                "runtime_driver_state": runtime_driver_state,
+                "collector_poll_context": poll_context,
                 "collector_poll_current_interval_seconds": interval,
                 "collector_poll_next_interval_seconds": next_interval,
                 "collector_poll_target_start_interval_seconds": next_interval,
@@ -2460,9 +2612,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 "collector_poll_recommended_min_interval_seconds": recommended,
             }
         )
+        detection_retry_interval = float(
+            getattr(self, "_poll_non_runtime_retry_interval_seconds", 0.0) or 0.0
+        )
+        if (
+            poll_context != _COLLECTOR_POLL_CONTEXT_RUNTIME
+            and detection_retry_interval > 0.0
+        ):
+            values["collector_poll_detection_retry_interval_seconds"] = int(
+                math.ceil(detection_retry_interval)
+            )
+        else:
+            values.pop("collector_poll_detection_retry_interval_seconds", None)
 
         if (
             self._configured_poll_mode() == POLL_MODE_MANUAL
+            and runtime_poll
             and self._collector_poll_high_utilization_streak
             >= _POLL_STABLE_STREAK_THRESHOLD
         ):
@@ -6114,6 +6279,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if publish is not None:
             publish(snapshot)
 
+    def invalidate_collector_runtime_values(self) -> None:
+        """Invalidate cached collector-side runtime values before a forced refresh."""
+
+        invalidator = getattr(self._runtime, "invalidate_collector_runtime_values", None)
+        if callable(invalidator):
+            invalidator()
+
     def _absolute_local_download_url(self, relative_url: str) -> str:
         """Return an absolute HA URL for one HA-relative download path when possible."""
 
@@ -6578,7 +6750,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         model = "EyeBond Collector"
         serial_number = self._preferred_collector_pn(snapshot)
         collector_ip = str(self.config_entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
-        sw_version = str(self.config_entry.data.get(CONF_SMARTESS_COLLECTOR_VERSION, "") or "").strip()
+        sw_version = ""
         hw_version = str(values.get("collector_hardware_version") or "").strip()
         collector_type = str(values.get("collector_type") or "").strip()
 

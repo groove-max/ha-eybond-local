@@ -37,6 +37,9 @@ class _RuntimeNumberSpec:
 def _runtime_number_specs(coordinator: EybondLocalCoordinator) -> tuple[_RuntimeNumberSpec, ...]:
     if not hasattr(coordinator, "async_set_proxy_capture_duration_minutes"):
         return ()
+    collector_capabilities = getattr(coordinator, "collector_capabilities", None)
+    if not bool(getattr(collector_capabilities, "proxy_capture", True)):
+        return ()
     return (
         _RuntimeNumberSpec(
             key=CONF_PROXY_CAPTURE_DURATION_MINUTES,

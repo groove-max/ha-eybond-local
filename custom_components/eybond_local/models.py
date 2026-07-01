@@ -496,8 +496,6 @@ class CollectorInfo:
     collector_virtual_bridge: bool = False
     collector_bridge_kind: str = ""
     collector_bridge_version: str = ""
-    collector_bridge_features: tuple[str, ...] = ()
-    collector_bridge_attributes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(slots=True)

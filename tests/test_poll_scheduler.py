@@ -99,6 +99,20 @@ class PollSchedulerTests(unittest.TestCase):
         self.assertEqual(decisions[-1].recommended_interval, 16)
         self.assertEqual(decisions[0].utilization_percent, 120)
 
+    def test_auto_does_not_adapt_or_record_samples_on_unsuccessful_cycle(self) -> None:
+        scheduler = PollScheduler(
+            policy=ASCII_POLL_POLICY,
+            mode=POLL_MODE_AUTO,
+            manual_interval=10,
+        )
+
+        decision = scheduler.observe(80.0, success=False)
+
+        self.assertEqual(decision.effective_interval, 10)
+        self.assertEqual(decision.sample_count, 0)
+        self.assertEqual(decision.observed_duration, 0.0)
+        self.assertEqual(decision.utilization_percent, 800)
+
     def test_auto_decreases_slowly_after_device_becomes_faster(self) -> None:
         scheduler = PollScheduler(
             policy=ASCII_POLL_POLICY,

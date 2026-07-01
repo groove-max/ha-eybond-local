@@ -158,6 +158,9 @@ can refresh more often than slower ASCII devices. In Manual mode, the
 diagnostic sensors **Poll Utilization**, **Poll Duration**, and **Recommended
 Poll Interval** show whether the chosen interval is realistic; if utilization
 stays high, increase the interval or switch back to Automatic.
+**Poll Context** shows whether the current cycle is reading the inverter,
+detecting an inverter, or only checking the collector, so long detection cycles
+are not confused with normal runtime polling.
 
 <p align="center"><img src="docs/images/runtime-settings.png" alt="Runtime settings with control mode and collector operation mode" width="480"></p>
 

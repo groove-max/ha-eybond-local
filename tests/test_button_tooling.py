@@ -233,6 +233,21 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertNotIn("create_local_profile_draft", specs)
         self.assertNotIn("create_local_schema_draft", specs)
 
+    def test_runtime_without_proxy_capture_skips_proxy_buttons(self) -> None:
+        specs = {
+            spec.key: spec
+            for spec in _tooling_button_specs_for_runtime(
+                set(),
+                "smg_modbus.json",
+                collector_proxy_capture_allowed=False,
+            )
+        }
+
+        self.assertIn("create_support_package", specs)
+        self.assertIn("reboot_collector", specs)
+        self.assertNotIn("start_proxy_capture", specs)
+        self.assertNotIn("stop_proxy_capture", specs)
+
     def test_create_support_package_button_is_disabled_while_export_running(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.support_package_export_running = True
@@ -573,7 +588,7 @@ class ToolingButtonTests(unittest.TestCase):
             "Stop proxy capture before changing collector callback actions.",
         )
 
-    def test_reboot_collector_button_is_disabled_for_virtual_bridge_without_reboot_feature(self) -> None:
+    def test_reboot_collector_button_is_available_for_virtual_bridge_without_reboot_feature(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.data = RuntimeSnapshot(
             connected=True,
@@ -581,7 +596,6 @@ class ToolingButtonTests(unittest.TestCase):
                 **coordinator.data.values,
                 "collector_virtual_bridge": True,
                 "collector_bridge_kind": "esp-collector",
-                "collector_bridge_features": "local_only, no_cloud, wifi_params, endpoint_write",
             },
         )
         entity = EybondToolingButton(
@@ -594,14 +608,9 @@ class ToolingButtonTests(unittest.TestCase):
             ),
         )
 
-        self.assertFalse(entity.available)
-        self.assertEqual(
-            entity.extra_state_attributes["availability_reason"],
-            "Collector restart is not advertised by this virtual collector firmware. "
-            "Update the firmware to a build that exposes the reboot capability.",
-        )
+        self.assertTrue(entity.available)
 
-    def test_reboot_collector_button_is_available_for_virtual_bridge_with_reboot_feature(self) -> None:
+    def test_reboot_collector_button_is_available_for_virtual_bridge(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.data = RuntimeSnapshot(
             connected=True,
@@ -609,7 +618,6 @@ class ToolingButtonTests(unittest.TestCase):
                 **coordinator.data.values,
                 "collector_virtual_bridge": True,
                 "collector_bridge_kind": "esp-collector",
-                "collector_bridge_features": "local_only, no_cloud, reboot",
             },
         )
         entity = EybondToolingButton(

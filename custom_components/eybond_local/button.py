@@ -13,7 +13,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .collector_endpoint import normalize_collector_server_endpoint
-from .collector.at_runtime import collector_bridge_features_support_reboot
 from .collector.entity_scope import is_collector_tooling_key
 from .metadata.collector_cloud_profile_catalog_loader import load_collector_cloud_profile_catalog
 from .runtime.coordinator import EybondLocalCoordinator
@@ -49,6 +48,10 @@ async def async_setup_entry(
     presets = (
         inverter.capability_presets if inverter is not None else (driver.capability_presets if driver is not None else ())
     )
+    collector_capabilities = getattr(coordinator, "collector_capabilities", None)
+    collector_proxy_capture_allowed = bool(
+        getattr(collector_capabilities, "proxy_capture", True)
+    )
     async_add_entities(
         [
             *[
@@ -57,6 +60,7 @@ async def async_setup_entry(
                     capability_keys,
                     profile_name,
                     has_inverter_identity=has_inverter_identity,
+                    collector_proxy_capture_allowed=collector_proxy_capture_allowed,
                 )
             ],
             *[
@@ -146,12 +150,14 @@ def _tooling_button_specs_for_runtime(
     capability_keys: set[str] | frozenset[str],
     profile_name: str,
     has_inverter_identity: bool = True,
+    collector_proxy_capture_allowed: bool = True,
 ) -> tuple[_ToolingButtonSpec, ...]:
     allowed_keys = set(
         tooling_button_keys_for_runtime(
             capability_keys,
             profile_name,
             has_inverter_identity=has_inverter_identity,
+            collector_proxy_capture_allowed=collector_proxy_capture_allowed,
         )
     )
     return tuple(spec for spec in _tooling_button_specs() if spec.key in allowed_keys)
@@ -198,35 +204,6 @@ def _callback_owner_label_from_family(
     if include_current_suffix:
         return f"{normalized}_or_current"
     return normalized
-
-
-def _collector_bridge_values(coordinator: EybondLocalCoordinator) -> tuple[bool, str, object]:
-    snapshot = coordinator.data
-    values = snapshot.values
-    collector = snapshot.collector
-    virtual_bridge = bool(values.get("collector_virtual_bridge")) or bool(
-        getattr(collector, "collector_virtual_bridge", False)
-    )
-    kind = str(
-        values.get("collector_bridge_kind")
-        or getattr(collector, "collector_bridge_kind", "")
-        or ""
-    ).strip()
-    features = (
-        values.get("collector_bridge_features")
-        or getattr(collector, "collector_bridge_features", ())
-        or ()
-    )
-    if kind.lower() == "esp-collector":
-        virtual_bridge = True
-    return virtual_bridge, kind, features
-
-
-def _collector_bridge_reboot_supported(coordinator: EybondLocalCoordinator) -> bool:
-    virtual_bridge, _, features = _collector_bridge_values(coordinator)
-    if not virtual_bridge:
-        return True
-    return collector_bridge_features_support_reboot(features)
 
 
 class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity):
@@ -408,14 +385,6 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return "Requires Auto or Full Control."
         if not self.coordinator.data.connected:
             return "Collector is not connected."
-        if (
-            self._spec.key == "reboot_collector"
-            and not _collector_bridge_reboot_supported(self.coordinator)
-        ):
-            return (
-                "Collector restart is not advertised by this virtual collector firmware. "
-                "Update the firmware to a build that exposes the reboot capability."
-            )
         if self._spec.key == "bind_collector_to_home_assistant":
             current_endpoint = _normalize_collector_endpoint(
                 self.coordinator.data.values.get("collector_server_endpoint")

@@ -9,20 +9,6 @@ from .at import CollectorAtResponse
 from .cloud_family import collector_cloud_family_observation_from_endpoint
 from .signal import merge_collector_signal_values, normalize_signal_strength
 
-# Literal prefix every virtual bridge (e.g. ESP EyeBond Collector) emits as the
-# first token of its ``AT+VDTU?`` reply. Factory collectors return an error,
-# empty value, or a reply without this prefix — absence means "factory/unknown".
-VIRTUAL_BRIDGE_PREFIX = "esp-collector,"
-VIRTUAL_BRIDGE_REBOOT_FEATURES = frozenset(
-    {
-        "reboot",
-        "restart",
-        "collector_reboot",
-        "collector_restart",
-    }
-)
-
-
 class CollectorAtQueryTransport(Protocol):
     """Minimal read-only collector AT transport contract."""
 
@@ -127,95 +113,7 @@ RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
         "Nearby Wi-Fi scan list reported by the collector.",
         _decode_text_value("collector_wifi_scan_list"),
     ),
-    CollectorAtQueryDefinition(
-        "VDTU",
-        "Virtual-bridge identity probe (additive; factory collectors stay silent).",
-        _decode_text_value("collector_vdtu_raw"),
-    ),
 )
-
-_FACTORY_COLLECTOR_CLOUD_FAMILIES = frozenset(
-    {
-        "legacy_binary",
-        "smartess_at",
-        "valuecloud_at",
-    }
-)
-
-
-@dataclass(frozen=True, slots=True)
-class CollectorVirtualBridgeInfo:
-    """Parsed identity of a virtual collector bridge (e.g. ESP EyeBond Collector)."""
-
-    is_virtual_bridge: bool = False
-    kind: str = ""
-    version: str = ""
-    features: tuple[str, ...] = ()
-    attributes: tuple[tuple[str, str], ...] = ()
-
-
-def collector_bridge_features_support_reboot(features: object) -> bool:
-    """Return whether a parsed virtual-bridge feature set advertises restart support."""
-
-    if isinstance(features, str):
-        tokens = features.split(",")
-    else:
-        try:
-            tokens = tuple(features or ())
-        except TypeError:
-            tokens = ()
-    normalized = {
-        str(token or "").strip().lower().replace("-", "_")
-        for token in tokens
-        if str(token or "").strip()
-    }
-    return bool(normalized & VIRTUAL_BRIDGE_REBOOT_FEATURES)
-
-
-def parse_collector_vdtu(raw: object) -> CollectorVirtualBridgeInfo:
-    """Parse one raw ``AT+VDTU`` value into virtual-bridge identity fields.
-
-    The reply format is::
-
-        esp-collector,<semver>;features=<csv>;uart=<...>;spacing_ms=<n>;queue=<n>
-
-    Detection keys only on the leading ``esp-collector,`` token. This parser is
-    pure and defensive: empty, truncated, or future-version input (including
-    unknown ``features`` tokens) must never raise — it just returns whatever it
-    can resolve, defaulting to "not a bridge".
-    """
-
-    text = str(raw or "").strip()
-    if not text or not text.startswith(VIRTUAL_BRIDGE_PREFIX):
-        return CollectorVirtualBridgeInfo()
-
-    remainder = text[len(VIRTUAL_BRIDGE_PREFIX) :]
-    segments = [segment.strip() for segment in remainder.split(";")]
-
-    version = segments[0].strip() if segments else ""
-    features: tuple[str, ...] = ()
-    attributes: list[tuple[str, str]] = []
-    for segment in segments[1:]:
-        key, _, value = segment.partition("=")
-        normalized_key = key.strip().lower()
-        if not normalized_key:
-            continue
-        attributes.append((normalized_key, value.strip()))
-        if normalized_key != "features":
-            continue
-        features = tuple(
-            token.strip()
-            for token in value.split(",")
-            if token.strip()
-        )
-
-    return CollectorVirtualBridgeInfo(
-        is_virtual_bridge=True,
-        kind="esp-collector",
-        version=version,
-        features=features,
-        attributes=tuple(attributes),
-    )
 
 
 async def query_runtime_collector_at_values(
@@ -226,14 +124,7 @@ async def query_runtime_collector_at_values(
     """Read a safe read-only collector metadata set over the plain AT session."""
 
     values: dict[str, object] = {}
-    normalized_family = str(collector_cloud_family or "").strip().lower()
     for definition in RUNTIME_COLLECTOR_AT_DEFINITIONS:
-        if definition.command == "VDTU":
-            effective_family = str(
-                values.get("collector_cloud_family") or normalized_family
-            ).strip().lower()
-            if effective_family in _FACTORY_COLLECTOR_CLOUD_FAMILIES:
-                continue
         try:
             response = await transport.async_query(definition.command)
         except Exception:

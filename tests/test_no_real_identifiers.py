@@ -44,6 +44,7 @@ _ALLOWED_SYNTHETIC_TOKENS = {
     # 2026-06-13).
     "Q0000000000001",
     "Q00000000000010001",
+    "V0000000000001",
 }
 
 _PN_SHAPED = re.compile(r"\b[A-Za-z][0-9]{13,}\b")

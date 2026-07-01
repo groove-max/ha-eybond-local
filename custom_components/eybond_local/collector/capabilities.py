@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .at_runtime import parse_collector_vdtu
 from ..const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
@@ -21,6 +20,32 @@ _RUNTIME_UART_UNAVAILABLE_HARDWARE_MARKERS = (
     "rtl87",
     "libretiny",
 )
+_ESP_COLLECTOR_HARDWARE_PREFIX = "esp-collector/"
+
+
+@dataclass(frozen=True, slots=True)
+class EspCollectorHardwareToken:
+    """Parsed ESP EyeBond Collector hardware-version token."""
+
+    is_bridge: bool = False
+    version: str = ""
+    platform: str = ""
+
+
+def parse_esp_collector_hardware_token(raw: object) -> EspCollectorHardwareToken:
+    """Parse ``esp-collector/<version>/<platform...>`` hardware tokens defensively."""
+
+    text = str(raw or "").strip()
+    if not text.lower().startswith(_ESP_COLLECTOR_HARDWARE_PREFIX):
+        return EspCollectorHardwareToken()
+
+    remainder = text[len(_ESP_COLLECTOR_HARDWARE_PREFIX) :].strip()
+    version, _separator, platform = remainder.partition("/")
+    return EspCollectorHardwareToken(
+        is_bridge=True,
+        version=version.strip(),
+        platform=platform.strip(),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +113,7 @@ def collector_capability_profile(
         wifi_management=True,
         uart_management=True,
         uart_runtime_speed_change=runtime_uart_available,
-        identity_probe="AT+VDTU",
+        identity_probe="collector_hardware_version",
     )
 
 
@@ -103,21 +128,22 @@ def collector_capability_profile_from_runtime(
     """Build one collector capability profile from runtime/config evidence."""
 
     # Default-to-factory is intentional, not fail-open: a factory collector has
-    # no positive "I am factory" signal — it is the ABSENCE of a bridge signal,
-    # and collectors with older firmware that never answer AT+VDTU must behave
-    # as factory (documented backward-compat). The bridge is detected once at
-    # onboarding and persisted to entry data/options below, and the OR over all
-    # signals means a known bridge never flips back to factory on a transient
-    # missing runtime signal. The cloud-only flows this profile gates are all
-    # additionally user-initiated and no-op on a bridge.
+    # no positive "I am factory" signal — it is the ABSENCE of the hardware
+    # token. The bridge is detected from FC=2 parameter 6
+    # (collector_hardware_version="esp-collector/<version>/<platform...>") and
+    # persisted to entry data/options below. The OR over all persisted signals
+    # keeps already-created entries stable when a transient runtime read is
+    # missing. The cloud-only flows this profile gates are all additionally
+    # user-initiated and no-op on a local-only bridge.
     runtime_values = values or {}
     entry_data = data or {}
     entry_options = options or {}
-    bridge_from_vdtu = parse_collector_vdtu(runtime_values.get("collector_vdtu_raw"))
+    resolved_hardware = hardware_version or runtime_values.get("collector_hardware_version", "")
+    hardware_token = parse_esp_collector_hardware_token(resolved_hardware)
     is_bridge = bool(
         getattr(collector, "collector_virtual_bridge", False)
         or runtime_values.get("collector_virtual_bridge")
-        or bridge_from_vdtu.is_virtual_bridge
+        or hardware_token.is_bridge
         or entry_data.get("collector_virtual_bridge")
         or entry_options.get("collector_virtual_bridge")
     )
@@ -128,7 +154,6 @@ def collector_capability_profile_from_runtime(
         or entry_options.get("collector_cloud_profile_key")
         or ("local_only" if is_bridge else "")
     )
-    resolved_hardware = hardware_version or runtime_values.get("collector_hardware_version", "")
     return collector_capability_profile(
         virtual_bridge=is_bridge,
         cloud_profile_key=profile_key,

@@ -14,8 +14,10 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.collector.capabilities import (  # noqa: E402
     COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
     COLLECTOR_KIND_FACTORY_EYBOND,
+    EspCollectorHardwareToken,
     collector_capability_profile,
     collector_capability_profile_from_runtime,
+    parse_esp_collector_hardware_token,
 )
 from custom_components.eybond_local.const import (  # noqa: E402
     COLLECTOR_OPERATION_HA_ONLY,
@@ -52,23 +54,35 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         self.assertTrue(profile.wifi_management)
         self.assertTrue(profile.uart_management)
         self.assertTrue(profile.uart_runtime_speed_change)
-        self.assertEqual(profile.identity_probe, "AT+VDTU")
+        self.assertEqual(profile.identity_probe, "collector_hardware_version")
+
+    def test_esp_bridge_token_parser_extracts_version_and_platform(self) -> None:
+        self.assertEqual(
+            parse_esp_collector_hardware_token("esp-collector/0.1.5/ESP32"),
+            EspCollectorHardwareToken(
+                is_bridge=True,
+                version="0.1.5",
+                platform="ESP32",
+            ),
+        )
 
     def test_esp_bridge_bk72xx_disables_runtime_uart_speed_change(self) -> None:
         profile = collector_capability_profile(
             virtual_bridge=True,
-            hardware_version="BK72xx/RTL87xx",
+            hardware_version="esp-collector/0.1.5/BK72xx/RTL87xx",
         )
 
         self.assertTrue(profile.uart_management)
         self.assertFalse(profile.uart_runtime_speed_change)
 
-    def test_runtime_evidence_detects_bridge_from_values(self) -> None:
+    def test_runtime_evidence_detects_bridge_from_hardware_token(self) -> None:
         profile = collector_capability_profile_from_runtime(
-            collector=types.SimpleNamespace(collector_virtual_bridge=False),
+            collector=types.SimpleNamespace(
+                collector_virtual_bridge=False,
+                collector_pn="E50000CHINESEPN",
+            ),
             values={
-                "collector_virtual_bridge": True,
-                "collector_hardware_version": "ESP32",
+                "collector_hardware_version": "esp-collector/0.1.5/ESP32",
             },
             data={},
             options={},

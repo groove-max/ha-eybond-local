@@ -122,6 +122,7 @@ class CollectorEntityScopeTests(unittest.TestCase):
         self.assertTrue(is_collector_entity_key("collector_poll_utilization_percent"))
         self.assertTrue(is_collector_entity_key("configured_collector_ip"))
         self.assertTrue(is_collector_entity_key("smartess_protocol_asset_id"))
+        self.assertTrue(is_collector_entity_key("runtime_driver_state"))
         self.assertFalse(is_collector_entity_key("model_name"))
         self.assertFalse(is_collector_entity_key("driver_key"))
 

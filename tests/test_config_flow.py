@@ -2911,12 +2911,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result.collector.collector.collector_bridge_kind = "esp-collector"
         return result
 
-    def _bridge_confirm_result_from_raw_vdtu(self) -> OnboardingResult:
+    def _bridge_confirm_result_from_hardware_token(self) -> OnboardingResult:
         result = self._bridge_confirm_result(is_bridge=False)
-        result.match.details["collector_vdtu_raw"] = (
-            "esp-collector,0.1.2;features=local_only,no_cloud;"
-            "uart=2400,8,1,NONE"
-        )
+        result.match.details["collector_hardware_version"] = "esp-collector/0.1.2/ESP32"
+        result.match.details["collector_virtual_bridge"] = True
+        result.match.details["collector_bridge_kind"] = "esp-collector"
+        result.match.details["collector_bridge_version"] = "0.1.2"
         return result
 
     def _collector_only_bridge_result(self) -> OnboardingResult:
@@ -2963,9 +2963,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
 
-    async def test_confirm_step_hides_operation_mode_selector_for_raw_vdtu_bridge(self) -> None:
+    async def test_confirm_step_hides_operation_mode_selector_for_hardware_token_bridge(self) -> None:
         flow = self._make_flow()
-        flow._selected_result = self._bridge_confirm_result_from_raw_vdtu()
+        flow._selected_result = self._bridge_confirm_result_from_hardware_token()
 
         result = await flow.async_step_confirm()
 
@@ -2985,7 +2985,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["collector_operation_mode_note"].strip()
         )
 
-    async def test_confirm_step_refreshes_collector_only_bridge_capability_from_vdtu(self) -> None:
+    async def test_confirm_step_refreshes_collector_only_bridge_capability_from_hardware_token(self) -> None:
         flow = self._make_flow()
         result = OnboardingResult(
             collector=CollectorCandidate(
@@ -3030,10 +3030,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
                 new=AsyncMock(
                     return_value={
-                        "collector_vdtu_raw": (
-                            "esp-collector,0.1.2;features=local_only,no_cloud;"
-                            "uart=2400,8,1,NONE"
-                        ),
+                        "collector_hardware_version": "esp-collector/0.1.2/ESP32",
                         "collector_server_endpoint": "192.168.1.50,8899,TCP",
                     }
                 ),
@@ -3103,7 +3100,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
                 new=AsyncMock(
                     return_value={
-                        "collector_vdtu_raw": "esp-collector,0.1.2;features=local_only,no_cloud",
+                        "collector_hardware_version": "esp-collector/0.1.2/ESP32",
                     }
                 ),
             ),
@@ -4583,7 +4580,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator = types.SimpleNamespace(
             data=snapshot,
-            async_set_updated_data=Mock(),
+            invalidate_collector_runtime_values=Mock(),
+            async_request_refresh=AsyncMock(),
         )
         options._config_entry.runtime_data = coordinator
         transport = AsyncMock()
@@ -4603,11 +4601,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         await options._async_apply_collector_uart_baudrate("9600")
 
         self.assertEqual(writes, [(SET_SERIAL_BAUDRATE, "9600")])
-        self.assertEqual(options._collector_uart_current_baudrate, "9600")
-        self.assertEqual(options._collector_uart_current_settings, "9600,8,1,NONE")
-        self.assertEqual(snapshot.values["collector_serial_baudrate"], "9600,8,1,NONE")
-        self.assertEqual(snapshot.values["collector_bridge_uart"], "9600,8,1,NONE")
-        coordinator.async_set_updated_data.assert_called_once_with(snapshot)
+        self.assertEqual(snapshot.values["collector_serial_baudrate"], "2400,8,1,NONE")
+        self.assertEqual(snapshot.values["collector_bridge_uart"], "2400,8,1,NONE")
+        coordinator.invalidate_collector_runtime_values.assert_called_once_with()
+        coordinator.async_request_refresh.assert_awaited_once_with()
         transport.stop.assert_awaited_once()
 
     async def test_options_collector_uart_apply_refuses_bk72xx_runtime_change(self) -> None:

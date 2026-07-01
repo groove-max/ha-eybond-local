@@ -16,6 +16,8 @@ the GitHub release body should be rendered from the matching version section her
   users who want a fixed cadence.
 - Added collector diagnostics for poll mode, current/next interval, poll
   duration, utilization, recommended interval, and scheduler delay.
+- Added poll-context diagnostics so collector-only, detection, and runtime
+  polling cycles are visible separately.
 
 ### Changed
 
@@ -23,6 +25,9 @@ the GitHub release body should be rendered from the matching version section her
   refresh is selected and shows it only for Manual refresh.
 - High-utilization warnings now point Manual-mode users either to a larger
   interval or to Automatic refresh.
+- Automatic refresh no longer learns from collector-only, offline, or inverter
+  detection cycles, so a missing or unsupported inverter does not permanently
+  inflate the normal runtime poll interval.
 
 ## [0.2.0-beta.2] - 2026-06-28
 

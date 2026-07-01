@@ -16,12 +16,11 @@ from ..const import (
     DRIVER_HINT_AUTO,
 )
 from ..connection.models import EybondConnectionSpec
-from ..collector.at_runtime import (
-    collector_bridge_features_support_reboot,
-    parse_collector_vdtu,
-    query_runtime_collector_at_values,
+from ..collector.at_runtime import query_runtime_collector_at_values
+from ..collector.capabilities import (
+    collector_capability_profile_from_runtime,
+    parse_esp_collector_hardware_token,
 )
-from ..collector.capabilities import collector_capability_profile_from_runtime
 from ..collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     inspect_collector_server_endpoint,
@@ -77,6 +76,47 @@ def _split_collector_endpoint(endpoint: object) -> tuple[str, int | None, str]:
 
 
 _DEFAULT_PROXY_CAPTURE_PORT = DEFAULT_COLLECTOR_SERVER_PORT
+RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE = "collector_offline"
+RUNTIME_DRIVER_STATE_DRIVER_UNBOUND = "driver_unbound"
+RUNTIME_DRIVER_STATE_DRIVER_BOUND = "driver_bound"
+_VOLATILE_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
+    {
+        "smartess_collector_version",
+        "smartess_protocol_raw_id",
+        "smartess_protocol_asset_id",
+        "smartess_protocol_asset_name",
+        "smartess_protocol_suffix",
+        "smartess_protocol_profile_key",
+        "smartess_protocol_name",
+        "smartess_device_address",
+        "collector_protocol_version",
+        "collector_type",
+        "collector_hardware_version",
+        "collector_local_ip_address",
+        "collector_server_endpoint",
+        "collector_callback_owner",
+        "collector_reboot_required",
+        "collector_transmission_mode",
+        "collector_serial_baudrate",
+        "collector_network_diagnostics",
+        "collector_signal_strength",
+        "collector_signal_strength_raw",
+        "collector_signal_strength_source",
+        "collector_signal_quality",
+        "collector_upload_mode",
+        "collector_system_time",
+        "collector_link_status",
+        "collector_cloud_heartbeat_value",
+        "collector_ssid",
+        "collector_wifi_scan_list",
+        "collector_virtual_bridge",
+        "collector_bridge_kind",
+        "collector_bridge_version",
+        "collector_bridge_uart",
+        "collector_bridge_spacing_ms",
+        "collector_bridge_queue",
+    }
+)
 
 
 def _is_home_assistant_callback_endpoint(
@@ -437,6 +477,7 @@ class EybondHub:
         self._collector_runtime_last_refresh_monotonic = 0.0
         self._collector_at_runtime_values: dict[str, object] = {}
         self._collector_at_runtime_last_refresh_monotonic = 0.0
+        self._collector_runtime_values_dirty = True
         self._collector_last_server_endpoint_before_change = ""
         self._write_blockers: dict[str, CapabilityBlocker] = {}
         self._last_operating_mode: object | None = None
@@ -673,6 +714,7 @@ class EybondHub:
             self._runtime_read_state.clear()
             ok = await self._link_manager.async_try_connect(timeout=0.75)
             if not ok:
+                self._clear_collector_runtime_value_caches()
                 collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
                 snapshot = self._build_snapshot(
                     extra_values=collector_values,
@@ -695,6 +737,7 @@ class EybondHub:
                 except Exception as exc:
                     logger.warning("Collector heartbeat recovery failed: %s", exc)
                     self._record_recovery_failure(reason="collector_heartbeat_timeout")
+                    self._clear_collector_runtime_value_caches()
                     collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
                     snapshot = self._build_snapshot(
                         extra_values=collector_values,
@@ -704,6 +747,7 @@ class EybondHub:
                     self._last_snapshot = snapshot
                     return snapshot
             else:
+                self._clear_collector_runtime_value_caches()
                 collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
                 snapshot = self._build_snapshot(
                     extra_values=collector_values,
@@ -714,6 +758,7 @@ class EybondHub:
                 return snapshot
 
         if not ok:
+            self._clear_collector_runtime_value_caches()
             collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
             snapshot = self._build_snapshot(
                 extra_values=collector_values,
@@ -724,12 +769,12 @@ class EybondHub:
             return snapshot
 
         collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
+        self._publish_intermediate_snapshot(
+            collector_values,
+            status="detecting_inverter" if self._driver is None or self._inverter is None else "",
+        )
 
         if self._driver is None or self._inverter is None:
-            self._publish_intermediate_snapshot(
-                collector_values,
-                status="detecting_inverter",
-            )
             detect_error = await self._async_detect_driver()
             if self._driver is None or self._inverter is None:
                 logger.warning("Driver detection failed: %s", detect_error)
@@ -849,8 +894,10 @@ class EybondHub:
 
         now_monotonic = asyncio.get_running_loop().time()
         refresh_interval = max(float(poll_interval or 0.0) * 3.0, 30.0)
+        force_refresh = bool(self._collector_runtime_values_dirty)
         if transport is not None and hasattr(transport, "async_send_collector") and (
-            not self._collector_runtime_values
+            force_refresh
+            or not self._collector_runtime_values
             or now_monotonic - self._collector_runtime_last_refresh_monotonic >= refresh_interval
         ):
             try:
@@ -866,7 +913,8 @@ class EybondHub:
             getattr(at_transport, "connected", False)
             or allow_disconnected_at_query
         ) and (
-            not self._collector_at_runtime_values
+            force_refresh
+            or not self._collector_at_runtime_values
             or now_monotonic - self._collector_at_runtime_last_refresh_monotonic >= refresh_interval
         ):
             try:
@@ -881,7 +929,20 @@ class EybondHub:
                     self._collector_at_runtime_values = dict(values)
                     self._collector_at_runtime_last_refresh_monotonic = now_monotonic
 
+        self._collector_runtime_values_dirty = False
         return self._combined_collector_runtime_values()
+
+    def _clear_collector_runtime_value_caches(self) -> None:
+        self._collector_runtime_values.clear()
+        self._collector_runtime_last_refresh_monotonic = 0.0
+        self._collector_at_runtime_values.clear()
+        self._collector_at_runtime_last_refresh_monotonic = 0.0
+        self._collector_runtime_values_dirty = True
+
+    def invalidate_collector_runtime_values(self) -> None:
+        """Drop cached collector-side values so the next refresh reads them live."""
+
+        self._clear_collector_runtime_value_caches()
 
     def _combined_collector_runtime_values(self) -> dict[str, object]:
         values = dict(self._collector_runtime_values)
@@ -899,10 +960,12 @@ class EybondHub:
         if self._snapshot_observer is None:
             return
         snapshot = self._build_snapshot(
-            extra_values={
-                **collector_values,
-                "runtime_detection_status": status,
-            }
+            extra_values=(
+                {**collector_values, "runtime_detection_status": status}
+                if status
+                else dict(collector_values)
+            ),
+            preserve_inverter_values=not bool(status),
         )
         self._last_snapshot = snapshot
         try:
@@ -1388,19 +1451,6 @@ class EybondHub:
 
         await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
 
-        collector = getattr(self._link_manager, "collector_info", None)
-        is_virtual_bridge = bool(getattr(collector, "collector_virtual_bridge", False))
-        bridge_kind = str(getattr(collector, "collector_bridge_kind", "") or "").strip()
-        if bridge_kind.lower() == "esp-collector":
-            is_virtual_bridge = True
-        bridge_features = getattr(collector, "collector_bridge_features", ()) or ()
-        if (
-            action == "reboot"
-            and is_virtual_bridge
-            and not collector_bridge_features_support_reboot(bridge_features)
-        ):
-            raise RuntimeError("collector_reboot_not_supported")
-
         transport = self._link_manager.transport
         if not hasattr(transport, "async_send_collector"):
             raise RuntimeError("collector_local_management_not_supported")
@@ -1511,9 +1561,10 @@ class EybondHub:
         extra_values: dict[str, object] | None = None,
         last_error: str | None = None,
         connected: bool | None = None,
+        preserve_inverter_values: bool = False,
     ) -> RuntimeSnapshot:
         generated_canonical_keys: set[str] = set()
-        if self._inverter is not None:
+        if self._inverter is not None and not preserve_inverter_values:
             generated_canonical_keys = {
                 description.key
                 for description in canonical_measurements_for_driver(self._inverter.driver_key)
@@ -1522,8 +1573,14 @@ class EybondHub:
         values = {
             key: value
             for key, value in self._last_snapshot.values.items()
-            if not key.startswith("capability_block_") and key not in generated_canonical_keys
+            if (
+                not key.startswith("capability_block_")
+                and key not in generated_canonical_keys
+                and key not in _VOLATILE_COLLECTOR_VALUE_KEYS
+            )
         }
+        for key in _VOLATILE_COLLECTOR_VALUE_KEYS:
+            values.pop(key, None)
         collector = self._link_manager.collector_info
 
         collector_field_overrides = extra_values or {}
@@ -1559,13 +1616,13 @@ class EybondHub:
             )
             if collector_field_overrides.get("smartess_device_address") is not None:
                 collector.smartess_device_address = int(collector_field_overrides["smartess_device_address"])
-            if "collector_vdtu_raw" in collector_field_overrides:
-                bridge = parse_collector_vdtu(collector_field_overrides.get("collector_vdtu_raw"))
-                collector.collector_virtual_bridge = bridge.is_virtual_bridge
-                collector.collector_bridge_kind = bridge.kind
-                collector.collector_bridge_version = bridge.version
-                collector.collector_bridge_features = bridge.features
-                collector.collector_bridge_attributes = bridge.attributes
+            hardware_token = parse_esp_collector_hardware_token(
+                collector_field_overrides.get("collector_hardware_version")
+            )
+            if hardware_token.is_bridge:
+                collector.collector_virtual_bridge = True
+                collector.collector_bridge_kind = "esp-collector"
+                collector.collector_bridge_version = hardware_token.version
 
         if collector.remote_ip:
             values["collector_remote_ip"] = collector.remote_ip
@@ -1683,20 +1740,6 @@ class EybondHub:
                 values["collector_bridge_kind"] = collector.collector_bridge_kind
             if collector.collector_bridge_version:
                 values["collector_bridge_version"] = collector.collector_bridge_version
-            if collector.collector_bridge_features:
-                values["collector_bridge_features"] = ", ".join(collector.collector_bridge_features)
-            if collector.collector_bridge_attributes:
-                values["collector_bridge_attributes"] = ", ".join(
-                    f"{key}={value}" for key, value in collector.collector_bridge_attributes
-                )
-                bridge_attributes = dict(collector.collector_bridge_attributes)
-                for key, value_key in (
-                    ("uart", "collector_bridge_uart"),
-                    ("spacing_ms", "collector_bridge_spacing_ms"),
-                    ("queue", "collector_bridge_queue"),
-                ):
-                    if bridge_attributes.get(key):
-                        values[value_key] = bridge_attributes[key]
 
         if self._inverter is not None:
             values["driver_key"] = self._inverter.driver_key
@@ -1800,6 +1843,14 @@ class EybondHub:
             values.pop("blocked_write_count", None)
             values.pop("blocked_write_summary", None)
 
+        snapshot_connected = self._link_manager.connected if connected is None else connected
+        if not snapshot_connected:
+            values["runtime_driver_state"] = RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE
+        elif self._inverter is not None:
+            values["runtime_driver_state"] = RUNTIME_DRIVER_STATE_DRIVER_BOUND
+        else:
+            values["runtime_driver_state"] = RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
+
         if last_error:
             values["last_error"] = last_error
         else:
@@ -1815,7 +1866,7 @@ class EybondHub:
             self._inverter = self._inverter_overlay_applier(self._inverter, collector)
 
         return RuntimeSnapshot(
-            connected=self._link_manager.connected if connected is None else connected,
+            connected=snapshot_connected,
             collector=collector,
             inverter=self._inverter,
             values=values,

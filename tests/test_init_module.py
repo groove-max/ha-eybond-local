@@ -14,6 +14,35 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+def _install_homeassistant_entity_registry_stub() -> None:
+    """Provide the HA entity-registry module for local pure-unit runs."""
+
+    if "homeassistant.helpers.entity_registry" in sys.modules:
+        return
+
+    homeassistant_module = sys.modules.setdefault(
+        "homeassistant",
+        types.ModuleType("homeassistant"),
+    )
+    helpers_module = sys.modules.setdefault(
+        "homeassistant.helpers",
+        types.ModuleType("homeassistant.helpers"),
+    )
+    entity_registry_module = types.ModuleType("homeassistant.helpers.entity_registry")
+
+    def _missing(*_args, **_kwargs):
+        raise AssertionError("entity_registry stub must be patched by the test")
+
+    entity_registry_module.async_get = _missing
+    entity_registry_module.async_entries_for_config_entry = _missing
+    helpers_module.entity_registry = entity_registry_module
+    homeassistant_module.helpers = helpers_module
+    sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_module
+
+
+_install_homeassistant_entity_registry_stub()
+
+
 from custom_components.eybond_local import (
     ConfigEntryNotReady,
     _async_cleanup_obsolete_entities,
@@ -277,6 +306,19 @@ class InitModuleTests(unittest.TestCase):
         )
         self.assertEqual(
             default_enabled_tooling_button_keys_for_runtime(
+                {"turn_on_mode", "battery_float_voltage"},
+                "smg_modbus.json",
+                collector_proxy_capture_allowed=False,
+            ),
+            (
+                "create_support_package",
+                "apply_collector_changes",
+                "rediscover_collector",
+                "reboot_collector",
+            ),
+        )
+        self.assertEqual(
+            default_enabled_tooling_button_keys_for_runtime(
                 {"inverter_date_write", "inverter_time_write"},
                 "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
             ),
@@ -323,6 +365,23 @@ class InitModuleTests(unittest.TestCase):
                 "reboot_collector",
                 "start_proxy_capture",
                 "stop_proxy_capture",
+            ),
+        )
+        self.assertEqual(
+            tooling_button_keys_for_runtime(
+                {"inverter_date_write", "inverter_time_write"},
+                "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+                collector_proxy_capture_allowed=False,
+            ),
+            (
+                "create_support_package",
+                "reload_local_metadata",
+                "create_local_profile_draft",
+                "create_local_schema_draft",
+                "apply_collector_changes",
+                "rediscover_collector",
+                "reboot_collector",
+                "sync_inverter_clock",
             ),
         )
 
@@ -375,6 +434,42 @@ class InitModuleTests(unittest.TestCase):
         self.assertIn("entry123_tool_start_proxy_capture", unique_ids)
         self.assertIn("entry123_tool_stop_proxy_capture", unique_ids)
         self.assertIn("entry123_tool_sync_inverter_clock", unique_ids)
+
+    def test_current_runtime_default_enabled_unique_ids_skip_proxy_entities_when_collector_forbids_proxy(
+        self,
+    ) -> None:
+        coordinator = types.SimpleNamespace(
+            async_set_proxy_capture_duration_minutes=AsyncMock(),
+            collector_capabilities=types.SimpleNamespace(proxy_capture=False),
+            data=types.SimpleNamespace(inverter=None),
+        )
+
+        with (
+            patch(
+                "custom_components.eybond_local.drivers.registry.measurements_for_runtime",
+                return_value=(),
+            ),
+            patch(
+                "custom_components.eybond_local.drivers.registry.binary_sensors_for_runtime",
+                return_value=(),
+            ),
+            patch.dict(sys.modules, _runtime_entity_key_module_stubs()),
+        ):
+            unique_ids = _default_enabled_unique_ids_for_current_runtime(
+                "entry123",
+                coordinator,
+                None,
+                None,
+                lambda _capability: True,
+                lambda _preset: True,
+                has_inverter_identity=False,
+            )
+
+        self.assertIn("entry123_tool_create_support_package", unique_ids)
+        self.assertIn("entry123_tool_reboot_collector", unique_ids)
+        self.assertNotIn("entry123_tool_start_proxy_capture", unique_ids)
+        self.assertNotIn("entry123_tool_stop_proxy_capture", unique_ids)
+        self.assertNotIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
 
     def test_self_heal_reenables_existing_integration_disabled_tool_entity(self) -> None:
         async def _run() -> None:
@@ -717,7 +812,7 @@ class InitModuleTests(unittest.TestCase):
             text_module.collector_text_keys_for_runtime = lambda: ()
             tooling_module = types.ModuleType("custom_components.eybond_local.tooling")
             tooling_module.tooling_button_keys_for_runtime = (
-                lambda capability_keys, profile_name, has_inverter_identity=True: ()
+                lambda capability_keys, profile_name, has_inverter_identity=True, **_kwargs: ()
             )
             derived_energy_module = types.ModuleType("custom_components.eybond_local.derived_energy")
             derived_energy_module.derived_energy_cycle_descriptions_for_keys = lambda _keys: ()
@@ -803,7 +898,7 @@ class InitModuleTests(unittest.TestCase):
             text_module.collector_text_keys_for_runtime = lambda: ()
             tooling_module = types.ModuleType("custom_components.eybond_local.tooling")
             tooling_module.tooling_button_keys_for_runtime = (
-                lambda capability_keys, profile_name, has_inverter_identity=True: ()
+                lambda capability_keys, profile_name, has_inverter_identity=True, **_kwargs: ()
             )
             derived_energy_module = types.ModuleType("custom_components.eybond_local.derived_energy")
             derived_energy_module.derived_energy_cycle_descriptions_for_keys = lambda _keys: ()
@@ -1018,7 +1113,7 @@ class InitModuleTests(unittest.TestCase):
             text_module.collector_text_keys_for_runtime = lambda: ()
             tooling_module = types.ModuleType("custom_components.eybond_local.tooling")
             tooling_module.tooling_button_keys_for_runtime = (
-                lambda capability_keys, profile_name, has_inverter_identity=True: ()
+                lambda capability_keys, profile_name, has_inverter_identity=True, **_kwargs: ()
             )
             derived_energy_module = types.ModuleType("custom_components.eybond_local.derived_energy")
             derived_energy_module.derived_energy_cycle_descriptions_for_keys = lambda _keys: ()

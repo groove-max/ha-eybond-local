@@ -14,6 +14,7 @@ _EXPLICIT_COLLECTOR_ENTITY_KEYS: frozenset[str] = frozenset(
         "smartess_protocol_profile_key",
         "smartess_protocol_name",
         "smartess_device_address",
+        "runtime_driver_state",
     }
 )
 

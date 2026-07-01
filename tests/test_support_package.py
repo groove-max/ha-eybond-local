@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.support.bundle import build_support_bundle_payload
 from custom_components.eybond_local.support.download import (
+    async_register_support_package_download_view,
     resolve_support_package_download_path,
     sign_support_package_download_url,
     support_package_authenticated_download_url,
@@ -42,6 +43,11 @@ class SupportPackageTests(unittest.TestCase):
                 sign_support_package_download_url(object(), "entry123"),
                 "/api/eybond_local/support_package/entry123?authSig=signed",
             )
+
+    def test_download_view_registration_noops_for_minimal_hass_stub(self) -> None:
+        self.assertFalse(
+            async_register_support_package_download_view(types.SimpleNamespace())
+        )
 
     def test_exports_support_package_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

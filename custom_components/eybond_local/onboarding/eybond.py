@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..canonical_telemetry import apply_canonical_measurements
-from ..collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
+from ..collector.at_runtime import query_runtime_collector_at_values
+from ..collector.capabilities import parse_esp_collector_hardware_token
 from ..collector.cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
@@ -71,15 +72,13 @@ _ONBOARDING_RUNTIME_DETAIL_KEYS = {
     "collector_cloud_family_confidence",
     "output_rating_active_power",
     "rated_power",
-    # Virtual-bridge verdict carried from the AT+VDTU probe so the confirm step
-    # can gate the collector operation-mode UI before the entry exists. The
-    # raw VDTU string itself is deliberately NOT carried — only the parsed
-    # boolean/identity, populated below in _async_enrich_onboarding_runtime_details.
+    # Virtual-bridge verdict carried from FC=2 parameter 6
+    # (collector_hardware_version="esp-collector/<version>/<platform...>") so
+    # the confirm step can gate the collector operation-mode UI before the
+    # entry exists.
     "collector_virtual_bridge",
     "collector_bridge_kind",
     "collector_bridge_version",
-    "collector_bridge_features",
-    "collector_bridge_attributes",
     "collector_bridge_uart",
     "collector_bridge_spacing_ms",
     "collector_bridge_queue",
@@ -109,20 +108,16 @@ def _collector_identity_matches(left: str, right: str) -> bool:
     )
 
 
-def _apply_virtual_bridge_info_to_collector(collector: Any, bridge: Any) -> None:
-    """Carry a positive AT+VDTU bridge verdict into CollectorInfo."""
+def _apply_bridge_hardware_token_to_collector(collector: Any, hardware_version: object) -> None:
+    """Carry a positive hardware-version bridge token into CollectorInfo."""
 
-    if collector is None or not bridge.is_virtual_bridge:
+    token = parse_esp_collector_hardware_token(hardware_version)
+    if collector is None or not token.is_bridge:
         return
     collector.collector_virtual_bridge = True
-    if bridge.kind:
-        collector.collector_bridge_kind = bridge.kind
-    if bridge.version:
-        collector.collector_bridge_version = bridge.version
-    if bridge.features:
-        collector.collector_bridge_features = tuple(bridge.features)
-    if bridge.attributes:
-        collector.collector_bridge_attributes = tuple(bridge.attributes)
+    collector.collector_bridge_kind = "esp-collector"
+    if token.version:
+        collector.collector_bridge_version = token.version
 
 
 def _apply_collector_cloud_endpoint_details_to_collector(
@@ -803,6 +798,7 @@ class OnboardingDetector:
             except TimeoutError:
                 if candidate.collector is not None:
                     await self._async_enrich_collector_bridge_details(
+                        transport,
                         candidate.collector,
                         collector_ip=candidate.ip,
                     )
@@ -817,6 +813,7 @@ class OnboardingDetector:
             except RuntimeError as exc:
                 if candidate.collector is not None:
                     await self._async_enrich_collector_bridge_details(
+                        transport,
                         candidate.collector,
                         collector_ip=candidate.ip,
                     )
@@ -879,11 +876,12 @@ class OnboardingDetector:
 
     async def _async_enrich_collector_bridge_details(
         self,
+        transport: Any,
         collector,
         *,
         collector_ip: str,
     ) -> None:
-        """Best-effort AT+VDTU bridge detection for collector-only results."""
+        """Best-effort bridge detection for collector-only results."""
 
         policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
         at_timeout = min(self._connection.request_timeout, policy.collector_query_timeout)
@@ -891,6 +889,23 @@ class OnboardingDetector:
             return
 
         details: dict[str, object] = {}
+        if hasattr(transport, "async_send_collector"):
+            try:
+                details.update(
+                    await asyncio.wait_for(
+                        query_runtime_collector_values(
+                            SmartEssLocalSession(transport),
+                            parameters=_ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS,
+                        ),
+                        timeout=at_timeout,
+                    )
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Onboarding collector bridge FC query failed ip=%s error=%s",
+                    collector_ip,
+                    exc,
+                )
         try:
             at_transport = SharedCollectorAtTransport(
                 host=_LISTENER_BIND_HOST,
@@ -916,12 +931,11 @@ class OnboardingDetector:
             )
             return
 
-        bridge = parse_collector_vdtu(details.get("collector_vdtu_raw"))
         _apply_collector_cloud_endpoint_details_to_collector(collector, details)
-        if not bridge.is_virtual_bridge:
-            return
-
-        _apply_virtual_bridge_info_to_collector(collector, bridge)
+        _apply_bridge_hardware_token_to_collector(
+            collector,
+            details.get("collector_hardware_version"),
+        )
 
     async def _async_enrich_onboarding_runtime_details(
         self,
@@ -975,33 +989,19 @@ class OnboardingDetector:
         except Exception as exc:
             logger.debug("Onboarding collector AT transport unavailable ip=%s error=%s", collector_ip, exc)
 
-        # Parse the AT+VDTU probe (if it answered) into the bridge verdict and
-        # carry it to the confirm step. Positive-only: a factory collector or an
-        # unanswered probe leaves no carrier keys, so onboarding behaves exactly
-        # as before. The raw VDTU string is intentionally dropped here.
-        bridge = parse_collector_vdtu(details.pop("collector_vdtu_raw", None))
         _apply_collector_cloud_endpoint_details_to_collector(collector, details)
-        if bridge.is_virtual_bridge:
-            _apply_virtual_bridge_info_to_collector(collector, bridge)
+        hardware_token = parse_esp_collector_hardware_token(
+            details.get("collector_hardware_version")
+        )
+        if hardware_token.is_bridge:
+            _apply_bridge_hardware_token_to_collector(
+                collector,
+                details.get("collector_hardware_version"),
+            )
             details["collector_virtual_bridge"] = True
-            if bridge.kind:
-                details["collector_bridge_kind"] = bridge.kind
-            if bridge.version:
-                details["collector_bridge_version"] = bridge.version
-            if bridge.features:
-                details["collector_bridge_features"] = ", ".join(bridge.features)
-            if bridge.attributes:
-                details["collector_bridge_attributes"] = ", ".join(
-                    f"{key}={value}" for key, value in bridge.attributes
-                )
-                bridge_attributes = dict(bridge.attributes)
-                for key, detail_key in (
-                    ("uart", "collector_bridge_uart"),
-                    ("spacing_ms", "collector_bridge_spacing_ms"),
-                    ("queue", "collector_bridge_queue"),
-                ):
-                    if bridge_attributes.get(key):
-                        details[detail_key] = bridge_attributes[key]
+            details["collector_bridge_kind"] = "esp-collector"
+            if hardware_token.version:
+                details["collector_bridge_version"] = hardware_token.version
 
         try:
             runtime_values = await deadline.wait_for(

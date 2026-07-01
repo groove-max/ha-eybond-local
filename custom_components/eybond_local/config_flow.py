@@ -147,7 +147,8 @@ from .collector.smartess_ble import (
     normalize_discovered_candidate,
     parse_wifi_scan_response,
 )
-from .collector.at_runtime import parse_collector_vdtu, query_runtime_collector_at_values
+from .collector.at_runtime import query_runtime_collector_at_values
+from .collector.capabilities import parse_esp_collector_hardware_token
 from .collector.transport import SharedCollectorAtTransport, SharedEybondTransport, _finish_cleanup_on_cancel
 from .collector.cloud_family import collector_cloud_family_observation_from_endpoint
 from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
@@ -2622,6 +2623,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         }
         if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
+            data["collector_bridge_kind"] = "esp-collector"
         _apply_smartess_detection_metadata(data, result)
         _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
@@ -2750,6 +2752,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         data[CONF_DETECTED_SERIAL] = detected_serial
         if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
+            data["collector_bridge_kind"] = "esp-collector"
         _apply_smartess_detection_metadata(data, result)
         _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
@@ -3084,9 +3087,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     def _selected_result_is_virtual_bridge(self) -> bool:
         """Return True when the selected onboarding result is a detected bridge.
 
-        Reads the bridge verdict carried from the onboarding AT+VDTU probe (see
+        Reads the bridge verdict carried from the onboarding hardware token (see
         ``onboarding/eybond.py``). Positive-only and fail-safe: a factory
-        collector or an unanswered probe leaves no verdict, so the confirm step
+        collector or an unread token leaves no verdict, so the confirm step
         behaves exactly as before — the runtime path still corrects identity and
         menu gating after the entry runs.
         """
@@ -3270,8 +3273,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             with suppress(Exception):
                 await at_transport.stop()
 
-        bridge = parse_collector_vdtu(details.get("collector_vdtu_raw"))
-        if not bridge.is_virtual_bridge:
+        hardware_token = parse_esp_collector_hardware_token(
+            details.get("collector_hardware_version")
+        )
+        if not hardware_token.is_bridge:
             return
 
         collector = selected_result.collector
@@ -3280,14 +3285,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             collector_info = CollectorInfo(remote_ip=collector.ip or collector.target_ip)
             collector.collector = collector_info
         collector_info.collector_virtual_bridge = True
-        if bridge.kind:
-            collector_info.collector_bridge_kind = bridge.kind
-        if bridge.version:
-            collector_info.collector_bridge_version = bridge.version
-        if bridge.features:
-            collector_info.collector_bridge_features = tuple(bridge.features)
-        if bridge.attributes:
-            collector_info.collector_bridge_attributes = tuple(bridge.attributes)
+        collector_info.collector_bridge_kind = "esp-collector"
+        if hardware_token.version:
+            collector_info.collector_bridge_version = hardware_token.version
         endpoint = str(details.get("collector_server_endpoint") or "").strip()
         if endpoint:
             collector_info.collector_server_endpoint = endpoint
@@ -5666,7 +5666,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         """Return True when the entry's collector is a detected virtual bridge.
 
         Detection is positive-only: it reads the runtime snapshot's parsed
-        ``AT+VDTU`` verdict. When the coordinator/snapshot is unavailable (older
+        hardware-version token. When the coordinator/snapshot is unavailable (older
         firmware, factory collector, or a missed query) this returns False, so
         the menu behaves exactly as before — the gate only ever removes
         cloud-only options, never adds restrictions to factory collectors.
@@ -9062,10 +9062,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         finally:
             await transport.stop()
 
-        runtime_value = self._collector_uart_runtime_value_for_baudrate(baudrate)
-        self._collector_uart_current_baudrate = baudrate
-        self._collector_uart_current_settings = runtime_value
-        self._publish_collector_uart_runtime_value(runtime_value)
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return
+        invalidator = getattr(coordinator, "invalidate_collector_runtime_values", None)
+        if callable(invalidator):
+            invalidator()
+        refresh = getattr(coordinator, "async_request_refresh", None)
+        if callable(refresh):
+            await refresh()
 
     @staticmethod
     def _collector_query_response_text(response) -> str:
@@ -9137,52 +9142,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if isinstance(values, dict):
             return str(values.get("collector_bridge_uart") or values.get("collector_serial_baudrate") or "")
         return ""
-
-    def _publish_collector_uart_runtime_value(self, baudrate: str) -> None:
-        """Publish an accepted UART speed into live entities immediately."""
-
-        normalized = self._normalize_collector_uart_baudrate(baudrate)
-        if not normalized:
-            return
-        runtime_value = self._collector_uart_runtime_value_for_baudrate(normalized)
-
-        coordinator = self._coordinator()
-        if coordinator is None:
-            return
-
-        publish_snapshot_values = getattr(coordinator, "_publish_snapshot_values", None)
-        if callable(publish_snapshot_values):
-            publish_snapshot_values(
-                collector_serial_baudrate=runtime_value,
-                collector_bridge_uart=runtime_value,
-            )
-            return
-
-        data = getattr(coordinator, "data", None)
-        values = getattr(data, "values", None)
-        if not isinstance(values, dict):
-            return
-        values["collector_serial_baudrate"] = runtime_value
-        values["collector_bridge_uart"] = runtime_value
-        publish = getattr(coordinator, "async_set_updated_data", None)
-        if callable(publish):
-            publish(data)
-
-    def _collector_uart_runtime_value_for_baudrate(self, baudrate: str) -> str:
-        """Return display/runtime UART settings after changing only baud rate."""
-
-        normalized = self._normalize_collector_uart_baudrate(baudrate)
-        if not normalized:
-            return ""
-
-        current = (
-            self._collector_uart_current_settings
-            or self._runtime_collector_uart_settings()
-        )
-        text = str(current or "").strip()
-        if "," not in text:
-            return normalized
-        return f"{normalized},{text.split(',', 1)[1]}"
 
     def _runtime_collector_hardware_version(self) -> str:
         coordinator = self._coordinator()

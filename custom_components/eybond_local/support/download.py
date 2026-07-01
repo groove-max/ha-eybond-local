@@ -72,7 +72,10 @@ def async_register_support_package_download_view(hass: Any) -> bool:
     except ModuleNotFoundError:
         return False
 
-    data = hass.data.setdefault(DOMAIN, {})
+    hass_data = getattr(hass, "data", None)
+    if hass_data is None:
+        return False
+    data = hass_data.setdefault(DOMAIN, {})
     if data.get(_SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED):
         return False
 

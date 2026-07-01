@@ -508,6 +508,22 @@
           "manual": "Ручной"
         }
       },
+      "collector_poll_context": {
+        "name": "Контекст опроса",
+        "state": {
+          "runtime": "Опрос инвертора",
+          "detection": "Поиск инвертора",
+          "collector": "Связь с коллектором"
+        }
+      },
+      "runtime_driver_state": {
+        "name": "Состояние runtime-драйвера",
+        "state": {
+          "driver_bound": "Драйвер выбран",
+          "driver_unbound": "Драйвер не определён",
+          "collector_offline": "Коллектор недоступен"
+        }
+      },
       "collector_signal_quality": {
         "state": {
           "unknown": "Неизвестно",

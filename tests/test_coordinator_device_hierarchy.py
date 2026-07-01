@@ -2410,6 +2410,34 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(info["name"], "Collector PN E50000200000000001")
         self.assertEqual(info["serial_number"], "E50000200000000001")
 
+    def test_collector_device_info_does_not_use_configured_firmware_fallback(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "collector_pn": "V0000000000001",
+                "collector_ip": "192.168.1.51",
+                "smartess_collector_version": "8.50.12.3",
+            },
+            options={},
+            title="Collector PN V0000000000001",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={},
+            collector=types.SimpleNamespace(
+                collector_pn="V0000000000001",
+                profile_name="",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="",
+                collector_virtual_bridge=False,
+            ),
+        )
+
+        info = coordinator.collector_device_info()
+
+        self.assertNotIn("sw_version", info)
+
     def test_collector_device_info_uses_honest_identity_for_virtual_bridge(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
@@ -2432,7 +2460,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 collector_virtual_bridge=True,
                 collector_bridge_kind="esp-collector",
                 collector_bridge_version="0.4.0",
-                collector_bridge_features=("local_only", "no_cloud", "wifi_params"),
             ),
         )
 
@@ -5048,7 +5075,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         async def _run() -> list[object]:
             snapshots = [
-                self.RuntimeSnapshot(values={"collector_poll_duration_ms": 12000})
+                self.RuntimeSnapshot(
+                    values={
+                        "collector_poll_duration_ms": 12000,
+                        "runtime_driver_state": "driver_bound",
+                    },
+                    connected=True,
+                    inverter=object(),
+                )
                 for _ in range(3)
             ]
             for snapshot in snapshots:
@@ -5128,6 +5162,200 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(snapshot.values["collector_poll_current_interval_seconds"], 10)
         self.assertEqual(snapshot.values["collector_poll_next_interval_seconds"], 16)
         self.assertEqual(snapshot.values["collector_poll_target_start_interval_seconds"], 16)
+
+    def test_driver_unbound_manual_poll_suppresses_high_utilization_warning(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        entry = types.SimpleNamespace(
+            entry_id="entry-poll",
+            options={"poll_mode": "manual", "poll_interval": 10},
+        )
+        notifications: list[dict[str, object]] = []
+
+        def _async_create(hass, body, *, title, notification_id) -> None:
+            del hass
+            notifications.append(
+                {
+                    "body": body,
+                    "title": title,
+                    "notification_id": notification_id,
+                }
+            )
+
+        coordinator.config_entry = entry
+        coordinator.hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(language="en"),
+            config_entries=types.SimpleNamespace(async_update_entry=lambda *_args, **_kwargs: None),
+        )
+        coordinator._poll_duration_ewma_seconds = 0.0
+        coordinator._poll_duration_max_seconds = 0.0
+        coordinator._poll_recent_durations_seconds = []
+        coordinator._collector_poll_overrun_streak = 0
+        coordinator._collector_poll_high_utilization_streak = 0
+        coordinator._poll_last_notification_monotonic = 0.0
+        self.coordinator_module.persistent_notification.async_create = _async_create
+
+        snapshot = self.RuntimeSnapshot(
+            values={
+                "collector_poll_duration_ms": 81533,
+                "runtime_driver_state": "driver_unbound",
+            },
+            connected=True,
+        )
+        for _ in range(3):
+            coordinator._record_poll_cycle_metrics(
+                snapshot,
+                poll_interval_seconds=10,
+            )
+
+        self.assertEqual(notifications, [])
+        self.assertEqual(snapshot.values["collector_poll_context"], "detection")
+        self.assertEqual(snapshot.values["collector_poll_utilization_percent"], 815)
+        self.assertEqual(snapshot.values["collector_poll_high_utilization_streak"], 0)
+        self.assertEqual(snapshot.values["collector_poll_overrun_streak"], 0)
+
+    def test_driver_unbound_auto_uses_retry_interval_without_polluting_scheduler(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={},
+            options={"poll_mode": "auto", "poll_interval": 10},
+        )
+        coordinator._poll_scheduler_driver_key = "auto"
+        coordinator._poll_non_runtime_retry_interval_seconds = 0
+        coordinator._ensure_poll_scheduler()
+
+        current_interval = coordinator._current_poll_cycle_interval_seconds()
+        decision = coordinator._poll_scheduler.observe(81.533, success=False)
+        next_interval = coordinator._next_poll_cycle_interval_seconds(
+            current_interval=current_interval,
+            duration_seconds=81.533,
+            poll_context="detection",
+            decision=decision,
+        )
+        snapshot = self.RuntimeSnapshot(
+            values={
+                "collector_poll_duration_ms": 81533,
+                "runtime_driver_state": "driver_unbound",
+            },
+            connected=True,
+        )
+        coordinator._poll_duration_ewma_seconds = 0.0
+        coordinator._poll_duration_max_seconds = 0.0
+        coordinator._poll_recent_durations_seconds = []
+        coordinator._collector_poll_overrun_streak = 0
+        coordinator._collector_poll_high_utilization_streak = 0
+        coordinator._poll_last_notification_monotonic = 0.0
+
+        coordinator._record_poll_cycle_metrics(
+            snapshot,
+            poll_interval_seconds=current_interval,
+            duration_seconds=81.533,
+            decision=decision,
+            runtime_driver_state="driver_unbound",
+            poll_context="detection",
+            next_interval_seconds=next_interval,
+        )
+
+        self.assertEqual(decision.effective_interval, 10)
+        self.assertEqual(coordinator._poll_scheduler.current_interval(), 10)
+        self.assertEqual(next_interval, 106)
+        self.assertEqual(coordinator._current_poll_cycle_interval_seconds(), 106)
+        self.assertEqual(snapshot.values["collector_poll_context"], "detection")
+        self.assertEqual(snapshot.values["collector_poll_next_interval_seconds"], 106)
+        self.assertEqual(snapshot.values["collector_poll_detection_retry_interval_seconds"], 106)
+        self.assertEqual(snapshot.values["collector_poll_high_utilization_streak"], 0)
+
+    def test_collector_offline_poll_reports_collector_context(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-poll",
+            options={"poll_mode": "manual", "poll_interval": 10},
+        )
+        coordinator._poll_duration_ewma_seconds = 0.0
+        coordinator._poll_duration_max_seconds = 0.0
+        coordinator._poll_recent_durations_seconds = []
+        coordinator._collector_poll_overrun_streak = 0
+        coordinator._collector_poll_high_utilization_streak = 0
+        coordinator._poll_last_notification_monotonic = 0.0
+        snapshot = self.RuntimeSnapshot(
+            values={"runtime_driver_state": "collector_offline"},
+            connected=False,
+        )
+
+        coordinator._record_poll_cycle_metrics(
+            snapshot,
+            poll_interval_seconds=10,
+            duration_seconds=4.5,
+        )
+
+        self.assertEqual(snapshot.values["collector_poll_context"], "collector")
+        self.assertEqual(snapshot.values["collector_poll_high_utilization_streak"], 0)
+        self.assertEqual(snapshot.values["collector_poll_overrun_streak"], 0)
+
+    def test_first_bound_cycle_after_unbound_does_not_train_auto_scheduler(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-poll",
+                data={},
+                options={"poll_mode": "auto", "poll_interval": 10},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                values={"runtime_driver_state": "driver_unbound"},
+                connected=True,
+            )
+            coordinator._diagnostic_active = False
+            coordinator._runtime_operation_lock = asyncio.Lock()
+            coordinator._poll_scheduler_driver_key = "auto"
+            coordinator._poll_scheduler = self.coordinator_module.PollScheduler(
+                policy=self.coordinator_module.poll_policy_for_driver("auto"),
+                mode="auto",
+                manual_interval=10,
+            )
+            observe_calls: list[dict[str, object]] = []
+            original_observe = coordinator._poll_scheduler.observe
+
+            def _observe(duration_seconds, *, success=True):
+                observe_calls.append(
+                    {
+                        "duration_seconds": duration_seconds,
+                        "success": success,
+                    }
+                )
+                return original_observe(duration_seconds, success=success)
+
+            coordinator._poll_scheduler.observe = _observe
+            coordinator._poll_non_runtime_retry_interval_seconds = 0
+            coordinator._poll_duration_ewma_seconds = 0.0
+            coordinator._poll_duration_max_seconds = 0.0
+            coordinator._poll_recent_durations_seconds = []
+            coordinator._poll_last_cycle_started_monotonic = 0.0
+            coordinator._collector_poll_overrun_streak = 0
+            coordinator._collector_poll_high_utilization_streak = 0
+            coordinator._poll_last_notification_monotonic = 0.0
+
+            async def _poll_with_lock(**_kwargs):
+                return self.RuntimeSnapshot(
+                    values={
+                        "runtime_driver_state": "driver_bound",
+                        "collector_poll_duration_ms": 1000,
+                    },
+                    connected=True,
+                    inverter=object(),
+                )
+
+            coordinator._async_update_data_with_runtime_lock = _poll_with_lock
+
+            snapshot = await coordinator._async_update_data()
+
+            self.assertEqual(snapshot.values["collector_poll_context"], "runtime")
+            self.assertEqual(observe_calls[-1]["success"], False)
+            self.assertEqual(coordinator._poll_scheduler.current_interval(), 10)
+            self.assertNotIn(
+                "collector_poll_detection_retry_interval_seconds",
+                snapshot.values,
+            )
+
+        asyncio.run(_run())
 
     def test_poll_scheduler_policy_updates_from_detected_driver_key(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -5212,7 +5440,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         async def _run() -> None:
             for _ in range(3):
                 coordinator._record_poll_cycle_metrics(
-                    self.RuntimeSnapshot(values={"collector_poll_duration_ms": 9200}),
+                    self.RuntimeSnapshot(
+                        values={
+                            "collector_poll_duration_ms": 9200,
+                            "runtime_driver_state": "driver_bound",
+                        },
+                        connected=True,
+                        inverter=object(),
+                    ),
                     poll_interval_seconds=10,
                 )
 
