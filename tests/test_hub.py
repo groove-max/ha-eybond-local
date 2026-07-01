@@ -517,7 +517,6 @@ class HubSnapshotTests(unittest.TestCase):
                 "collector_upload_mode": "ON",
                 "collector_system_time": "20250120120000",
                 "collector_serial_baudrate": "2400,8,1,NONE",
-                "collector_bridge_uart": "2400,8,1,NONE",
                 "smartess_protocol_asset_id": "0925",
             }
         )
@@ -534,7 +533,6 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertNotIn("collector_upload_mode", snapshot.values)
         self.assertNotIn("collector_system_time", snapshot.values)
         self.assertNotIn("collector_serial_baudrate", snapshot.values)
-        self.assertNotIn("collector_bridge_uart", snapshot.values)
         self.assertNotIn("smartess_protocol_asset_id", snapshot.values)
 
     def test_collector_phase_publish_preserves_previous_inverter_values(self) -> None:
@@ -1042,7 +1040,7 @@ class HubSnapshotTests(unittest.TestCase):
             "collector_serial_baudrate": "2400,8,1,NONE",
         }
         hub._collector_at_runtime_values = {
-            "collector_bridge_uart": "2400,8,1,NONE",
+            "collector_link_status": "STA,CONNECTED",
         }
         hub._collector_runtime_values_dirty = False
 

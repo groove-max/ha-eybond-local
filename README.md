@@ -15,7 +15,8 @@
 
 It lets Home Assistant read live inverter data over your local network. On supported models it can also expose safe controls such as charge settings, output mode, beeper settings, and model-specific switches.
 
-If your inverter already works in the SmartESS app, it has a good chance of working here too.
+If your inverter already works in the SmartESS, ValueCloud, or compatible vendor
+app, it has a good chance of working here too.
 
 > **Note:** The integration is actively developed. Some inverters work fully, some work in read-only mode, and some need a Support Archive before support can be added.
 
@@ -90,7 +91,8 @@ The setup wizard starts with the collector, then confirms the inverter.
 
 If the collector is already on the same Wi-Fi/LAN as Home Assistant, continue.
 
-If it is not, use the SmartESS app, manual Wi-Fi setup, or Bluetooth Wi-Fi setup when your collector supports it.
+If it is not, use the vendor app, manual Wi-Fi setup, or Bluetooth Wi-Fi setup
+when your collector supports it.
 
 <p align="center"><img src="docs/images/setup-02-collector-network.png" alt="Collector network setup choice" width="480"></p>
 
@@ -114,11 +116,14 @@ The wizard can show:
 
 <p align="center"><img src="docs/images/setup-06-detected-devices.png" alt="Detected devices" width="480"></p>
 
-### 4. Confirm collector mode
+### 4. Confirm detection and refresh mode
 
-Choose whether the collector should keep working with SmartESS or talk only to Home Assistant.
+Confirm the detected device and choose how sensors should refresh.
 
-<p align="center"><img src="docs/images/setup-07-confirm.png" alt="Confirm detection and choose collector mode" width="480"></p>
+Collector mode is managed later from **Connection and polling**, after the
+integration has created the device and read its collector capabilities.
+
+<p align="center"><img src="docs/images/setup-07-confirm.png" alt="Confirm detection and choose sensor refresh mode" width="480"></p>
 
 Manual setup is available when automatic scanning is not practical.
 
@@ -180,11 +185,14 @@ What to expect:
 
 1. Start **Configure → Add controls (device learning)**.
 2. Read the safety notice.
-3. Sign in to SmartESS for this one session.
+3. Sign in to the supported cloud account for this one session, if the flow asks
+   for it. For many factory collectors this is the same account used by the
+   SmartESS, ValueCloud, or compatible vendor app.
 4. Let the integration check available settings.
 5. Review the discovered items before applying them.
 
-The SmartESS password is not saved. Learned items apply only to this Home Assistant device until they are reviewed and added to the built-in catalog.
+The cloud password is not saved. Learned items apply only to this Home Assistant
+device until they are reviewed and added to the built-in catalog.
 
 If anything looks unsafe or unexpected, stop and create a Support Archive instead.
 
@@ -223,9 +231,9 @@ Use these issue templates:
 | Device stays on **EyeBond Setup Pending** | Wait a few minutes, refresh the device page, then retry scan or manual setup. If it still stays pending, create a Support Archive. |
 | Stuck on **Collector only** | The collector answered, but the inverter was not identified confidently. Create a Support Archive. |
 | Sensors stay unavailable | Check that the collector and Home Assistant are on the same network and that the collector has stable Wi-Fi. |
-| SmartESS app stopped showing live data | Check collector mode. **HA only** disconnects that collector from SmartESS by design. Switch back to **SmartESS + HA** if you want the vendor app too. |
-| SmartESS works, but Home Assistant says unavailable | The collector may have reconnected to SmartESS faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
-| A setting changes back immediately | The inverter rejected the value or did not confirm it. Check diagnostics, avoid changing the same setting from SmartESS at the same time, and retry after the collector is stable. |
+| Vendor app stopped showing live data | Check collector mode. **HA only** disconnects that collector from its cloud by design. Switch back to **SmartESS + HA** / cloud + HA mode if you want the vendor app too. |
+| Vendor app works, but Home Assistant says unavailable | The collector may have reconnected to its cloud faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
+| A setting changes back immediately | The inverter rejected the value or did not confirm it. Check diagnostics, avoid changing the same setting from the vendor app at the same time, and retry after the collector is stable. |
 | Remote setup is needed | Use [Remote / NAT setup guide](docs/REMOTE_SETUP.md). Prefer VPN over public port forwarding when possible. |
 | Controls are missing | Keep **Auto** mode for normal use. If monitoring works but controls are missing, run device learning if offered, or create a Support Archive. Use **Full Control** only if you understand the risk. |
 

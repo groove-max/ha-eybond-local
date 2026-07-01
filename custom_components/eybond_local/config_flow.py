@@ -9140,7 +9140,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         data = getattr(coordinator, "data", None)
         values = getattr(data, "values", None)
         if isinstance(values, dict):
-            return str(values.get("collector_bridge_uart") or values.get("collector_serial_baudrate") or "")
+            return str(values.get("collector_serial_baudrate") or "")
         return ""
 
     def _runtime_collector_hardware_version(self) -> str:

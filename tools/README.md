@@ -76,8 +76,9 @@ Or build and vet a record from a support archive:
 python3 tools/vet_contribution.py --from-archive support_archive.zip
 ```
 
-## Local-only maintainer tooling
+## What stays local
 
-Low-level hardware probes, fixture import/replay helpers, cloud probes, and
-other investigation workflows are maintainer-only material. Keep their notes and
-outputs under `.local/`.
+Low-level hardware probing, local fixture replay, raw cloud probing, and
+case-specific investigation notes are maintainer-only workflows. Keep their
+notes and outputs under `.local/`, and do not treat them as user-facing support
+steps.

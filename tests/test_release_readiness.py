@@ -37,7 +37,7 @@ class ReleaseReadinessTests(unittest.TestCase):
         report = asyncio.run(build_release_readiness())
 
         self.assertEqual(report["integration"]["domain"], "eybond_local")
-        self.assertEqual(report["integration"]["version"], "0.1.43")
+        self.assertEqual(report["integration"]["version"], "0.2.0-beta.2")
         self.assertEqual(report["status"], "ready")
         self.assertEqual(report["summary"]["drivers"], 2)
         self.assertEqual(report["summary"]["profiles"], 2)

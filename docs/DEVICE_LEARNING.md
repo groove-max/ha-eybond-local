@@ -6,7 +6,8 @@ Most users do not need to run it. Use it when the integration offers it for your
 
 ## What it can help with
 
-Device learning can find extra items that are known to SmartESS for your exact inverter:
+Device learning can find extra items that are known to the supported cloud
+provider for your exact inverter:
 
 - additional read-only sensors;
 - selectable settings;
@@ -35,8 +36,9 @@ Check these first:
 
 - The collector has stable Wi-Fi.
 - Home Assistant can read live data from the inverter.
-- You know the SmartESS username and password for this device.
-- The SmartESS mobile app is closed while learning runs.
+- You know the cloud/app username and password for this device, if the learning
+  flow asks for them.
+- The mobile app for the same cloud account is closed while learning runs.
 - You are near the inverter or can safely check it afterward.
 
 If the inverter powers critical loads, run learning only when it is safe to recover manually.
@@ -48,19 +50,21 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 3. Click **Configure**.
 4. Choose **Add controls (device learning)**.
 5. Read the safety notice.
-6. Enter SmartESS credentials for this one session.
+6. Enter the supported cloud/app credentials for this one session, if the flow
+   asks for them.
 7. Wait for the scan to finish.
 8. Review the discovered items before applying them.
 
-The SmartESS password is not saved.
+The cloud/app password is not saved.
 
 ## What happens during learning
 
 In plain terms:
 
 1. Home Assistant starts a temporary safe learning session.
-2. It signs in to SmartESS with the credentials you entered.
-3. It asks SmartESS which settings and fields the cloud knows for this device.
+2. It signs in to the supported cloud provider with the credentials you entered.
+3. It asks the provider which settings and fields the cloud knows for this
+   device.
 4. It observes how those cloud items map to the local inverter connection.
 5. It blocks unsafe or unknown traffic instead of letting it reach the real inverter.
 6. It builds a local result for review.
@@ -110,7 +114,7 @@ The Support Archive includes the relevant learning evidence.
 
 Common causes:
 
-- SmartESS username or password was rejected.
+- The cloud/app username or password was rejected.
 - The collector went offline or reconnected during the scan.
 - The safe learning session could not be confirmed.
 - The device protocol is not supported by learning yet.
@@ -120,12 +124,13 @@ What to do:
 
 1. Do not repeat the scan immediately if the error mentions a safety stop.
 2. Check the inverter state, especially output on/off state and important settings.
-3. Make sure SmartESS app is closed.
+3. Make sure the vendor app for the same account is closed.
 4. Make sure the collector Wi-Fi is stable.
 5. Create a Support Archive and attach it to the issue.
 
 ## ESP EyeBond Collector note
 
-Device learning depends on SmartESS cloud knowing the device.
+Device learning depends on a supported cloud provider knowing the device.
 
-The ESP EyeBond Collector is local-only and does not have a SmartESS cloud side, so device learning is normally not available for it.
+The ESP EyeBond Collector is local-only and does not have a cloud side, so
+device learning is normally not available for it.

@@ -112,9 +112,6 @@ _VOLATILE_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
         "collector_virtual_bridge",
         "collector_bridge_kind",
         "collector_bridge_version",
-        "collector_bridge_uart",
-        "collector_bridge_spacing_ms",
-        "collector_bridge_queue",
     }
 )
 

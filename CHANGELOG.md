@@ -5,10 +5,24 @@ All notable changes to this project are documented in this file.
 The format is inspired by Keep a Changelog, with one practical rule for this repository:
 the GitHub release body should be rendered from the matching version section here.
 
-## [Unreleased]
+## [0.2.0-beta.2] - 2026-06-28
 
 ### Added
 
+- Added first-class support for the community **ESP EyeBond Collector** virtual bridge
+  (firmware for inverters without a factory collector). The bridge is detected from the
+  collector hardware-version token read through FC=2 parameter 6
+  (`collector_hardware_version = esp-collector/<version>/<platform...>`); detection never uses
+  the collector PN, devcode, or factory firmware-version string, and no extra AT probe is sent
+  during detection. A detected bridge is shown as an honest **ESP EyeBond Collector** device
+  (manufacturer, model, firmware version, and project link) and its cloud-only actions —
+  device learning / shadow learning, proxy capture, and SmartESS cloud assist — are hidden
+  unless a future firmware explicitly advertises cloud capabilities. Its collector operation
+  mode is fixed to **Home Assistant only** (the SmartESS+HA choice is not shown), and reverse
+  discovery stays on so it can reconnect. Local actions (runtime settings, diagnostics, and
+  Change Collector Wi-Fi) stay fully available. Already-onboarded bridges keep working from
+  their persisted bridge identity; fresh bridge onboarding requires esp-eybond-collector
+  firmware that emits the `esp-collector/<version>/<platform...>` token.
 - Added an adaptive sensor refresh scheduler. New entries default to
   **Automatic** refresh, where EyeBond Local chooses the next poll interval from
   the observed device response time and protocol-specific limits; **Manual**
@@ -18,33 +32,6 @@ the GitHub release body should be rendered from the matching version section her
   duration, utilization, recommended interval, and scheduler delay.
 - Added poll-context diagnostics so collector-only, detection, and runtime
   polling cycles are visible separately.
-
-### Changed
-
-- The runtime settings flow now hides the fixed poll interval while Automatic
-  refresh is selected and shows it only for Manual refresh.
-- High-utilization warnings now point Manual-mode users either to a larger
-  interval or to Automatic refresh.
-- Automatic refresh no longer learns from collector-only, offline, or inverter
-  detection cycles, so a missing or unsupported inverter does not permanently
-  inflate the normal runtime poll interval.
-
-## [0.2.0-beta.2] - 2026-06-28
-
-### Added
-
-- Added first-class support for the community **ESP EyeBond Collector** virtual bridge
-  (firmware for inverters without a factory collector). The bridge is detected with a single
-  additive, read-only `AT+VDTU` query (reply prefixed `esp-collector,`); detection never uses
-  the collector PN, devcode, or firmware-version string, and the query is safe to send to any
-  collector. A detected bridge is shown as an honest **ESP EyeBond Collector** device
-  (manufacturer, model, firmware version, and project link) and its cloud-only actions —
-  device learning / shadow learning, proxy capture, and SmartESS cloud assist — are hidden,
-  since the bridge has no SmartESS cloud side. Its collector operation mode is fixed to
-  **Home Assistant only** (the SmartESS+HA choice is not shown), and reverse discovery stays
-  on so it can reconnect. Local actions (runtime settings, diagnostics, and Change Collector
-  Wi-Fi) stay fully available. Factory collectors and bridges with older firmware that never
-  answer `AT+VDTU` behave exactly as before.
 - Added an offline device identification catalog: inverters are now identified by a
   deterministic register fingerprint (protocol layout + model code + rated power) with explicit
   support tiers, and the catalog — not heuristics — decides which schema and controls apply.
@@ -99,6 +86,13 @@ the GitHub release body should be rendered from the matching version section her
   instead of a false "no supported driver matched".
 - Startup is lighter: metadata catalogs are warmed off the event loop, removing blocking file
   reads during driver detection (matters on slow or throttled hosts).
+- The runtime settings flow now hides the fixed poll interval while Automatic
+  refresh is selected and shows it only for Manual refresh.
+- High-utilization warnings now point Manual-mode users either to a larger
+  interval or to Automatic refresh.
+- Automatic refresh no longer learns from collector-only, offline, or inverter
+  detection cycles, so a missing or unsupported inverter does not permanently
+  inflate the normal runtime poll interval.
 
 ### Fixed
 

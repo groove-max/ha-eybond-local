@@ -2155,7 +2155,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["description_placeholders"]["deep_scan_target_count"], "253")
         self.assertNotIn("deep_scan_duration", result["description_placeholders"])
-        self.assertIn("unicast-запитами", result["description_placeholders"]["deep_scan_warning"])
+        self.assertIn("адресними запитами", result["description_placeholders"]["deep_scan_warning"])
 
     async def test_change_scan_interface_preserves_connection_type(self) -> None:
         flow = self._make_flow()
@@ -4575,7 +4575,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             values={
                 "collector_virtual_bridge": True,
                 "collector_serial_baudrate": "2400,8,1,NONE",
-                "collector_bridge_uart": "2400,8,1,NONE",
             }
         )
         coordinator = types.SimpleNamespace(
@@ -4602,7 +4601,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(writes, [(SET_SERIAL_BAUDRATE, "9600")])
         self.assertEqual(snapshot.values["collector_serial_baudrate"], "2400,8,1,NONE")
-        self.assertEqual(snapshot.values["collector_bridge_uart"], "2400,8,1,NONE")
         coordinator.invalidate_collector_runtime_values.assert_called_once_with()
         coordinator.async_request_refresh.assert_awaited_once_with()
         transport.stop.assert_awaited_once()

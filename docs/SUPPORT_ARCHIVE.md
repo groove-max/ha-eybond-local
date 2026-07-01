@@ -36,7 +36,7 @@ Along with the ZIP, write a short description:
 - inverter commercial model name, if known;
 - what you expected to happen;
 - what actually happened;
-- whether SmartESS app still works;
+- whether the vendor app still works, if you use one;
 - whether controls were enabled, missing, or rejected;
 - what action you tried right before creating the archive.
 
@@ -58,15 +58,18 @@ The archive helps answer questions such as:
 
 The archive is intended for sharing with the maintainer in a GitHub issue.
 
-It avoids obvious secrets where possible, but it can still contain technical identifiers needed for support. Before posting publicly, do not add extra screenshots or files that include passwords, private IP notes, SmartESS account details, or serial/account information you do not want to share.
+It avoids obvious secrets where possible, but it can still contain technical identifiers needed for support. Before posting publicly, do not add extra screenshots or files that include passwords, private IP notes, vendor-app account details, or serial/account information you do not want to share.
 
 If the case contains sensitive information, say so in the issue and share only the minimum needed publicly.
 
-## SmartESS credentials
+## Cloud credentials
 
-Creating a normal Support Archive does not require your SmartESS password.
+Creating a normal Support Archive does not require your cloud/app password.
 
-Some optional support actions can refresh SmartESS evidence and may ask for SmartESS credentials for that one action. The password is used only for the live request and is not saved by the integration.
+Some optional support actions can refresh cloud evidence and may ask for
+SmartESS, ValueCloud, or compatible vendor-app credentials for that one action.
+The password is used only for the live request and is not saved by the
+integration.
 
 ## Support Archive vs proxy capture
 

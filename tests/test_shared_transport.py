@@ -650,7 +650,6 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_listener_routes_initial_framed_identity_to_pn_owner(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
-        listener.register_payload_pn_owner("E50000200000000001")
         listener._remember_session(
             session_id="session-1",
             remote_ip="203.0.113.10",
@@ -1178,8 +1177,6 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             connected.set()
             try:
-                writer.write(b"\x00")
-                await writer.drain()
                 self.assertEqual(await reader.read(1), b"")
                 disconnected.set()
             finally:
@@ -1222,6 +1219,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         )
 
         connected = asyncio.Event()
+        release_client = asyncio.Event()
 
         async def _collector_client() -> None:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -1241,6 +1239,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                     )
                 )
                 await writer.drain()
+                await release_client.wait()
             finally:
                 writer.close()
                 await writer.wait_closed()
@@ -1260,6 +1259,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(payload, b"OK")
                 self.assertTrue(transport.connected)
             finally:
+                release_client.set()
                 await client_task
                 await transport.stop()
 
@@ -1677,10 +1677,20 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         reader = asyncio.StreamReader()
-        reader.feed_data(b"\x00")
 
         with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
             await listener._handle_connection(reader, _FakeWriter())
+            pending = await listener.pop_pending_socket_for_route(
+                collector_ip="93.184.216.34",
+            )
+            self.assertIsNotNone(pending)
+            assert pending is not None
+            await listener.activate_pending_connection(
+                pending,
+                collector_ip="93.184.216.34",
+                heartbeat_interval=60.0,
+                write_timeout=0.5,
+            )
             await asyncio.sleep(0)
 
         run_mock.assert_awaited_once()
@@ -1708,10 +1718,20 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         reader = asyncio.StreamReader()
-        reader.feed_data(b"\x00")
 
         with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
             await listener._handle_connection(reader, _FakeWriter())
+            pending = await listener.pop_pending_socket_for_route(
+                collector_ip="192.168.1.255",
+            )
+            self.assertIsNotNone(pending)
+            assert pending is not None
+            await listener.activate_pending_connection(
+                pending,
+                collector_ip="192.168.1.255",
+                heartbeat_interval=60.0,
+                write_timeout=0.5,
+            )
             await asyncio.sleep(0)
 
         run_mock.assert_awaited_once()

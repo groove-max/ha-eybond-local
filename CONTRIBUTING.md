@@ -111,7 +111,7 @@ These are the hard rules — don't cross them without discussion:
 - **Fixture-first over live debugging** when feasible — but keep those fixtures local unless you intentionally sanitize them for sharing.
 - **JSON-first over Python** for new family additions.
 - **Local fixtures and maintainer-only notes belong under `.local/`** and are not part of the public repository.
-- **`tools/` is supported project tooling** for CI, release validation, generated-doc checks, hardware probing, and local fixture workflows.
+- **`tools/` is supported project tooling** for CI, release validation, catalog validation, generated-doc checks, and sanitized contribution workflows.
 - **`.local/generated/`, `.local/release-notes/`, and raw research dumps** remain local-only artifacts and should stay out of git.
 
 ---

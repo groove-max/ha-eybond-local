@@ -11,7 +11,7 @@ Proxy capture records a short communication session so a developer can understan
 It can help when:
 
 - the collector connects but the inverter is not identified;
-- SmartESS sees data but Home Assistant does not;
+- the vendor app or cloud sees data but Home Assistant does not;
 - a model needs extra evidence before support can be added;
 - a developer asks for a capture in a GitHub issue.
 
@@ -24,7 +24,7 @@ Make sure:
 - the collector has stable Wi-Fi;
 - Home Assistant can already reach the collector;
 - you are ready to keep the capture short;
-- you can check that the SmartESS app still works afterward if you use SmartESS.
+- you can check that the vendor app still works afterward if you use one.
 
 If you are not sure, stop and create a Support Archive instead.
 
@@ -76,15 +76,15 @@ Download the ZIP and attach it to the GitHub issue together with a short note ab
 
 If the developer also asks for a normal Support Archive, create it separately from **Configure → Diagnostics and service tools → Create support archive**.
 
-## Restoring SmartESS access
+## Restoring cloud/app access
 
 Normally, EyeBond Local restores the collector automatically after capture.
 
-If SmartESS stops showing live data afterward:
+If the vendor app stops showing live data afterward:
 
 1. Open the collector device page.
-2. Press **Restore SmartESS access**.
+2. Press the restore cloud/app access action shown for this collector.
 3. Wait a few minutes for the collector to reconnect.
-4. Check SmartESS again.
+4. Check the vendor app again.
 
 If the restore action is unavailable or the collector still does not recover, do not repeat captures. Create a Support Archive and report the issue.

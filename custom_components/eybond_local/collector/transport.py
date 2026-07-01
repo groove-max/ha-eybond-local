@@ -2007,7 +2007,13 @@ class _SharedEybondListener:
         async with self._pending_route_lock:
             normalized_pn = str(collector_pn or "").strip()
             if not normalized_pn:
-                return self.pop_pending_socket(collector_ip)
+                pending = self._select_pending_socket(collector_ip)
+                if pending is None:
+                    return None
+                await self._pause_pending_sniff(pending)
+                if not self._pending_socket_still_registered(pending):
+                    return None
+                return self._claim_pending_socket(pending)
 
             matched = self._select_pending_socket_by_collector_pn(normalized_pn)
             if matched is not None:
@@ -2178,6 +2184,8 @@ class _SharedEybondListener:
         pending.writer.close()
         try:
             await pending.writer.wait_closed()
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 

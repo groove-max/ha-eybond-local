@@ -49,7 +49,9 @@ Choose this when you want that collector to talk only to Home Assistant.
 - the SmartESS app will no longer show live data for that collector while this mode is active
 - this is the right choice when you want a fully local day-to-day setup
 
-You can choose the mode during setup and change it later from **Connection and polling**.
+You can change the mode later from **Connection and polling**. Initial setup
+keeps this choice out of the confirm step because collector capabilities and
+cloud endpoint details are safer to read after the device exists.
 
 <p align="center"><img src="images/runtime-settings.png" alt="Runtime settings dialog" width="480"></p>
 

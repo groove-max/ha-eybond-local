@@ -79,9 +79,6 @@ _ONBOARDING_RUNTIME_DETAIL_KEYS = {
     "collector_virtual_bridge",
     "collector_bridge_kind",
     "collector_bridge_version",
-    "collector_bridge_uart",
-    "collector_bridge_spacing_ms",
-    "collector_bridge_queue",
 }
 
 _ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS = tuple(

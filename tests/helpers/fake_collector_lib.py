@@ -69,9 +69,9 @@ class CollectorProfile:
     uart: str = "9600,8,1,NONE"
     link_status: str = "connected"
     wifi_scan_list: str = ""
-    # Virtual-bridge identity probe (``AT+VDTU?``). Empty by default so a factory
-    # collector stays silent on this command; set it to emulate an ESP EyeBond
-    # Collector bridge reply (must start with the ``esp-collector,`` prefix).
+    # Optional legacy/manual ``AT+VDTU?`` reply used by low-level transport tests.
+    # Runtime bridge detection no longer sends this probe; it keys off the
+    # FC=2 parameter-6 hardware-version token instead.
     vdtu: str = ""
     rated_power: int = 6200
     protocol_number: int = 1
