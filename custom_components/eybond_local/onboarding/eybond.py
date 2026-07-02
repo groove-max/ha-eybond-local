@@ -788,10 +788,7 @@ class OnboardingDetector:
                 warnings.append("collector_heartbeat_not_observed")
 
             try:
-                context = await asyncio.wait_for(
-                    self._async_detect_driver_with_retries(transport),
-                    timeout=DEFAULT_ONBOARDING_TIMEOUT_POLICY.driver_detection_timeout,
-                )
+                context = await self._async_detect_driver_with_retries(transport)
             except TimeoutError:
                 if candidate.collector is not None:
                     await self._async_enrich_collector_bridge_details(
@@ -860,15 +857,17 @@ class OnboardingDetector:
     async def _async_detect_driver_with_retries(self, transport: Any) -> DetectedDriverContext:
         """Retry one-shot driver probing when the collector responds too early."""
 
+        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
         last_error: RuntimeError | None = None
-        for attempt in range(3):
+        attempts = max(1, int(policy.driver_detection_attempts))
+        for attempt in range(attempts):
             try:
                 return await async_detect_inverter(transport, driver_hint=self._driver_hint)
             except RuntimeError as exc:
                 last_error = exc
-                if attempt >= 2 or not _is_retryable_detection_error(str(exc)):
+                if attempt >= attempts - 1 or not _is_retryable_detection_error(str(exc)):
                     raise
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(max(0.0, float(policy.driver_retry_delay)))
         raise last_error or RuntimeError("no_supported_driver_matched")
 
     async def _async_enrich_collector_bridge_details(

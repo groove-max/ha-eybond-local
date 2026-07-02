@@ -31,7 +31,7 @@
     "vendor_register_map": "unknown",
     "notes": [
       "Base runtime profile exposes the standard ANJ-4200/SMG Protocol 1 surface.",
-      "Full SmartESS shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied."
+      "Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied."
     ]
   },
   "known_limitations": [

@@ -7,7 +7,7 @@
   "captured_at": "2026-06-26",
   "visibility": "private",
   "summary_publishable": true,
-  "summary": "Local protocol document describes an inverter ASCII command family using carriage-return-terminated commands and responses such as GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL. It confirms the ValueCloud capture is a distinct G-command protocol family rather than PI30 ASCII and documents read-only telemetry field positions.",
+  "summary": "Local protocol document describes an inverter ASCII command family using carriage-return-terminated commands and responses such as GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL. It confirms the SmartValue capture is a distinct G-command protocol family rather than PI30 ASCII and documents read-only telemetry field positions.",
   "assertions": [
     "runtime_compatibility",
     "telemetry_validation",

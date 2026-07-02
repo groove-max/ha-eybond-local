@@ -10,7 +10,7 @@
     "support_tier": "conditional",
     "enabled_default": true,
     "requires_confirm": true,
-    "support_notes": "Built-in LVYUAN EyeBond G-ASCII control surface for a locally identified 220V/16A/24V/50Hz, SVFW 4.003 device. Verified model controls come from ValueCloud shadow-learning evidence; inherited advanced protocol controls are document-backed from JSDSOLAR and remain untested until verified on a specific inverter."
+    "support_notes": "Built-in LVYUAN EyeBond G-ASCII control surface for a locally identified 220V/16A/24V/50Hz, SVFW 4.003 device. Verified model controls come from SmartValue shadow-learning evidence; inherited advanced protocol controls are document-backed from JSDSOLAR and remain untested until verified on a specific inverter."
   },
   "groups": [
     {

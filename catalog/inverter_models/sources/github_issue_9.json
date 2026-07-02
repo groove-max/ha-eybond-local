@@ -3,7 +3,7 @@
   "source_key": "github_issue_9",
   "kind": "github_issue",
   "title": "Anenji ANJ-4000W-24V user report",
-  "reference": "https://github.com/groove-max/ha-eybond-local/issues/9",
+  "reference": "project-issue:9",
   "captured_at": "2026-06-16",
   "visibility": "public",
   "summary": "Device owner reported an Anenji ANJ-4000W-24V inverter. A later private test build confirmed compatibility with the new runtime in read mode.",

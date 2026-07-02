@@ -7,7 +7,7 @@
   "captured_at": "2026-06-24",
   "visibility": "private",
   "summary_publishable": true,
-  "summary": "Device owner reported the commercial model as LVYUAN TY-SIC-3.6KBE-W1 behind an EyeBond/ValueCloud Wi-Fi logger. The same owner reported local RS485 settings as 9600 8N1.",
+  "summary": "Device owner reported the commercial model as LVYUAN TY-SIC-3.6KBE-W1 behind an EyeBond/SmartValue Wi-Fi logger. The same owner reported local RS485 settings as 9600 8N1.",
   "assertions": [
     "commercial_identity"
   ]

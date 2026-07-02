@@ -25,6 +25,9 @@ class OnboardingTimeoutPolicyTests(unittest.TestCase):
 
         self.assertEqual(auto_scan_timeout_seconds(), policy.auto_total_timeout)
         self.assertEqual(manual_probe_timeout_seconds(), policy.manual_total_timeout)
+        self.assertFalse(hasattr(policy, "driver_detection_timeout"))
+        self.assertGreaterEqual(policy.driver_detection_attempts, 1)
+        self.assertGreaterEqual(policy.driver_retry_delay, 0)
 
     def test_default_policy_derives_slash24_deep_scan_budget_from_estimate_and_buffer(self) -> None:
         policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY

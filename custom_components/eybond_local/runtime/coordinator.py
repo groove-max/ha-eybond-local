@@ -1578,6 +1578,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if capabilities.virtual_bridge and options.get("collector_bridge_kind") != "esp-collector":
             options["collector_bridge_kind"] = "esp-collector"
             changed = True
+        if capabilities.virtual_bridge:
+            bridge_version = str(
+                getattr(self.data.collector, "collector_bridge_version", "")
+                or self.data.values.get("collector_bridge_version")
+                or ""
+            ).strip()
+            if bridge_version and data.get("collector_bridge_version") != bridge_version:
+                data["collector_bridge_version"] = bridge_version
+                changed = True
+            if bridge_version and options.get("collector_bridge_version") != bridge_version:
+                options["collector_bridge_version"] = bridge_version
+                changed = True
         if changed:
             self._async_update_entry_without_reload(data=data, options=options)
 

@@ -421,6 +421,23 @@ class _AmbiguousActiveLinkManager(_FakeLinkManager):
         return False
 
 
+class _InactiveActiveLinkManager(_FakeLinkManager):
+    def __init__(
+        self,
+        transport: _CollectorQueryTransport,
+        at_transport: _CollectorAtQueryTransport | None = None,
+    ) -> None:
+        super().__init__()
+        self.connected = False
+        self.transport = transport
+        self.collector_at_transport = at_transport
+        self.active_transport = None
+        self.active_collector_at_transport = None
+
+    async def async_try_connect(self, *, timeout: float, require_heartbeat: bool = False) -> bool:
+        return False
+
+
 class _RuntimeValuesDriver:
     async def async_read_values(
         self,
@@ -1084,6 +1101,42 @@ class HubSnapshotTests(unittest.TestCase):
             self.assertEqual(at_transport.queries, [])
             self.assertNotIn("collector_protocol_version", snapshot.values)
             self.assertNotIn("collector_server_endpoint", snapshot.values)
+
+        asyncio.run(_run())
+
+    def test_async_refresh_bootstraps_virtual_bridge_metadata_without_heartbeat(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            transport = _CollectorQueryTransport(
+                {
+                    (2, b"\x06"): b"\x00\x06esp-collector/0.1.5/ESP32",
+                }
+            )
+            hub._link_manager = _InactiveActiveLinkManager(transport)
+
+            snapshot = await hub.async_refresh(poll_interval=10.0)
+
+            self.assertFalse(snapshot.connected)
+            self.assertEqual(snapshot.last_error, "waiting_for_collector")
+            self.assertEqual(snapshot.values["runtime_driver_state"], "collector_offline")
+            self.assertIn((2, b"\x06"), transport.requests)
+            self.assertTrue(snapshot.collector.collector_virtual_bridge)
+            self.assertEqual(snapshot.collector.collector_bridge_kind, "esp-collector")
+            self.assertEqual(snapshot.collector.collector_bridge_version, "0.1.5")
+            self.assertTrue(snapshot.values["collector_virtual_bridge"])
+            self.assertEqual(snapshot.values["collector_bridge_kind"], "esp-collector")
+            self.assertEqual(snapshot.values["collector_bridge_version"], "0.1.5")
 
         asyncio.run(_run())
 

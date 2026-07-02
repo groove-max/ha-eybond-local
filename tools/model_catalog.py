@@ -681,10 +681,10 @@ def _coverage_text(coverage: dict) -> str:
     """Render the three independent coverage dimensions in one compact line."""
 
     if not isinstance(coverage, dict):
-        return "runtime ?, SmartESS ?, vendor map ?"
+        return "runtime ?, cloud ?, vendor map ?"
     return (
         f"runtime {coverage.get('runtime_control_surface', '?')}, "
-        f"SmartESS {coverage.get('smartess_control_surface', '?')}, "
+        f"cloud {coverage.get('smartess_control_surface', '?')}, "
         f"vendor map {coverage.get('vendor_register_map', '?')}"
     )
 
@@ -748,25 +748,15 @@ def _render_model_detail(model: dict, catalog, sources_index: dict) -> list[str]
     else:
         lines.append("- Known limitations: —")
 
-    # Evidence: source count, public references, publishable sanitized summaries.
+    # Evidence: source count only.
+    #
+    # Keep raw references (URLs, private archive ids, external project links)
+    # inside source records for maintainers.  The generated catalog is public
+    # user-facing documentation, so it must not publish source references,
+    # source titles, or source summaries even when the source itself is marked
+    # public.
     source_keys = model.get("source_keys", [])
-    public_refs: list[str] = []
-    summaries: list[str] = []
-    for source_key in source_keys:
-        source = sources_index.get(source_key)
-        if not source:
-            continue
-        is_public = source.get("visibility") == "public"
-        if is_public:
-            public_refs.append(f"{source.get('title')} ({source.get('reference')})")
-        if is_public or source.get("summary_publishable"):
-            summaries.append(f"{source.get('title')}: {source.get('summary')}")
     lines.append(f"- Evidence: {len(source_keys)} source(s)")
-    lines.append(f"  - Public references: {'; '.join(public_refs) if public_refs else '—'}")
-    if summaries:
-        lines.append("  - Sanitized summaries:")
-        for summary in summaries:
-            lines.append(f"    - {summary}")
     lines.append("")
     return lines
 

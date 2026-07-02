@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is inspired by Keep a Changelog, with one practical rule for this repository:
 the GitHub release body should be rendered from the matching version section here.
 
-## [0.2.0-beta.2] - 2026-06-28
+## [0.2.0] - 2026-07-02
 
 ### Added
 
@@ -16,9 +16,9 @@ the GitHub release body should be rendered from the matching version section her
   the collector PN, devcode, or factory firmware-version string, and no extra AT probe is sent
   during detection. A detected bridge is shown as an honest **ESP EyeBond Collector** device
   (manufacturer, model, firmware version, and project link) and its cloud-only actions —
-  device learning / shadow learning, proxy capture, and SmartESS cloud assist — are hidden
+  device learning / shadow learning, proxy capture, and cloud-assist actions — are hidden
   unless a future firmware explicitly advertises cloud capabilities. Its collector operation
-  mode is fixed to **Home Assistant only** (the SmartESS+HA choice is not shown), and reverse
+  mode is fixed to **Home Assistant only** (the Cloud + HA choice is not shown), and reverse
   discovery stays on so it can reconnect. Local actions (runtime settings, diagnostics, and
   Change Collector Wi-Fi) stay fully available. Already-onboarded bridges keep working from
   their persisted bridge identity; fresh bridge onboarding requires esp-eybond-collector
@@ -39,7 +39,7 @@ the GitHub release body should be rendered from the matching version section her
   its support tier (full / partial / not recognized), and what to do next, before the device
   is created.
 - Added a guided control-discovery wizard ("Add controls (device learning)") for partially
-  supported and unrecognized inverters: one linear flow (consent → SmartESS sign-in → progress
+  supported and unrecognized inverters: one linear flow (consent → vendor-app sign-in → progress
   → review → apply) replaces the old technical action menu. Sessions are fail-closed: the
   collector is always restored even when a run fails.
 - Added read-sensor learning: during a learning session the integration also captures which
@@ -51,7 +51,7 @@ the GitHub release body should be rendered from the matching version section her
   (single output, full support with the SMG control set).
 - Added more supported models: **Anenji ANJ-4000W-24V** (full SMG telemetry), and read-only
   telemetry support for **MUST PV18**, **SRNE-compatible Modbus** inverters, and **LVYUAN**
-  units on the new **ValueCloud / EyeBond G-ASCII** protocol. The full, always-current device
+  units on the new **SmartValue / EyeBond G-ASCII** protocol. The full, always-current device
   matrix is the generated [inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md).
 - Added collector **callback identity routing**: collector callbacks are routed by collector
   identity (PN) instead of peer IP, so several collectors behind one router/NAT are tracked
@@ -75,8 +75,8 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
-- Onboarding UX overhaul: the welcome form is gone, the happy path is decluttered, SmartESS
-  cloud assist is an explicit optional choice (never an interstitial), developer tooling is
+- Onboarding UX overhaul: the welcome form is gone, the happy path is decluttered, cloud
+  assist is an explicit optional choice (never an interstitial), developer tooling is
   removed from the options flow, and long wall-of-text screens were rewritten into short
   actionable guidance (en/ru/uk).
 - Unknown-but-SMG-family inverters now onboard at the partial tier with base read sensors and
@@ -144,7 +144,7 @@ the GitHub release body should be rendered from the matching version section her
 ### Changed
 
 - EyeBond Local now presents collector and inverter devices as separate parts of one installation, with user-facing runtime settings centered on collector mode and control mode.
-- User-facing setup and runtime copy now explain the two everyday collector modes, `SmartESS + HA` and `HA only`, in plain user terms.
+- User-facing setup and runtime copy now explain the two everyday collector modes, `Cloud + HA` and `HA only`, in plain user terms.
 - Support artifacts now split collector, inverter, and integration roles so beta reports are easier to triage.
 
 ### Fixed
@@ -154,7 +154,7 @@ the GitHub release body should be rendered from the matching version section her
 - Legacy EyeBond cloud endpoints now resolve with the legacy port default when only the host name is known.
 - Legacy collector signal entities are cleaned up from existing installs instead of remaining visible after their defaults changed.
 - Removed collector entries and Home Assistant Core restarts now close owner-specific callback sockets and avoid accepting orphan collector callbacks.
-- Local onboarding no longer offers SmartESS cloud assist before creating a local entry, and HA-only mode applies its callback binding silently.
+- Local onboarding no longer offers cloud assist before creating a local entry, and HA-only mode applies its callback binding silently.
 
 ### Docs
 
@@ -268,14 +268,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
-- Added optional SmartESS cloud assist for onboarding and diagnostics, including reusable cloud-evidence export for one collector identity.
+- Added optional cloud assist for onboarding and diagnostics, including reusable cloud-evidence export for one collector identity.
 - Added JSON-first SmartESS protocol and model-binding catalogs plus imported SmartESS assets `0912`, `0921`, and `0925` for metadata ownership, diagnostics, and local draft tooling.
 - Added SmartESS local collector helpers for collector query/set commands, protocol-id parsing from query `14`, and known-family metadata planning.
 - Added read-only SMG model coverage and wider support-archive capture windows for Anenji ANJ-11KW-48V-WIFI-P / Protocol 3-10 devices.
 
 ### Changed
 
-- `Create support archive` is now the main diagnostics flow and can include saved SmartESS cloud evidence automatically or refresh it inline before the ZIP is built.
+- `Create support archive` is now the main diagnostics flow and can include saved cloud evidence automatically or refresh it inline before the ZIP is built.
 - Runtime diagnostics, support export, and local draft tooling now resolve effective profile/register-schema ownership from saved or live SmartESS metadata hints, so imported SmartESS assets can be used before a native SmartESS runtime driver exists.
 - PI30 default metadata now uses the canonical SmartESS `0925` compatibility paths, while user-facing naming presents raw `VMII-NXPW5KW` devices as PowMr 4.2kW.
 - Advanced metadata tools now focus on raw JSON export plus SmartESS draft and bridge generation instead of duplicating routine archive and reload actions.
@@ -283,13 +283,13 @@ the GitHub release body should be rendered from the matching version section her
 ### Fixed
 
 - Metadata cache priming now also warms catalog-driven metadata, avoiding blocking file reads when Home Assistant starts or reloads local overrides.
-- Support archives now store matching SmartESS cloud evidence only once inside the ZIP under `evidence/cloud_evidence.json`.
+- Support archives now store matching cloud evidence only once inside the ZIP under `evidence/cloud_evidence.json`.
 - Support-archive raw register capture now follows the effective schema name, so model-specific SMG evidence windows are not dropped for variant overlays.
 - External relative metadata overrides can now fall back to built-in parent profile and schema files when the local parent file is missing.
 
 ### Docs
 
-- Public docs now explain SmartESS cloud evidence, inline archive refresh, and the retention behavior of saved cloud-evidence files.
+- Public docs now explain cloud evidence, inline archive refresh, and the retention behavior of saved cloud-evidence files.
 - Public docs now call out PowMr 4.2kW and Sandisolar SD-HYM-4862HWP as the currently verified commercial examples for the PI30 and SMG families.
 
 ## [0.1.43] - 2026-04-15

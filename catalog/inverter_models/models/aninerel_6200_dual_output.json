@@ -32,7 +32,7 @@
     "notes": [
       "The aninerel.zip donor capture and the issue #7 Aninerel 6.2KW device currently share the same immutable local fingerprint: layout 11, model code 30979, rated power 6200, firmware 7903_A6260126v1.",
       "A fresh issue #7 support archive includes a device-scoped shadow-learning overlay with 71 matched cloud write attempts and zero unmatched attempts or writes.",
-      "SmartESS cloud evidence and shadow-learning trace confirm charge_source_priority/register 331 values 1-3; owner ESPHome YAML also lists value 4, so the built-in UI exposes 1-4 for this shared OP2 profile. The generic SMG value 0 remains excluded after a user-reported illegal_data_value rejection.",
+      "cloud evidence and shadow-learning trace confirm charge_source_priority/register 331 values 1-3; owner ESPHome YAML also lists value 4, so the built-in UI exposes 1-4 for this shared OP2 profile. The generic SMG value 0 remains excluded after a user-reported illegal_data_value rejection.",
       "Owner-supplied ESPHome YAML extends the known register map beyond the OP2-only register list, but it is not official manufacturer documentation.",
       "Only the OP2 enable write and the selected shadow-learning controls have device-specific evidence; the rest of the base SMG control surface is inherited."
     ]

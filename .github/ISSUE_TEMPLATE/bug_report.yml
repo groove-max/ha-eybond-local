@@ -28,7 +28,7 @@ body:
     id: integration_version
     attributes:
       label: EyeBond Local version
-      placeholder: 0.1.43
+      placeholder: 0.2.0
     validations:
       required: true
   - type: input
@@ -83,3 +83,20 @@ body:
       label: Logs, screenshots, or additional context
       description: Paste relevant logs or screenshots. Redact secrets if needed.
       render: shell
+  - type: dropdown
+    id: discovery_source
+    attributes:
+      label: Where did you hear about EyeBond Local?
+      description: Optional. Helps understand where the project is found.
+      options:
+        - Prefer not to say
+        - Search engine (Google, etc.)
+        - Home Assistant Community
+        - Reddit
+        - Telegram
+        - YouTube
+        - GitHub
+        - Friend / installer
+        - Other
+    validations:
+      required: false

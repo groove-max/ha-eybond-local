@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "private_note_g_ascii_family_shape",
+  "kind": "private_message",
+  "title": "Private G-ASCII family shape comparison note",
+  "reference": "private:g_ascii_family_shape_note",
+  "captured_at": "2026-03-02",
+  "visibility": "private",
+  "summary": "Private maintainer note records that a separate G-command device family uses the same command shape, including GPDAT0, GPV, GBAT, GMOD, GTMP, GCHG, GOP, GLINE, GBUS, GINV, GWS, Q1, and F. This supports treating the captured SmartValue traffic as a distinct G-ASCII protocol family rather than as PI30 ASCII.",
+  "assertions": [
+    "runtime_compatibility"
+  ]
+}

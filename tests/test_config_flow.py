@@ -3010,7 +3010,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._autodetect_results = {"0": result}
         flow._selected_result = result
 
-        class _FakeAtTransport:
+        class _FakeTransport:
             def __init__(self, **kwargs) -> None:
                 self.kwargs = kwargs
                 self.started = False
@@ -3023,16 +3023,26 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
-                _FakeAtTransport,
+                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                _FakeTransport,
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                _FakeTransport,
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_values",
                 new=AsyncMock(
                     return_value={
                         "collector_hardware_version": "esp-collector/0.1.2/ESP32",
                         "collector_server_endpoint": "192.168.1.50,8899,TCP",
                     }
+                ),
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                new=AsyncMock(
+                    return_value={}
                 ),
             ),
         ):
@@ -3081,7 +3091,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._autodetect_results = {"0": scanned_result}
         flow._selected_result = selected_result
 
-        class _FakeAtTransport:
+        class _FakeTransport:
             def __init__(self, **kwargs) -> None:
                 self.kwargs = kwargs
 
@@ -3093,16 +3103,24 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
-                _FakeAtTransport,
+                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                _FakeTransport,
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                _FakeTransport,
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_values",
                 new=AsyncMock(
                     return_value={
                         "collector_hardware_version": "esp-collector/0.1.2/ESP32",
                     }
                 ),
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                new=AsyncMock(return_value={}),
             ),
         ):
             form = await flow.async_step_confirm()

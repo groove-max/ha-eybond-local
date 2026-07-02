@@ -842,6 +842,100 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("collector_heartbeat_not_observed", result.warnings)
 
+    async def test_detect_target_does_not_wrap_driver_detection_in_global_timeout(self) -> None:
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        target = DiscoveryTarget(ip="192.168.1.14", source="known_ip")
+
+        class FakeTransport:
+            def __init__(
+                self,
+                *,
+                host: str,
+                port: int,
+                request_timeout: float,
+                heartbeat_interval: float,
+                collector_ip: str,
+            ) -> None:
+                self.collector_ip = collector_ip
+                self.collector_info = CollectorInfo(remote_ip=collector_ip)
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            def set_collector_ip(self, collector_ip: str) -> None:
+                self.collector_ip = collector_ip
+
+            async def wait_until_connected(self, timeout: float) -> bool:
+                return True
+
+            async def wait_until_heartbeat(self, timeout: float) -> bool:
+                return True
+
+        detected = DetectedInverter(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="PowMr 4.2kW",
+            serial_number="553555355535552",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+            details={"protocol_id": "PI30"},
+        )
+        context = DetectedDriverContext(
+            driver=Pi30Driver(),
+            inverter=detected,
+            match=DriverMatch(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model_name="PowMr 4.2kW",
+                serial_number="553555355535552",
+                probe_target=detected.probe_target,
+            ),
+        )
+
+        async def fail_if_called(*args, **kwargs):
+            raise AssertionError("driver detection must not be wrapped in asyncio.wait_for")
+
+        with (
+            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                new=AsyncMock(
+                    return_value=DiscoveryProbeResult(
+                        target_ip="192.168.1.14",
+                        message="set>server=192.168.1.50:8899;",
+                        local_port=40000,
+                        reply="rsp>server=2;",
+                        reply_from="192.168.1.14:58899",
+                    )
+                ),
+            ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond._async_probe_smartess_onboarding",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                detector,
+                "_async_detect_driver_with_retries",
+                new=AsyncMock(return_value=context),
+            ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.asyncio.wait_for",
+                new=fail_if_called,
+            ),
+        ):
+            result = await detector._async_detect_target(
+                target,
+                discovery_timeout=0.1,
+                connect_timeout=0.1,
+                heartbeat_timeout=0.1,
+                enrich_runtime_details=False,
+            )
+
+        self.assertEqual(result.next_action, "create_entry")
+        self.assertIsNotNone(result.match)
+
     async def test_detect_target_collects_smartess_metadata_on_successful_match(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")

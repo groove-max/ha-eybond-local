@@ -25,7 +25,13 @@ For unsupported or partially supported hardware, always attach a Support Archive
 2. Open **EyeBond Local**.
 3. Click **Configure**.
 4. Open **Diagnostics and service tools**.
+
+<p align="center"><img src="images/diagnostics-service-tools.png" alt="Diagnostics and service tools menu" width="480"></p>
+
 5. Choose **Create support archive**.
+
+<p align="center"><img src="images/support-archive-create.png" alt="Create support archive form" width="480"></p>
+
 6. Download the generated ZIP.
 7. Attach it to the GitHub issue.
 
@@ -67,7 +73,7 @@ If the case contains sensitive information, say so in the issue and share only t
 Creating a normal Support Archive does not require your cloud/app password.
 
 Some optional support actions can refresh cloud evidence and may ask for
-SmartESS, ValueCloud, or compatible vendor-app credentials for that one action.
+credentials for SmartESS / SmartValue or another compatible vendor app for that one action.
 The password is used only for the live request and is not saved by the
 integration.
 

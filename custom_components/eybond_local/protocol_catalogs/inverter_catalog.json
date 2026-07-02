@@ -501,7 +501,7 @@
     "eybond_g_ascii": {
       "ranges": [],
       "notes": [
-        "EyeBond/JsdSolar G-ASCII support is read-only. Current evidence comes from ValueCloud proxy/support captures and a matching local protocol document covering GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL responses.",
+        "EyeBond/JsdSolar G-ASCII support is read-only. Current evidence comes from SmartValue proxy/support captures and a matching local protocol document covering GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL responses.",
         "Support capture uses protocol_catalogs/command_schemas/eybond_g_ascii/base.json as the schema-driven read-only command probe plan. Captured unknown fields are maintainer evidence only until the schema/driver decoder is explicitly updated."
       ]
     }
@@ -1225,8 +1225,8 @@
       ],
       "provenance": {
         "sources": [
-          "Private ValueCloud support archive 01KW4GB9F4A7W81NCMKJK46EBB_20260629T213351481467Z.zip: local G-ASCII F/SVFW fingerprint 220V/16A/24V/50Hz + SVFW 4.003; commercial model name is user-reported.",
-          "ValueCloud shadow-learning evidence from the same device correlated 36 cloud write attempts to 12 local G-ASCII setting commands without applying them to the inverter."
+          "Private SmartValue support archive 01KW4GB9F4A7W81NCMKJK46EBB_20260629T213351481467Z.zip: local G-ASCII F/SVFW fingerprint 220V/16A/24V/50Hz + SVFW 4.003; commercial model name is user-reported.",
+          "SmartValue shadow-learning evidence from the same device correlated 36 cloud write attempts to 12 local G-ASCII setting commands without applying them to the inverter."
         ],
         "confidence": "offline-fingerprint-user-reported-model"
       }
@@ -1244,7 +1244,7 @@
       ],
       "provenance": {
         "sources": [
-          "ValueCloud proxy/support captures: GPDAT0, GPV, GBAT, GMOD, SVFW, GTMP, GLINE, GBUS, GCHG, GOP, GINV command family",
+          "SmartValue proxy/support captures: GPDAT0, GPV, GBAT, GMOD, SVFW, GTMP, GLINE, GBUS, GCHG, GOP, GINV command family",
           "local protocol document protocol.JSDSOLAR.docx: JsdSolar G-command ASCII read-only telemetry layout",
           "external JsdSolar SmartESS G-command discussion: confirms the same GPDAT0/GPV/GBAT/GMOD command family exists outside this capture"
         ],

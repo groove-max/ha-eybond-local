@@ -36,7 +36,7 @@
     "reference": {
       "type": "string",
       "minLength": 1,
-      "description": "Durable identity: a public URL, a sha256:<hash>, an opaque private:<token>, or a fixture:<name>. Private references must not be exposed by public sources."
+      "description": "Durable maintainer identity such as project-issue:<id>, project-attachment:<token>, sha256:<hash>, private:<token>, or fixture:<name>. Public URLs should not be committed to the public model catalog."
     },
     "captured_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "format": "date"},
     "visibility": {"type": "string", "enum": ["public", "private"]},

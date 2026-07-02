@@ -90,7 +90,7 @@ class CollectorCloudProfileCatalogLoaderTests(unittest.TestCase):
 
         self.assertEqual(valuecloud.default_host, "iot.eybond.com")
         self.assertEqual(valuecloud.provider, "valuecloud")
-        self.assertEqual(valuecloud.label, "ValueCloud AT")
+        self.assertEqual(valuecloud.label, "SmartValue iot.eybond.com AT")
         self.assertEqual(valuecloud.default_port, 18899)
         self.assertEqual(valuecloud.default_protocol, "TCP")
         self.assertEqual(valuecloud.known_hosts, ("iot.eybond.com",))

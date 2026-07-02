@@ -31,7 +31,7 @@
     "smartess_control_surface": "cloud_catalog",
     "vendor_register_map": "unknown",
     "notes": [
-      "The proxy capture proves PI30 ASCII telemetry and SmartESS cloud-visible PI30 controls, but Home Assistant write behavior is not yet independently user-confirmed.",
+      "The proxy capture proves PI30 ASCII telemetry and cloud-visible PI30 controls, but Home Assistant write behavior is not yet independently user-confirmed.",
       "This collector family uses raw PI30 ASCII payloads directly over the SmartESS DTU AT callback stream rather than the legacy EyeBond binary FC=4 forwarding tunnel."
     ]
   },

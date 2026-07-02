@@ -149,6 +149,10 @@ from .collector.smartess_ble import (
 )
 from .collector.at_runtime import query_runtime_collector_at_values
 from .collector.capabilities import parse_esp_collector_hardware_token
+from .collector.parameter_registry import (
+    COLLECTOR_PARAMETER_DEFINITION_BY_ID,
+    query_runtime_collector_values,
+)
 from .collector.transport import SharedCollectorAtTransport, SharedEybondTransport, _finish_cleanup_on_cancel
 from .collector.cloud_family import collector_cloud_family_observation_from_endpoint
 from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
@@ -3245,33 +3249,82 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         values = dict(self._auto_connection_defaults(), **self._auto_config)
         spec = build_connection_spec_from_values(self._current_connection_type(), values)
+        collector_pn = self._collector_pn_for_result(selected_result)
+        details: dict[str, object] = {}
+        payload_transport = SharedEybondTransport(
+            host="0.0.0.0",
+            port=getattr(spec, "tcp_port", DEFAULT_TCP_PORT),
+            request_timeout=min(float(getattr(spec, "request_timeout", DEFAULT_REQUEST_TIMEOUT)), 3.0),
+            heartbeat_interval=float(getattr(spec, "heartbeat_interval", DEFAULT_HEARTBEAT_INTERVAL)),
+            collector_ip=collector_ip,
+            collector_pn=collector_pn,
+        )
         at_transport = SharedCollectorAtTransport(
             host="0.0.0.0",
             port=getattr(spec, "tcp_port", DEFAULT_TCP_PORT),
             request_timeout=min(float(getattr(spec, "request_timeout", DEFAULT_REQUEST_TIMEOUT)), 3.0),
             collector_ip=collector_ip,
-            collector_pn=self._collector_pn_for_result(selected_result),
+            collector_pn=collector_pn,
         )
         try:
+            await payload_transport.start()
             await at_transport.start()
-            async with _async_timeout(4.0):
-                details = await query_runtime_collector_at_values(at_transport)
-        except TimeoutError:
-            logger.debug(
-                "Selected-result collector capability refresh timed out collector_ip=%s",
-                collector_ip,
-            )
-            return
         except Exception as exc:
             logger.debug(
-                "Selected-result collector capability refresh failed collector_ip=%s error=%s",
+                "Selected-result collector capability transport unavailable collector_ip=%s error=%s",
                 collector_ip,
                 exc,
             )
+            with suppress(Exception):
+                await at_transport.stop()
+            with suppress(Exception):
+                await payload_transport.stop()
             return
+
+        try:
+            async with _async_timeout(4.0):
+                collector_parameters = tuple(
+                    COLLECTOR_PARAMETER_DEFINITION_BY_ID[parameter]
+                    for parameter in (6, 21)
+                    if parameter in COLLECTOR_PARAMETER_DEFINITION_BY_ID
+                )
+                details.update(
+                    await query_runtime_collector_values(
+                        SmartEssLocalSession(payload_transport),
+                        parameters=collector_parameters,
+                    )
+                )
+        except TimeoutError:
+            logger.debug(
+                "Selected-result collector FC capability refresh timed out collector_ip=%s",
+                collector_ip,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Selected-result collector FC capability refresh failed collector_ip=%s error=%s",
+                collector_ip,
+                exc,
+            )
+
+        try:
+            async with _async_timeout(4.0):
+                details.update(await query_runtime_collector_at_values(at_transport))
+        except TimeoutError:
+            logger.debug(
+                "Selected-result collector AT capability refresh timed out collector_ip=%s",
+                collector_ip,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Selected-result collector AT capability refresh failed collector_ip=%s error=%s",
+                collector_ip,
+                exc,
+            )
         finally:
             with suppress(Exception):
                 await at_transport.stop()
+            with suppress(Exception):
+                await payload_transport.stop()
 
         hardware_token = parse_esp_collector_hardware_token(
             details.get("collector_hardware_version")

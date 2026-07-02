@@ -56,7 +56,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Lifecycle: supported
 - Aliases: —
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, SmartESS unknown, vendor map unknown
+- Coverage: runtime available, cloud unknown, vendor map unknown
   - Coverage notes:
     - Runtime write surface is inherited from the shared SMG base profile; not every write is independently validated on this commercial unit.
 - Summary: Anenji single-output 6200 (layout 1) bound to the shared SMG base surface; same control set as the verified SMG 6200.
@@ -71,16 +71,13 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Controls inherit the SMG 6200 control set; not every writable setting is independently confirmed on this unit.
 - Evidence: 1 source(s)
-  - Public references: —
-  - Sanitized summaries:
-    - Anenji 6200 single-output donor capture: Donor single-output capture (layout 1, model code 14080, fw 3700_A6250424v1). Bound to the SMG 6200 surface with correct telemetry readback.
 
 ### Anenji — ANJ-11KW-48V-WIFI-P (`anenji_anj_11kw_48v_wifi_p`)
 
 - Lifecycle: supported
 - Aliases: —
 - Validation: hardware captured, telemetry confirmed, controls confirmed
-- Coverage: runtime hardware_confirmed, SmartESS unknown, vendor map documented
+- Coverage: runtime hardware_confirmed, cloud unknown, vendor map documented
   - Coverage notes:
     - Device-specific runtime profile is user-confirmed.
     - Private Anenji Protocol No. 3-10 documentation backs a model-specific register map for this runtime family.
@@ -95,21 +92,16 @@ Runtime descriptors with no specific commercial model record. These are generic 
       - Capabilities: 47 (tested 47); support tiers: conditional 37, standard 10 | Telemetry: 122 measurements, 18 binary sensors
 - Known limitations: —
 - Evidence: 3 source(s)
-  - Public references: —
-  - Sanitized summaries:
-    - Anenji ANJ-11KW-48V-WIFI-P donor captures: Donor captures from 2026-04-17/18 (layout 4, model code 32768) bound to the ANJ-11KW model profile with correct telemetry readback.
-    - Anenji ANJ-11KW-48V-WIFI-P user control validation: Device owner confirmed the ANJ-11KW model-specific runtime path and writable control surface on real hardware after the donor captures.
-    - Anenji Protocol No. 3-10 Modbus register documentation: Private local copy of Communication.Protocol.No.3-10.pdf, a 20-page Modbus RTU register document covering protocol numbers 3, 4, 5, and 6 for the ANJ-11KW runtime family.
 
 ### Anenji — ANJ-4000W-24V (`anenji_4200_protocol_1`)
 
 - Lifecycle: experimental
 - Aliases: 4200 (Protocol 1), Anenji 4200 Protocol 1
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime device_scoped_overlay, SmartESS device_scoped_overlay, vendor map unknown
+- Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map unknown
   - Coverage notes:
     - Base runtime profile exposes the standard ANJ-4200/SMG Protocol 1 surface.
-    - Full SmartESS shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied.
+    - Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied.
 - Summary: Anenji 4200 Protocol 1 variant has user support captures from an ANJ-4000W-24V device. Runtime detection resolves exactly to the SMG Protocol 1 surface, read telemetry is confirmed, and a full shadow-learning run mapped the SmartESS 0925 write surface without leaking writes to the real inverter. Treat controls as partial until specific Home Assistant writes are user-validated.
 - Variants:
   - `layout1_model13569` — Anenji 4200 Protocol 1 variant
@@ -123,20 +115,13 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Runtime telemetry is confirmed by user support archives.
   - Full shadow-learning completed and activated eight device-scoped learned controls; the learning proxy intentionally captured but did not apply cloud writes, so direct Home Assistant write/readback validation is still pending.
 - Evidence: 5 source(s)
-  - Public references: Anenji ANJ-4000W-24V user report (https://github.com/groove-max/ha-eybond-local/issues/9)
-  - Sanitized summaries:
-    - Anenji 4200 (Protocol 1) rule migration note: Anenji 4200 (Protocol 1) variant originally migrated from legacy detection rules before later user capture evidence was added.
-    - Anenji ANJ-4000W-24V user report: Device owner reported an Anenji ANJ-4000W-24V inverter. A later private test build confirmed compatibility with the new runtime in read mode.
-    - Anenji ANJ-4000W-24V runtime support archive: Private support archive for the issue #9 device. The runtime selected modbus_smg/models/anenji_4200_protocol_1.json, matched layout 1 and model code 13569 with rated power 4200, and reported live telemetry values. Control learning did not run because SmartESS login preflight failed for this account.
-    - Anenji ANJ-4000W-24V follow-up support archive: Follow-up private support archive for the issue #9 ANJ-4000W-24V device after the user rebooted the setup. Runtime still resolves to modbus_smg/models/anenji_4200_protocol_1.json with layout 1, model code 13569, rated power 4200, and firmware 3501_A6251128v1. The archive shows controls enabled in full mode, 30 local write capabilities exposed, and SmartESS 0925 cloud settings evidence with 39 fields, 29 mapped fields, and the ctrlDevice write action known. It does not include a user-confirmed individual write/readback result.
-    - Anenji ANJ-4000W-24V full shadow-learning support archive: Full private shadow-learning support archive for the issue #9 ANJ-4000W-24V device. The run planned and correlated 77 SmartESS cloud write attempts with 77 local FC16 Modbus writes, with zero unmatched, degraded, leaked, or unknown-field attempts. The safety proxy captured but did not apply the writes to the real inverter. The generated device-scoped overlay selected eight learned controls at registers 304, 322, 330, 338, 341, 342, 343, and 425, and excluded destructive actions at registers 460 and 461.
 
 ### Anenji — ANJ-6200-48PL (`anenji_anj_6200_48pl`)
 
 - Lifecycle: supported
 - Aliases: —
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, SmartESS unknown, vendor map unknown
+- Coverage: runtime available, cloud unknown, vendor map unknown
   - Coverage notes:
     - Runtime write surface is shared with SMG 6200; write behavior is not independently confirmed on this commercial unit.
 - Summary: SMG layout 2 model that reuses the SMG 6200 runtime surface; reported via a GitHub issue and a support capture.
@@ -151,21 +136,17 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Shares the SMG 6200 runtime surface; writes are not independently hardware-confirmed on this unit.
 - Evidence: 2 source(s)
-  - Public references: Anenji ANJ-6200-48PL user report (https://github.com/groove-max/ha-eybond-local/issues/8)
-  - Sanitized summaries:
-    - Anenji ANJ-6200-48PL user report: Device owner reported the commercial model name and output-priority behavior for the ANJ-6200-48PL.
-    - ANJ-6200-48PL support capture: Support capture (layout 2, model code 8960, rated 6200) that bound successfully to the SMG 6200 register schema and profile.
 
 ### Aninerel — 6200 (dual output) (`aninerel_6200_dual_output`)
 
 - Lifecycle: supported
 - Aliases: SMG OP2 6200, Aninerel 6.2KW
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime device_scoped_overlay, SmartESS device_scoped_overlay, vendor map extended
+- Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map extended
   - Coverage notes:
     - The aninerel.zip donor capture and the issue #7 Aninerel 6.2KW device currently share the same immutable local fingerprint: layout 11, model code 30979, rated power 6200, firmware 7903_A6260126v1.
     - A fresh issue #7 support archive includes a device-scoped shadow-learning overlay with 71 matched cloud write attempts and zero unmatched attempts or writes.
-    - SmartESS cloud evidence and shadow-learning trace confirm charge_source_priority/register 331 values 1-3; owner ESPHome YAML also lists value 4, so the built-in UI exposes 1-4 for this shared OP2 profile. The generic SMG value 0 remains excluded after a user-reported illegal_data_value rejection.
+    - cloud evidence and shadow-learning trace confirm charge_source_priority/register 331 values 1-3; owner ESPHome YAML also lists value 4, so the built-in UI exposes 1-4 for this shared OP2 profile. The generic SMG value 0 remains excluded after a user-reported illegal_data_value rejection.
     - Owner-supplied ESPHome YAML extends the known register map beyond the OP2-only register list, but it is not official manufacturer documentation.
     - Only the OP2 enable write and the selected shadow-learning controls have device-specific evidence; the rest of the base SMG control surface is inherited.
 - Summary: Aninerel dual-output 6200 / Aninerel 6.2KW resolves to the OP2 6200 runtime surface (layout 11, model code 30979, rated 6200, firmware 7903_A6260126v1). The aninerel.zip donor capture and the issue #7 support package are treated as the same shared OP2 model family unless a future stable runtime anchor proves otherwise. Owner ESPHome YAML and shadow-learning evidence extend the known Modbus register map for this family.
@@ -182,20 +163,13 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Charge Source Priority value 4 is exposed from owner-supplied YAML evidence; if a particular unit rejects it, Home Assistant will surface the inverter rejection.
   - Shadow-learning proves cloud-to-local register correlation for selected controls, but does not by itself confirm every Home Assistant write/readback path as user-tested.
 - Evidence: 5 source(s)
-  - Public references: Aninerel 6.2KW user report (https://github.com/groove-max/ha-eybond-local/issues/7); Aninerel 6.2KW ESPHome register map (https://github.com/user-attachments/files/29160459/esp32-anenji.yaml)
-  - Sanitized summaries:
-    - Aninerel 6.2KW user report: Device owner reported an Aninerel 6.2KW inverter and provided a fresh support archive from the current integration build plus an ESPHome YAML register map used with an esp32-anenji setup.
-    - Aninerel 6200 dual-output donor capture: Donor support archive aninerel.zip for a dual-output unit (layout 11, model code 30979, rated 6200, fw 7903_A6260126v1). The device ran with local SMG metadata and correct telemetry readback; OP2 config registers were present in the capture.
-    - SMG OP2 register information: Owner-supplied OP2 register list: output2 apparent power 239 (signed), active power 240, load percent 243, voltage 244 scaled by 0.1, cut-off SOC 344, overload warning threshold 353, output2 enable at register 354 bit 0 with write-multiple, and remote switch at register 420 bit 0.
-    - Aninerel 6.2KW current-runtime support archive: Fresh private support archive 01KVJEVE5C9B45C3TX4CVM4KED_20260620T131647450494Z.zip for the issue #7 Aninerel 6.2KW device. The runtime resolves exactly to descriptor anenji_op2_6200 with layout 11, model code 30979, rated power 6200, firmware 7903_A6260126v1, profile modbus_smg/models/anenji_op2_6200.json, and confirmed live telemetry. The archive includes a device-scoped shadow-learning overlay activated on top of the OP2 profile; 71 cloud write attempts matched local Modbus writes with zero unmatched attempts or writes.
-    - Aninerel 6.2KW ESPHome register map: Owner-supplied ESPHome YAML register map for the issue #7 Aninerel 6.2KW device. The map covers SMG-style Modbus telemetry and settings, including live registers around 202-235, configuration registers around 300-352, PV daily energy at 443, remote switch at 420, battery type at 322, battery charging priority at register 331 with listed values 1-4, charging/current/voltage thresholds, SOC protection thresholds, automatic mains output enable at 338, lithium activation at 339, and OP2-related settings.
 
 ### Aninerel — ANL-4200T-24L-W-PRO (`aninerel_anl_4200t_24l_w_pro`)
 
 - Lifecycle: experimental
 - Aliases: —
 - Validation: hardware captured, telemetry partial, controls none
-- Coverage: runtime read_only, SmartESS unknown, vendor map unknown
+- Coverage: runtime read_only, cloud unknown, vendor map unknown
   - Coverage notes:
     - Current runtime coverage is a read-only SMG family fallback.
 - Summary: Aninerel 4200T reported via a GitHub issue and donor captures; resolves to the SMG read-only family surface pending a model-specific profile.
@@ -210,25 +184,21 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Read-only family-fallback surface; no model-specific profile and no confirmed controls.
 - Evidence: 2 source(s)
-  - Public references: Aninerel ANL-4200T-24L-W-PRO user report (https://github.com/groove-max/ha-eybond-local/issues/3)
-  - Sanitized summaries:
-    - Aninerel ANL-4200T-24L-W-PRO user report: Device owner reported the Aninerel ANL-4200T-24L-W-PRO commercial model.
-    - Aninerel ANL-4200T donor captures: Donor captures (layout 11, model code 30723, rated 4200) resolved to the SMG read-only family surface.
 
 ### LVYUAN — TY-SIC-3.6KBE-W1 (`lvyuan_ty_sic_3_6kbe_w1`)
 
 - Lifecycle: experimental
 - Aliases: —
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, SmartESS correlated, vendor map documented
+- Coverage: runtime available, cloud correlated, vendor map documented
   - Coverage notes:
-    - Runtime support is based on captured ValueCloud/EyeBond G-ASCII command polling and a matching JsdSolar G-command ASCII protocol document.
+    - Runtime support is based on captured SmartValue/EyeBond G-ASCII command polling and a matching JsdSolar G-command ASCII protocol document.
     - The model is identified offline by the local G-ASCII rated-info/software fingerprint: F=220V/16A/24V/50Hz plus SVFW 4.003.
     - Support archives now include a schema-driven extended EyeBond G-ASCII read-only protocol probe so future user packages can report command support and unknown fields without changing runtime behavior.
-    - A fingerprint-bound control profile is exposed from ValueCloud shadow-learning evidence. The captured cloud write attempts were correlated to local G-ASCII setting commands without applying the writes during learning.
-- Summary: LVYUAN TY-SIC-3.6KBE-W1 was reported behind an EyeBond/ValueCloud Wi-Fi logger using iot.eybond.com-style cloud connectivity and 9600 8N1 serial settings. Proxy/support captures show a plain G-command ASCII polling family with GPDAT0, GPV, GBAT, GMOD, and related commands; a matching JsdSolar protocol document defines the telemetry layout. The current runtime binding uses the local offline fingerprint F=220V/16A/24V/50Hz plus SVFW 4.003 and exposes a partial, fingerprint-bound control profile derived from ValueCloud shadow-learning evidence.
+    - A fingerprint-bound control profile is exposed from SmartValue shadow-learning evidence. The captured cloud write attempts were correlated to local G-ASCII setting commands without applying the writes during learning.
+- Summary: LVYUAN TY-SIC-3.6KBE-W1 was reported behind an EyeBond/SmartValue Wi-Fi logger using iot.eybond.com-style cloud connectivity and 9600 8N1 serial settings. Proxy/support captures show a plain G-command ASCII polling family with GPDAT0, GPV, GBAT, GMOD, and related commands; a matching JsdSolar protocol document defines the telemetry layout. The current runtime binding uses the local offline fingerprint F=220V/16A/24V/50Hz plus SVFW 4.003 and exposes a partial, fingerprint-bound control profile derived from SmartValue shadow-learning evidence.
 - Variants:
-  - `eybond_g_ascii_lvyuan_fingerprint` — ValueCloud EyeBond G-ASCII fingerprint-bound control profile
+  - `eybond_g_ascii_lvyuan_fingerprint` — SmartValue EyeBond G-ASCII fingerprint-bound control profile
     - Descriptors: lvyuan_ty_sic_3_6kbe_w1
     - Known firmware: collector FW 8-50-12-3, collector AT 1-11, inverter F 220V 16A 24V 50Hz, inverter SVFW 4.003 (20250217)
     - `lvyuan_ty_sic_3_6kbe_w1` → surface `eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1` (driver eybond_g_ascii, variant lvyuan_ty_sic_3_6kbe_w1)
@@ -240,26 +210,18 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Commercial model name is still user-reported, while runtime binding uses the offline F/SVFW fingerprint.
   - The documented G-ASCII command family is distinct from PI30 ASCII despite superficial line-oriented ASCII similarities.
   - Extended protocol-probe evidence is maintainer input only; runtime entities are added only after the command schema/driver decoder is explicitly updated.
-  - ValueCloud public XML catalog checks found adjacent OEM/SMK Modbus or mixed profiles, but no direct LVYUAN TY-SIC-3.6KBE-W1 manufacturer register map.
+  - SmartValue public XML catalog checks found adjacent OEM/SMK Modbus or mixed profiles, but no direct LVYUAN TY-SIC-3.6KBE-W1 manufacturer register map.
 - Evidence: 6 source(s)
-  - Public references: External JsdSolar SmartESS G-command family evidence (https://github.com/syssi/esphome-pipsolar/issues/160#issuecomment-2660896958)
-  - Sanitized summaries:
-    - LVYUAN TY-SIC-3.6KBE-W1 user identity report: Device owner reported the commercial model as LVYUAN TY-SIC-3.6KBE-W1 behind an EyeBond/ValueCloud Wi-Fi logger. The same owner reported local RS485 settings as 9600 8N1.
-    - ValueCloud LVYUAN G-ASCII support archive: Private support archive captured a ValueCloud endpoint profile, 9600 8N1 collector serial settings, and read-only G-command telemetry. The archive was produced before the protocol was renamed from a provisional ValueCloud-specific runtime name to EyeBond G-ASCII, so old runtime key names in this archive are historical evidence only.
-    - ValueCloud LVYUAN G-ASCII shadow-learning support archive: Private support archive captured the local EyeBond G-ASCII fingerprint F=220V/16A/24V/50Hz with SVFW 4.003 and ValueCloud shadow-learning evidence. The evidence correlated cloud-known setting writes to local G-ASCII commands without applying the writes to the inverter during learning.
-    - ValueCloud cloud proxy capture with G-command polling: Proxy capture shows the cloud polling the logger/inverter with plain G-ASCII commands including GPDAT0, GPV, GBAT, GMOD, SVFW, GTMP, GLINE, GBUS, GCHG, GOP, GINV, GWS, TE?, Q1, and F. Captured responses provide read-only telemetry field evidence; no write-control behavior was validated.
-    - JsdSolar G-command ASCII inverter communication protocol: Local protocol document describes an inverter ASCII command family using carriage-return-terminated commands and responses such as GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL. It confirms the ValueCloud capture is a distinct G-command protocol family rather than PI30 ASCII and documents read-only telemetry field positions.
-    - External JsdSolar SmartESS G-command family evidence: External discussion of a JsdSolar/SmartESS device lists the same G-command family shape, including GPDAT0, GPV, GBAT, GMOD, GTMP, GCHG, GOP, GLINE, GBUS, GINV, GWS, Q1, and F. This supports treating the captured ValueCloud traffic as a distinct G-ASCII protocol family rather than as PI30 ASCII.
 
 ### MUST — PV18-3024 (`must_pv18_3024`)
 
 - Lifecycle: experimental
 - Aliases: MUST PV18-3024, MUST PV1800, MUST PV/PH18
 - Validation: hardware captured, telemetry partial, controls none
-- Coverage: runtime read_only, SmartESS cloud_catalog, vendor map partial
+- Coverage: runtime read_only, cloud cloud_catalog, vendor map partial
   - Coverage notes:
     - Runtime support uses a third-party MUST PV/PH18 Modbus map for read-only telemetry.
-    - SmartESS cloud settings were observed as a catalog-only control surface; they are not exposed as local controls because no safe write/readback correlation exists.
+    - cloud settings were observed as a catalog-only control surface; they are not exposed as local controls because no safe write/readback correlation exists.
 - Summary: MUST PV18-3024 support is based on issue #5 support archives and a third-party MUST PV/PH18 Modbus register map. The user archives showed Auto/PI30 probe timeouts, SmartESS protocol asset "02FF,0,0," and collector serial baudrate 19200-8-1-0. The runtime accepts both the PV18 marker and a numeric PV1800 marker at Modbus register 20001, and adds a read-only MUST PV/PH18 Modbus surface using slave address 4 and the third-party register map.
 - Variants:
   - `must_pv18` — MUST PV18 Modbus read-only variant
@@ -272,19 +234,16 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Read-only first implementation; no write controls are exposed.
   - Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.
-  - SmartESS cloud-visible settings are not exposed as Home Assistant controls until local Modbus write correlation is validated.
+  - cloud-visible settings are not exposed as Home Assistant controls until local Modbus write correlation is validated.
   - Telemetry map is based on a third-party MUST PV/PH18 Modbus register map and still needs owner confirmation through a fresh support archive after integration update.
 - Evidence: 3 source(s)
-  - Public references: MUST PV18-3024 user report (https://github.com/groove-max/ha-eybond-local/issues/5)
-  - Sanitized summaries:
-    - MUST PV18-3024 user report: Device owner reported a MUST PV18-3024 Modbus inverter with Wi-Fi data logger. Initial Auto and manual PI30 attempts timed out; follow-up evidence showed the collector serial baudrate was 19200-8-1-0 and the SmartESS protocol asset was "02FF,0,0,".
 
 ### PowMr — 4.2KW (`powmr_4_2kw`)
 
 - Lifecycle: supported
 - Aliases: VMII-NXPW5KW
 - Validation: hardware captured, telemetry confirmed, controls confirmed
-- Coverage: runtime hardware_confirmed, SmartESS hardware_confirmed, vendor map unknown
+- Coverage: runtime hardware_confirmed, cloud hardware_confirmed, vendor map unknown
   - Coverage notes:
     - PI30 ASCII runtime control surface is validated from the VMII-NXPW5KW live-capture fixture.
     - The same inverter also responds to the local SmartESS 0925 Modbus map through the legacy EyeBond binary tunnel; the commercial model is PowMr 4.2kW, while the raw inverter model reports VMII-NXPW5KW.
@@ -306,21 +265,18 @@ Runtime descriptors with no specific commercial model record. These are generic 
       - Capabilities: 18 (tested 18); support tiers: standard 18 | Telemetry: 71 measurements, 16 binary sensors
 - Known limitations: —
 - Evidence: 1 source(s)
-  - Public references: —
-  - Sanitized summaries:
-    - PowMr 4.2KW / VMII-NXPW5KW live-capture fixture: Local PI30 live-capture (field dump pi30_vmii_nxpw5kw_20260408T0003Z) for the PowMr 4.2KW. The inverter reports raw model number VMII-NXPW5KW via QMN; the fixture validates PI30 telemetry and the tested control surface. The anonymized fixture is local-only.
 
 ### Sandisolar — SD-HYM-4862HWP (`sandisolar_sd_hym_4862hwp`)
 
 - Lifecycle: supported
 - Aliases: —
 - Validation: hardware confirmed, telemetry confirmed, controls confirmed
-- Coverage: runtime hardware_confirmed, SmartESS hardware_confirmed, vendor map extended
+- Coverage: runtime hardware_confirmed, cloud hardware_confirmed, vendor map extended
   - Coverage notes:
     - Maintainer hardware validates the runtime SMG control surface.
-    - SmartESS shadow-learning contributed five non-destructive controls and excluded destructive actions.
-    - Maintainer local evidence covers an extended register map beyond the SmartESS user-facing surface.
-- Summary: Maintainer's Sandisolar SD-HYM-4862HWP resolves to runtime descriptor smg_6200 via local SMG identity anchors: register 171 device_type/model_code=0x1E00 (7680), register 184 protocol/layout=1, and register 643 rated_power=6200. The local SMG register set does not expose the commercial model name, so the Sandisolar mapping is hardware/source-backed rather than register-name-backed. Full telemetry, the original SMG control set, and five SmartESS shadow-learning controls (304, 322, 330, 338, 425) are validated on this hardware; destructive actions 460 and 461 remain excluded.
+    - Cloud shadow-learning contributed five non-destructive controls and excluded destructive actions.
+    - Maintainer local evidence covers an extended register map beyond the cloud user-facing surface.
+- Summary: Maintainer's Sandisolar SD-HYM-4862HWP resolves to runtime descriptor smg_6200 via local SMG identity anchors: register 171 device_type/model_code=0x1E00 (7680), register 184 protocol/layout=1, and register 643 rated_power=6200. The local SMG register set does not expose the commercial model name, so the Sandisolar mapping is hardware/source-backed rather than register-name-backed. Full telemetry, the original SMG control set, and five cloud shadow-learning controls (304, 322, 330, 338, 425) are validated on this hardware; destructive actions 460 and 461 remain excluded.
 - Variants:
   - `layout1_model7680` — SMG fingerprint 171=0x1E00, 184=1, 643=6200
     - Descriptors: smg_6200
@@ -331,17 +287,13 @@ Runtime descriptors with no specific commercial model record. These are generic 
       - Capabilities: 38 (tested 30, untested 8); support tiers: blocked 2, conditional 27, standard 9 | Telemetry: 107 measurements, 18 binary sensors
 - Known limitations: —
 - Evidence: 2 source(s)
-  - Public references: —
-  - Sanitized summaries:
-    - Maintainer Sandisolar SD-HYM-4862HWP own-device validation: Maintainer's own Sandisolar SD-HYM-4862HWP resolves to runtime descriptor smg_6200 through the local SMG fingerprint anchors register 171 device_type/model_code=0x1E00 (7680), register 184 protocol/layout=1, and register 643 rated_power=6200. The commercial name is known from the device/source context, not from a local SMG register. Full telemetry and the complete SMG control set read back and write back correct values on hardware across 16 captures.
-    - Sandisolar SD-HYM-4862HWP SmartESS shadow-learning support archives: Latest Sandisolar SD-HYM-4862HWP support archives include repeated SmartESS shadow-learning sessions for runtime descriptor smg_6200. The cloud profile exposed 39 settings; 34 map to already-known SMG registers or existing controls, five non-destructive controls were selected and verified on the maintainer's device (registers 304, 322, 330, 338, 425), and two destructive actions were intentionally excluded (registers 460 and 461).
 
 ### SRNE-compatible — Modbus family (`srne_modbus_family`)
 
 - Lifecycle: experimental
 - Aliases: Anenji SRNE, SRNE Modbus
 - Validation: hardware none, telemetry partial, controls none
-- Coverage: runtime read_only, SmartESS not_applicable, vendor map partial
+- Coverage: runtime read_only, cloud not_applicable, vendor map partial
   - Coverage notes:
     - Runtime support is read-only and based on a private third-party SRNE-compatible Modbus map.
 - Summary: SRNE-compatible Modbus support is based on a private third-party register map. The runtime adds a read-only surface using slave address 1, product-info detection at registers 53-72, and telemetry ranges for controller, fault, inverter, and optional phase data.
@@ -359,16 +311,15 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Telemetry map is based on a third-party SRNE-compatible Modbus register map and still needs owner confirmation through a fresh support archive after integration update.
   - Detection relies on the product-info register block containing an SRNE-like marker; commercial model names may need follow-up catalog entries.
 - Evidence: 1 source(s)
-  - Public references: —
 
 ### Yingfa — YF6.2K-2K-LEL-IF (`yingfa_yf6_2k_2k_lel_if`)
 
 - Lifecycle: supported
 - Aliases: YF6.2K, PI30 6200
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, SmartESS cloud_catalog, vendor map unknown
+- Coverage: runtime available, cloud cloud_catalog, vendor map unknown
   - Coverage notes:
-    - The proxy capture proves PI30 ASCII telemetry and SmartESS cloud-visible PI30 controls, but Home Assistant write behavior is not yet independently user-confirmed.
+    - The proxy capture proves PI30 ASCII telemetry and cloud-visible PI30 controls, but Home Assistant write behavior is not yet independently user-confirmed.
     - This collector family uses raw PI30 ASCII payloads directly over the SmartESS DTU AT callback stream rather than the legacy EyeBond binary FC=4 forwarding tunnel.
 - Summary: Yingfa YF6.2K-2K-LEL-IF support is based on issue #6 and a private proxy capture. The inverter speaks PI30 ASCII through a SmartESS DTU AT collector; QPI reports PI30, QPIRI reports a 28-field 6200W/48V MAX-style rating, and QPIGS returns live telemetry. The integration should use the PI30 MAX runtime surface over raw AT-text payload transport for this collector family.
 - Variants:
@@ -383,10 +334,6 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - The commercial model name is known from the user report, not from a local inverter identity command in the captured traffic.
   - QMN/model-number evidence was not present in the cloud proxy capture, so runtime resolution is currently by PI30 protocol plus QPIRI 28-field MAX-family shape.
 - Evidence: 2 source(s)
-  - Public references: Yingfa YF6.2K-2K-LEL-IF user report (https://github.com/groove-max/ha-eybond-local/issues/6)
-  - Sanitized summaries:
-    - Yingfa YF6.2K-2K-LEL-IF user report: Device owner reported a Yingfa YF6.2K-2K-LEL-IF inverter behind an EyeBond logger. The local network topology initially masked the callback source address, but routing/NAT diagnostics later confirmed that the collector could call Home Assistant back with its real remote address.
-    - Yingfa YF6.2K-2K-LEL-IF proxy capture: Private proxy capture 01KVRFV6VETJ4B7MQ54DB5RDFF_20260622T211305079147Z.zip shows a SmartESS DTU AT collector using endpoint dtu_ess.eybond.com,18899,TCP and UART 2400,8,1,NONE. The cloud sends raw PI30 ASCII commands directly on the AT callback stream: QPI, QID, QSID, QVFW, QVFW2, QPIRI, QFLAG, QPIGS, QPIGS2, QMODI, QPIWS, QDI, QMCHGCR, QMUCHGCR, and QOPM. QPI returns PI30; QPIRI returns a 28-field 6200W/48V rating; QPIGS returns a 21-field live telemetry frame.
 
 ## Integrity Findings
 

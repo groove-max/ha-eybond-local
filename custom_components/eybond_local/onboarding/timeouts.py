@@ -26,7 +26,6 @@ class OnboardingTimeoutPolicy:
     auto_attempts: int = 3
     auto_attempt_delay: float = 0.75
     driver_detection_attempts: int = 3
-    driver_detection_timeout: float = 35.0
     driver_retry_delay: float = 0.35
     pi30_qpi_probe_timeout: float = 1.0
     smartess_probe_timeout: float = 3.0

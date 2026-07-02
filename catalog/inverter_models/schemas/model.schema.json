@@ -64,7 +64,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["runtime_control_surface", "smartess_control_surface", "vendor_register_map"],
-      "description": "Coverage dimensions are intentionally separate from validation. They distinguish the runtime surface exposed by the integration, the SmartESS/cloud-learned write surface, and the broader vendor/MCU register map.",
+      "description": "Coverage dimensions are intentionally separate from validation. They distinguish the runtime surface exposed by the integration, the cloud-learned write surface, and the broader vendor/MCU register map.",
       "properties": {
         "runtime_control_surface": {
           "type": "string",
@@ -74,7 +74,7 @@
         "smartess_control_surface": {
           "type": "string",
           "enum": ["unknown", "not_applicable", "cloud_catalog", "correlated", "device_scoped_overlay", "hardware_confirmed"],
-          "description": "How completely the SmartESS/cloud-known control surface is known."
+          "description": "How completely the cloud-known control surface is known."
         },
         "vendor_register_map": {
           "type": "string",

@@ -50,9 +50,18 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 3. Click **Configure**.
 4. Choose **Add controls (device learning)**.
 5. Read the safety notice.
+
+<p align="center"><img src="images/device-learning-start.png" alt="Device learning safety notice" width="480"></p>
+
 6. Enter the supported cloud/app credentials for this one session, if the flow
    asks for them.
+
+<p align="center"><img src="images/device-learning-credentials.png" alt="Device learning cloud credentials form" width="480"></p>
+
 7. Wait for the scan to finish.
+
+<p align="center"><img src="images/device-learning-scanning.png" alt="Device learning scan in progress" width="480"></p>
+
 8. Review the discovered items before applying them.
 
 The cloud/app password is not saved.

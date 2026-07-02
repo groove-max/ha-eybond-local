@@ -881,13 +881,40 @@ class EybondHub:
             transport = self._link_manager.transport if self._link_manager.connected else None
         else:
             transport = active_transport
+            if (
+                transport is None
+                and not self._link_manager.connected
+                and str(self._connection.collector_ip or "").strip()
+            ):
+                # Collector-side metadata must be readable before an inverter
+                # heartbeat exists. This is required for collector-only bridge
+                # bootstrap: the esp-collector identity token lives in FC=2
+                # param 6, but a freshly added bridge without an inverter will
+                # not produce a framed inverter heartbeat yet. Route by the
+                # configured collector IP and let the shared transport claim a
+                # pending callback socket if one is available.
+                transport = getattr(self._link_manager, "transport", None)
 
         active_at_transport = getattr(self._link_manager, "active_collector_at_transport", missing)
         if active_at_transport is missing:
             at_transport = getattr(self._link_manager, "collector_at_transport", None)
         else:
             at_transport = active_at_transport
-        allow_disconnected_at_query = active_at_transport is missing and not self._link_manager.connected
+            if (
+                at_transport is None
+                and not self._link_manager.connected
+                and str(self._connection.collector_ip or "").strip()
+            ):
+                # Same collector-only bootstrap rule for plain AT metadata:
+                # use the per-entry transport facade even before it becomes the
+                # active runtime transport. It remains scoped by collector_ip,
+                # so entries without a concrete target still fail closed.
+                at_transport = getattr(self._link_manager, "collector_at_transport", None)
+        allow_disconnected_at_query = (
+            at_transport is not None
+            and not self._link_manager.connected
+            and str(self._connection.collector_ip or "").strip()
+        )
 
         now_monotonic = asyncio.get_running_loop().time()
         refresh_interval = max(float(poll_interval or 0.0) * 3.0, 30.0)
