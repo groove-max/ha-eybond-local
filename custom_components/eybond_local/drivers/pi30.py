@@ -37,6 +37,13 @@ from ..metadata.compiled_detection_catalog import (
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .command_support import (
+    apply_unsupported_diagnostics,
+    command_skipped_as_unsupported as _command_skipped_as_unsupported,
+    commit_cycle_failures as _commit_cycle_failures,
+    record_command_failure as _record_command_failure,
+    record_command_success as _record_command_success,
+)
 from .catalog_probe import (
     async_probe_ascii_catalog,
     async_probe_ascii_catalog_signature,
@@ -399,16 +406,24 @@ def _support_commands() -> tuple[str, ...]:
 async def _async_collect_values(
     session: Pi30Session,
     specs: tuple[Pi30CommandSpec, ...],
+    *,
+    runtime_state: dict[str, Any] | None = None,
+    now_monotonic: float | None = None,
 ) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
     for spec in specs:
+        if spec.optional and _command_skipped_as_unsupported(runtime_state, spec.command):
+            continue
         try:
             payload = await session.request(spec.command)
             values.update(spec.parser(payload))
         except Pi30Error:
             if not spec.optional:
                 raise
+            _record_command_failure(runtime_state, spec.command)
+        else:
+            _record_command_success(runtime_state, spec.command)
 
     return values
 
@@ -463,41 +478,79 @@ async def _async_collect_runtime_values(
         ):
             continue
         if group.specs:
-            values.update(await _async_collect_values(session, group.specs))
+            values.update(
+                await _async_collect_values(
+                    session,
+                    group.specs,
+                    runtime_state=runtime_state,
+                    now_monotonic=now_monotonic,
+                )
+            )
         if group.include_energy:
-            values.update(await _async_collect_energy_values(session))
+            values.update(
+                await _async_collect_energy_values(
+                    session,
+                    runtime_state=runtime_state,
+                    now_monotonic=now_monotonic,
+                )
+            )
+    _commit_cycle_failures(runtime_state)
+    apply_unsupported_diagnostics(values, runtime_state)
     return values
 
 
-async def _async_collect_energy_values(session: Pi30Session) -> dict[str, Any]:
+async def _async_collect_energy_values(
+    session: Pi30Session,
+    *,
+    runtime_state: dict[str, Any] | None = None,
+    now_monotonic: float | None = None,
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
-    try:
-        values.update(parse_energy_counter(await session.request("QET"), key="pv_generation_sum"))
-    except Pi30Error:
+    async def _request(command: str, cache_key: str) -> str | None:
+        # Dynamic commands embed the current date, so they are cached under a
+        # stable prefix key instead of the literal command.
+        if _command_skipped_as_unsupported(runtime_state, cache_key):
+            return None
+        try:
+            payload = await session.request(command)
+        except Pi30Error:
+            _record_command_failure(runtime_state, cache_key)
+            return None
+        _record_command_success(runtime_state, cache_key)
+        return payload
+
+    payload = await _request("QET", "QET")
+    if payload is None:
         return values
+    values.update(parse_energy_counter(payload, key="pv_generation_sum"))
 
-    try:
-        values.update(parse_energy_counter(await session.request("QLT"), key="ac_in_generation_sum"))
-    except Pi30Error:
-        pass
+    payload = await _request("QLT", "QLT")
+    if payload is not None:
+        values.update(parse_energy_counter(payload, key="ac_in_generation_sum"))
 
+    payload = await _request("QT", "QT")
+    if payload is None:
+        return values
     try:
-        clock_token = parse_qt_clock(await session.request("QT"))["clock_token"]
+        clock_token = parse_qt_clock(payload)["clock_token"]
     except Pi30Error:
         return values
 
     dynamic_specs = (
-        (f"QEY{clock_token[:4]}", "pv_generation_year"),
-        (f"QEM{clock_token[:6]}", "pv_generation_month"),
-        (f"QED{clock_token[:8]}", "pv_generation_day"),
-        (f"QLY{clock_token[:4]}", "ac_in_generation_year"),
-        (f"QLM{clock_token[:6]}", "ac_in_generation_month"),
-        (f"QLD{clock_token[:8]}", "ac_in_generation_day"),
+        (f"QEY{clock_token[:4]}", "QEY", "pv_generation_year"),
+        (f"QEM{clock_token[:6]}", "QEM", "pv_generation_month"),
+        (f"QED{clock_token[:8]}", "QED", "pv_generation_day"),
+        (f"QLY{clock_token[:4]}", "QLY", "ac_in_generation_year"),
+        (f"QLM{clock_token[:6]}", "QLM", "ac_in_generation_month"),
+        (f"QLD{clock_token[:8]}", "QLD", "ac_in_generation_day"),
     )
-    for command, key in dynamic_specs:
+    for command, cache_key, key in dynamic_specs:
+        payload = await _request(command, cache_key)
+        if payload is None:
+            continue
         try:
-            values.update(parse_energy_counter(await session.request(command), key=key))
+            values.update(parse_energy_counter(payload, key=key))
         except Pi30Error:
             continue
 

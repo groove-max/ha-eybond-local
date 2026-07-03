@@ -38,6 +38,12 @@ the GitHub release body should be rendered from the matching version section her
 - Added a detection summary step to onboarding: after the scan you see the identified model,
   its support tier (full / partial / not recognized), and what to do next, before the device
   is created.
+- Added canonical power-flow telemetry for the SRNE and MUST PV PH18 drivers: `pv_power`
+  (SRNE: PV1+PV2 sum, MUST: solar-charger power), signed `battery_power` (SRNE register 270,
+  MUST register 25274), and the six `*_to_*_power` flow-split sensors now populate from
+  registers these drivers already poll, so the power-flow card renders fully for both
+  families. SRNE has no grid-power register and MUST has no battery-SOC register, so those
+  two slots stay empty until the registers are identified.
 - Added a guided control-discovery wizard ("Add controls (device learning)") for partially
   supported and unrecognized inverters: one linear flow (consent → vendor-app sign-in → progress
   → review → apply) replaces the old technical action menu. Sessions are fail-closed: the
@@ -75,6 +81,84 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Deep scan is now a real extended detection path instead of a lightly longer quick scan:
+  it keeps structured evidence for each target, does not stop a target batch after the first
+  matched inverter, uses a distinct extended timeout budget, and surfaces detection timeouts
+  separately from ordinary collector-only results.
+- The deep-scan time budget is now derived from the registered drivers' own signature and
+  probe budgets instead of a hand-maintained constant that was smaller than the worst-case
+  driver sweep, and each connected target gets its own sweep deadline so one slow target
+  cannot starve the identification of another. Together these remove the main cause of
+  connected collectors finishing as "detection ran out of time".
+- Driver detection now uses the protocol metadata a collector reports (mapped through the
+  protocol catalog, not a hardcoded family list) to probe the matching local driver first.
+  Previously the probe order fell back to the registry order when the signature pre-pass
+  did not match, so a PI30-family inverter could burn most of the deep-scan budget on
+  Modbus drivers before its own driver was ever tried.
+- Deep detection now records a per-driver probe log (driver, elapsed time, outcome) into
+  the detection evidence and the created entry (`detection_probe_log`), so real
+  installations produce the data needed to validate and tune the per-driver probe budgets
+  instead of guessing.
+- The driver-choice step was made human-readable: options are now
+  "model — driver (recommended)" with the measured identification time per candidate,
+  the raw probe-route digits are gone (the device address is shown only when two
+  candidates differ by nothing else), and the summary explains that protocols can
+  differ in polling speed. Candidates show the localized driver display names
+  ("SmartESS 0925 / Modbus", "SMG / Modbus", "PI30") instead of internal keys, and the
+  missing English fallback label for the SmartESS-local driver in the driver selector
+  was added.
+- After a deep scan the repeat action is labeled "Repeat deep scan" (repeating always
+  re-ran the same scan mode, but the generic label made it look like a quick scan and
+  sent users through the advanced menu to reach deep scan again).
+- Scan targets whose probe was deliberately cancelled because another target already
+  matched are no longer reported as detection timeouts: they carry the dedicated
+  `cancelled_first_match_found` evidence status, keep what was learned about the
+  candidate, and present by their actual state (collector replied / connected) instead
+  of "detection ran out of time".
+- The scan-results screen lets you add a found device directly: the device list and the
+  follow-up actions (refresh, advanced setup) live in one selector, replacing the extra
+  "Add detected device" menu hop and its separate selection step.
+- Deep scan now starts immediately when the selected interface has a known, normally
+  sized network; the intermediate confirmation step remains only where the user has a
+  real decision to make (a large subnet, or an unknown network).
+- The deep-scan identification headroom now sits on top of the discovery budget instead
+  of sharing one ceiling with it, so scanning a /16 network (whose discovery alone takes
+  ~14 minutes) no longer consumes the identification budget.
+- Collectors owned by existing entries are now visible in the scan results as
+  "Already added" (previously the unprobed marker was filtered out of the list, so the
+  summary claimed zero configured devices).
+- The scan-results list was decluttered: the status chip is not repeated in the details
+  (no more "SmartESS hint — ... SmartESS metadata ... collector connected"), the
+  "Unconfirmed inverter" filler is gone, serial numbers are shown only when known, and
+  confidence is lowercased mid-line.
+- The deep-scan time budget now follows the discovered work instead of being fixed
+  upfront: every collector that connects and is admitted for identification extends the
+  shared scan deadline by one full driver-sweep budget (bounded by a 15-minute runaway
+  ceiling). A site with many inverters gets one sweep per collector instead of all of
+  them starving on a budget sized for one or two.
+- Scans no longer probe collectors that already belong to a configured entry: probing
+  stole the collector's callback session from the running entry and burned the shared
+  scan time budget on devices that cannot be added again anyway. Such collectors are
+  listed as "Already added" without being touched.
+- A collector that dials back in now triggers an immediate refresh when the entry is not
+  bound, instead of idling until the next scheduled poll — after failed detection cycles
+  that could be more than a minute away. Together with the next change this removes most
+  of the "one update, then unavailable for a minute" churn right after adding a device.
+- Consecutive failed refresh cycles no longer re-run the full (slow) collector AT metadata
+  sweep every time: the caches are invalidated once per outage, and collector liveness is
+  proven with the cheap framed query when available. This also stops the failed-cycle
+  duration — and therefore the retry backoff derived from it — from being inflated by our
+  own metadata reads.
+- Deep scan now keeps every successful local driver/protocol probe for the same device.
+  When one inverter responds through multiple protocols, onboarding shows a driver choice
+  step with the successful candidates instead of silently keeping only the first match.
+  Choosing an alternative keeps the full probe metadata (SmartESS details included) and
+  re-runs the confirm-time detail refresh with the chosen driver, and if the deep-scan
+  time budget runs out mid-probe the candidates found so far are kept instead of being
+  discarded with a bare timeout.
+- New entries persist detection evidence (`detection_depth`, `detection_status`,
+  `detected_probe_route`, and the candidate driver list when more than one protocol
+  matched) so the support package can explain how a device was onboarded.
 - Onboarding UX overhaul: the welcome form is gone, the happy path is decluttered, cloud
   assist is an explicit optional choice (never an interstitial), developer tooling is
   removed from the options flow, and long wall-of-text screens were rewritten into short
@@ -96,6 +180,81 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- The poll-debugging diagnostic sensors (Poll Phase Breakdown, Refresh Phase Breakdown,
+  Slowest Driver Requests) are disabled by default — enable them per collector when
+  chasing a slow poll — and all of them live on the collector device (the refresh
+  breakdown and slow-requests sensors previously landed on the inverter device).
+- Added "Refresh Phase Breakdown" and "Slowest Driver Requests" diagnostic sensors: the
+  runtime refresh reports where its time went (collector metadata, driver detection,
+  driver read, snapshot build) and the SmartESS-local driver reports its five slowest
+  register requests per cycle with outcomes.
+- Added a "Poll Phase Breakdown" diagnostic sensor: each poll cycle reports where its
+  wall-clock time actually went (network reconcile, session profile, runtime refresh,
+  snapshot profile, endpoint reconcile), so a slow cycle is explained by a sensor read
+  instead of a packet capture.
+- The Collector Protocol Asset ID and Collector Devcode diagnostics no longer flip
+  between two values every cycle. Parameter 14 on some collectors returns a composite
+  serial-protocol config string ("02FF,0,0,#0#") — the id is now parsed from its first
+  field, and an asset id is claimed from parameter 14 only when the protocol catalog
+  knows it, so it cannot fight the asset id the bound driver reports. The devcode
+  diagnostic now shows the collector's stable heartbeat devcode instead of the devcode
+  of whatever frame happened to arrive last.
+- Whether a collector answers the AT metadata channel at all is now a learned per-device
+  fact, like unsupported inverter commands: framed collectors tunnel AT via raw
+  passthrough and only some firmwares support it, so after two evidence-gated failures
+  the channel is skipped entirely (persisted as `collector:at_metadata`, cleared by the
+  same "Re-check Supported Commands" button). Collectors where AT-over-passthrough works
+  (Wi-Fi scan, signal metadata) keep it.
+- Fixed the actual cause of the stable ~60-second poll cycles on EyeBond collectors with
+  a framed callback session: the collector AT-metadata sweep (12 commands: DTUPN, ATVER,
+  WFSS, ...) ran against an AT channel that never answers, burning a full request timeout
+  per command, and the empty result was never cached — so the sweep repeated every
+  cycle. The sweep now aborts after the first timeout (a dead AT link times out for
+  every command), and its retry cadence is keyed on attempts instead of successful
+  results. The refresh-phase diagnostic additionally splits collector metadata into its
+  framed (FC) and AT parts.
+- The SmartESS-local (Modbus) driver applies the same unsupported-command memory to its
+  register blocks: a bulk read the inverter rejects or ignores was retried every cycle
+  (block failures never marked the block as read), spending most of a ~60-second poll on
+  consecutive request timeouts while the wire carried only a few seconds of real traffic.
+  Rejected blocks and dead fallback registers are now remembered per device
+  (`block:config`, `register:5005`, ...), the capability values keep coming from the
+  cheap single-register fallbacks, and the same "Re-check Supported Commands" button
+  clears the memory.
+- The ASCII drivers (PI30, PI18, EyeBond G-ASCII) no longer re-send unsupported commands
+  on every poll cycle. On inverters that only answer the core command set, every optional
+  or energy command burned a full request timeout each cycle, turning a ~2-second poll
+  into a ~60-second poll. A command that fails twice — in cycles where the device
+  answered something else, so a link outage never counts as evidence — is marked
+  unsupported for this device permanently: the learned set is persisted into the config
+  entry (`driver_unsupported_commands`), survives restarts and reconnects, and is shown
+  as a diagnostic value. A new "Re-check Supported Commands" diagnostic button clears the
+  learned set and probes everything again (for example after an inverter firmware
+  update).
+- One collector seen through two scan sources (the configured-IP marker plus a
+  PN-carrying callback-session result) is now collapsed into a single scan line; the
+  PN-carrying duplicate wins so the line keeps the identity.
+- Collector callbacks that no config entry owns are now parked (held open passively,
+  bounded and with a TTL) instead of being closed after classification. Closing made the
+  collector firmware redial within seconds, producing a permanent connect/close loop for
+  collectors whose entry was removed; a parked callback also stays instantly claimable by
+  a scan or a newly added entry, including its already-received identity bytes.
+- A collector whose management link answers but whose inverter sends no heartbeat is no
+  longer reported as offline. The runtime now separates the two layers: collector-level
+  sensors keep updating, the state becomes `driver_unbound` with the new
+  `inverter_heartbeat_missing` code (instead of the misleading `collector_heartbeat_timeout`),
+  and a bound inverter still goes through the normal reconnect/recovery path. This fixes the
+  esp-collector bridge appearing stuck as "waiting for collector" after a power cycle even
+  though its TCP session was live.
+- Stale UDP discovery details (`collector_udp_reply`, `collector_udp_reply_from`) are now
+  dropped when the collector goes offline instead of being shown from the previous session.
+- The manual-mode high-utilization warning no longer misfires after a device outage. Cycles
+  that bound the driver or recovered the collector connection measure that recovery work,
+  not the normal poll cost, so they are now excluded from the warning streak, from the
+  poll-duration statistics (average/max/recent sensors), and from the adaptive scheduler's
+  learning samples — a device coming back online no longer inflates the reported
+  utilization or the recommended minimum interval. The warning is also dismissed
+  automatically once polling stays within the configured interval again.
 - Device learning now actually works on the partial / unrecognized tier it targets. Two
   coupled defects made it unusable there: those devices silently inherited the full controls
   profile (so overlay generation deduped against the wrong base), and the readiness check kept

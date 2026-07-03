@@ -255,6 +255,48 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(values["power_saving_enabled"], False)
         self.assertIs(values["lcd_backlight_enabled"], True)
 
+    async def test_rejected_bulk_blocks_stop_being_retried_every_cycle(self) -> None:
+        transport = self._transport(fail_config_bulk=True)
+        bulk_attempts: list[int] = []
+        original = transport._handle_read_holding
+
+        def _counting(payload: bytes) -> bytes:
+            address = int.from_bytes(payload[2:4], "big")
+            count = int.from_bytes(payload[4:6], "big")
+            if count > 1 and address in {5001, 6030}:
+                bulk_attempts.append(address)
+            return original(payload)
+
+        transport._handle_read_holding = _counting
+        runtime_state: dict[str, object] = {}
+
+        # Two cycles collect the failure strikes for the rejected bulk reads.
+        for now in (100.0, 200.0):
+            await self.driver.async_read_values(
+                transport,
+                self._inverter(),
+                runtime_state=runtime_state,
+                poll_interval=10.0,
+                now_monotonic=now,
+            )
+        attempts_after_learning = len(bulk_attempts)
+        self.assertGreater(attempts_after_learning, 0)
+
+        values = await self.driver.async_read_values(
+            transport,
+            self._inverter(),
+            runtime_state=runtime_state,
+            poll_interval=10.0,
+            now_monotonic=300.0,
+        )
+
+        # No further bulk attempts for the rejected blocks.
+        self.assertEqual(len(bulk_attempts), attempts_after_learning)
+        self.assertIn("block:config", values["driver_unsupported_commands"])
+        # Capability values still come from the single-register fallbacks.
+        self.assertIs(values["lcd_backlight_enabled"], True)
+        self.assertIs(values["buzzer_enabled"], False)
+
     async def test_support_capture_reads_0925_config_controls_individually(self) -> None:
         evidence = await self.driver.async_capture_support_evidence(
             self._transport(fail_config_bulk=True),

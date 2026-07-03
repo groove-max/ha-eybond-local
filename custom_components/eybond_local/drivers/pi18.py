@@ -24,6 +24,13 @@ from ..payload.pi18 import (
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .command_support import (
+    apply_unsupported_diagnostics,
+    command_skipped_as_unsupported,
+    commit_cycle_failures,
+    record_command_failure,
+    record_command_success,
+)
 from .catalog_probe import (
     async_probe_ascii_catalog,
     catalog_model_name,
@@ -145,9 +152,17 @@ class Pi18Driver(InverterDriver):
         now_monotonic: float | None = None,
     ) -> dict[str, Any]:
         session = self._session(transport, inverter.probe_target)
-        values = await _async_collect_values(session, _RUNTIME_COMMAND_SPECS)
+        values = await _async_collect_values(
+            session,
+            _RUNTIME_COMMAND_SPECS,
+            runtime_state=runtime_state,
+        )
         values.update(_translate_runtime_enums(values, load_register_schema(inverter.register_schema_name or self.register_schema_name)))
-        values.update(await _async_collect_energy_values(session))
+        values.update(
+            await _async_collect_energy_values(session, runtime_state=runtime_state)
+        )
+        commit_cycle_failures(runtime_state)
+        apply_unsupported_diagnostics(values, runtime_state)
         return values
 
     async def async_write_capability(self, transport, inverter: DetectedInverter, capability_key: str, value: Any) -> Any:
@@ -181,37 +196,70 @@ class Pi18Driver(InverterDriver):
         )
 
 
-async def _async_collect_values(session: Pi18Session, specs: tuple[Pi18CommandSpec, ...]) -> dict[str, Any]:
+async def _async_collect_values(
+    session: Pi18Session,
+    specs: tuple[Pi18CommandSpec, ...],
+    *,
+    runtime_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for spec in specs:
+        if spec.optional and command_skipped_as_unsupported(runtime_state, spec.command):
+            continue
         try:
             values.update(spec.parser(await session.request(spec.command)))
         except Pi18Error:
             if not spec.optional:
                 raise
+            record_command_failure(runtime_state, spec.command)
+        else:
+            record_command_success(runtime_state, spec.command)
     return values
 
 
-async def _async_collect_energy_values(session: Pi18Session) -> dict[str, Any]:
+async def _async_collect_energy_values(
+    session: Pi18Session,
+    *,
+    runtime_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    try:
-        values.update(parse_energy_counter(await session.request("^P005ET"), key="pv_generation_sum"))
-    except Pi18Error:
-        return values
 
+    async def _request(command: str, cache_key: str) -> str | None:
+        # Dated commands are cached under a stable prefix key.
+        if command_skipped_as_unsupported(runtime_state, cache_key):
+            return None
+        try:
+            payload = await session.request(command)
+        except Pi18Error:
+            record_command_failure(runtime_state, cache_key)
+            return None
+        record_command_success(runtime_state, cache_key)
+        return payload
+
+    payload = await _request("^P005ET", "^P005ET")
+    if payload is None:
+        return values
+    values.update(parse_energy_counter(payload, key="pv_generation_sum"))
+
+    payload = await _request("^P004T", "^P004T")
+    if payload is None:
+        return values
     try:
-        clock_token = parse_current_time(await session.request("^P004T"))["clock_token"]
+        clock_token = parse_current_time(payload)["clock_token"]
     except Pi18Error:
         return values
 
     dynamic_specs = (
-        (f"^P009EY{clock_token[:4]}", "pv_generation_year"),
-        (f"^P011EM{clock_token[:6]}", "pv_generation_month"),
-        (f"^P013ED{clock_token[:8]}", "pv_generation_day"),
+        (f"^P009EY{clock_token[:4]}", "^P009EY", "pv_generation_year"),
+        (f"^P011EM{clock_token[:6]}", "^P011EM", "pv_generation_month"),
+        (f"^P013ED{clock_token[:8]}", "^P013ED", "pv_generation_day"),
     )
-    for command, key in dynamic_specs:
+    for command, cache_key, key in dynamic_specs:
+        payload = await _request(command, cache_key)
+        if payload is None:
+            continue
         try:
-            values.update(parse_energy_counter(await session.request(command), key=key))
+            values.update(parse_energy_counter(payload, key=key))
         except Pi18Error:
             continue
     return values

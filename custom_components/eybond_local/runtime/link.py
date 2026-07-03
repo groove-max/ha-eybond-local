@@ -9,7 +9,7 @@ import json
 import logging
 import socket
 import subprocess
-from typing import Protocol
+from typing import Callable, Protocol
 
 from ..collector.cloud_family import (
     apply_collector_cloud_family_observation,
@@ -378,7 +378,34 @@ class EybondRuntimeLinkManager:
         self._route_lease_lock = asyncio.Lock()
         self._route_lease: RouteLease | None = None
         self._announcer: DiscoveryAnnouncer
+        self._collector_connection_watcher: Callable[[str], None] | None = None
         self._rebuild_link(self._effective_server_ip)
+
+    def set_collector_connection_watcher(self, callback: Callable[[str], None] | None) -> None:
+        """Notify ``callback(remote_ip)`` when this entry's collector dials in.
+
+        Survives link rebuilds; used to trigger an immediate refresh instead
+        of waiting out the poll backoff after the collector reconnects.
+        """
+
+        self._collector_connection_watcher = callback
+        self._apply_collector_connection_watcher()
+
+    def _apply_collector_connection_watcher(self) -> None:
+        set_watcher = getattr(self._transport, "set_connection_watcher", None)
+        if callable(set_watcher):
+            set_watcher(self._collector_connection_watcher)
+
+    def clear_discovery_reply(self) -> None:
+        """Drop the remembered UDP discovery reply.
+
+        ``collector_info`` rebuilds its snapshot from the announcer on every
+        call, so stale-reply cleanup must clear the announcer source — not a
+        returned copy.
+        """
+
+        self._announcer.last_reply = ""
+        self._announcer.last_reply_from = ""
 
     @property
     def active_transport(self) -> CollectorTransport | None:
@@ -1405,6 +1432,7 @@ class EybondRuntimeLinkManager:
             udp_port=self._udp_port,
             interval=float(self._discovery_interval),
         )
+        self._apply_collector_connection_watcher()
 
     def _build_transport_pair(
         self,

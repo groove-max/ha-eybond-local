@@ -35,6 +35,13 @@ from ..payload.ascii_line import (
     parse_space_fields,
 )
 from .base import InverterDriver
+from .command_support import (
+    apply_unsupported_diagnostics,
+    command_skipped_as_unsupported,
+    commit_cycle_failures,
+    record_command_failure,
+    record_command_success,
+)
 from .catalog_probe import catalog_model_name
 
 
@@ -595,8 +602,16 @@ async def _async_collect_eybond_g_ascii_values(
     if probe:
         return values
 
+    # The core commands answered (no exception): this cycle's optional-command
+    # failures are command-specific evidence, not a link-wide outage.
+    record_command_success(state, "__g_ascii_core__")
+
     await _async_collect_eybond_g_ascii_offline_fingerprint_values(session, values)
-    await _async_collect_eybond_g_ascii_secondary_values(session, values)
+    await _async_collect_eybond_g_ascii_secondary_values(
+        session,
+        values,
+        runtime_state=state,
+    )
     await _async_collect_g_ascii_capability_readbacks(
         session,
         values,
@@ -625,14 +640,19 @@ async def _async_collect_eybond_g_ascii_values(
         else "core, fingerprint, secondary"
     )
 
+    commit_cycle_failures(state)
+    apply_unsupported_diagnostics(values, state)
+
     return values
 
 
 async def _async_collect_eybond_g_ascii_secondary_values(
     session: AsciiLineSession,
     values: dict[str, Any],
+    *,
+    runtime_state: dict[str, Any] | None = None,
 ) -> None:
-    gtmp = await _optional_request(session, values, "GTMP")
+    gtmp = await _optional_request(session, values, "GTMP", runtime_state=runtime_state)
     if gtmp:
         fields = parse_space_fields(gtmp)
         _set_float(values, "pv_side_temperature", fields, 0)
@@ -641,7 +661,7 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_float(values, "low_voltage_mppt_temperature_1", fields, 3)
         _set_float(values, "low_voltage_mppt_temperature_2", fields, 4)
 
-    gline = await _optional_request(session, values, "GLINE")
+    gline = await _optional_request(session, values, "GLINE", runtime_state=runtime_state)
     if gline:
         fields = parse_space_fields(gline)
         values["eybond_g_ascii_gline_fields"] = " ".join(fields)
@@ -659,7 +679,7 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_scaled_float(values, "grid_energy_today", fields, 10, divisor=100.0)
         _set_combined_scaled_counter(values, "grid_energy_total", fields, 11, 12, divisor=100.0)
 
-    gbat = await _optional_request(session, values, "GBAT")
+    gbat = await _optional_request(session, values, "GBAT", runtime_state=runtime_state)
     if gbat:
         fields = parse_space_fields(gbat)
         values["eybond_g_ascii_gbat_fields"] = " ".join(fields)
@@ -669,14 +689,14 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_float(values, "battery_discharge_cutoff_voltage", fields, 3)
         _set_float(values, "battery_discharge_alarm_voltage", fields, 4)
 
-    gbus = await _optional_request(session, values, "GBUS")
+    gbus = await _optional_request(session, values, "GBUS", runtime_state=runtime_state)
     if gbus:
         fields = parse_space_fields(gbus)
         _set_float(values, "bus_voltage", fields, 0)
         _set_float(values, "bus_reference_start_voltage", fields, 1)
         _set_float(values, "bus_reference_voltage", fields, 2)
 
-    gchg = await _optional_request(session, values, "GCHG")
+    gchg = await _optional_request(session, values, "GCHG", runtime_state=runtime_state)
     if gchg:
         fields = parse_space_fields(gchg)
         values["eybond_g_ascii_gchg_fields"] = " ".join(fields)
@@ -697,7 +717,7 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_float(values, "low_power_discharge_time", fields, 16)
         _set_str(values, "charging_mode_code", fields, 17)
 
-    gop = await _optional_request(session, values, "GOP")
+    gop = await _optional_request(session, values, "GOP", runtime_state=runtime_state)
     if gop:
         fields = parse_space_fields(gop)
         values["eybond_g_ascii_gop_fields"] = " ".join(fields)
@@ -713,14 +733,14 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_scaled_float(values, "output_energy_today", fields, 12, divisor=100.0)
         _set_combined_scaled_counter(values, "output_energy_total", fields, 13, 14, divisor=100.0)
 
-    ginv = await _optional_request(session, values, "GINV")
+    ginv = await _optional_request(session, values, "GINV", runtime_state=runtime_state)
     if ginv:
         fields = parse_space_fields(ginv)
         _set_float(values, "inverter_voltage", fields, 0)
         _set_float(values, "inverter_frequency", fields, 1)
         _set_float(values, "inverter_current", fields, 2)
 
-    gws = await _optional_request(session, values, "GWS")
+    gws = await _optional_request(session, values, "GWS", runtime_state=runtime_state)
     if gws:
         fields = parse_space_fields(gws)
         values["eybond_g_ascii_gws_fields"] = " ".join(fields)
@@ -728,7 +748,7 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_str(values, "warning_status_1", fields, 1)
         _set_str(values, "warning_status_2", fields, 2)
 
-    bl = await _optional_request(session, values, "BL")
+    bl = await _optional_request(session, values, "BL", runtime_state=runtime_state)
     if bl:
         text = bl.strip()
         if text.startswith("BL"):
@@ -738,7 +758,7 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         except ValueError:
             pass
 
-    fan = await _optional_request(session, values, "FAN???")
+    fan = await _optional_request(session, values, "FAN???", runtime_state=runtime_state)
     if fan:
         fields = parse_space_fields(fan)
         values["eybond_g_ascii_fan_fields"] = " ".join(fields)
@@ -748,17 +768,17 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         _set_bool_flag(values, "fan1_stopped", fields, 3)
         _set_bool_flag(values, "fan2_stopped", fields, 4)
 
-    tcqn = await _optional_request(session, values, "TCQN????")
+    tcqn = await _optional_request(session, values, "TCQN????", runtime_state=runtime_state)
     if tcqn:
         fields = parse_space_fields(tcqn)
         _set_float(values, "equalization_elapsed_hours", fields, 0)
 
-    date = await _optional_request(session, values, "DATE??????")
+    date = await _optional_request(session, values, "DATE??????", runtime_state=runtime_state)
     if date:
         fields = parse_space_fields(date)
         _set_offset_2000_date(values, "inverter_date", fields)
 
-    time_value = await _optional_request(session, values, "TIME??????")
+    time_value = await _optional_request(session, values, "TIME??????", runtime_state=runtime_state)
     if time_value:
         fields = parse_space_fields(time_value)
         _set_hms_time(values, "inverter_time", fields)
@@ -795,7 +815,7 @@ async def _async_collect_eybond_g_ascii_bms_values(
         )
         return
 
-    gbms = await _optional_request(session, values, "GBMS")
+    gbms = await _optional_request(session, values, "GBMS", runtime_state=runtime_state)
     if _last_command_timing_is_timeout(values, "GBMS"):
         values["g_ascii_bms_available"] = False
         _suppress_optional_command(
@@ -1323,17 +1343,26 @@ async def _optional_request(
     session: AsciiLineSession,
     values: dict[str, Any],
     command: str,
+    *,
+    runtime_state: dict[str, Any] | None = None,
 ) -> str:
+    # The shared unsupported-command cache applies only when the caller
+    # passes runtime state; the capability-readback path keeps its own
+    # dedicated suppression mechanism and calls without it.
+    if runtime_state is not None and command_skipped_as_unsupported(runtime_state, command):
+        return ""
     started = time.monotonic()
     status = "ok"
     error = ""
     payload = ""
     try:
         payload = await session.request(command)
+        record_command_success(runtime_state, command)
         return payload
     except (AsciiLineError, KeyError, TimeoutError) as exc:
         status = "error"
         error = str(exc) or exc.__class__.__name__
+        record_command_failure(runtime_state, command)
         return ""
     finally:
         _record_g_ascii_runtime_command_timing(

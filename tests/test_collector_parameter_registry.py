@@ -150,5 +150,43 @@ class CollectorParameterRegistryTests(unittest.TestCase):
         self.assertNotIn("collector_signal_strength_source", values)
 
 
+class ProtocolDescriptorParsingTests(unittest.TestCase):
+    def test_composite_config_descriptor_extracts_first_field_and_gates_asset_id(self) -> None:
+        from custom_components.eybond_local.collector.smartess_local import (
+            resolve_protocol_descriptor,
+        )
+
+        descriptor = resolve_protocol_descriptor("02FF,0,0,#0#")
+        self.assertEqual(descriptor.raw_id, "02FF")
+        # 02FF is not a catalog asset id: the parameter-registry decode must
+        # not claim an asset id for it (the bound driver owns that value).
+        from custom_components.eybond_local.collector.parameter_registry import (
+            _decode_protocol_descriptor,
+        )
+        from custom_components.eybond_local.collector.smartess_local import (
+            CollectorQueryResponse,
+        )
+
+        values = _decode_protocol_descriptor(
+            CollectorQueryResponse(code=0, parameter=14, data=b"", text="02FF,0,0,#0#")
+        )
+        self.assertEqual(values["smartess_protocol_raw_id"], "02FF")
+        self.assertNotIn("smartess_protocol_asset_id", values)
+
+    def test_catalog_known_descriptor_still_resolves_asset_metadata(self) -> None:
+        from custom_components.eybond_local.collector.parameter_registry import (
+            _decode_protocol_descriptor,
+        )
+        from custom_components.eybond_local.collector.smartess_local import (
+            CollectorQueryResponse,
+        )
+
+        values = _decode_protocol_descriptor(
+            CollectorQueryResponse(code=0, parameter=14, data=b"", text="0925#SD-HYM-4862HWP")
+        )
+        self.assertEqual(values["smartess_protocol_asset_id"], "0925")
+        self.assertEqual(values["smartess_protocol_profile_key"], "smartess_0925")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -121,6 +121,12 @@ def resolve_protocol_descriptor(
     if not raw_id:
         raise SmartEssLocalError("protocol_descriptor_missing_id")
 
+    # Some collectors answer query 14 with a composite serial-protocol config
+    # string ("02FF,0,0,#0#"); the protocol id is the first comma field.
+    raw_id = raw_id.split(",", 1)[0].strip()
+    if not raw_id:
+        raise SmartEssLocalError("protocol_descriptor_missing_id")
+
     asset_id = _LEGACY_PROTOCOL_ASSET_ALIASES.get(raw_id, raw_id)
     return SmartEssProtocolDescriptor(
         raw_id=raw_id,

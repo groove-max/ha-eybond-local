@@ -143,6 +143,13 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
             entity_category=EntityCategory.CONFIG,
             enabled_default=True,
         ),
+        _ToolingButtonSpec(
+            key="recheck_supported_commands",
+            name="Re-check Supported Commands",
+            icon="mdi:playlist-check",
+            entity_category=EntityCategory.DIAGNOSTIC,
+            enabled_default=True,
+        ),
     )
 
 
@@ -602,6 +609,9 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return
         if self._spec.key == "reload_local_metadata":
             await self.coordinator.async_reload_local_metadata()
+            return
+        if self._spec.key == "recheck_supported_commands":
+            await self.coordinator.async_recheck_supported_commands()
             return
         if self._spec.key == "rediscover_collector":
             await self.coordinator.async_trigger_collector_rediscovery()

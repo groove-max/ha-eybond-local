@@ -165,6 +165,22 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("pv_input_power",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("srne_modbus",),
+                source_keys=("pv1_input_power", "pv2_input_power"),
+                compute="sum",
+            ),
+            # Single-string SRNE models may not report the PV2 register.
+            CanonicalTelemetryVariant(
+                driver_keys=("srne_modbus",),
+                source_keys=("pv1_input_power",),
+                compute="passthrough",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("must_pv_ph18",),
+                source_keys=("pv_charging_power",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -226,6 +242,18 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 ),
                 compute="eybond_g_ascii_battery_power",
             ),
+            # SRNE register 270 is signed battery charging power (charge > 0).
+            CanonicalTelemetryVariant(
+                driver_keys=("srne_modbus",),
+                source_keys=("charge_power",),
+                compute="passthrough",
+            ),
+            # MUST register 25274 is signed battery power (charge > 0).
+            CanonicalTelemetryVariant(
+                driver_keys=("must_pv_ph18",),
+                source_keys=("battery_load",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -240,7 +268,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
+                driver_keys=(
+                    "modbus_smg",
+                    "pi18",
+                    "pi30",
+                    "smartess_local",
+                    "eybond_g_ascii",
+                    "srne_modbus",
+                    "must_pv_ph18",
+                ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_home",
             ),
@@ -258,7 +294,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
+                driver_keys=(
+                    "modbus_smg",
+                    "pi18",
+                    "pi30",
+                    "smartess_local",
+                    "eybond_g_ascii",
+                    "srne_modbus",
+                    "must_pv_ph18",
+                ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_battery",
             ),
@@ -276,7 +320,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
+                driver_keys=(
+                    "modbus_smg",
+                    "pi18",
+                    "pi30",
+                    "smartess_local",
+                    "eybond_g_ascii",
+                    "srne_modbus",
+                    "must_pv_ph18",
+                ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_grid",
             ),
@@ -294,7 +346,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
+                driver_keys=(
+                    "modbus_smg",
+                    "pi18",
+                    "pi30",
+                    "smartess_local",
+                    "eybond_g_ascii",
+                    "srne_modbus",
+                    "must_pv_ph18",
+                ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_battery_to_home",
             ),
@@ -312,7 +372,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
+                driver_keys=(
+                    "modbus_smg",
+                    "pi18",
+                    "pi30",
+                    "smartess_local",
+                    "eybond_g_ascii",
+                    "srne_modbus",
+                    "must_pv_ph18",
+                ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_home",
             ),
@@ -330,7 +398,15 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
         ),
         variants=(
             CanonicalTelemetryVariant(
-                driver_keys=("modbus_smg", "pi18", "pi30", "smartess_local", "eybond_g_ascii"),
+                driver_keys=(
+                    "modbus_smg",
+                    "pi18",
+                    "pi30",
+                    "smartess_local",
+                    "eybond_g_ascii",
+                    "srne_modbus",
+                    "must_pv_ph18",
+                ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_battery",
             ),
@@ -401,6 +477,15 @@ def _compute_variant(
 ) -> Any:
     if variant.compute == "passthrough":
         return values.get(variant.source_keys[0])
+
+    if variant.compute == "sum":
+        total = 0.0
+        for key in variant.source_keys:
+            numeric = _numeric(values.get(key))
+            if numeric is None:
+                return None
+            total += numeric
+        return round(total, 4)
 
     if variant.compute == "signed_delta_multiply":
         voltage = values.get(variant.source_keys[0])

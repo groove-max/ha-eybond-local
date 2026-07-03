@@ -120,6 +120,10 @@ class CollectorEntityScopeTests(unittest.TestCase):
     def test_is_collector_entity_key_matches_current_namespace_and_future_smartess_keys(self) -> None:
         self.assertTrue(is_collector_entity_key("collector_pn"))
         self.assertTrue(is_collector_entity_key("collector_poll_utilization_percent"))
+        # Poll-debugging sensors live on the collector device, not the inverter.
+        self.assertTrue(is_collector_entity_key("runtime_refresh_phase_breakdown"))
+        self.assertTrue(is_collector_entity_key("driver_slow_requests"))
+        self.assertTrue(is_collector_entity_key("driver_unsupported_commands"))
         self.assertTrue(is_collector_entity_key("configured_collector_ip"))
         self.assertTrue(is_collector_entity_key("smartess_protocol_asset_id"))
         self.assertTrue(is_collector_entity_key("runtime_driver_state"))

@@ -156,10 +156,8 @@
       "scan_none_addable_next_with_deep": "Use **{refresh_action_label}** to try again, **{deep_scan_action_label}** to check the full local network, or **{manual_action_label}** to override the connection settings.",
       "scan_none_addable_next": "Use **{refresh_action_label}** to try again, or **{manual_action_label}** to override the connection settings.",
       "scan_pending_summary": "Found **{detected_count}** device candidate(s). **{available_count}** collector candidate(s) can be added now, but local inverter matching is still pending.",
-      "scan_pending_next": "Choose **{choose_action_label}** to save the Pending Device now, or use **{refresh_action_label}** or **{manual_action_label}** to retry the local match.",
       "scan_ready_fallback": "detected inverters",
       "scan_ready_summary": "Found **{detected_count}** device candidate(s). **{available_count}** can be added now, **{already_added_count}** already configured. Ready now: {ready_summary}.",
-      "scan_ready_next": "Choose **{choose_action_label}** to pick which inverter to add.",
       "scan_progress_stage_preparing": "Preparing scan",
       "scan_progress_stage_discovering": "Sending discovery probes",
       "scan_progress_stage_analyzing": "Analyzing collector responses",
@@ -170,7 +168,6 @@
       "duration_minutes_short": "min",
       "duration_seconds_short": "sec",
       "choose_summary": "**{available_count}** detected device candidate(s) can be added right now. Already configured devices are excluded.",
-      "scan_line_matched": "{index}. **{status_label}** — {model_name} · serial {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
       "scan_line_smartess_hint": "SmartESS metadata",
       "scan_line_peer_connected": "{peer_label} connected",
       "scan_line_peer_replied": "{peer_label} replied, waiting for reverse connection",
@@ -431,7 +428,18 @@
       "control_discovery_result_reads_only": "Discovery finished and the temporary cloud connection is closed. {control_discovery_read_count} read sensor(s) were discovered. Apply them, download the support package, or return to the menu.",
       "control_discovery_result_reads_note": "Plus {control_discovery_read_count} read sensor(s) were discovered and will be added on Apply.",
       "control_discovery_result_notice_applied_both": "✓ The selected controls and {read_count} read sensor(s) were added to Home Assistant.",
-      "control_discovery_result_notice_applied_reads": "✓ {read_count} read sensor(s) were added to Home Assistant."
+      "control_discovery_result_notice_applied_reads": "✓ {read_count} read sensor(s) were added to Home Assistant.",
+      "status_driver_choice": "Driver choice",
+      "status_detection_timeout": "Detection ran out of time",
+      "driver_choice_option": "{model_name} — {driver_key}",
+      "driver_choice_summary": "This inverter answered over **{count}** different protocols during the deep scan, so you can choose which driver Home Assistant will use. Protocols can differ in polling speed — the response time below is a good hint. If unsure, keep the recommended option.",
+      "driver_choice_recommended": "recommended",
+      "driver_choice_probe_seconds": "answered in {seconds}s",
+      "driver_choice_device_address": "device address {device_addr}",
+      "scan_line_serial": "serial {serial_number}",
+      "scan_ready_next_select": "Pick the inverter you want to add from the list below.",
+      "scan_pending_next_select": "Pick a device below to save the Pending Device now, or use **{refresh_action_label}** or **{manual_action_label}** to retry the local match.",
+      "scan_results_action_refresh_deep": "Repeat deep scan"
     }
   }
 }

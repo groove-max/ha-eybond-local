@@ -68,6 +68,12 @@
           "choose": "Добавить обнаруженное устройство",
           "refresh_scan": "Повторить сканирование",
           "advanced_setup": "Устройство не найдено? Расширенная настройка"
+        },
+        "data": {
+          "result_key": "Устройство или действие"
+        },
+        "data_description": {
+          "result_key": "Выберите найденное устройство, чтобы добавить его, или действие из списка."
         }
       },
       "change_scan_interface": {
@@ -88,6 +94,16 @@
         },
         "data_description": {
           "result_key": "Выберите инвертор, который хотите добавить в Home Assistant."
+        }
+      },
+      "driver_choice": {
+        "title": "Выбор драйвера инвертора",
+        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
+        "data": {
+          "driver_match_key": "Драйвер / протокол"
+        },
+        "data_description": {
+          "driver_match_key": "Если не уверены — оставьте рекомендованный вариант."
         }
       },
       "detection_summary": {

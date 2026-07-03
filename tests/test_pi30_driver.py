@@ -409,6 +409,73 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_read_values_stops_retrying_unsupported_commands(self) -> None:
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        inverter = await Pi30Driver().async_probe(
+            _FakeTransport(
+                {
+                    (0x0994, 0x01, "QPI"): "PI30",
+                    (0x0994, 0x01, "QID"): "553555355535552",
+                    (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 28.2 27.0 2 30 80 0 2 2 1 10 0 0 27.0 0 1",
+                }
+            ),
+            target,
+        )
+        assert inverter is not None
+        # An inverter that only answers the core pair: every other command
+        # times out (like a PowMr behind an EyeBond collector).
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPIGS"): "239.5 49.9 239.5 49.9 0927 0924 015 396 26.60 000 100 0028 002.2 315.9 00.00 00000 00010000 00 00 00665 000",
+                (0x0994, 0x01, "QMOD"): "L",
+            }
+        )
+        runtime_state: dict[str, object] = {}
+
+        # Two full cycles collect the failure strikes.
+        await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=100.0,
+        )
+        await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=200.0,
+        )
+
+        transport.commands.clear()
+        values = await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=300.0,
+        )
+
+        # Third cycle: only the supported pair goes on the wire.
+        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+        self.assertEqual(values["driver_unsupported_commands"], "Q1, QET, QPIWS")
+
+        # The set is permanent: no timer-based re-probe. An explicit re-check
+        # (the diagnostic button) clears the cache and probes everything again.
+        transport.commands.clear()
+        await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=300.0 + 100_000.0,
+        )
+        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+
+        from custom_components.eybond_local.drivers.command_support import (
+            clear_unsupported_commands,
+        )
+
+        clear_unsupported_commands(runtime_state)
+        transport.commands.clear()
+        await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=300.0 + 100_100.0,
+        )
+        self.assertIn("QPIWS", transport.commands)
+        self.assertIn("Q1", transport.commands)
+        self.assertIn("QET", transport.commands)
+
     async def test_write_enum_capability_sends_pi30_command(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)

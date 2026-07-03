@@ -17,6 +17,13 @@ from ..models import (
 )
 from ..payload.modbus import ModbusSession, to_signed_16
 from .base import InverterDriver
+from .command_support import (
+    apply_unsupported_diagnostics,
+    command_skipped_as_unsupported,
+    commit_cycle_failures,
+    record_command_failure,
+    record_command_success,
+)
 
 
 SMARTESS_LOCAL_0925_PROFILE_NAME = "smartess_local/models/0925.json"
@@ -195,6 +202,22 @@ class SmartEssLocalDriver(InverterDriver):
         register_cache: dict[int, int] = cache.setdefault("registers", {})
         last_read: dict[str, float] = cache.setdefault("last_read", {})
 
+        request_timings: list[tuple[str, int, str]] = []
+
+        async def _timed_read(session_obj, label: str, start: int, count: int):
+            request_started = time.monotonic()
+            try:
+                result = await session_obj.read_holding(start, count)
+            except Exception:
+                request_timings.append(
+                    (label, int(round((time.monotonic() - request_started) * 1000.0)), "error")
+                )
+                raise
+            request_timings.append(
+                (label, int(round((time.monotonic() - request_started) * 1000.0)), "ok")
+            )
+            return result
+
         read_blocks: list[tuple[int, list[int]]] = []
         for block in schema.blocks:
             if block.count <= 0:
@@ -206,16 +229,11 @@ class SmartEssLocalDriver(InverterDriver):
                 poll_interval=poll_interval,
             ):
                 continue
-            session = self._session(
-                transport,
-                _target_for_block(inverter.probe_target, block.key),
-            )
-            try:
-                words = _normalize_block_words(
-                    block.key,
-                    await session.read_holding(block.start, block.count),
-                )
-            except Exception:
+            block_cache_key = f"block:{block.key}"
+            if command_skipped_as_unsupported(runtime_state, block_cache_key):
+                # The bulk read is known-rejected for this device; keep the
+                # cheap per-register capability fallbacks (they have their own
+                # negative cache) instead of burning a timeout every cycle.
                 await _read_capability_register_fallbacks(
                     self,
                     transport,
@@ -224,8 +242,32 @@ class SmartEssLocalDriver(InverterDriver):
                     block_start=block.start,
                     block_count=block.count,
                     register_cache=register_cache,
+                    runtime_state=runtime_state,
                 )
                 continue
+            session = self._session(
+                transport,
+                _target_for_block(inverter.probe_target, block.key),
+            )
+            try:
+                words = _normalize_block_words(
+                    block.key,
+                    await _timed_read(session, block_cache_key, block.start, block.count),
+                )
+            except Exception:
+                record_command_failure(runtime_state, block_cache_key)
+                await _read_capability_register_fallbacks(
+                    self,
+                    transport,
+                    inverter.probe_target,
+                    self.write_capabilities,
+                    block_start=block.start,
+                    block_count=block.count,
+                    register_cache=register_cache,
+                    runtime_state=runtime_state,
+                )
+                continue
+            record_command_success(runtime_state, block_cache_key)
             last_read[block.key] = now
             read_blocks.append((block.start, words))
             for index, raw in enumerate(words):
@@ -241,7 +283,22 @@ class SmartEssLocalDriver(InverterDriver):
             values_cache.setdefault("smartess_config_collector_addr", _SMARTESS_0925_CONFIG_COLLECTOR_ADDR)
 
         _apply_capability_read_back(values_cache, self.write_capabilities, register_cache)
-        return dict(values_cache)
+        commit_cycle_failures(runtime_state)
+        result = dict(values_cache)
+        apply_unsupported_diagnostics(result, runtime_state)
+        if request_timings:
+            slowest = sorted(request_timings, key=lambda item: -item[1])[:5]
+            result["driver_slow_requests"] = ", ".join(
+                f"{label}={elapsed_ms}ms:{outcome}" for label, elapsed_ms, outcome in slowest
+            )
+            _LOGGER.debug(
+                "SmartESS 0925 cycle requests: %s",
+                ", ".join(
+                    f"{label}={elapsed_ms}ms:{outcome}"
+                    for label, elapsed_ms, outcome in request_timings
+                ),
+            )
+        return result
 
     async def async_write_capability(
         self,
@@ -443,6 +500,7 @@ async def _read_capability_register_fallbacks(
     block_start: int,
     block_count: int,
     register_cache: dict[int, int],
+    runtime_state: dict[str, Any] | None = None,
 ) -> None:
     """Read individual capability registers when a bulk metadata block is rejected."""
 
@@ -455,11 +513,16 @@ async def _read_capability_register_fallbacks(
             continue
         if not block_start <= register < block_end:
             continue
+        register_cache_key = f"register:{register}"
+        if command_skipped_as_unsupported(runtime_state, register_cache_key):
+            continue
         session = driver._session(transport, _target_for_register(target, register))
         try:
             words = _normalize_register_words(register, await session.read_holding(register, 1))
         except Exception:
+            record_command_failure(runtime_state, register_cache_key)
             continue
+        record_command_success(runtime_state, register_cache_key)
         if words:
             register_cache[register] = int(words[0])
 

@@ -227,6 +227,7 @@ _HIDDEN_HA_ONLY_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
 _DEFAULT_PROXY_CAPTURE_PORT = 18899
 _COLLECTOR_HA_PRIMARY_RECONCILE_COOLDOWN_SECONDS = 300.0
 _EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY = "effective_metadata_snapshot"
+_UNSUPPORTED_COMMANDS_OPTION_KEY = "driver_unsupported_commands"
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
 _POLL_INTERVAL_MIN_SECONDS = 2
 _POLL_INTERVAL_MAX_SECONDS = 3600
@@ -391,6 +392,39 @@ def _poll_context_for_runtime_driver_state(runtime_driver_state: str) -> str:
     if runtime_driver_state == _RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE:
         return _COLLECTOR_POLL_CONTEXT_COLLECTOR
     return _COLLECTOR_POLL_CONTEXT_DETECTION
+
+
+def _snapshot_reconnect_count(snapshot: object) -> int:
+    values = getattr(snapshot, "values", None)
+    if not isinstance(values, dict):
+        return 0
+    try:
+        return int(values.get("runtime_reconnect_count", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_clean_runtime_poll_cycle(
+    *,
+    previous_runtime_driver_state: str,
+    runtime_driver_state: str,
+    previous_reconnect_count: int,
+    reconnect_count: int,
+) -> bool:
+    """Return whether one cycle measured only a steady-state runtime poll.
+
+    A cycle that bound the driver (detection ran inside it) or that recovered
+    the collector connection (device came back after being unreachable)
+    measures that recovery work, not the device's normal poll cost. Such
+    cycles must not feed the scheduler, the high-utilization warning, or the
+    poll-duration statistics.
+    """
+
+    return (
+        runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+        and previous_runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+        and reconnect_count <= previous_reconnect_count
+    )
 
 
 def _poll_non_runtime_retry_interval_seconds(
@@ -784,6 +818,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         if callable(set_snapshot_observer):
             set_snapshot_observer(self._publish_runtime_intermediate_snapshot)
+        set_connection_watcher = getattr(
+            self._runtime,
+            "set_collector_connection_watcher",
+            None,
+        )
+        if callable(set_connection_watcher):
+            set_connection_watcher(self._on_collector_connection_established)
+        persisted_unsupported = entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_KEY)
+        set_unsupported = getattr(
+            self._runtime,
+            "set_persistent_unsupported_commands",
+            None,
+        )
+        if callable(set_unsupported) and isinstance(persisted_unsupported, (list, tuple)):
+            set_unsupported(tuple(persisted_unsupported))
         super().__init__(
             hass,
             logger,
@@ -854,6 +903,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._poll_last_cycle_started_monotonic = 0.0
         self._collector_poll_overrun_streak = 0
         self._collector_poll_high_utilization_streak = 0
+        self._poll_normal_utilization_streak = 0
+        self._poll_notification_active = False
         self._poll_last_notification_monotonic = 0.0
         self._poll_non_runtime_retry_interval_seconds = 0
         self._poll_scheduler_driver_key = str(
@@ -2342,6 +2393,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 if isinstance(self.data, RuntimeSnapshot)
                 else ""
             )
+            previous_reconnect_count = (
+                _snapshot_reconnect_count(self.data)
+                if isinstance(self.data, RuntimeSnapshot)
+                else 0
+            )
             loop = asyncio.get_running_loop()
             cycle_started = loop.time()
             previous_started = float(
@@ -2355,9 +2411,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self._update_poll_scheduler_policy_from_snapshot(snapshot)
             runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)
             poll_context = _poll_context_for_runtime_driver_state(runtime_driver_state)
-            runtime_poll_success = (
-                runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND
-                and previous_runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+            runtime_poll_success = _is_clean_runtime_poll_cycle(
+                previous_runtime_driver_state=previous_runtime_driver_state,
+                runtime_driver_state=runtime_driver_state,
+                previous_reconnect_count=previous_reconnect_count,
+                reconnect_count=_snapshot_reconnect_count(snapshot),
             )
             decision = self._poll_scheduler.observe(
                 cycle_duration,
@@ -2383,6 +2441,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 runtime_driver_state=runtime_driver_state,
                 poll_context=poll_context,
                 next_interval_seconds=next_poll_interval,
+                clean_runtime_poll=runtime_poll_success,
             )
             self._sync_fixed_rate_poll_update_interval(
                 snapshot,
@@ -2390,6 +2449,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 duration_seconds=cycle_duration,
                 scheduler_mode=decision.mode,
             )
+            self._maybe_persist_unsupported_commands(snapshot)
             return snapshot
 
     def _configured_poll_interval_seconds(self) -> int:
@@ -2494,6 +2554,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         runtime_driver_state: str | None = None,
         poll_context: str | None = None,
         next_interval_seconds: float | None = None,
+        clean_runtime_poll: bool | None = None,
     ) -> None:
         """Publish poll-pipeline utilization and protect against stable overruns."""
 
@@ -2512,28 +2573,35 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             except (TypeError, ValueError):
                 return
         interval = clamp_interval(poll_interval_seconds)
-        self._poll_duration_max_seconds = max(
-            float(getattr(self, "_poll_duration_max_seconds", 0.0) or 0.0),
-            duration,
-        )
-        current_ewma = float(getattr(self, "_poll_duration_ewma_seconds", 0.0) or 0.0)
-        if current_ewma <= 0.0:
-            self._poll_duration_ewma_seconds = duration
-        else:
-            self._poll_duration_ewma_seconds = (
-                current_ewma * 0.7 + duration * 0.3
-            )
-        recent = list(getattr(self, "_poll_recent_durations_seconds", []) or [])
-        recent.append(duration)
-        self._poll_recent_durations_seconds = recent
-        if len(self._poll_recent_durations_seconds) > 20:
-            self._poll_recent_durations_seconds = self._poll_recent_durations_seconds[-20:]
 
         if not runtime_driver_state:
             runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)
         if not poll_context:
             poll_context = _poll_context_for_runtime_driver_state(runtime_driver_state)
         runtime_poll = poll_context == _COLLECTOR_POLL_CONTEXT_RUNTIME
+        # Cycles that bound the driver or recovered the connection measure that
+        # recovery work, not the normal poll cost: keep them out of the duration
+        # statistics, the warning streaks, and the scheduler alike.
+        clean_poll = runtime_poll if clean_runtime_poll is None else bool(clean_runtime_poll)
+
+        if clean_poll:
+            self._poll_duration_max_seconds = max(
+                float(getattr(self, "_poll_duration_max_seconds", 0.0) or 0.0),
+                duration,
+            )
+            current_ewma = float(getattr(self, "_poll_duration_ewma_seconds", 0.0) or 0.0)
+            if current_ewma <= 0.0:
+                self._poll_duration_ewma_seconds = duration
+            else:
+                self._poll_duration_ewma_seconds = (
+                    current_ewma * 0.7 + duration * 0.3
+                )
+            recent = list(getattr(self, "_poll_recent_durations_seconds", []) or [])
+            recent.append(duration)
+            self._poll_recent_durations_seconds = recent
+            if len(self._poll_recent_durations_seconds) > 20:
+                self._poll_recent_durations_seconds = self._poll_recent_durations_seconds[-20:]
+
         next_interval = (
             clamp_interval(next_interval_seconds)
             if next_interval_seconds is not None
@@ -2544,14 +2612,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         )
         utilization_ratio = duration / float(interval) if interval > 0 else 0.0
-        if runtime_poll and utilization_ratio >= _POLL_OVERRUN_RATIO:
+        if runtime_poll and clean_poll and utilization_ratio >= _POLL_OVERRUN_RATIO:
             self._collector_poll_overrun_streak = (
                 int(getattr(self, "_collector_poll_overrun_streak", 0) or 0) + 1
             )
         else:
             self._collector_poll_overrun_streak = 0
 
-        if runtime_poll and utilization_ratio >= _POLL_UTILIZATION_WARNING_RATIO:
+        if runtime_poll and clean_poll and utilization_ratio >= _POLL_UTILIZATION_WARNING_RATIO:
             self._collector_poll_high_utilization_streak = (
                 int(getattr(self, "_collector_poll_high_utilization_streak", 0) or 0) + 1
             )
@@ -2649,6 +2717,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 utilization_ratio=utilization_ratio,
             )
 
+        if (
+            runtime_poll
+            and clean_poll
+            and utilization_ratio < _POLL_UTILIZATION_WARNING_RATIO
+        ):
+            self._poll_normal_utilization_streak = (
+                int(getattr(self, "_poll_normal_utilization_streak", 0) or 0) + 1
+            )
+            if self._poll_normal_utilization_streak >= _POLL_STABLE_STREAK_THRESHOLD:
+                self._dismiss_poll_high_utilization_notification()
+        elif runtime_poll and clean_poll:
+            self._poll_normal_utilization_streak = 0
+
     def _sync_fixed_rate_poll_update_interval(
         self,
         snapshot: RuntimeSnapshot,
@@ -2681,6 +2762,26 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             values["collector_poll_effective_update_delay_seconds"] = round(delay, 3)
             values["collector_poll_scheduler_mode"] = "fixed_rate"
 
+    def _poll_high_utilization_notification_id(self) -> str:
+        return f"{DOMAIN}_poll_interval_high_utilization_{self.config_entry.entry_id}"
+
+    def _dismiss_poll_high_utilization_notification(self) -> None:
+        """Retract the warning once polling is sustainably back within budget."""
+
+        if not getattr(self, "_poll_notification_active", False):
+            return
+        self._poll_notification_active = False
+        try:
+            persistent_notification.async_dismiss(
+                self.hass,
+                self._poll_high_utilization_notification_id(),
+            )
+        except Exception:
+            logger.debug(
+                "Failed to dismiss poll high-utilization notification",
+                exc_info=True,
+            )
+
     def _notify_poll_high_utilization(
         self,
         *,
@@ -2688,6 +2789,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         recommended_interval: int,
         utilization_ratio: float,
     ) -> None:
+        self._poll_normal_utilization_streak = 0
         now = asyncio.get_running_loop().time()
         if (
             float(getattr(self, "_poll_last_notification_monotonic", 0.0) or 0.0)
@@ -2697,6 +2799,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         ):
             return
         self._poll_last_notification_monotonic = now
+        # Marked active only when a notification is actually created, so a
+        # later dismiss never targets a notification that was throttled away.
+        self._poll_notification_active = True
         persistent_notification.async_create(
             self.hass,
             _localized_runtime_text(
@@ -2710,7 +2815,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 self.hass,
                 "poll_interval_high_utilization_title",
             ),
-            notification_id=f"{DOMAIN}_poll_interval_high_utilization_{self.config_entry.entry_id}",
+            notification_id=self._poll_high_utilization_notification_id(),
         )
 
     async def _async_update_data_with_runtime_lock(
@@ -2726,16 +2831,58 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if poll_interval_seconds is not None
             else self._poll_scheduler.current_interval()
         )
-        await self._async_reconcile_network(reason="refresh")
-        await self._async_reconcile_collector_session_profile(reason="refresh")
-        snapshot = await self._runtime.async_refresh(poll_interval=poll_interval)
-        snapshot = await self._async_prepare_runtime_snapshot_profile(snapshot)
-        if await self._async_reconcile_collector_session_profile(
-            reason="post_refresh_profile_discovery"
+        # Per-phase wall-clock timing: poll cycles have repeatedly turned out
+        # to be dominated by phases nobody suspected; the breakdown makes the
+        # next "why is the cycle 60s" question a sensor read, not a tcpdump.
+        _phase_timings: dict[str, int] = {}
+        _loop = asyncio.get_running_loop()
+
+        async def _timed(phase: str, coro):
+            phase_started = _loop.time()
+            try:
+                return await coro
+            finally:
+                _phase_timings[phase] = _phase_timings.get(phase, 0) + int(
+                    round((_loop.time() - phase_started) * 1000.0)
+                )
+
+        await _timed("network_reconcile", self._async_reconcile_network(reason="refresh"))
+        await _timed(
+            "session_profile",
+            self._async_reconcile_collector_session_profile(reason="refresh"),
+        )
+        snapshot = await _timed(
+            "runtime_refresh",
+            self._runtime.async_refresh(poll_interval=poll_interval),
+        )
+        snapshot = await _timed(
+            "snapshot_profile",
+            self._async_prepare_runtime_snapshot_profile(snapshot),
+        )
+        if await _timed(
+            "session_profile",
+            self._async_reconcile_collector_session_profile(
+                reason="post_refresh_profile_discovery"
+            ),
         ):
-            snapshot = await self._runtime.async_refresh(poll_interval=poll_interval)
-            snapshot = await self._async_prepare_runtime_snapshot_profile(snapshot)
-        await self._async_reconcile_collector_operation_mode_endpoint(snapshot)
+            snapshot = await _timed(
+                "runtime_refresh",
+                self._runtime.async_refresh(poll_interval=poll_interval),
+            )
+            snapshot = await _timed(
+                "snapshot_profile",
+                self._async_prepare_runtime_snapshot_profile(snapshot),
+            )
+        await _timed(
+            "endpoint_reconcile",
+            self._async_reconcile_collector_operation_mode_endpoint(snapshot),
+        )
+        snapshot.values["collector_poll_phase_breakdown"] = ", ".join(
+            f"{phase}={elapsed_ms}ms"
+            for phase, elapsed_ms in sorted(
+                _phase_timings.items(), key=lambda item: -item[1]
+            )
+        )
         snapshot.values["connection_type"] = self.config_entry.data.get(CONF_CONNECTION_TYPE, "eybond")
         snapshot.values["collector_operation_mode"] = self.collector_operation_mode
         snapshot.values["detection_confidence"] = self.detection_confidence
@@ -2843,6 +2990,70 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 collector_cloud_profile_confidence
             )
         return snapshot
+
+    def _maybe_persist_unsupported_commands(self, snapshot: RuntimeSnapshot) -> None:
+        """Persist the empirically learned unsupported-command set on change."""
+
+        values = getattr(snapshot, "values", None)
+        if not isinstance(values, dict):
+            return
+        raw = values.get("driver_unsupported_commands")
+        if not isinstance(raw, str) or not raw.strip():
+            return
+        commands = sorted(
+            command.strip()
+            for command in raw.split(",")
+            if command.strip()
+        )
+        stored = self.config_entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_KEY)
+        if isinstance(stored, (list, tuple)) and sorted(stored) == commands:
+            return
+        set_unsupported = getattr(
+            self._runtime,
+            "set_persistent_unsupported_commands",
+            None,
+        )
+        if callable(set_unsupported):
+            set_unsupported(tuple(commands))
+        options = dict(self.config_entry.options)
+        options[_UNSUPPORTED_COMMANDS_OPTION_KEY] = commands
+        self._async_update_entry_without_reload(options=options)
+        logger.info(
+            "Persisted unsupported inverter commands for this device: %s",
+            ", ".join(commands),
+        )
+
+    async def async_recheck_supported_commands(self) -> None:
+        """Forget the learned unsupported-command set and re-probe everything."""
+
+        clear_cache = getattr(self._runtime, "clear_unsupported_command_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+        options = dict(self.config_entry.options)
+        if options.pop(_UNSUPPORTED_COMMANDS_OPTION_KEY, None) is not None:
+            self._async_update_entry_without_reload(options=options)
+        await self.async_request_refresh()
+
+    def _on_collector_connection_established(self, remote_ip: str) -> None:
+        """Refresh immediately when the collector dials back in.
+
+        Without this the reconnected collector sits idle until the next
+        scheduled poll, which after failed detection cycles can be more than
+        a minute away (non-runtime retry backoff).
+        """
+
+        if getattr(self, "_shutdown_complete", False):
+            return
+        snapshot = self.data if isinstance(self.data, RuntimeSnapshot) else None
+        if snapshot is not None:
+            runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)
+            if snapshot.connected and runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND:
+                return
+        logger.debug(
+            "Collector connection from %s while not bound; requesting immediate refresh",
+            remote_ip,
+        )
+        self.hass.async_create_task(self.async_request_refresh())
 
     def _publish_runtime_intermediate_snapshot(self, snapshot: RuntimeSnapshot) -> None:
         """Publish collector state while the runtime is still probing the inverter."""

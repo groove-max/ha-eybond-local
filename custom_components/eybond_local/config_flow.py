@@ -212,6 +212,9 @@ from .support.shadow_learning_review_model import (
 from . import valuecloud_cloud as valuecloud_cloud_module
 
 CONF_RESULT_KEY = "result_key"
+_SCAN_RESULTS_ACTION_REFRESH = "action:refresh_scan"
+_SCAN_RESULTS_ACTION_ADVANCED = "action:advanced_setup"
+CONF_DRIVER_MATCH_KEY = "driver_match_key"
 CONF_COLLECTOR_NETWORK_STATUS = "collector_network_status"
 CONF_COLLECTOR_WIFI_ACTION = "collector_wifi_action"
 CONF_CONFIRM_COLLECTOR_WIFI_APPLY = "confirm_collector_wifi_apply"
@@ -606,6 +609,36 @@ def _apply_smartess_detection_metadata(
             data[config_key] = value
 
 
+def _apply_detection_evidence_metadata(
+    data: dict[str, Any],
+    result: OnboardingResult | None,
+) -> None:
+    """Persist detection evidence so diagnostics can explain how the entry was made."""
+
+    if result is None:
+        return
+
+    if result.match is not None:
+        target = result.match.probe_target
+        data["detected_probe_route"] = (
+            f"{target.devcode}:{target.collector_addr}:{target.device_addr}"
+        )
+
+    detection = result.detection
+    if detection is None:
+        return
+    data["detection_depth"] = detection.depth
+    data["detection_status"] = detection.status
+    if detection.budget_exhausted:
+        data["detection_budget_exhausted"] = True
+    candidate_drivers = detection.details.get("candidate_drivers")
+    if isinstance(candidate_drivers, (list, tuple)) and len(candidate_drivers) > 1:
+        data["detection_candidate_drivers"] = list(candidate_drivers)
+    probe_log = detection.details.get("probe_log")
+    if isinstance(probe_log, (list, tuple)) and probe_log:
+        data["detection_probe_log"] = [dict(entry) for entry in probe_log if isinstance(entry, dict)]
+
+
 def _apply_collector_cloud_family_metadata(
     data: dict[str, Any],
     result: OnboardingResult | None,
@@ -943,16 +976,20 @@ def _smartess_credential_schema_fields(
     }
 
 
+_DRIVER_DISPLAY_LABELS: dict[str, str] = {
+    DRIVER_HINT_AUTO: "Auto",
+    "modbus_smg": "SMG / Modbus",
+    "srne_modbus": "SRNE / Modbus",
+    "must_pv_ph18": "MUST PV/PH18",
+    "smartess_local": "SmartESS 0925 / Modbus",
+    "pi30": "PI30",
+    "eybond_g_ascii": "EyeBond G-ASCII",
+    "pi18": "PI18",
+}
+
+
 def _driver_selector(bundle: dict[str, Any] | None = None) -> SelectSelector:
-    labels = {
-        DRIVER_HINT_AUTO: "Auto",
-        "modbus_smg": "SMG / Modbus",
-        "srne_modbus": "SRNE / Modbus",
-        "must_pv_ph18": "MUST PV/PH18",
-        "pi30": "PI30",
-        "eybond_g_ascii": "EyeBond G-ASCII",
-        "pi18": "PI18",
-    }
+    labels = _DRIVER_DISPLAY_LABELS
     options = [
         SelectOptionDict(
             value=opt,
@@ -1829,6 +1866,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         self._set_scan_mode(SETUP_MODE_DEEP_SCAN)
+        plan = self._deep_scan_plan()
+        if plan["network_cidr"] and plan["target_count"] and not plan["large_subnet"]:
+            # A known, normally sized network needs no confirmation step; the
+            # menu remains only where the user must decide something: a large
+            # subnet (long scan), or an unknown network (change interface /
+            # go manual).
+            return await self.async_step_start_deep_scan()
         menu_options = ["start_deep_scan"]
         if len(self._interface_options) > 1:
             menu_options.append("change_scan_interface")
@@ -1902,6 +1946,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         detector_timeout = max(5.0, scan_timeout - 5.0)
         if self._scan_mode != SETUP_MODE_DEEP_SCAN:
             detector_timeout = min(detector_timeout, 40.0)
+        else:
+            # The deep-scan deadline extends itself for every connected
+            # collector it admits; the admission headroom (policy hard
+            # ceiling) sits on top of the discovery budget so a /16 sweep
+            # does not consume the identification budget. The outer guard
+            # only has to stop a runaway scan, not pace it.
+            scan_timeout = (
+                scan_timeout
+                + _ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds
+                + 30.0
+            )
         self._scan_progress_stage = "discovering"
         progress_updater = asyncio.create_task(self._async_update_scan_progress_loop())
         detector = create_onboarding_manager(
@@ -1911,6 +1966,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
             driver_hint=DRIVER_HINT_AUTO,
         )
+        skip_probe_ips = self._configured_collector_probe_skip_ips()
         try:
             async with _async_timeout(scan_timeout):
                 if self._scan_mode == SETUP_MODE_DEEP_SCAN:
@@ -1919,6 +1975,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         unicast_network_cidr=deep_scan_plan["network_cidr"],
                         enrich_runtime_details=True,
                         total_timeout=detector_timeout,
+                        skip_probe_ips=skip_probe_ips,
                     )
                 else:
                     results = await detector.async_auto_detect(
@@ -1926,6 +1983,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         attempts=1,
                         enrich_runtime_details=False,
                         total_timeout=detector_timeout,
+                        skip_probe_ips=skip_probe_ips,
                     )
         except TimeoutError:
             logger.warning(
@@ -1986,15 +2044,48 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
+        """One screen: pick a found device directly, or pick a follow-up action."""
+
         available_results = self._available_autodetect_results()
-        menu_options: list[str] = []
-        if available_results:
-            menu_options.append("choose")
-        menu_options.append("refresh_scan")
-        menu_options.append("advanced_setup")
-        return self.async_show_menu(
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            selection = str(user_input.get(CONF_RESULT_KEY) or "")
+            if selection == _SCAN_RESULTS_ACTION_REFRESH:
+                return await self.async_step_refresh_scan()
+            if selection == _SCAN_RESULTS_ACTION_ADVANCED:
+                return await self.async_step_advanced_setup()
+            result = available_results.get(selection)
+            if result is None:
+                errors["base"] = "invalid_selection"
+            elif self._existing_entry_for_result(result) is not None:
+                errors["base"] = "already_added_candidate"
+            elif _result_indicates_inverter_link_down(result):
+                errors["base"] = "inverter_link_down"
+            else:
+                self._set_selected_result(result)
+                self._detection_summary_context = "auto"
+                if self._selected_result_needs_driver_choice():
+                    return await self.async_step_driver_choice()
+                return await self.async_step_detection_summary()
+
+        options: dict[str, str] = {
+            key: self._result_label(result)
+            for key, result in available_results.items()
+        }
+        options[_SCAN_RESULTS_ACTION_REFRESH] = self._refresh_scan_action_label()
+        options[_SCAN_RESULTS_ACTION_ADVANCED] = self._scan_action_label(
+            "advanced_setup", "Device not found? Advanced setup"
+        )
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_RESULT_KEY): _result_selector(options),
+            }
+        )
+        return self.async_show_form(
             step_id="scan_results",
-            menu_options=menu_options,
+            data_schema=data_schema,
+            errors=errors,
             description_placeholders=self._scan_results_placeholders(),
         )
 
@@ -2094,6 +2185,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else:
                 self._set_selected_result(candidate)
                 self._detection_summary_context = "auto"
+                if self._selected_result_needs_driver_choice():
+                    return await self.async_step_driver_choice()
                 return await self.async_step_detection_summary()
 
         if user_input is not None:
@@ -2108,6 +2201,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else:
                 self._set_selected_result(result)
                 self._detection_summary_context = "auto"
+                if self._selected_result_needs_driver_choice():
+                    return await self.async_step_driver_choice()
                 return await self.async_step_detection_summary()
 
         options = {
@@ -2124,6 +2219,66 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             errors=errors,
             description_placeholders=self._choose_placeholders(),
+        )
+
+    # ---- step: driver_choice ----
+
+    @_with_translation_bundle
+    async def async_step_driver_choice(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Let the user choose between multiple successful deep-scan drivers."""
+
+        if self._selected_result is None:
+            return await self.async_step_auto()
+        candidates = self._driver_choice_candidates(self._selected_result)
+        if len(candidates) <= 1:
+            return await self.async_step_detection_summary()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            selected_key = str(user_input.get(CONF_DRIVER_MATCH_KEY) or "").strip()
+            selected_match = self._driver_choice_match_by_key(
+                self._selected_result,
+                selected_key,
+            )
+            if selected_match is None:
+                errors["base"] = "invalid_selection"
+            else:
+                updated_result = self._selected_result_with_match(
+                    self._selected_result,
+                    selected_match,
+                )
+                # Keep the autodetect registry pointing at the updated result:
+                # the confirm-time runtime-detail refresh only runs for results
+                # it can find there, and it must probe with the chosen driver.
+                for result_key, stored in self._autodetect_results.items():
+                    if stored is self._selected_result:
+                        self._autodetect_results[result_key] = updated_result
+                        break
+                self._set_selected_result(updated_result)
+                return await self.async_step_detection_summary()
+
+        include_address = self._driver_choice_needs_address(candidates)
+        options = {
+            self._driver_choice_key(match): self._driver_choice_label(
+                match,
+                recommended=index == 0,
+                include_address=include_address,
+            )
+            for index, match in enumerate(candidates)
+        }
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_DRIVER_MATCH_KEY): _result_selector(options),
+            }
+        )
+        return self.async_show_form(
+            step_id="driver_choice",
+            data_schema=data_schema,
+            errors=errors,
+            description_placeholders=self._driver_choice_placeholders(self._selected_result),
         )
 
     # ---- step: detection_summary ----
@@ -2632,6 +2787,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
         _apply_smartess_cloud_assist_metadata(data, assist_state)
+        _apply_detection_evidence_metadata(data, result)
         poll_interval = int((user_input or {}).get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
         poll_mode = str((user_input or {}).get(CONF_POLL_MODE, DEFAULT_POLL_MODE) or DEFAULT_POLL_MODE)
         if poll_mode not in {POLL_MODE_AUTO, POLL_MODE_MANUAL}:
@@ -3118,6 +3274,168 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._selected_result = result
         self._selected_result_runtime_details_attempted = False
         self._selected_result_collector_capabilities_attempted = False
+
+    @staticmethod
+    def _driver_choice_candidates(result: OnboardingResult) -> tuple:
+        candidates = tuple(
+            match
+            for match in (result.match, *result.alternative_matches)
+            if match is not None
+        )
+        seen: set[str] = set()
+        deduped = []
+        for match in candidates:
+            key = EybondLocalConfigFlow._driver_choice_key(match)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(match)
+        return tuple(deduped)
+
+    def _selected_result_needs_driver_choice(self) -> bool:
+        result = self._selected_result
+        return bool(result is not None and len(self._driver_choice_candidates(result)) > 1)
+
+    @staticmethod
+    def _driver_choice_key(match) -> str:
+        target = match.probe_target
+        return (
+            f"{match.driver_key}|{match.variant_key}|"
+            f"{target.devcode}:{target.collector_addr}:{target.device_addr}"
+        )
+
+    @staticmethod
+    def _driver_choice_match_by_key(result: OnboardingResult, selected_key: str):
+        for match in EybondLocalConfigFlow._driver_choice_candidates(result):
+            if EybondLocalConfigFlow._driver_choice_key(match) == selected_key:
+                return match
+        return None
+
+    @staticmethod
+    def _selected_result_with_match(result: OnboardingResult, selected_match) -> OnboardingResult:
+        alternatives = tuple(
+            match
+            for match in EybondLocalConfigFlow._driver_choice_candidates(result)
+            if EybondLocalConfigFlow._driver_choice_key(match)
+            != EybondLocalConfigFlow._driver_choice_key(selected_match)
+        )
+        detection = result.detection
+        if detection is not None:
+            detection = replace(
+                detection,
+                status="matched",
+                reason=selected_match.driver_key,
+                details={
+                    **dict(detection.details),
+                    "selected_driver": selected_match.driver_key,
+                },
+            )
+        return replace(
+            result,
+            match=selected_match,
+            alternative_matches=alternatives,
+            detection=detection,
+        )
+
+    @staticmethod
+    def _driver_choice_needs_address(candidates) -> bool:
+        """Show the device address only when it is the distinguishing detail."""
+
+        keys = {(match.driver_key, match.variant_key) for match in candidates}
+        return len(keys) < len(candidates)
+
+    def _driver_display_name(self, driver_key: str) -> str:
+        """Human driver name (protocol family / wire protocol), not the raw key."""
+
+        return self._tr(
+            f"selector.driver_hint.options.{driver_key}",
+            _DRIVER_DISPLAY_LABELS.get(driver_key, driver_key),
+        )
+
+    def _driver_choice_base_label(self, match) -> str:
+        model_name = match.model_name or self._unconfirmed_inverter_label()
+        driver_label = self._driver_display_name(match.driver_key)
+        # Drivers qualify their model names with the protocol family already
+        # ("PI30 4200", "... (SmartESS 0925)"); repeating the driver name next
+        # to it reads as a duplicate, so only append it when it adds anything.
+        family_token = driver_label.split("/", 1)[0].strip().lower()
+        if family_token and family_token in model_name.lower():
+            return model_name
+        return self._tr(
+            "common.dynamic.driver_choice_option",
+            "{model_name} — {driver_key}",
+            {
+                "driver_key": driver_label,
+                "model_name": model_name,
+            },
+        )
+
+    def _driver_choice_label(
+        self,
+        match,
+        *,
+        recommended: bool = False,
+        include_address: bool = False,
+    ) -> str:
+        """Short dropdown label; the details live in the numbered list above."""
+
+        label = self._driver_choice_base_label(match)
+        extras: list[str] = []
+        if recommended:
+            extras.append(
+                self._tr("common.dynamic.driver_choice_recommended", "recommended")
+            )
+        if include_address:
+            extras.append(
+                self._tr(
+                    "common.dynamic.driver_choice_device_address",
+                    "device address {device_addr}",
+                    {"device_addr": match.probe_target.device_addr},
+                )
+            )
+        if extras:
+            return f"{label} ({', '.join(extras)})"
+        return label
+
+    def _driver_choice_line(
+        self,
+        index: int,
+        match,
+        *,
+        recommended: bool,
+        include_address: bool,
+    ) -> str:
+        """One numbered description line with the human-readable details."""
+
+        confidence = self._confidence_label(match.confidence)
+        # The shared confidence label is capitalized for standalone use; here
+        # it sits mid-sentence, so lowercase the first letter.
+        confidence = confidence[:1].lower() + confidence[1:]
+        parts = [f"**{self._driver_choice_base_label(match)}**", confidence]
+        probe_elapsed_ms = match.details.get("probe_elapsed_ms")
+        if isinstance(probe_elapsed_ms, (int, float)) and probe_elapsed_ms > 0:
+            parts.append(
+                self._tr(
+                    "common.dynamic.driver_choice_probe_seconds",
+                    "answered in {seconds}s",
+                    {"seconds": f"{float(probe_elapsed_ms) / 1000.0:.1f}"},
+                )
+            )
+        if include_address:
+            parts.append(
+                self._tr(
+                    "common.dynamic.driver_choice_device_address",
+                    "device address {device_addr}",
+                    {"device_addr": match.probe_target.device_addr},
+                )
+            )
+        line = f"{index}. " + " · ".join(parts)
+        if recommended:
+            line += " — " + self._tr(
+                "common.dynamic.driver_choice_recommended",
+                "recommended",
+            )
+        return line
 
     def _selected_collector_ip(self) -> str:
         result = self._selected_result
@@ -4639,6 +4957,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         defaults.update(self._auto_config)
         return defaults
 
+    def _refresh_scan_action_label(self) -> str:
+        """Context-aware label: repeating after a deep scan repeats the deep scan."""
+
+        if self._scan_mode == SETUP_MODE_DEEP_SCAN:
+            return self._tr(
+                "common.dynamic.scan_results_action_refresh_deep",
+                "Repeat deep scan",
+            )
+        return self._scan_action_label("refresh_scan", "Refresh scan results")
+
     def _scan_action_label(self, action: str, default: str) -> str:
         # deep_scan / change_scan_interface / manual moved under the
         # advanced_setup submenu; resolve their labels from either step.
@@ -5267,6 +5595,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else f"listener:{server_ip}:{DEFAULT_TCP_PORT}"
         )
 
+    def _configured_collector_probe_skip_ips(self) -> frozenset[str]:
+        """Collector IPs owned by existing entries: scans must not probe them.
+
+        Probing would steal the collector's callback session from the running
+        entry; the scan lists them as already added instead.
+        """
+
+        ips: set[str] = set()
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id == self.context.get("entry_id"):
+                continue
+            ip = str(entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
+            if ip:
+                ips.add(ip)
+        return frozenset(ips)
+
     def _existing_entry_for_result(self, result: OnboardingResult):
         collector = result.collector
         collector_pn = self._collector_pn_for_result(result)
@@ -5315,6 +5659,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     @staticmethod
     def _is_visible_scan_result(result: OnboardingResult) -> bool:
         collector = result.collector
+        if result.last_error == "already_configured":
+            # Configured collectors are not probed, but the user must still
+            # see that the scan accounted for them.
+            return True
         if result.match is not None:
             return True
         if collector is None:
@@ -5364,13 +5712,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return "unknown"
 
     @staticmethod
-    def _scan_result_priority(result: OnboardingResult) -> tuple[int, int, int, int]:
+    def _scan_result_priority(result: OnboardingResult) -> tuple[int, int, int, int, int]:
         collector = result.collector
+        collector_info = collector.collector if collector is not None else None
         return (
             1 if result.match is not None else 0,
             1 if collector is not None and collector.connected else 0,
             1 if collector is not None and collector.udp_reply else 0,
             confidence_sort_score(result.confidence),
+            1 if collector_info is not None and collector_info.collector_pn else 0,
         )
 
     def _sorted_autodetect_items(self) -> list[tuple[str, OnboardingResult]]:
@@ -5412,12 +5762,25 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         for result in results:
             key = self._scan_result_key(result)
             collector_pn = self._collector_pn_for_result(result)
-            if collector_pn:
-                for existing_key, existing in collapsed.items():
-                    existing_pn = self._collector_pn_for_result(existing)
-                    if _collector_identity_matches(existing_pn, collector_pn):
-                        key = existing_key
-                        break
+            collector_ip = result.collector.ip if result.collector is not None else ""
+            for existing_key, existing in collapsed.items():
+                existing_pn = self._collector_pn_for_result(existing)
+                if collector_pn and _collector_identity_matches(existing_pn, collector_pn):
+                    key = existing_key
+                    break
+                # One collector seen through two sources (e.g. the skip-probe
+                # marker for a configured IP plus a PN-carrying session-inventory
+                # result) must collapse into one line. Same-IP merging applies
+                # only when at least one side lacks a PN: two different
+                # collectors behind one NAT IP both carry PNs and stay apart.
+                if (
+                    collector_ip
+                    and existing.collector is not None
+                    and existing.collector.ip == collector_ip
+                    and (not collector_pn or not existing_pn)
+                ):
+                    key = existing_key
+                    break
             current = collapsed.get(key)
             if current is None or self._scan_result_priority(result) > self._scan_result_priority(current):
                 collapsed[key] = result
@@ -5428,7 +5791,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         available_count = 0
         already_added_count = 0
         selected_ip = self._auto_config.get(CONF_SERVER_IP, self._local_ip)
-        refresh_action_label = self._scan_action_label("refresh_scan", "Refresh scan results")
+        refresh_action_label = self._refresh_scan_action_label()
         deep_scan_action_label = self._scan_action_label("deep_scan", "Run deep scan")
         manual_action_label = self._scan_action_label("manual", "Manual setup")
         selected_label = self._selected_interface_label(selected_ip)
@@ -5526,7 +5889,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     },
                 )
         elif not ready_models:
-            choose_action_label = self._scan_action_label("choose", "Add detected device")
             scan_summary = self._tr(
                 "common.dynamic.scan_pending_summary",
                 "Found **{detected_count}** device candidate(s). **{available_count}** collector candidate(s) can be added now, but local inverter matching is still pending.",
@@ -5536,16 +5898,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 },
             )
             next_hint = self._tr(
-                "common.dynamic.scan_pending_next",
-                "Choose **{choose_action_label}** to save the Pending Device now, or use **{refresh_action_label}** or **{manual_action_label}** to retry the local match.",
+                "common.dynamic.scan_pending_next_select",
+                "Pick a device below to save the Pending Device now, or use **{refresh_action_label}** or **{manual_action_label}** to retry the local match.",
                 {
-                    "choose_action_label": choose_action_label,
                     "refresh_action_label": refresh_action_label,
                     "manual_action_label": manual_action_label,
                 },
             )
         else:
-            choose_action_label = self._scan_action_label("choose", "Add detected device")
             ready_summary = (
                 ", ".join(dict.fromkeys(ready_models[:5]))
                 or self._tr("common.dynamic.scan_ready_fallback", "detected inverters")
@@ -5561,9 +5921,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 },
             )
             next_hint = self._tr(
-                "common.dynamic.scan_ready_next",
-                "Choose **{choose_action_label}** to pick which inverter to add.",
-                {"choose_action_label": choose_action_label},
+                "common.dynamic.scan_ready_next_select",
+                "Pick the inverter you want to add from the list below.",
             )
 
         return {
@@ -5582,6 +5941,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
         }
 
+    def _driver_choice_placeholders(self, result: OnboardingResult) -> dict[str, str]:
+        candidates = self._driver_choice_candidates(result)
+        include_address = self._driver_choice_needs_address(candidates)
+        candidate_lines = "\n".join(
+            self._driver_choice_line(
+                index,
+                match,
+                recommended=index == 1,
+                include_address=include_address,
+            )
+            for index, match in enumerate(candidates, start=1)
+        )
+        return {
+            "driver_choice_summary": self._tr(
+                "common.dynamic.driver_choice_summary",
+                "This inverter answered over **{count}** different protocols during the deep scan, so you can choose which driver Home Assistant will use. Protocols can differ in polling speed — the response time below is a good hint. If unsure, keep the recommended option.",
+                {"count": len(candidates)},
+            ),
+            "driver_choice_candidates": candidate_lines,
+        }
+
     def _scan_result_line(self, index: int, result: OnboardingResult) -> str:
         collector = result.collector
         collector_ip = collector.ip if collector is not None else self._tr("common.dynamic.unknown", "Unknown")
@@ -5589,35 +5969,47 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collector_pn = self._collector_pn_for_result(result)
         status_label = self._result_status_label(result, existing_entry is not None)
 
+        status_code = scan_result_status_code(result, existing_entry is not None)
         if result.match is not None:
-            line = self._tr(
-                "common.dynamic.scan_line_matched",
-                "{index}. **{status_label}** — {model_name} · serial {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
-                {
-                    "index": index,
-                    "status_label": status_label,
-                    "model_name": result.match.model_name,
-                    "serial_number": result.match.serial_number or self._tr("common.dynamic.unknown", "Unknown"),
-                    "peer_label": self._peer_label(),
-                    "collector_ip": collector_ip,
-                    "confidence_label": self._confidence_label(result.confidence),
-                },
-            )
-        else:
+            confidence = self._confidence_label(result.confidence)
+            # Lowercase mid-line, same as the driver-choice presentation.
+            confidence = confidence[:1].lower() + confidence[1:]
             details = [
-                self._unconfirmed_inverter_label(),
+                result.match.model_name or self._unconfirmed_inverter_label(),
                 f"{self._peer_label()} {collector_ip}",
             ]
+            if result.match.serial_number:
+                details.append(
+                    self._tr(
+                        "common.dynamic.scan_line_serial",
+                        "serial {serial_number}",
+                        {"serial_number": result.match.serial_number},
+                    )
+                )
+            details.append(confidence)
+            line = f"{index}. **{status_label}** — " + " · ".join(details)
+        else:
+            # The status chip already names the situation (SmartESS hint,
+            # collector connected, already added, ...): the details carry only
+            # what the chip does not say.
+            details = [f"{self._peer_label()} {collector_ip}"]
             if collector_pn:
                 details.append(f"PN {collector_pn}")
-            if has_smartess_collector_hint(result):
+            if (
+                status_code not in ("smartess_hint", "already_added")
+                and has_smartess_collector_hint(result)
+            ):
                 details.append(
                     self._tr(
                         "common.dynamic.scan_line_smartess_hint",
                         "SmartESS metadata",
                     )
                 )
-            if collector is not None and collector.connected:
+            if (
+                status_code in ("detection_timeout", "unknown")
+                and collector is not None
+                and collector.connected
+            ):
                 details.append(
                     self._tr(
                         "common.dynamic.scan_line_peer_connected",
@@ -5625,7 +6017,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         {"peer_label": self._peer_label()},
                     )
                 )
-            elif collector is not None and collector.udp_reply:
+            elif status_code == "unknown" and collector is not None and collector.udp_reply:
                 details.append(
                     self._tr(
                         "common.dynamic.scan_line_peer_replied",
@@ -5647,8 +6039,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         status_code = scan_result_status_code(result, already_added)
         return {
             "ready": self._tr("common.dynamic.status_ready", "Ready"),
+            "driver_choice": self._tr("common.dynamic.status_driver_choice", "Driver choice"),
             "review": self._tr("common.dynamic.status_review", "Review"),
             "already_added": self._tr("common.dynamic.status_already_added", "Already added"),
+            "detection_timeout": self._tr("common.dynamic.status_detection_timeout", "Detection ran out of time"),
             "smartess_hint": self._tr("common.dynamic.status_smartess_hint", "SmartESS hint"),
             "collector_only": self._tr("common.dynamic.status_collector_only", "Collector only"),
             "collector_replied": self._tr("common.dynamic.status_collector_replied", "Collector replied"),

@@ -68,6 +68,12 @@
           "choose": "Add detected device",
           "refresh_scan": "Refresh scan results",
           "advanced_setup": "Device not found? Advanced setup"
+        },
+        "data": {
+          "result_key": "Device or action"
+        },
+        "data_description": {
+          "result_key": "Pick a found device to add it, or pick a follow-up action."
         }
       },
       "change_scan_interface": {
@@ -88,6 +94,16 @@
         },
         "data_description": {
           "result_key": "Choose the inverter you want to add to Home Assistant."
+        }
+      },
+      "driver_choice": {
+        "title": "Choose Inverter Driver",
+        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
+        "data": {
+          "driver_match_key": "Driver / protocol"
+        },
+        "data_description": {
+          "driver_match_key": "If you are not sure, keep the recommended option."
         }
       },
       "detection_summary": {

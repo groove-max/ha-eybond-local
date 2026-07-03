@@ -13,6 +13,8 @@ class OnboardingManager(Protocol):
     async def async_auto_detect(
         self,
         *,
+        depth: str = "fast",
+        skip_probe_ips: frozenset[str] = frozenset(),
         collector_ip: str = "",
         discovery_target: str = "",
         discovery_targets: Sequence[Any] | None = None,

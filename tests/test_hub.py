@@ -948,7 +948,7 @@ class HubSnapshotTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_async_refresh_returns_collector_only_at_snapshot_when_framed_link_is_missing(self) -> None:
+    def test_async_refresh_returns_live_collector_at_snapshot_when_framed_link_is_missing(self) -> None:
         async def _run() -> None:
             hub = EybondHub(
                 connection=EybondConnectionSpec(
@@ -983,9 +983,9 @@ class HubSnapshotTests(unittest.TestCase):
 
             snapshot = await hub.async_refresh(poll_interval=3.0)
 
-            self.assertFalse(snapshot.connected)
-            self.assertEqual(snapshot.last_error, "waiting_for_collector")
-            self.assertEqual(snapshot.values["runtime_driver_state"], "collector_offline")
+            self.assertTrue(snapshot.connected)
+            self.assertEqual(snapshot.last_error, "inverter_heartbeat_missing")
+            self.assertEqual(snapshot.values["runtime_driver_state"], "driver_unbound")
             self.assertEqual(snapshot.values["collector_protocol_version"], "2.05")
             self.assertEqual(snapshot.values["collector_server_endpoint"], "at.example,18899,TCP")
             self.assertEqual(snapshot.values["collector_signal_strength"], -55)
@@ -1127,9 +1127,9 @@ class HubSnapshotTests(unittest.TestCase):
 
             snapshot = await hub.async_refresh(poll_interval=10.0)
 
-            self.assertFalse(snapshot.connected)
-            self.assertEqual(snapshot.last_error, "waiting_for_collector")
-            self.assertEqual(snapshot.values["runtime_driver_state"], "collector_offline")
+            self.assertTrue(snapshot.connected)
+            self.assertEqual(snapshot.last_error, "inverter_heartbeat_missing")
+            self.assertEqual(snapshot.values["runtime_driver_state"], "driver_unbound")
             self.assertIn((2, b"\x06"), transport.requests)
             self.assertTrue(snapshot.collector.collector_virtual_bridge)
             self.assertEqual(snapshot.collector.collector_bridge_kind, "esp-collector")
@@ -1791,6 +1791,243 @@ class HubWriteBlockerTests(unittest.TestCase):
             self.assertEqual(hub._link_manager.reset_calls, 1)
             self.assertEqual(snapshot.values["runtime_reconnect_count"], 1)
             self.assertEqual(snapshot.values["runtime_recovery_streak"], 1)
+
+        asyncio.run(_run())
+
+    def test_async_refresh_keeps_collector_live_when_unbound_heartbeat_is_missing(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            link = _FakeLinkManager(heartbeat_result=False)
+            link.transport = _CollectorQueryTransport(
+                {
+                    (2, b"\x06"): b"\x00\x06esp-collector/0.1.5/ESP32",
+                }
+            )
+            hub._link_manager = link
+
+            snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertTrue(snapshot.connected)
+            self.assertEqual(snapshot.last_error, "inverter_heartbeat_missing")
+            self.assertEqual(snapshot.values["runtime_driver_state"], "driver_unbound")
+            self.assertEqual(hub._link_manager.reset_calls, 0)
+            self.assertTrue(snapshot.values["collector_virtual_bridge"])
+
+        asyncio.run(_run())
+
+    def test_outage_cache_clear_runs_once_per_outage(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        clears: list[int] = []
+        original = hub._clear_collector_runtime_value_caches
+        hub._clear_collector_runtime_value_caches = lambda: (clears.append(1), original())[1]
+
+        hub._clear_collector_value_caches_for_outage()
+        hub._clear_collector_value_caches_for_outage()
+        self.assertEqual(len(clears), 1)
+
+        hub._record_refresh_success()
+        hub._clear_collector_value_caches_for_outage()
+        self.assertEqual(len(clears), 2)
+
+    def test_empty_at_metadata_result_respects_attempt_cadence(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+
+            class _DeadAtTransport:
+                connected = True
+
+                def __init__(self) -> None:
+                    self.queries = 0
+
+                async def async_query(self, command: str):
+                    self.queries += 1
+                    raise asyncio.TimeoutError()
+
+            at_transport = _DeadAtTransport()
+            link = _FakeLinkManager()
+            link.collector_at_transport = at_transport
+            hub._link_manager = link
+
+            await hub._async_read_collector_runtime_values(poll_interval=10.0)
+            first_attempt_queries = at_transport.queries
+            self.assertGreaterEqual(first_attempt_queries, 1)
+
+            # Second read within the refresh interval: the dead AT link is
+            # NOT re-swept just because the previous sweep yielded nothing.
+            await hub._async_read_collector_runtime_values(poll_interval=10.0)
+            self.assertEqual(at_transport.queries, first_attempt_queries)
+
+        asyncio.run(_run())
+
+    def test_dead_at_metadata_channel_is_learned_and_skipped(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+
+            class _DeadAtTransport:
+                connected = True
+
+                def __init__(self) -> None:
+                    self.queries = 0
+
+                async def async_query(self, command: str):
+                    self.queries += 1
+                    raise asyncio.TimeoutError()
+
+            from custom_components.eybond_local.drivers.command_support import (
+                commit_cycle_failures,
+                record_command_success,
+            )
+
+            at_transport = _DeadAtTransport()
+            link = _FakeLinkManager()
+            link.collector_at_transport = at_transport
+            link.transport = _CollectorQueryTransport(
+                {(2, b"\x06"): b"\x00\x06esp-collector/0.1.5/ESP32"}
+            )
+            hub._link_manager = link
+
+            for _ in range(2):
+                # Force each attempt through the cadence gate, emulate a
+                # cycle where the framed side answered, and commit.
+                hub._collector_at_runtime_last_attempt_monotonic = -1000.0
+                hub._collector_runtime_last_refresh_monotonic = -1000.0
+                await hub._async_read_collector_runtime_values(poll_interval=10.0)
+                record_command_success(hub._runtime_read_state, "collector:fc_metadata")
+                commit_cycle_failures(hub._runtime_read_state)
+
+            learned_queries = at_transport.queries
+            self.assertGreaterEqual(learned_queries, 2)
+
+            # Third attempt: the channel verdict blocks the sweep entirely,
+            # even with the cadence forced open.
+            hub._collector_at_runtime_last_attempt_monotonic = -1000.0
+            hub._collector_runtime_last_refresh_monotonic = -1000.0
+            await hub._async_read_collector_runtime_values(poll_interval=10.0)
+            self.assertEqual(at_transport.queries, learned_queries)
+
+            # The re-check path clears the verdict and probes again.
+            hub.clear_unsupported_command_cache()
+            hub._collector_at_runtime_last_attempt_monotonic = -1000.0
+            hub._collector_runtime_last_refresh_monotonic = -1000.0
+            await hub._async_read_collector_runtime_values(poll_interval=10.0)
+            self.assertEqual(at_transport.queries, learned_queries + 1)
+
+        asyncio.run(_run())
+
+    def test_persistent_unsupported_commands_survive_runtime_state_reset(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        from custom_components.eybond_local.drivers.command_support import (
+            command_skipped_as_unsupported,
+        )
+
+        hub.set_persistent_unsupported_commands(("QPIWS", "QET"))
+        self.assertTrue(
+            command_skipped_as_unsupported(hub._runtime_read_state, "QPIWS")
+        )
+
+        # A reconnect clears the session state but must re-seed device facts.
+        hub._reset_runtime_read_state()
+        self.assertTrue(
+            command_skipped_as_unsupported(hub._runtime_read_state, "QET")
+        )
+
+        hub.clear_unsupported_command_cache()
+        hub._reset_runtime_read_state()
+        self.assertFalse(
+            command_skipped_as_unsupported(hub._runtime_read_state, "QPIWS")
+        )
+
+    def test_async_refresh_keeps_bound_inverter_offline_when_framed_link_is_missing(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            at_transport = _CollectorAtQueryTransport({"ATVER": "2.05"}, connected=False)
+            link = _CollectorOnlyLinkManager(at_transport)
+            hub._link_manager = link
+            hub._inverter = DetectedInverter(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model_name="PowMr 4.2kW",
+                variant_key="vmii_nxpw5kw",
+                serial_number="553555355535552",
+                probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+                profile_name="pi30_ascii/models/vmii_nxpw5kw.json",
+                register_schema_name="pi30_ascii/models/vmii_nxpw5kw.json",
+            )
+
+            snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertFalse(snapshot.connected)
+            self.assertEqual(snapshot.last_error, "waiting_for_collector")
+            self.assertEqual(snapshot.values["runtime_driver_state"], "collector_offline")
+            self.assertNotIn("collector_udp_reply", snapshot.values)
+            self.assertNotIn("collector_udp_reply_from", snapshot.values)
+            self.assertEqual(link.collector_info.last_udp_reply_from, "")
 
         asyncio.run(_run())
 

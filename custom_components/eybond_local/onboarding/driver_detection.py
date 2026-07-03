@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from ..drivers.base import InverterDriver
 from ..drivers.catalog_identity import (
@@ -32,22 +32,92 @@ class DetectedDriverContext:
     match: DriverMatch
 
 
+@dataclass(slots=True)
+class DriverCandidateScan:
+    """All driver candidates found by one deep probe plus budget status.
+
+    ``probe_log`` records what each driver probe actually cost and how it
+    ended, so real installations produce the evidence needed to tune the
+    per-driver budgets instead of guessing.
+    """
+
+    candidates: tuple[DetectedDriverContext, ...] = field(default_factory=tuple)
+    budget_exhausted: bool = False
+    probe_log: tuple[dict[str, object], ...] = field(default_factory=tuple)
+
+
+def driver_keys_for_profile_prefixes(profile_names: Any) -> tuple[str, ...]:
+    """Map catalog profile paths to registered driver keys, order-preserving.
+
+    SmartESS collector metadata names the protocol profile (for example
+    ``pi30_ascii/models/smartess_0925_compat.json``); the path prefix
+    identifies the local driver that speaks it.
+    """
+
+    catalog = load_compiled_detection_catalog()
+    surface_map: dict[str, str] = {}
+    for surface in catalog.surfaces.values():
+        prefix = str(surface.profile_name or "").split("/", 1)[0]
+        if prefix:
+            surface_map.setdefault(prefix, surface.driver_key)
+    registered = {driver.key for driver in iter_drivers("auto")}
+    keys: list[str] = []
+    for name in profile_names or ():
+        prefix = str(name or "").split("/", 1)[0]
+        if not prefix:
+            continue
+        key = surface_map.get(prefix) or (prefix if prefix in registered else "")
+        if key and key not in keys:
+            keys.append(key)
+    return tuple(keys)
+
+
+async def _ordered_driver_targets(
+    transport: Any,
+    *,
+    driver_hint: str,
+    preferred_driver_keys: tuple[str, ...] = (),
+) -> tuple[tuple[InverterDriver, tuple[ProbeTarget, ...]], ...]:
+    """Return the probe order, seeded by collector metadata when available.
+
+    A metadata hint (SmartESS protocol profile) names the driver the collector
+    itself reports, so it outranks the signature pre-pass — and skipping that
+    pre-pass saves its per-driver probe budget, which matters inside the
+    shared deep-scan deadline.
+    """
+
+    driver_targets = tuple(
+        (driver, _ordered_probe_targets(driver, transport))
+        for driver in iter_drivers(driver_hint)
+    )
+    preferred = {key for key in preferred_driver_keys if key}
+    if preferred and any(driver.key in preferred for driver, _ in driver_targets):
+        logger.debug("Driver order seeded by collector metadata hint: %s", sorted(preferred))
+        return tuple(
+            sorted(
+                driver_targets,
+                key=lambda item: 0 if item[0].key in preferred else 1,
+            )
+        )
+    return await _ordered_driver_targets_by_signature(driver_targets, transport)
+
+
 async def async_detect_inverter(
     transport: Any,
     *,
     driver_hint: str,
+    depth: str = "fast",
+    preferred_driver_keys: tuple[str, ...] = (),
 ) -> DetectedDriverContext:
     """Probe all drivers against one active transport and return the first match."""
 
     errors: list[str] = []
     inverter_link_down = False
-    driver_targets = tuple(
-        (driver, _ordered_probe_targets(driver, transport))
-        for driver in iter_drivers(driver_hint)
-    )
-    driver_targets = await _ordered_driver_targets_by_signature(
-        driver_targets,
+    logger.debug("Starting inverter driver detection depth=%s hint=%s", depth, driver_hint)
+    driver_targets = await _ordered_driver_targets(
         transport,
+        driver_hint=driver_hint,
+        preferred_driver_keys=preferred_driver_keys,
     )
 
     for driver, targets in driver_targets:
@@ -82,6 +152,113 @@ async def async_detect_inverter(
                 match=_build_driver_match(driver, inverter),
             )
 
+    if inverter_link_down:
+        raise RuntimeError(ERROR_INVERTER_LINK_DOWN)
+    raise RuntimeError(errors[-1] if errors else "no_supported_driver_matched")
+
+
+async def async_detect_inverter_candidates(
+    transport: Any,
+    *,
+    driver_hint: str,
+    depth: str = "deep",
+    remaining_seconds: Callable[[], float | None] | None = None,
+    preferred_driver_keys: tuple[str, ...] = (),
+) -> DriverCandidateScan:
+    """Probe all drivers and return every successful driver candidate.
+
+    ``remaining_seconds`` exposes the shared onboarding deadline. When it runs
+    out mid-scan, the candidates found so far are returned with
+    ``budget_exhausted=True`` instead of being discarded by the outer timeout.
+    """
+
+    errors: list[str] = []
+    candidates: list[DetectedDriverContext] = []
+    probe_log: list[dict[str, object]] = []
+    inverter_link_down = False
+    budget_exhausted = False
+    logger.debug("Starting multi-candidate inverter detection depth=%s hint=%s", depth, driver_hint)
+    driver_targets = await _ordered_driver_targets(
+        transport,
+        driver_hint=driver_hint,
+        preferred_driver_keys=preferred_driver_keys,
+    )
+
+    loop = asyncio.get_running_loop()
+
+    def _remaining() -> float | None:
+        return remaining_seconds() if remaining_seconds is not None else None
+
+    def _log_probe(driver: InverterDriver, started: float, outcome: str) -> int:
+        elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
+        probe_log.append(
+            {
+                "driver": driver.key,
+                "elapsed_ms": elapsed_ms,
+                "outcome": outcome,
+            }
+        )
+        return elapsed_ms
+
+    for index, (driver, targets) in enumerate(driver_targets):
+        remaining = _remaining()
+        if remaining is not None and remaining <= 0:
+            budget_exhausted = True
+            logger.debug("Deep detection budget exhausted before driver=%s", driver.key)
+            probe_log.extend(
+                {"driver": pending.key, "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"}
+                for pending, _ in driver_targets[index:]
+            )
+            break
+        probe_started = loop.time()
+        try:
+            probe = _async_probe_driver_with_budget(
+                driver,
+                transport,
+                targets,
+            )
+            if remaining is not None:
+                inverter = await asyncio.wait_for(probe, timeout=remaining)
+            else:
+                inverter = await probe
+        except asyncio.TimeoutError:
+            errors.append(f"{driver.key}:probe_timeout")
+            _log_probe(driver, probe_started, "probe_timeout")
+            logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
+            continue
+        except InverterIdentityNoDataError:
+            errors.append(f"{driver.key}:{ERROR_INVERTER_LINK_DOWN}")
+            inverter_link_down = True
+            _log_probe(driver, probe_started, ERROR_INVERTER_LINK_DOWN)
+            logger.debug("Identity region read as zeros driver=%s", driver.key)
+            continue
+        except Exception as exc:
+            errors.append(f"{driver.key}:{exc}")
+            _log_probe(driver, probe_started, f"error:{str(exc)[:80]}")
+            logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
+            continue
+
+        if inverter is not None:
+            elapsed_ms = _log_probe(driver, probe_started, "matched")
+            # Measured identification time: the driver-choice step shows it so
+            # the user can compare candidates on something real.
+            inverter.details["probe_elapsed_ms"] = elapsed_ms
+            candidates.append(
+                DetectedDriverContext(
+                    driver=driver,
+                    inverter=inverter,
+                    match=_build_driver_match(driver, inverter),
+                )
+            )
+        else:
+            _log_probe(driver, probe_started, "no_match")
+
+    if candidates or budget_exhausted:
+        return DriverCandidateScan(
+            candidates=tuple(candidates),
+            budget_exhausted=budget_exhausted,
+            probe_log=tuple(probe_log),
+        )
     if inverter_link_down:
         raise RuntimeError(ERROR_INVERTER_LINK_DOWN)
     raise RuntimeError(errors[-1] if errors else "no_supported_driver_matched")

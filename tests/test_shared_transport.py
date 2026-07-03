@@ -1095,10 +1095,17 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             writer.write(b"\x00")
             await writer.drain()
+            await asyncio.sleep(0.6)
 
-            self.assertEqual(await asyncio.wait_for(reader.read(), timeout=1.0), b"")
+            # The unowned callback is parked (held open), never routed into a
+            # collector connection and never reported as transport-connected.
             self.assertNotIn("127.0.0.1", listener._connections)
             self.assertFalse(await remaining.wait_until_connected(0.05))
+            states = {
+                session["session_id"]: session["state"]
+                for session in listener.session_inventory_diagnostics()["sessions"]
+            }
+            self.assertIn("parked_no_payload_owner", states.values())
             self.assertTrue(listener._server is not None)
         finally:
             if writer is not None:
@@ -2566,6 +2573,134 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             run_task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await run_task
+
+
+class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
+    def _heartbeat_frame(self) -> bytes:
+        return build_collector_request(
+            7,
+            b"E5000020000000",
+            devcode=2376,
+            collector_addr=1,
+            fcode=1,
+        )
+
+    def _pending(self, listener, *, session_id: str, remote_ip: str, eof: bool = False):
+        listener._remember_session(
+            session_id=session_id,
+            remote_ip=remote_ip,
+            remote_port=41000,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(self._heartbeat_frame())
+        if eof:
+            reader.feed_eof()
+        pending = _PendingCollectorSocket(
+            remote_ip=remote_ip,
+            remote_port=41000,
+            session_id=session_id,
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[session_id] = pending
+        return pending
+
+    async def test_unclaimed_callback_is_parked_instead_of_closed(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        pending = self._pending(listener, session_id="s1", remote_ip="203.0.113.10")
+
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+        await asyncio.sleep(0.4)
+
+        self.assertFalse(pending.writer.closed)
+        self.assertTrue(pending.parked)
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        states = {
+            session["session_id"]: session["state"]
+            for session in listener.session_inventory_diagnostics()["sessions"]
+        }
+        self.assertEqual(states["s1"], "parked_no_payload_owner")
+
+        # Peer close releases the parked socket.
+        pending.reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+        self.assertTrue(pending.writer.closed)
+        self.assertFalse(listener._pending_socket_still_registered(pending))
+
+    async def test_parked_callback_stays_claimable_with_buffered_identity(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        pending = self._pending(listener, session_id="s1", remote_ip="203.0.113.10")
+
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+        await asyncio.sleep(0.4)
+        self.assertTrue(pending.parked)
+
+        claimed = listener._claim_pending_socket(pending)
+
+        self.assertIs(claimed, pending)
+        # The sniffed heartbeat is preserved for the claiming transport.
+        self.assertIn(b"E5000020000000", claimed.initial_bytes)
+        self.assertFalse(pending.writer.closed)
+        with self.assertRaises(asyncio.CancelledError):
+            await sniff
+
+    async def test_activated_parked_socket_replays_buffered_identity(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        pending = self._pending(listener, session_id="s1", remote_ip="203.0.113.10")
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+        await asyncio.sleep(0.4)
+        self.assertTrue(pending.parked)
+
+        claimed = listener._claim_pending_socket(pending)
+        try:
+            await sniff
+        except asyncio.CancelledError:
+            pass
+
+        connection = await listener.activate_pending_connection(
+            claimed,
+            collector_ip="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=1.5,
+        )
+
+        # The heartbeat buffered while parked must be replayed on activation:
+        # identity is learned without waiting for the next heartbeat.
+        for _ in range(40):
+            if connection.collector_info.collector_pn:
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual(connection.collector_info.collector_pn, "E5000020000000")
+        self.assertEqual(claimed.initial_bytes, b"")
+
+        pending.reader.feed_eof()
+        await asyncio.sleep(0.1)
+
+    async def test_new_connection_replaces_parked_socket_from_same_ip(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        first = self._pending(listener, session_id="s1", remote_ip="203.0.113.10")
+        sniff_first = asyncio.create_task(listener._sniff_pending_socket(first))
+        first.sniff_task = sniff_first
+        await asyncio.sleep(0.4)
+        self.assertTrue(first.parked)
+
+        second = self._pending(listener, session_id="s2", remote_ip="203.0.113.10")
+        sniff_second = asyncio.create_task(listener._sniff_pending_socket(second))
+        second.sniff_task = sniff_second
+        await asyncio.sleep(0.4)
+
+        self.assertTrue(second.parked)
+        self.assertTrue(first.writer.closed)
+        self.assertFalse(listener._pending_socket_still_registered(first))
+        self.assertTrue(listener._pending_socket_still_registered(second))
+
+        second.reader.feed_eof()
+        await asyncio.wait_for(sniff_second, timeout=2.0)
+        with self.assertRaises(asyncio.CancelledError):
+            await sniff_first
 
 
 if __name__ == "__main__":

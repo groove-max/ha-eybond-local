@@ -34,6 +34,15 @@ from ..collector.smartess_local import (
     SmartEssLocalSession,
 )
 from ..drivers.base import InverterDriver
+from ..drivers.command_support import (
+    apply_unsupported_diagnostics,
+    clear_unsupported_commands,
+    command_skipped_as_unsupported,
+    commit_cycle_failures,
+    record_command_failure,
+    record_command_success,
+    seed_unsupported_commands,
+)
 from ..drivers.registry import iter_drivers
 from ..onboarding.driver_detection import async_detect_inverter
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
@@ -78,6 +87,11 @@ def _split_collector_endpoint(endpoint: object) -> tuple[str, int | None, str]:
 _DEFAULT_PROXY_CAPTURE_PORT = DEFAULT_COLLECTOR_SERVER_PORT
 RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE = "collector_offline"
 RUNTIME_DRIVER_STATE_DRIVER_UNBOUND = "driver_unbound"
+# One learned per-device fact: whether this collector answers the AT metadata
+# channel at all. Framed collectors tunnel AT via raw passthrough, and only
+# some firmwares support it — the channel is probed empirically and the
+# verdict persists (cleared by the "Re-check Supported Commands" button).
+_AT_METADATA_CHANNEL_KEY = "collector:at_metadata"
 RUNTIME_DRIVER_STATE_DRIVER_BOUND = "driver_bound"
 _VOLATILE_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
     {
@@ -112,6 +126,8 @@ _VOLATILE_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
         "collector_virtual_bridge",
         "collector_bridge_kind",
         "collector_bridge_version",
+        "collector_udp_reply",
+        "collector_udp_reply_from",
     }
 )
 
@@ -470,11 +486,17 @@ class EybondHub:
         self._snapshot_observer: Callable[[RuntimeSnapshot], None] | None = None
         self._last_snapshot = RuntimeSnapshot()
         self._runtime_read_state: dict[str, Any] = {}
+        self._persistent_unsupported_commands: tuple[str, ...] = ()
         self._collector_runtime_values: dict[str, object] = {}
         self._collector_runtime_last_refresh_monotonic = 0.0
         self._collector_at_runtime_values: dict[str, object] = {}
         self._collector_at_runtime_last_refresh_monotonic = 0.0
+        self._collector_at_runtime_last_attempt_monotonic = 0.0
         self._collector_runtime_values_dirty = True
+        self._collector_runtime_read_fresh = False
+        self._collector_outage_caches_cleared = False
+        self._collector_metadata_fc_last_ms = 0
+        self._collector_metadata_at_last_ms = 0
         self._collector_last_server_endpoint_before_change = ""
         self._write_blockers: dict[str, CapabilityBlocker] = {}
         self._last_operating_mode: object | None = None
@@ -554,6 +576,13 @@ class EybondHub:
         """Pass reverse-discovery policy changes through to the runtime link layer."""
 
         self._link_manager.set_reverse_discovery_enabled(enabled)
+
+    def set_collector_connection_watcher(self, callback: Callable[[str], None] | None) -> None:
+        """Notify ``callback(remote_ip)`` when this entry's collector dials in."""
+
+        set_watcher = getattr(self._link_manager, "set_collector_connection_watcher", None)
+        if callable(set_watcher):
+            set_watcher(callback)
 
     async def async_ensure_callback_listener(self, port: int) -> None:
         """Ensure one auxiliary callback listener is available for collector redirects."""
@@ -708,13 +737,30 @@ class EybondHub:
         """Refresh the current runtime snapshot."""
 
         if not self._link_manager.connected:
-            self._runtime_read_state.clear()
+            self._reset_runtime_read_state()
             ok = await self._link_manager.async_try_connect(timeout=0.75)
             if not ok:
-                self._clear_collector_runtime_value_caches()
-                collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
+                collector_values = await self._async_read_collector_runtime_values(
+                    poll_interval=poll_interval,
+                    force_liveness=True,
+                )
+                if (
+                    self._driver is None
+                    and self._inverter is None
+                    and self._collector_runtime_read_fresh
+                ):
+                    self._collector_outage_caches_cleared = False
+                    snapshot = self._build_snapshot(
+                        extra_values=collector_values,
+                        last_error="inverter_heartbeat_missing",
+                        connected=True,
+                    )
+                    self._last_snapshot = snapshot
+                    return snapshot
+                self._clear_collector_value_caches_for_outage()
+                self._reset_volatile_collector_link_fields()
                 snapshot = self._build_snapshot(
-                    extra_values=collector_values,
+                    extra_values=self._combined_collector_runtime_values(),
                     last_error="waiting_for_collector",
                     connected=False,
                 )
@@ -723,8 +769,23 @@ class EybondHub:
 
         ok = await self._link_manager.async_try_connect(timeout=1.5, require_heartbeat=True)
         if not ok:
-            self._runtime_read_state.clear()
+            self._reset_runtime_read_state()
             if self._link_manager.connected:
+                if self._driver is None and self._inverter is None:
+                    collector_values = await self._async_read_collector_runtime_values(
+                        poll_interval=poll_interval,
+                        force_liveness=True,
+                    )
+                    if self._collector_runtime_read_fresh:
+                        self._collector_outage_caches_cleared = False
+                        snapshot = self._build_snapshot(
+                            extra_values=collector_values,
+                            last_error="inverter_heartbeat_missing",
+                            connected=True,
+                        )
+                        self._last_snapshot = snapshot
+                        return snapshot
+
                 logger.warning(
                     "Collector heartbeat timed out; resetting stale runtime connection"
                 )
@@ -734,7 +795,7 @@ class EybondHub:
                 except Exception as exc:
                     logger.warning("Collector heartbeat recovery failed: %s", exc)
                     self._record_recovery_failure(reason="collector_heartbeat_timeout")
-                    self._clear_collector_runtime_value_caches()
+                    self._clear_collector_value_caches_for_outage()
                     collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
                     snapshot = self._build_snapshot(
                         extra_values=collector_values,
@@ -744,8 +805,9 @@ class EybondHub:
                     self._last_snapshot = snapshot
                     return snapshot
             else:
-                self._clear_collector_runtime_value_caches()
+                self._clear_collector_value_caches_for_outage()
                 collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
+                self._reset_volatile_collector_link_fields()
                 snapshot = self._build_snapshot(
                     extra_values=collector_values,
                     last_error="waiting_for_collector",
@@ -755,7 +817,7 @@ class EybondHub:
                 return snapshot
 
         if not ok:
-            self._clear_collector_runtime_value_caches()
+            self._clear_collector_value_caches_for_outage()
             collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
             snapshot = self._build_snapshot(
                 extra_values=collector_values,
@@ -765,14 +827,30 @@ class EybondHub:
             self._last_snapshot = snapshot
             return snapshot
 
+        # Sub-phase timing for the bound path: the coordinator-level breakdown
+        # repeatedly pointed at "runtime_refresh" as one opaque number.
+        refresh_phase_started = asyncio.get_running_loop().time()
+        refresh_phases: dict[str, int] = {}
+
+        def _mark_refresh_phase(phase: str) -> None:
+            nonlocal refresh_phase_started
+            now_monotonic = asyncio.get_running_loop().time()
+            refresh_phases[phase] = refresh_phases.get(phase, 0) + int(
+                round((now_monotonic - refresh_phase_started) * 1000.0)
+            )
+            refresh_phase_started = now_monotonic
+
         collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
+        _mark_refresh_phase("collector_metadata")
         self._publish_intermediate_snapshot(
             collector_values,
             status="detecting_inverter" if self._driver is None or self._inverter is None else "",
         )
+        _mark_refresh_phase("intermediate_snapshot")
 
         if self._driver is None or self._inverter is None:
             detect_error = await self._async_detect_driver()
+            _mark_refresh_phase("driver_detection")
             if self._driver is None or self._inverter is None:
                 logger.warning("Driver detection failed: %s", detect_error)
                 snapshot = self._build_snapshot(extra_values=collector_values, last_error=detect_error)
@@ -811,17 +889,18 @@ class EybondHub:
 
         try:
             runtime_values = await _async_read_driver_values()
+            _mark_refresh_phase("driver_read")
         except Exception as exc:
             if _is_retryable_collector_error(exc):
                 logger.warning("Runtime refresh failed: %s; retrying after collector reconnect", exc)
                 try:
                     self._record_recovery_attempt(reason=_error_code(exc))
                     await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
-                    self._runtime_read_state.clear()
+                    self._reset_runtime_read_state()
                     runtime_values = await _async_read_driver_values()
                 except Exception as retry_exc:
                     logger.warning("Runtime refresh failed after retry: %s", retry_exc)
-                    self._runtime_read_state.clear()
+                    self._reset_runtime_read_state()
                     self._record_recovery_failure(reason=_error_code(retry_exc))
                     snapshot = self._build_snapshot(
                         extra_values=collector_values,
@@ -839,11 +918,11 @@ class EybondHub:
                     self._record_recovery_attempt(reason=_error_code(exc))
                     await self._link_manager.async_reset_connection(reason=str(exc))
                     await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
-                    self._runtime_read_state.clear()
+                    self._reset_runtime_read_state()
                     runtime_values = await _async_read_driver_values()
                 except Exception as retry_exc:
                     logger.warning("Runtime refresh failed after forced reconnect: %s", retry_exc)
-                    self._runtime_read_state.clear()
+                    self._reset_runtime_read_state()
                     self._record_recovery_failure(reason=_error_code(retry_exc))
                     snapshot = self._build_snapshot(
                         extra_values=collector_values,
@@ -854,7 +933,7 @@ class EybondHub:
                     return snapshot
             else:
                 logger.warning("Runtime refresh failed: %s", exc)
-                self._runtime_read_state.clear()
+                self._reset_runtime_read_state()
                 snapshot = self._build_snapshot(
                     extra_values=collector_values,
                     last_error=str(exc),
@@ -864,7 +943,21 @@ class EybondHub:
                 return snapshot
 
         self._record_refresh_success()
-        snapshot = self._build_snapshot(extra_values={**collector_values, **runtime_values})
+        commit_cycle_failures(self._runtime_read_state)
+        merged_values = {**collector_values, **runtime_values}
+        apply_unsupported_diagnostics(merged_values, self._runtime_read_state)
+        snapshot = self._build_snapshot(extra_values=merged_values)
+        _mark_refresh_phase("snapshot_build")
+        refresh_phases["collector_metadata_fc"] = self._collector_metadata_fc_last_ms
+        refresh_phases["collector_metadata_at"] = self._collector_metadata_at_last_ms
+        self._collector_metadata_fc_last_ms = 0
+        self._collector_metadata_at_last_ms = 0
+        snapshot.values["runtime_refresh_phase_breakdown"] = ", ".join(
+            f"{phase}={elapsed_ms}ms"
+            for phase, elapsed_ms in sorted(
+                refresh_phases.items(), key=lambda item: -item[1]
+            )
+        )
         self._last_snapshot = snapshot
         return snapshot
 
@@ -872,9 +965,19 @@ class EybondHub:
         self,
         *,
         poll_interval: float | None,
+        force_liveness: bool = False,
     ) -> dict[str, object]:
-        """Best-effort collector-side metadata refresh over FC=2 and plain AT helpers."""
+        """Best-effort collector-side metadata refresh over FC=2 and plain AT helpers.
 
+        Sets ``_collector_runtime_read_fresh`` when at least one management
+        query returned data during this call (not from cache).
+
+        ``force_liveness`` guarantees one real command exchange this call —
+        the cheap framed FC query when available, otherwise the AT query —
+        without forcing the full metadata sweep out of cache.
+        """
+
+        self._collector_runtime_read_fresh = False
         missing = object()
         active_transport = getattr(self._link_manager, "active_transport", missing)
         if active_transport is missing:
@@ -919,11 +1022,15 @@ class EybondHub:
         now_monotonic = asyncio.get_running_loop().time()
         refresh_interval = max(float(poll_interval or 0.0) * 3.0, 30.0)
         force_refresh = bool(self._collector_runtime_values_dirty)
-        if transport is not None and hasattr(transport, "async_send_collector") and (
-            force_refresh
+        fc_transport_available = transport is not None and hasattr(transport, "async_send_collector")
+        force_fc_refresh = force_refresh or (force_liveness and fc_transport_available)
+        force_at_refresh = force_refresh or (force_liveness and not fc_transport_available)
+        if fc_transport_available and (
+            force_fc_refresh
             or not self._collector_runtime_values
             or now_monotonic - self._collector_runtime_last_refresh_monotonic >= refresh_interval
         ):
+            fc_query_started = asyncio.get_running_loop().time()
             try:
                 values = await query_runtime_collector_values(SmartEssLocalSession(transport))
             except Exception as exc:
@@ -932,15 +1039,34 @@ class EybondHub:
                 if values:
                     self._collector_runtime_values = dict(values)
                     self._collector_runtime_last_refresh_monotonic = now_monotonic
+                    self._collector_runtime_read_fresh = True
+                    record_command_success(self._runtime_read_state, "collector:fc_metadata")
+            self._collector_metadata_fc_last_ms = int(
+                round((asyncio.get_running_loop().time() - fc_query_started) * 1000.0)
+            )
 
-        if at_transport is not None and (
+        at_values_stale = (
+            not self._collector_at_runtime_values
+            or now_monotonic - self._collector_at_runtime_last_refresh_monotonic >= refresh_interval
+        )
+        at_attempt_due = (
+            now_monotonic - self._collector_at_runtime_last_attempt_monotonic >= refresh_interval
+        )
+        at_channel_supported = not command_skipped_as_unsupported(
+            self._runtime_read_state,
+            _AT_METADATA_CHANNEL_KEY,
+        )
+        if at_transport is not None and at_channel_supported and (
             getattr(at_transport, "connected", False)
             or allow_disconnected_at_query
         ) and (
-            force_refresh
-            or not self._collector_at_runtime_values
-            or now_monotonic - self._collector_at_runtime_last_refresh_monotonic >= refresh_interval
+            force_at_refresh
+            # Cadence is keyed on ATTEMPTS, not successful results: an AT
+            # link that answers nothing must not be re-swept every cycle.
+            or (at_values_stale and at_attempt_due)
         ):
+            self._collector_at_runtime_last_attempt_monotonic = now_monotonic
+            at_query_started = asyncio.get_running_loop().time()
             try:
                 values = await query_runtime_collector_at_values(
                     at_transport,
@@ -952,6 +1078,17 @@ class EybondHub:
                 if values:
                     self._collector_at_runtime_values = dict(values)
                     self._collector_at_runtime_last_refresh_monotonic = now_monotonic
+                    self._collector_runtime_read_fresh = True
+                    record_command_success(
+                        self._runtime_read_state, _AT_METADATA_CHANNEL_KEY
+                    )
+                else:
+                    record_command_failure(
+                        self._runtime_read_state, _AT_METADATA_CHANNEL_KEY
+                    )
+            self._collector_metadata_at_last_ms = int(
+                round((asyncio.get_running_loop().time() - at_query_started) * 1000.0)
+            )
 
         self._collector_runtime_values_dirty = False
         return self._combined_collector_runtime_values()
@@ -961,11 +1098,71 @@ class EybondHub:
         self._collector_runtime_last_refresh_monotonic = 0.0
         self._collector_at_runtime_values.clear()
         self._collector_at_runtime_last_refresh_monotonic = 0.0
+        self._collector_at_runtime_last_attempt_monotonic = 0.0
         self._collector_runtime_values_dirty = True
+
+    def _reset_runtime_read_state(self) -> None:
+        """Clear per-session read state, re-seeding the persisted facts.
+
+        The unsupported-command set is an empirical device fact persisted in
+        the config entry; a reconnect must not forget it and start burning
+        timeouts on known-dead commands again.
+        """
+
+        self._runtime_read_state.clear()
+        if self._persistent_unsupported_commands:
+            seed_unsupported_commands(
+                self._runtime_read_state,
+                self._persistent_unsupported_commands,
+            )
+
+    def set_persistent_unsupported_commands(self, commands: tuple[str, ...]) -> None:
+        """Install the persisted unsupported-command set for this device."""
+
+        self._persistent_unsupported_commands = tuple(
+            str(command or "").strip()
+            for command in commands
+            if str(command or "").strip()
+        )
+        seed_unsupported_commands(
+            self._runtime_read_state,
+            self._persistent_unsupported_commands,
+        )
+
+    def clear_unsupported_command_cache(self) -> None:
+        """Forget the unsupported set so the next cycles re-probe everything."""
+
+        self._persistent_unsupported_commands = ()
+        clear_unsupported_commands(self._runtime_read_state)
 
     def invalidate_collector_runtime_values(self) -> None:
         """Drop cached collector-side values so the next refresh reads them live."""
 
+        self._clear_collector_runtime_value_caches()
+
+    def _reset_volatile_collector_link_fields(self) -> None:
+        """Drop link-scoped collector fields that must not survive an offline gap."""
+
+        clear_reply = getattr(self._link_manager, "clear_discovery_reply", None)
+        if callable(clear_reply):
+            # The real link manager rebuilds collector_info from the announcer
+            # on every access: the source must be cleared, not a snapshot.
+            clear_reply()
+        collector = self._link_manager.collector_info
+        collector.last_udp_reply = ""
+        collector.last_udp_reply_from = ""
+
+    def _clear_collector_value_caches_for_outage(self) -> None:
+        """Force one fresh collector read at the start of an outage.
+
+        Consecutive failed cycles must not re-run the full (slow) AT metadata
+        sweep every time: that inflates the failed-cycle duration, which the
+        poll scheduler then mirrors into an equally long retry backoff.
+        """
+
+        if self._collector_outage_caches_cleared:
+            return
+        self._collector_outage_caches_cleared = True
         self._clear_collector_runtime_value_caches()
 
     def _combined_collector_runtime_values(self) -> dict[str, object]:
@@ -1544,7 +1741,7 @@ class EybondHub:
         # The overlay merge is applied in _build_snapshot (every refresh, once the
         # collector identity is populated), not here -- at detection the collector is
         # not yet identified, so the device-scope match would fail and never retry.
-        self._runtime_read_state.clear()
+        self._reset_runtime_read_state()
         self._write_blockers.clear()
         logger.info(
             "Detected inverter driver=%s protocol=%s serial=%s confidence=%s",
@@ -1575,6 +1772,7 @@ class EybondHub:
 
     def _record_refresh_success(self) -> None:
         self._last_success_monotonic = monotonic()
+        self._collector_outage_caches_cleared = False
         self._recovery_streak = 0
         self._recovery_backoff_until_monotonic = 0.0
         self._last_recovery_reason = ""
@@ -1736,8 +1934,14 @@ class EybondHub:
             values.update(listener_diagnostics())
             if not values.get("collector_listener_last_error"):
                 values.pop("collector_listener_last_error", None)
-        if collector.last_devcode is not None:
-            values["collector_devcode"] = f"0x{collector.last_devcode:04X}"
+        # The heartbeat devcode is the collector's stable identity; the last
+        # received frame's devcode alternates with every data forward and made
+        # the sensor flip between values continuously.
+        display_devcode = collector.heartbeat_devcode
+        if not display_devcode:
+            display_devcode = collector.last_devcode
+        if display_devcode is not None:
+            values["collector_devcode"] = f"0x{display_devcode:04X}"
         if collector.last_udp_reply:
             values["collector_udp_reply"] = collector.last_udp_reply
         if collector.last_udp_reply_from:

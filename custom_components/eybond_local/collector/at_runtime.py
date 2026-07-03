@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
@@ -127,6 +129,12 @@ async def query_runtime_collector_at_values(
     for definition in RUNTIME_COLLECTOR_AT_DEFINITIONS:
         try:
             response = await transport.async_query(definition.command)
+        except (asyncio.TimeoutError, TimeoutError):
+            # A dead AT link times out for every command: this sweep is 12
+            # commands, so marching on burns a full request timeout per
+            # command (~60s per cycle). One timeout ends the sweep; the
+            # values already collected are kept.
+            break
         except Exception:
             continue
         merge_collector_signal_values(values, definition.decode(response))

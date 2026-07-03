@@ -156,10 +156,8 @@
       "scan_none_addable_next_with_deep": "Скористайтеся **{refresh_action_label}**, щоб спробувати ще раз, **{deep_scan_action_label}**, щоб перевірити всю локальну мережу, або **{manual_action_label}**, щоб вручну задати параметри підключення.",
       "scan_none_addable_next": "Скористайтеся **{refresh_action_label}**, щоб спробувати ще раз, або **{manual_action_label}**, щоб вручну задати параметри підключення.",
       "scan_pending_summary": "Знайдено **{detected_count}** кандидатів пристроїв. **{available_count}** кандидатів за колекторами можна додати вже зараз, але локальне зіставлення інвертора поки не підтверджено.",
-      "scan_pending_next": "Виберіть **{choose_action_label}**, щоб зараз зберегти очікувальний пристрій, або скористайтеся **{refresh_action_label}** чи **{manual_action_label}**, щоб повторити локальне зіставлення.",
       "scan_ready_fallback": "виявлені інвертори",
       "scan_ready_summary": "Знайдено **{detected_count}** кандидатів пристроїв. **{available_count}** можна додати зараз, **{already_added_count}** уже налаштовано. Готові зараз: {ready_summary}.",
-      "scan_ready_next": "Виберіть **{choose_action_label}**, щоб указати, який інвертор додати.",
       "scan_progress_stage_preparing": "Підготовка сканування",
       "scan_progress_stage_discovering": "Надсилання проб виявлення",
       "scan_progress_stage_analyzing": "Аналіз відповідей колекторів",
@@ -170,7 +168,6 @@
       "duration_minutes_short": "хв",
       "duration_seconds_short": "с",
       "choose_summary": "Прямо зараз можна додати **{available_count}** знайдених кандидатів пристроїв. Уже налаштовані пристрої виключені.",
-      "scan_line_matched": "{index}. **{status_label}** — {model_name} · серійний номер {serial_number} · {peer_label} {collector_ip} · {confidence_label}",
       "scan_line_smartess_hint": "метадані SmartESS",
       "scan_line_peer_connected": "{peer_label} підключений",
       "scan_line_peer_replied": "{peer_label} відповів, очікується зворотне підключення",
@@ -431,7 +428,18 @@
       "control_discovery_result_reads_only": "Перевірку завершено, тимчасове хмарне підключення закрито. Виявлено сенсорів читання: {control_discovery_read_count}. Застосуйте їх, завантажте пакет підтримки або поверніться в меню.",
       "control_discovery_result_reads_note": "Також виявлено сенсорів читання: {control_discovery_read_count} — їх буде додано при натисканні «Застосувати».",
       "control_discovery_result_notice_applied_both": "✓ Вибрані елементи керування та сенсори читання ({read_count}) додано в Home Assistant.",
-      "control_discovery_result_notice_applied_reads": "✓ Сенсори читання ({read_count}) додано в Home Assistant."
+      "control_discovery_result_notice_applied_reads": "✓ Сенсори читання ({read_count}) додано в Home Assistant.",
+      "status_driver_choice": "Вибір драйвера",
+      "status_detection_timeout": "Забракло часу на розпізнавання",
+      "driver_choice_option": "{model_name} — {driver_key}",
+      "driver_choice_summary": "Під час глибокого сканування інвертор відповів через кілька протоколів (знайдено варіантів: **{count}**), тож можна вибрати, який драйвер використовуватиме Home Assistant. Протоколи можуть опитуватися з різною швидкістю — час відповіді нижче дає орієнтир. Якщо сумніваєтеся, залиште рекомендований варіант.",
+      "driver_choice_recommended": "рекомендовано",
+      "driver_choice_probe_seconds": "відповів за {seconds} с",
+      "driver_choice_device_address": "адреса пристрою {device_addr}",
+      "scan_line_serial": "серійний {serial_number}",
+      "scan_ready_next_select": "Виберіть у списку нижче інвертор, який хочете додати.",
+      "scan_pending_next_select": "Виберіть пристрій нижче, щоб зберегти його як очікувальний, або скористайтеся **{refresh_action_label}** чи **{manual_action_label}**, щоб повторити локальне зіставлення.",
+      "scan_results_action_refresh_deep": "Повторити глибоке сканування"
     }
   }
 }

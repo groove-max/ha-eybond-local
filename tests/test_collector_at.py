@@ -156,5 +156,41 @@ class CollectorAtTests(unittest.TestCase):
         asyncio.run(_run())
 
 
+class AtSweepTimeoutAbortTests(unittest.TestCase):
+    def test_first_timeout_aborts_the_remaining_sweep(self) -> None:
+        class _DeadLinkTransport:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            async def async_query(self, command: str):
+                self.commands.append(command)
+                raise asyncio.TimeoutError()
+
+        async def _run() -> None:
+            transport = _DeadLinkTransport()
+            values = await query_runtime_collector_at_values(transport)
+            self.assertEqual(values, {})
+            # One strike ends the sweep instead of 12 consecutive timeouts.
+            self.assertEqual(len(transport.commands), 1)
+
+        asyncio.run(_run())
+
+    def test_command_level_errors_do_not_abort_the_sweep(self) -> None:
+        class _ErroringTransport:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            async def async_query(self, command: str):
+                self.commands.append(command)
+                raise ValueError("bad response")
+
+        async def _run() -> None:
+            transport = _ErroringTransport()
+            await query_runtime_collector_at_values(transport)
+            self.assertGreater(len(transport.commands), 1)
+
+        asyncio.run(_run())
+
+
 if __name__ == "__main__":
     unittest.main()

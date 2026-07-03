@@ -15,6 +15,11 @@ _EXPLICIT_COLLECTOR_ENTITY_KEYS: frozenset[str] = frozenset(
         "smartess_protocol_name",
         "smartess_device_address",
         "runtime_driver_state",
+        # Poll-pipeline debugging sensors: they describe the collector's
+        # polling machinery, not the inverter.
+        "runtime_refresh_phase_breakdown",
+        "driver_slow_requests",
+        "driver_unsupported_commands",
     }
 )
 

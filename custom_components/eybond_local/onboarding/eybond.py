@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from itertools import islice
 import ipaddress
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from ..canonical_telemetry import apply_canonical_measurements
@@ -37,9 +37,20 @@ from ..const import (
     DRIVER_HINT_AUTO,
 )
 from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
-from .driver_detection import DetectedDriverContext, async_detect_inverter
-from .timeouts import DEFAULT_ONBOARDING_TIMEOUT_POLICY, OnboardingDeadline
-from ..models import CollectorCandidate, CollectorInfo, OnboardingResult
+from .driver_detection import (
+    DetectedDriverContext,
+    DriverCandidateScan,
+    async_detect_inverter,
+    async_detect_inverter_candidates,
+    driver_keys_for_profile_prefixes,
+)
+from .timeouts import (
+    DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+    ExtendableOnboardingDeadline,
+    OnboardingDeadline,
+    default_deep_driver_sweep_seconds,
+)
+from ..models import CollectorCandidate, CollectorInfo, OnboardingResult, TargetDetectionEvidence
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +69,9 @@ _CONNECT_TIMEOUT_WITHOUT_UDP_REPLY = 0.75
 _TARGET_DETECTION_CONCURRENCY = 8
 _BROADCAST_FANOUT_SETTLE_TIMEOUT = 3.0
 _BROADCAST_FANOUT_POLL_INTERVAL = 0.1
+DETECTION_DEPTH_FAST = "fast"
+DETECTION_DEPTH_DEEP = "deep"
+_DEEP_SWEEP_FINALIZE_MARGIN = 10.0
 _ONBOARDING_RUNTIME_DETAIL_KEYS = {
     "battery_connected",
     "battery_connection_state",
@@ -166,10 +180,73 @@ class SmartEssOnboardingProbe:
         return self.known_protocol.device_addresses[0]
 
 
+def _smartess_preferred_driver_keys(
+    smartess_probe: SmartEssOnboardingProbe | None,
+) -> tuple[str, ...]:
+    """Derive the driver probe-order hint from SmartESS collector metadata."""
+
+    if smartess_probe is None or smartess_probe.known_protocol is None:
+        return ()
+    known = smartess_probe.known_protocol
+    return driver_keys_for_profile_prefixes(
+        (known.profile_name, known.raw_profile_name)
+    )
+
+
+def _already_configured_result(target: DiscoveryTarget, depth: str) -> OnboardingResult:
+    """Mark one target as owned by an existing entry without probing it.
+
+    Probing a configured collector would steal its callback session from the
+    running entry and contend with its polling, so the scan reports it
+    as already added instead.
+    """
+
+    return _with_detection_evidence(
+        OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip=target.ip,
+                source=target.source,
+                ip=target.ip,
+            ),
+            connection_type=CONNECTION_TYPE_EYBOND,
+            connection_mode=target.source,
+            next_action="",
+            last_error="already_configured",
+        ),
+        depth=depth,
+        status="already_configured",
+        reason="configured_entry_owns_collector",
+    )
+
+
 @dataclass(slots=True)
 class _TargetDetectionState:
     target: DiscoveryTarget
+    depth: str = DETECTION_DEPTH_FAST
     candidate: CollectorCandidate | None = None
+
+
+def _with_detection_evidence(
+    result: OnboardingResult,
+    *,
+    depth: str,
+    status: str,
+    reason: str = "",
+    budget_exhausted: bool = False,
+    details: dict[str, Any] | None = None,
+) -> OnboardingResult:
+    """Attach structured target-detection evidence to one onboarding result."""
+
+    return replace(
+        result,
+        detection=TargetDetectionEvidence(
+            depth=depth,
+            status=status,
+            reason=reason,
+            budget_exhausted=budget_exhausted,
+            details=dict(details or {}),
+        ),
+    )
 
 
 def build_default_discovery_targets(
@@ -329,6 +406,7 @@ class OnboardingDetector:
         self,
         targets: Sequence[DiscoveryTarget],
         *,
+        depth: str = DETECTION_DEPTH_FAST,
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
@@ -337,10 +415,13 @@ class OnboardingDetector:
         total_timeout: float | None = None,
         concurrency: int = _TARGET_DETECTION_CONCURRENCY,
         return_after_first_match: bool = False,
+        skip_probe_ips: frozenset[str] = frozenset(),
+        deadline: OnboardingDeadline | ExtendableOnboardingDeadline | None = None,
     ) -> tuple[OnboardingResult, ...]:
         """Run one-shot detection against a list of discovery targets."""
 
-        deadline = OnboardingDeadline.from_timeout(total_timeout)
+        if deadline is None:
+            deadline = OnboardingDeadline.from_timeout(total_timeout)
         semaphore = asyncio.Semaphore(max(1, int(concurrency)))
         results: list[OnboardingResult] = []
         task_states: dict[asyncio.Task[OnboardingResult], _TargetDetectionState] = {}
@@ -360,6 +441,8 @@ class OnboardingDetector:
                             enrich_runtime_details=enrich_runtime_details,
                             cleanup_new_shared_connection=cleanup_new_shared_connection,
                             detection_state=state,
+                            depth=state.depth,
+                            deadline=deadline,
                         )
                     )
                 except TimeoutError:
@@ -372,20 +455,29 @@ class OnboardingDetector:
                         target.source,
                         exc,
                     )
-                    return OnboardingResult(
-                        collector=CollectorCandidate(target_ip=target.ip, source=target.source, ip=target.ip),
-                        connection_type=CONNECTION_TYPE_EYBOND,
-                        connection_mode=target.source,
-                        next_action="manual_input",
-                        last_error=str(exc),
+                    return _with_detection_evidence(
+                        OnboardingResult(
+                            collector=CollectorCandidate(target_ip=target.ip, source=target.source, ip=target.ip),
+                            connection_type=CONNECTION_TYPE_EYBOND,
+                            connection_mode=target.source,
+                            next_action="manual_input",
+                            last_error=str(exc),
+                        ),
+                        depth=state.depth,
+                        status="error",
+                        reason=str(exc),
                     )
 
         for target in targets:
-            state = _TargetDetectionState(target=target)
+            if target.ip and target.ip in skip_probe_ips:
+                results.append(_already_configured_result(target, depth))
+                continue
+            state = _TargetDetectionState(target=target, depth=depth)
             task = asyncio.create_task(_run_target(state), name=f"eybond_detect_{target.ip}")
             task_states[task] = state
 
         pending = set(task_states)
+        stopped_after_first_match = False
         while pending:
             remaining = deadline.remaining_seconds()
             if remaining is not None and remaining <= 0:
@@ -404,6 +496,7 @@ class OnboardingDetector:
                 if return_after_first_match and result.match is not None:
                     should_stop = True
             if should_stop:
+                stopped_after_first_match = True
                 break
 
         if pending:
@@ -411,13 +504,20 @@ class OnboardingDetector:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             for task in pending:
-                results.append(self._timeout_result_for_state(task_states[task]))
+                state = task_states[task]
+                if stopped_after_first_match:
+                    # Deliberately cancelled because another target already
+                    # matched — not a timeout, and it must not read like one.
+                    results.append(self._cancelled_after_match_result_for_state(state))
+                else:
+                    results.append(self._timeout_result_for_state(state))
 
         return tuple(self._dedupe_results(results))
 
     async def async_auto_detect(
         self,
         *,
+        depth: str = DETECTION_DEPTH_FAST,
         collector_ip: str = "",
         discovery_target: str = DEFAULT_DISCOVERY_TARGET,
         discovery_targets: Sequence[DiscoveryTarget] | None = None,
@@ -428,10 +528,14 @@ class OnboardingDetector:
         attempt_delay: float = 0.75,
         enrich_runtime_details: bool = True,
         total_timeout: float | None = None,
+        return_after_first_match: bool = True,
+        skip_probe_ips: frozenset[str] = frozenset(),
+        deadline: OnboardingDeadline | ExtendableOnboardingDeadline | None = None,
     ) -> tuple[OnboardingResult, ...]:
         """Run the default EyeBond onboarding discovery order."""
 
-        deadline = OnboardingDeadline.from_timeout(total_timeout)
+        if deadline is None:
+            deadline = OnboardingDeadline.from_timeout(total_timeout)
         targets = tuple(
             discovery_targets
             or build_default_discovery_targets(
@@ -476,12 +580,15 @@ class OnboardingDetector:
                 if detection_targets:
                     results = await self.async_detect_targets(
                         detection_targets,
+                        depth=depth,
                         discovery_timeout=discovery_timeout,
                         connect_timeout=connect_timeout,
                         heartbeat_timeout=heartbeat_timeout,
                         enrich_runtime_details=enrich_runtime_details,
                         total_timeout=deadline.remaining_seconds(),
-                        return_after_first_match=True,
+                        return_after_first_match=return_after_first_match,
+                        skip_probe_ips=skip_probe_ips,
+                        deadline=deadline,
                     )
                     aggregated.extend(results)
 
@@ -503,12 +610,15 @@ class OnboardingDetector:
                     aggregated.extend(
                         await self.async_detect_targets(
                             late_fanout_targets,
+                            depth=depth,
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
                             enrich_runtime_details=enrich_runtime_details,
                             total_timeout=deadline.remaining_seconds(),
-                            return_after_first_match=True,
+                            return_after_first_match=return_after_first_match,
+                            skip_probe_ips=skip_probe_ips,
+                            deadline=deadline,
                         )
                     )
 
@@ -517,6 +627,7 @@ class OnboardingDetector:
                         listener=listener,
                         discovery_targets=targets,
                         results=aggregated,
+                        depth=depth,
                     )
                 )
 
@@ -541,12 +652,15 @@ class OnboardingDetector:
                     aggregated.extend(
                         await self.async_detect_targets(
                             fallback_targets,
+                            depth=depth,
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
                             enrich_runtime_details=enrich_runtime_details,
                             total_timeout=deadline.remaining_seconds(),
-                            return_after_first_match=True,
+                            return_after_first_match=return_after_first_match,
+                            skip_probe_ips=skip_probe_ips,
+                            deadline=deadline,
                         )
                     )
                     deduped = self._dedupe_results(aggregated)
@@ -555,6 +669,7 @@ class OnboardingDetector:
                     listener=listener,
                     discovery_targets=targets,
                     results=aggregated,
+                    depth=depth,
                 )
             )
             deduped = self._dedupe_results(aggregated)
@@ -624,10 +739,24 @@ class OnboardingDetector:
         attempt_delay: float = 0.75,
         enrich_runtime_details: bool = True,
         total_timeout: float | None = None,
+        skip_probe_ips: frozenset[str] = frozenset(),
     ) -> tuple[OnboardingResult, ...]:
         """Run broadcast discovery first, then sweep the full selected IPv4 network."""
 
-        deadline = OnboardingDeadline.from_timeout(total_timeout)
+        # The scan budget must follow the discovered work: every connected
+        # collector admitted for identification extends this deadline by one
+        # full driver-sweep budget (bounded by the policy hard ceiling), so a
+        # site with many inverters does not starve the late ones.
+        deadline = ExtendableOnboardingDeadline(
+            base_timeout_seconds=total_timeout,
+            # Admission headroom sits ON TOP of the discovery budget: a /16
+            # sweep legitimately spends ~14 minutes on discovery alone and
+            # must not eat the identification budget.
+            hard_ceiling_seconds=(
+                float(total_timeout or 0.0)
+                + DEFAULT_ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds
+            ),
+        )
         resolved_targets = tuple(
             discovery_targets
             or build_default_discovery_targets(
@@ -637,6 +766,7 @@ class OnboardingDetector:
         )
         aggregated = list(
             await self.async_auto_detect(
+                depth=DETECTION_DEPTH_DEEP,
                 collector_ip=collector_ip,
                 discovery_target=discovery_target,
                 discovery_targets=resolved_targets,
@@ -647,6 +777,9 @@ class OnboardingDetector:
                 attempt_delay=attempt_delay,
                 enrich_runtime_details=enrich_runtime_details,
                 total_timeout=deadline.remaining_seconds(),
+                return_after_first_match=False,
+                skip_probe_ips=skip_probe_ips,
+                deadline=deadline,
             )
         )
 
@@ -700,11 +833,15 @@ class OnboardingDetector:
 
         fallback_results = await self.async_detect_targets(
             replied_targets,
+            depth=DETECTION_DEPTH_DEEP,
             discovery_timeout=discovery_timeout,
             connect_timeout=connect_timeout,
             heartbeat_timeout=heartbeat_timeout,
             enrich_runtime_details=enrich_runtime_details,
             total_timeout=deadline.remaining_seconds(),
+            return_after_first_match=False,
+            skip_probe_ips=skip_probe_ips,
+            deadline=deadline,
         )
         aggregated.extend(fallback_results)
         return tuple(self._dedupe_results(aggregated))
@@ -713,12 +850,14 @@ class OnboardingDetector:
         self,
         target: DiscoveryTarget,
         *,
+        depth: str = DETECTION_DEPTH_FAST,
         discovery_timeout: float,
         connect_timeout: float,
         heartbeat_timeout: float,
         enrich_runtime_details: bool = True,
         cleanup_new_shared_connection: bool = False,
         detection_state: _TargetDetectionState | None = None,
+        deadline: OnboardingDeadline | None = None,
     ) -> OnboardingResult:
         transport = SharedEybondTransport(
             host=_LISTENER_BIND_HOST,
@@ -763,13 +902,18 @@ class OnboardingDetector:
                 warnings: list[str] = []
                 if probe.reply:
                     warnings.append("collector_replied_but_no_reverse_tcp")
-                return OnboardingResult(
-                    collector=candidate,
-                    connection_type=CONNECTION_TYPE_EYBOND,
-                    connection_mode=target.source,
-                    warnings=tuple(warnings),
-                    next_action="manual_input",
-                    last_error="collector_not_connected",
+                return _with_detection_evidence(
+                    OnboardingResult(
+                        collector=candidate,
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=target.source,
+                        warnings=tuple(warnings),
+                        next_action="manual_input",
+                        last_error="collector_not_connected",
+                    ),
+                    depth=depth,
+                    status="collector_not_connected",
+                    reason="reverse_tcp_not_connected",
                 )
 
             candidate.connected = True
@@ -787,8 +931,30 @@ class OnboardingDetector:
             if not heartbeat_seen:
                 warnings.append("collector_heartbeat_not_observed")
 
+            sweep_deadline = deadline
+            if depth == DETECTION_DEPTH_DEEP:
+                # Each connected target gets its own sweep budget so one slow
+                # target cannot starve the identification of another. On an
+                # extendable scan deadline this ADMITS the collector: the
+                # shared budget grows by one full sweep (up to the hard
+                # ceiling), so ten connected collectors get ten sweeps instead
+                # of starving on a budget sized for one.
+                sweep_budget = default_deep_driver_sweep_seconds()
+                ensure_remaining = getattr(deadline, "ensure_remaining", None)
+                if callable(ensure_remaining):
+                    ensure_remaining(sweep_budget + _DEEP_SWEEP_FINALIZE_MARGIN)
+                sweep_deadline = (
+                    deadline.nested(sweep_budget)
+                    if deadline is not None
+                    else OnboardingDeadline.from_timeout(sweep_budget)
+                )
             try:
-                context = await self._async_detect_driver_with_retries(transport)
+                scan = await self._async_detect_driver_with_retries(
+                    transport,
+                    depth=depth,
+                    deadline=sweep_deadline,
+                    preferred_driver_keys=_smartess_preferred_driver_keys(smartess_probe),
+                )
             except TimeoutError:
                 if candidate.collector is not None:
                     await self._async_enrich_collector_bridge_details(
@@ -796,13 +962,19 @@ class OnboardingDetector:
                         candidate.collector,
                         collector_ip=candidate.ip,
                     )
-                return OnboardingResult(
-                    collector=candidate,
-                    connection_type=CONNECTION_TYPE_EYBOND,
-                    connection_mode=target.source,
-                    warnings=tuple(warnings),
-                    next_action="manual_driver_selection",
-                    last_error="target_detection_timeout",
+                return _with_detection_evidence(
+                    OnboardingResult(
+                        collector=candidate,
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=target.source,
+                        warnings=tuple(warnings),
+                        next_action="manual_driver_selection",
+                        last_error="target_detection_timeout",
+                    ),
+                    depth=depth,
+                    status="target_timeout",
+                    reason="driver_detection_timeout",
+                    budget_exhausted=True,
                 )
             except RuntimeError as exc:
                 if candidate.collector is not None:
@@ -811,18 +983,54 @@ class OnboardingDetector:
                         candidate.collector,
                         collector_ip=candidate.ip,
                     )
-                return OnboardingResult(
-                    collector=candidate,
-                    connection_type=CONNECTION_TYPE_EYBOND,
-                    connection_mode=target.source,
-                    warnings=tuple(warnings),
-                    next_action="manual_driver_selection",
-                    last_error=str(exc),
+                return _with_detection_evidence(
+                    OnboardingResult(
+                        collector=candidate,
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=target.source,
+                        warnings=tuple(warnings),
+                        next_action="manual_driver_selection",
+                        last_error=str(exc),
+                    ),
+                    depth=depth,
+                    status="collector_only",
+                    reason=str(exc),
                 )
 
+            if not scan.candidates:
+                # Deep sweep ran out of budget before any driver confirmed;
+                # keep the per-driver probe log so diagnostics can show what
+                # was tried and how long each probe took.
+                if candidate.collector is not None:
+                    await self._async_enrich_collector_bridge_details(
+                        transport,
+                        candidate.collector,
+                        collector_ip=candidate.ip,
+                    )
+                return _with_detection_evidence(
+                    OnboardingResult(
+                        collector=candidate,
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=target.source,
+                        warnings=tuple(warnings),
+                        next_action="manual_driver_selection",
+                        last_error="target_detection_timeout",
+                    ),
+                    depth=depth,
+                    status="target_timeout",
+                    reason="driver_detection_budget_exhausted",
+                    budget_exhausted=True,
+                    details={"probe_log": list(scan.probe_log)} if scan.probe_log else None,
+                )
+
+            context = scan.candidates[0]
+            alternative_contexts = tuple(scan.candidates[1:])
             if smartess_probe is not None:
                 _apply_smartess_probe_to_match(context.match.details, smartess_probe)
                 _apply_smartess_probe_to_match(context.inverter.details, smartess_probe)
+                for alternative in alternative_contexts:
+                    _apply_smartess_probe_to_match(alternative.match.details, smartess_probe)
+                    _apply_smartess_probe_to_match(alternative.inverter.details, smartess_probe)
             if enrich_runtime_details:
                 await self._async_enrich_onboarding_runtime_details(
                     transport,
@@ -831,13 +1039,36 @@ class OnboardingDetector:
                     collector=candidate.collector,
                 )
 
-            return OnboardingResult(
-                collector=candidate,
-                match=context.match,
-                connection_type=CONNECTION_TYPE_EYBOND,
-                connection_mode=target.source,
-                warnings=tuple(warnings),
-                next_action="create_entry",
+            details: dict[str, Any] = {
+                "candidate_driver_count": 1 + len(alternative_contexts),
+                "candidate_drivers": [
+                    context.match.driver_key,
+                    *[alternative.match.driver_key for alternative in alternative_contexts],
+                ],
+            }
+            if scan.probe_log:
+                details["probe_log"] = list(scan.probe_log)
+            return _with_detection_evidence(
+                OnboardingResult(
+                    collector=candidate,
+                    match=context.match,
+                    alternative_matches=tuple(
+                        alternative.match for alternative in alternative_contexts
+                    ),
+                    connection_type=CONNECTION_TYPE_EYBOND,
+                    connection_mode=target.source,
+                    warnings=tuple(warnings),
+                    next_action="create_entry",
+                ),
+                depth=depth,
+                status=(
+                    "driver_choice_required"
+                    if alternative_contexts
+                    else "matched"
+                ),
+                reason=context.match.driver_key,
+                budget_exhausted=scan.budget_exhausted,
+                details=details,
             )
         finally:
             if cleanup_new_shared_connection:
@@ -854,7 +1085,14 @@ class OnboardingDetector:
                     )
             await transport.stop()
 
-    async def _async_detect_driver_with_retries(self, transport: Any) -> DetectedDriverContext:
+    async def _async_detect_driver_with_retries(
+        self,
+        transport: Any,
+        *,
+        depth: str = DETECTION_DEPTH_FAST,
+        deadline: OnboardingDeadline | None = None,
+        preferred_driver_keys: tuple[str, ...] = (),
+    ) -> DriverCandidateScan:
         """Retry one-shot driver probing when the collector responds too early."""
 
         policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
@@ -862,7 +1100,23 @@ class OnboardingDetector:
         attempts = max(1, int(policy.driver_detection_attempts))
         for attempt in range(attempts):
             try:
-                return await async_detect_inverter(transport, driver_hint=self._driver_hint)
+                if depth == DETECTION_DEPTH_DEEP:
+                    return await async_detect_inverter_candidates(
+                        transport,
+                        driver_hint=self._driver_hint,
+                        depth=depth,
+                        remaining_seconds=(
+                            deadline.remaining_seconds if deadline is not None else None
+                        ),
+                        preferred_driver_keys=preferred_driver_keys,
+                    )
+                context = await async_detect_inverter(
+                    transport,
+                    driver_hint=self._driver_hint,
+                    depth=depth,
+                    preferred_driver_keys=preferred_driver_keys,
+                )
+                return DriverCandidateScan(candidates=(context,))
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= attempts - 1 or not _is_retryable_detection_error(str(exc)):
@@ -1165,12 +1419,53 @@ class OnboardingDetector:
         else:
             next_action = "manual_driver_selection" if candidate.connected else "manual_input"
 
-        return OnboardingResult(
-            collector=candidate,
-            connection_type=CONNECTION_TYPE_EYBOND,
-            connection_mode=state.target.source,
-            next_action=next_action,
-            last_error="target_detection_timeout",
+        return _with_detection_evidence(
+            OnboardingResult(
+                collector=candidate,
+                connection_type=CONNECTION_TYPE_EYBOND,
+                connection_mode=state.target.source,
+                next_action=next_action,
+                last_error="target_detection_timeout",
+            ),
+            depth=state.depth,
+            status="target_timeout",
+            reason="deadline_exhausted",
+            budget_exhausted=True,
+        )
+
+    @staticmethod
+    def _cancelled_after_match_result_for_state(
+        state: _TargetDetectionState,
+    ) -> OnboardingResult:
+        """Result for a probe cancelled because another target already matched.
+
+        Unlike a timeout this is not a failure: the candidate keeps whatever
+        was learned (reply, connection), no budget-exhausted flag is raised,
+        and the evidence names the real cause for diagnostics.
+        """
+
+        candidate = state.candidate
+        if candidate is None:
+            candidate = CollectorCandidate(
+                target_ip=state.target.ip,
+                source=state.target.source,
+                ip=state.target.ip,
+            )
+            next_action = "manual_input"
+        else:
+            next_action = "manual_driver_selection" if candidate.connected else "manual_input"
+
+        return _with_detection_evidence(
+            OnboardingResult(
+                collector=candidate,
+                connection_type=CONNECTION_TYPE_EYBOND,
+                connection_mode=state.target.source,
+                next_action=next_action,
+                last_error="cancelled_first_match_found",
+            ),
+            depth=state.depth,
+            status="cancelled_first_match_found",
+            reason="another_target_matched_first",
         )
 
     @staticmethod
@@ -1211,6 +1506,7 @@ class OnboardingDetector:
         listener: Any,
         discovery_targets: Sequence[DiscoveryTarget],
         results: Sequence[OnboardingResult],
+        depth: str = DETECTION_DEPTH_FAST,
     ) -> tuple[OnboardingResult, ...]:
         if listener is None:
             return ()
@@ -1263,22 +1559,28 @@ class OnboardingDetector:
             peer_port_raw = session.get("peer_port")
             peer_port = peer_port_raw if isinstance(peer_port_raw, int) else None
             materialized.append(
-                OnboardingResult(
-                    collector=CollectorCandidate(
-                        target_ip=broadcast_target.ip,
-                        source=broadcast_target.source,
-                        ip=peer_ip,
-                        connected=state in {"claimed", "routed_framed", "routed_at_text"},
-                        collector=CollectorInfo(
-                            remote_ip=peer_ip,
-                            remote_port=peer_port,
-                            collector_pn=collector_pn,
+                _with_detection_evidence(
+                    OnboardingResult(
+                        collector=CollectorCandidate(
+                            target_ip=broadcast_target.ip,
+                            source=broadcast_target.source,
+                            ip=peer_ip,
+                            connected=state in {"claimed", "routed_framed", "routed_at_text"},
+                            collector=CollectorInfo(
+                                remote_ip=peer_ip,
+                                remote_port=peer_port,
+                                collector_pn=collector_pn,
+                            ),
                         ),
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=broadcast_target.source,
+                        next_action="manual_driver_selection",
+                        last_error="collector_detected_without_driver",
                     ),
-                    connection_type=CONNECTION_TYPE_EYBOND,
-                    connection_mode=broadcast_target.source,
-                    next_action="manual_driver_selection",
-                    last_error="collector_detected_without_driver",
+                    depth=depth,
+                    status="collector_only",
+                    reason="callback_session_inventory",
+                    details={"session_state": state},
                 )
             )
             known_pns.add(collector_pn)

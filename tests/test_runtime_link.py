@@ -952,6 +952,53 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(manager._announcer._advertised_server_ip, "192.168.1.10")
         self.assertEqual(manager._announcer._advertised_server_port, 8899)
 
+    def test_clear_discovery_reply_clears_the_announcer_source(self) -> None:
+        manager = self._build_manager()
+        manager._announcer.last_reply = "rsp>server=1;"
+        manager._announcer.last_reply_from = "192.168.1.14:58899"
+
+        # collector_info rebuilds from the announcer: the stale values are
+        # visible before the clear and gone after it.
+        self.assertEqual(manager.collector_info.last_udp_reply, "rsp>server=1;")
+        manager.clear_discovery_reply()
+        self.assertEqual(manager.collector_info.last_udp_reply, "")
+        self.assertEqual(manager.collector_info.last_udp_reply_from, "")
+
+    def test_shared_listener_connection_watchers_filter_by_collector_ip(self) -> None:
+        from custom_components.eybond_local.collector.transport import _SharedEybondListener
+
+        listener = _SharedEybondListener(host="0.0.0.0", port=18899)
+        scoped_hits: list[str] = []
+        any_hits: list[str] = []
+        scoped_token = listener.add_connection_watcher("192.168.1.14", scoped_hits.append)
+        listener.add_connection_watcher("", any_hits.append)
+
+        listener._notify_connection_watchers("192.168.1.99")
+        self.assertEqual(scoped_hits, [])
+        self.assertEqual(any_hits, ["192.168.1.99"])
+
+        listener._notify_connection_watchers("192.168.1.14")
+        self.assertEqual(scoped_hits, ["192.168.1.14"])
+        self.assertEqual(any_hits, ["192.168.1.99", "192.168.1.14"])
+
+        listener.remove_connection_watcher(scoped_token)
+        listener._notify_connection_watchers("192.168.1.14")
+        self.assertEqual(scoped_hits, ["192.168.1.14"])
+
+    def test_runtime_manager_applies_connection_watcher_across_rebuilds(self) -> None:
+        manager = self._build_manager()
+        hits: list[str] = []
+
+        manager.set_collector_connection_watcher(hits.append)
+
+        watcher = manager._transport._connection_watcher_callback
+        self.assertIsNotNone(watcher)
+        watcher("192.168.1.14")
+        self.assertEqual(hits, ["192.168.1.14"])
+
+        manager._rebuild_link("192.168.1.10")
+        self.assertIsNotNone(manager._transport._connection_watcher_callback)
+
 
 if __name__ == "__main__":
     unittest.main()

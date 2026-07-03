@@ -1466,6 +1466,7 @@ class _PendingCollectorSocket:
     remote_port: int | None = None
     sniff_task: asyncio.Task[None] | None = None
     initial_bytes: bytes = b""
+    parked: bool = False
 
 
 @dataclass(slots=True)
@@ -1501,6 +1502,14 @@ class _CollectorSessionInventoryEntry:
 
 class _SharedEybondListener:
     _MAX_SESSION_INVENTORY = 20
+    # Unclaimed collector callbacks are parked (held open passively) instead
+    # of being closed: closing makes the collector firmware redial within
+    # seconds, producing a permanent connect/close loop for collectors that
+    # have no config entry. Parked sockets stay claimable by a later scan or
+    # a newly added entry.
+    _MAX_PARKED_SOCKETS = 8
+    _PARKED_SOCKET_TTL_SECONDS = 900.0
+    _PARKED_IDENTITY_BUFFER_LIMIT = 512
 
     def __init__(self, *, host: str, port: int) -> None:
         self._host = host
@@ -1525,6 +1534,37 @@ class _SharedEybondListener:
         self._session_seq = 0
         self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
         self._pending_route_lock = asyncio.Lock()
+        self._connection_watcher_seq = 0
+        self._connection_watchers: dict[int, tuple[str, Callable[[str], None]]] = {}
+
+    def add_connection_watcher(
+        self,
+        collector_ip: str,
+        callback: Callable[[str], None],
+    ) -> int:
+        """Register a callback fired when a collector socket arrives.
+
+        ``collector_ip`` scopes the watcher to one collector; an empty value
+        matches any incoming connection. The callback runs on the event loop
+        and must not block.
+        """
+
+        self._connection_watcher_seq += 1
+        token = self._connection_watcher_seq
+        self._connection_watchers[token] = (str(collector_ip or "").strip(), callback)
+        return token
+
+    def remove_connection_watcher(self, token: int) -> None:
+        self._connection_watchers.pop(token, None)
+
+    def _notify_connection_watchers(self, remote_ip: str) -> None:
+        for watched_ip, callback in tuple(self._connection_watchers.values()):
+            if watched_ip and watched_ip != remote_ip:
+                continue
+            try:
+                callback(remote_ip)
+            except Exception:
+                logger.debug("Collector connection watcher failed", exc_info=True)
 
     async def acquire(self) -> None:
         self._ref_count += 1
@@ -2189,6 +2229,100 @@ class _SharedEybondListener:
         except Exception:
             pass
 
+    def _evict_parked_sockets(self, new_pending: _PendingCollectorSocket) -> None:
+        """Bound parked sockets: replace same-IP parks, cap the total count."""
+
+        def _close(parked: _PendingCollectorSocket, state: str) -> None:
+            self._remove_pending_socket(parked)
+            task = parked.sniff_task
+            parked.sniff_task = None
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+            self._mark_session_state(parked.session_id, state)
+            parked.writer.close()
+
+        for candidate in tuple(self._pending_sockets.values()):
+            if (
+                candidate.parked
+                and candidate is not new_pending
+                and candidate.remote_ip == new_pending.remote_ip
+            ):
+                _close(candidate, "parked_replaced")
+        parked_sockets = [
+            candidate
+            for candidate in self._pending_sockets.values()
+            if candidate.parked and candidate is not new_pending
+        ]
+        while len(parked_sockets) >= self._MAX_PARKED_SOCKETS:
+            _close(parked_sockets.pop(0), "parked_evicted")
+
+    async def _park_unclaimed_pending_socket(
+        self,
+        pending: _PendingCollectorSocket,
+        chunk: bytes,
+        *,
+        session_state: str,
+    ) -> None:
+        """Hold an ownerless collector callback open instead of dropping it.
+
+        The already-sniffed bytes stay buffered so a later claim replays them;
+        the watch loop keeps a bounded identity buffer, notices a peer close,
+        and closes the socket after the TTL as a natural refresh point.
+        """
+
+        pending.initial_bytes = chunk + pending.initial_bytes
+        pending.parked = True
+        self._evict_parked_sockets(pending)
+        if pending.session_id:
+            self._pending_sockets[pending.session_id] = pending
+        self._last_pending_ip = pending.remote_ip
+        self._mark_session_state(pending.session_id, session_state)
+        logger.debug(
+            "Parked unclaimed collector callback from %s (%s)",
+            pending.remote_ip,
+            session_state,
+        )
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._PARKED_SOCKET_TTL_SECONDS
+        close_state = "parked_expired"
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                data = await asyncio.wait_for(
+                    pending.reader.read(256),
+                    timeout=min(30.0, remaining),
+                )
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                # Claimed or listener shutdown: the socket is not ours to close.
+                raise
+            except Exception:
+                close_state = "parked_read_failed"
+                break
+            if not data:
+                close_state = "parked_peer_closed"
+                break
+            if len(pending.initial_bytes) < self._PARKED_IDENTITY_BUFFER_LIMIT:
+                pending.initial_bytes = (
+                    pending.initial_bytes + data
+                )[: self._PARKED_IDENTITY_BUFFER_LIMIT]
+
+        if not self._pending_socket_still_registered(pending):
+            return
+        self._remove_pending_socket(pending)
+        if self._last_pending_ip == pending.remote_ip:
+            self._last_pending_ip = ""
+        self._mark_session_state(pending.session_id, close_state)
+        pending.writer.close()
+        try:
+            await pending.writer.wait_closed()
+        except Exception:
+            pass
+
     def _callback_ip_matches_collector(self, collector_ip: str, remote_ip: str) -> bool:
         if not collector_ip or not remote_ip:
             return False
@@ -2480,10 +2614,13 @@ class _SharedEybondListener:
             self._session_at_connections[pending.session_id] = connection
         self._last_at_connection_ip = remote_ip
         self._mark_session_state(pending.session_id, "routed_at_text")
+        initial_bytes = pending.initial_bytes
+        pending.initial_bytes = b""
         asyncio.create_task(
             connection.run(
                 pending.reader,
                 pending.writer,
+                initial_bytes=initial_bytes,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
                 disconnect_callback=self._drop_connection_indexes_for_connection,
@@ -2522,10 +2659,13 @@ class _SharedEybondListener:
             self._session_payload_connections[pending.session_id] = connection
         self._last_connection_ip = remote_ip
         self._mark_session_state(pending.session_id, "routed_framed")
+        initial_bytes = pending.initial_bytes
+        pending.initial_bytes = b""
         asyncio.create_task(
             connection.run(
                 pending.reader,
                 pending.writer,
+                initial_bytes=initial_bytes,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
                 disconnect_callback=self._drop_connection_indexes_for_connection,
@@ -2688,12 +2828,11 @@ class _SharedEybondListener:
                     initial_pn,
                 )
                 if not has_ip_owner and not has_pn_owner:
-                    self._mark_session_state(pending.session_id, "closed_no_at_owner")
-                    pending.writer.close()
-                    try:
-                        await pending.writer.wait_closed()
-                    except Exception:
-                        pass
+                    await self._park_unclaimed_pending_socket(
+                        pending,
+                        chunk,
+                        session_state="parked_no_at_owner",
+                    )
                     return
                 connection = _CollectorAtConnection(
                     remote_ip_hint=pending.remote_ip,
@@ -2742,12 +2881,11 @@ class _SharedEybondListener:
                 initial_pn,
             )
             if not has_ip_owner and not has_pn_owner:
-                self._mark_session_state(pending.session_id, "closed_no_payload_owner")
-                pending.writer.close()
-                try:
-                    await pending.writer.wait_closed()
-                except Exception:
-                    pass
+                await self._park_unclaimed_pending_socket(
+                    pending,
+                    chunk,
+                    session_state="parked_no_payload_owner",
+                )
                 return
             connection = _CollectorConnection(
                 remote_ip_hint=pending.remote_ip,
@@ -2812,6 +2950,7 @@ class _SharedEybondListener:
             self._sniff_pending_socket(pending),
             name=f"collector_pending_sniff_{remote_ip}",
         )
+        self._notify_connection_watchers(remote_ip)
 
 
 _LISTENERS: dict[tuple[str, int], _SharedEybondListener] = {}
@@ -3086,6 +3225,25 @@ class SharedEybondTransport:
             int(collector_raw_passthrough_min_interval_ms or 0),
         )
         self._listener: _SharedEybondListener | None = None
+        self._connection_watcher_callback: Callable[[str], None] | None = None
+        self._connection_watcher_token: int | None = None
+
+    def set_connection_watcher(self, callback: Callable[[str], None] | None) -> None:
+        """Fire ``callback(remote_ip)`` whenever this collector dials back in.
+
+        Registered on the shared listener once the transport starts; safe to
+        call before ``start()``.
+        """
+
+        if self._listener is not None and self._connection_watcher_token is not None:
+            self._listener.remove_connection_watcher(self._connection_watcher_token)
+            self._connection_watcher_token = None
+        self._connection_watcher_callback = callback
+        if callback is not None and self._listener is not None:
+            self._connection_watcher_token = self._listener.add_connection_watcher(
+                self._collector_ip,
+                callback,
+            )
 
     @property
     def connected(self) -> bool:
@@ -3111,6 +3269,11 @@ class SharedEybondTransport:
             self._collector_pn,
             self._collector_session_protocol,
         )
+        if self._connection_watcher_callback is not None and self._connection_watcher_token is None:
+            self._connection_watcher_token = self._listener.add_connection_watcher(
+                self._collector_ip,
+                self._connection_watcher_callback,
+            )
         self._connection(create_placeholder=bool(self._collector_ip))
 
     async def stop(self) -> None:
@@ -3118,6 +3281,9 @@ class SharedEybondTransport:
             return
         listener = self._listener
         self._listener = None
+        if self._connection_watcher_token is not None:
+            listener.remove_connection_watcher(self._connection_watcher_token)
+            self._connection_watcher_token = None
         await _release_shared_listener(
             listener,
             collector_ip=self._collector_ip,

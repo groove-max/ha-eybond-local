@@ -68,6 +68,80 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertIn("grid_to_home_power", keys)
         self.assertIn("grid_to_battery_power", keys)
 
+    def test_srne_canonical_measurements_expose_card_aliases(self) -> None:
+        keys = {
+            description.key
+            for description in canonical_measurements_for_driver("srne_modbus")
+        }
+
+        self.assertIn("pv_power", keys)
+        self.assertIn("battery_power", keys)
+        self.assertIn("pv_to_home_power", keys)
+        self.assertIn("pv_to_battery_power", keys)
+        self.assertIn("pv_to_grid_power", keys)
+        self.assertIn("battery_to_home_power", keys)
+        self.assertIn("grid_to_home_power", keys)
+        self.assertIn("grid_to_battery_power", keys)
+
+    def test_must_canonical_measurements_expose_card_aliases(self) -> None:
+        keys = {
+            description.key
+            for description in canonical_measurements_for_driver("must_pv_ph18")
+        }
+
+        self.assertIn("pv_power", keys)
+        self.assertIn("battery_power", keys)
+        self.assertIn("pv_to_home_power", keys)
+        self.assertIn("grid_to_battery_power", keys)
+
+    def test_apply_canonical_measurements_builds_srne_card_values(self) -> None:
+        values = {
+            "grid_voltage": 229.0,
+            "output_power": 900,
+            "pv1_input_power": 620,
+            "pv2_input_power": 480,
+            "charge_power": 200.0,
+        }
+
+        apply_canonical_measurements("srne_modbus", values)
+
+        self.assertEqual(values["pv_power"], 1100.0)
+        self.assertEqual(values["battery_power"], 200.0)
+        self.assertEqual(values["pv_to_home_power"], 900.0)
+        self.assertEqual(values["pv_to_battery_power"], 200.0)
+        self.assertEqual(values["battery_to_home_power"], 0.0)
+        self.assertEqual(values["grid_to_home_power"], 0.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+
+    def test_apply_canonical_measurements_sums_single_string_srne_pv(self) -> None:
+        values = {
+            "output_power": 400,
+            "pv1_input_power": 350,
+            "charge_power": 0.0,
+        }
+
+        apply_canonical_measurements("srne_modbus", values)
+
+        self.assertEqual(values["pv_power"], 350)
+
+    def test_apply_canonical_measurements_builds_must_card_values(self) -> None:
+        values = {
+            "grid_voltage": 231.0,
+            "output_power": 1200,
+            "grid_power": 700.0,
+            "pv_charging_power": 500,
+            "battery_load": -300.0,
+        }
+
+        apply_canonical_measurements("must_pv_ph18", values)
+
+        self.assertEqual(values["pv_power"], 500)
+        self.assertEqual(values["battery_power"], -300.0)
+        self.assertEqual(values["pv_to_home_power"], 500.0)
+        self.assertEqual(values["battery_to_home_power"], 300.0)
+        self.assertEqual(values["grid_to_home_power"], 700.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+
     def test_apply_canonical_measurements_builds_pi30_common_values(self) -> None:
         values = {
             "input_voltage": 230.0,

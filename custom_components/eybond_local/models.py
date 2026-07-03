@@ -561,16 +561,29 @@ class DetectedInverter:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetDetectionEvidence:
+    """Structured evidence for one onboarding target probe."""
+
+    depth: str = "fast"
+    status: str = "unknown"
+    reason: str = ""
+    budget_exhausted: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class OnboardingResult:
     """Aggregated result of one onboarding detection attempt."""
 
     collector: CollectorCandidate | None = None
     match: DriverMatch | None = None
+    alternative_matches: tuple[DriverMatch, ...] = ()
     connection_type: str = "eybond"
     connection_mode: str = ""
     warnings: tuple[str, ...] = ()
     next_action: str = ""
     last_error: str | None = None
+    detection: TargetDetectionEvidence | None = None
 
     @property
     def confidence(self) -> str:
