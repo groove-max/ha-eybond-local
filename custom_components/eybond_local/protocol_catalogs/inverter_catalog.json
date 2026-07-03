@@ -90,7 +90,12 @@
      "rated_power_register_valid": false,
      "base_schema": ""
     }
-   ]
+   ],
+   "link_hints": {
+    "baud": [
+     9600
+    ]
+   }
   },
   {
    "key": "pi30",
@@ -285,7 +290,12 @@
      ]
     }
    ],
-   "layouts": []
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     2400
+    ]
+   }
   },
   {
    "key": "pi18",
@@ -396,7 +406,12 @@
      ]
     }
    ],
-   "layouts": []
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     9600
+    ]
+   }
   },
   {
    "key": "must_pv_ph18",
@@ -448,7 +463,12 @@
      ]
     }
    ],
-   "layouts": []
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     19200
+    ]
+   }
   },
   {
    "key": "eybond_g_ascii",
@@ -573,7 +593,12 @@
      ]
     }
    ],
-   "layouts": []
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     9600
+    ]
+   }
   }
  ],
  "support_capture_policies": {

@@ -148,6 +148,9 @@ class CatalogProtocol:
     probe_targets: tuple["CatalogProbeTarget", ...] = ()
     probe_timeout: float = 0.0
     signature_timeout: float = 0.0
+    # Observed inverter-UART baud rates for this protocol family. Hints, not
+    # identity: they feed the esp-bridge link sweep and diagnostics only.
+    link_baud_hints: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,7 +529,17 @@ def _parse_protocol(raw: dict[str, object]) -> CatalogProtocol:
         ),
         probe_timeout=float(raw.get("probe_timeout", 0.0)),
         signature_timeout=float(raw.get("signature_timeout", 0.0)),
+        link_baud_hints=_parse_link_baud_hints(raw.get("link_hints")),
     )
+
+
+def _parse_link_baud_hints(raw: object) -> tuple[int, ...]:
+    if not isinstance(raw, dict):
+        return ()
+    bauds = raw.get("baud", ())
+    if not isinstance(bauds, list):
+        return ()
+    return tuple(int(value) for value in bauds if int(value) > 0)
 
 
 def _parse_probe_action(raw: dict[str, object]) -> CatalogProbeAction:

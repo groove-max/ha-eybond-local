@@ -142,6 +142,25 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["grid_to_home_power"], 700.0)
         self.assertEqual(values["grid_to_battery_power"], 0.0)
 
+    def test_apply_canonical_measurements_builds_modbus_catalog_card_values(self) -> None:
+        values = {
+            "grid_voltage": 230.0,
+            "output_power": 900.0,
+            "pv_input_voltage": 350.0,
+            "pv_input_current": 4.0,
+            "battery_voltage": 26.4,
+            "battery_current": 10.0,
+            "battery_percent": 78,
+        }
+
+        apply_canonical_measurements("modbus_catalog", values)
+
+        self.assertEqual(values["pv_power"], 1400.0)
+        self.assertEqual(values["battery_power"], 264.0)
+        self.assertEqual(values["pv_to_home_power"], 900.0)
+        self.assertEqual(values["pv_to_battery_power"], 264.0)
+        self.assertEqual(values["battery_to_home_power"], 0.0)
+
     def test_apply_canonical_measurements_builds_pi30_common_values(self) -> None:
         values = {
             "input_voltage": 230.0,

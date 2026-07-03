@@ -12,7 +12,10 @@ from typing import Any, Sequence
 
 from ..canonical_telemetry import apply_canonical_measurements
 from ..collector.at_runtime import query_runtime_collector_at_values
-from ..collector.capabilities import parse_esp_collector_hardware_token
+from ..collector.capabilities import (
+    collector_capability_profile,
+    parse_esp_collector_hardware_token,
+)
 from ..collector.cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
@@ -37,6 +40,12 @@ from ..const import (
     DRIVER_HINT_AUTO,
 )
 from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
+from .link_sweep import (
+    async_run_link_baud_sweep,
+    catalog_link_baud_hints,
+    is_silent_detection_error,
+    parse_reported_baud,
+)
 from .driver_detection import (
     DetectedDriverContext,
     DriverCandidateScan,
@@ -948,6 +957,7 @@ class OnboardingDetector:
                     if deadline is not None
                     else OnboardingDeadline.from_timeout(sweep_budget)
                 )
+            sweep_outcome = None
             try:
                 scan = await self._async_detect_driver_with_retries(
                     transport,
@@ -977,25 +987,45 @@ class OnboardingDetector:
                     budget_exhausted=True,
                 )
             except RuntimeError as exc:
-                if candidate.collector is not None:
-                    await self._async_enrich_collector_bridge_details(
+                scan = None
+                if depth == DETECTION_DEPTH_DEEP and is_silent_detection_error(str(exc)):
+                    sweep_outcome = await self._async_attempt_link_baud_sweep(
                         transport,
-                        candidate.collector,
-                        collector_ip=candidate.ip,
+                        deadline=deadline,
+                        preferred_driver_keys=_smartess_preferred_driver_keys(smartess_probe),
                     )
-                return _with_detection_evidence(
-                    OnboardingResult(
-                        collector=candidate,
-                        connection_type=CONNECTION_TYPE_EYBOND,
-                        connection_mode=target.source,
-                        warnings=tuple(warnings),
-                        next_action="manual_driver_selection",
-                        last_error=str(exc),
-                    ),
-                    depth=depth,
-                    status="collector_only",
-                    reason=str(exc),
-                )
+                if sweep_outcome is not None and sweep_outcome.matched:
+                    scan = sweep_outcome.scan
+                    warnings = [
+                        *warnings,
+                        "link_baud_changed",
+                    ]
+                else:
+                    if candidate.collector is not None:
+                        await self._async_enrich_collector_bridge_details(
+                            transport,
+                            candidate.collector,
+                            collector_ip=candidate.ip,
+                        )
+                    silent_details: dict[str, Any] = {}
+                    if is_silent_detection_error(str(exc)):
+                        silent_details["link_baud_hints"] = list(catalog_link_baud_hints())
+                    if sweep_outcome is not None:
+                        silent_details["link_baud_sweep"] = sweep_outcome.as_details()
+                    return _with_detection_evidence(
+                        OnboardingResult(
+                            collector=candidate,
+                            connection_type=CONNECTION_TYPE_EYBOND,
+                            connection_mode=target.source,
+                            warnings=tuple(warnings),
+                            next_action="manual_driver_selection",
+                            last_error=str(exc),
+                        ),
+                        depth=depth,
+                        status="collector_only",
+                        reason=str(exc),
+                        details=silent_details or None,
+                    )
 
             if not scan.candidates:
                 # Deep sweep ran out of budget before any driver confirmed;
@@ -1048,6 +1078,8 @@ class OnboardingDetector:
             }
             if scan.probe_log:
                 details["probe_log"] = list(scan.probe_log)
+            if sweep_outcome is not None and sweep_outcome.matched:
+                details["link_baud_sweep"] = sweep_outcome.as_details()
             return _with_detection_evidence(
                 OnboardingResult(
                     collector=candidate,
@@ -1123,6 +1155,111 @@ class OnboardingDetector:
                     raise
                 await asyncio.sleep(max(0.0, float(policy.driver_retry_delay)))
         raise last_error or RuntimeError("no_supported_driver_matched")
+
+    async def _async_attempt_link_baud_sweep(
+        self,
+        transport: Any,
+        *,
+        deadline: OnboardingDeadline | None,
+        preferred_driver_keys: tuple[str, ...] = (),
+    ):
+        """Walk catalog baud rates on a runtime-UART-capable esp bridge.
+
+        Returns a ``LinkBaudSweepOutcome`` or ``None`` when the collector is
+        not eligible (factory collector, fixed-UART build, no FC channel, or
+        no catalog hints to try).
+        """
+
+        if not hasattr(transport, "async_send_collector"):
+            return None
+        candidate_bauds = catalog_link_baud_hints()
+        if not candidate_bauds:
+            return None
+
+        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
+        query_timeout = max(1.0, float(policy.collector_query_timeout))
+        session = SmartEssLocalSession(transport)
+
+        try:
+            hardware = await asyncio.wait_for(
+                session.query_collector(6), timeout=query_timeout
+            )
+        except Exception as exc:
+            logger.debug("Link baud sweep: hardware token read failed error=%s", exc)
+            return None
+        token = parse_esp_collector_hardware_token(getattr(hardware, "text", ""))
+        if not token.is_bridge:
+            return None
+        profile = collector_capability_profile(
+            virtual_bridge=True,
+            hardware_version=getattr(hardware, "text", ""),
+        )
+        if not profile.uart_runtime_speed_change:
+            logger.debug(
+                "Link baud sweep skipped: platform %s has fixed UART", token.platform
+            )
+            return None
+
+        async def read_baud() -> int | None:
+            try:
+                response = await asyncio.wait_for(
+                    session.query_collector(34), timeout=query_timeout
+                )
+            except Exception as exc:
+                logger.debug("Link baud sweep: baud read failed error=%s", exc)
+                return None
+            return parse_reported_baud(getattr(response, "text", ""))
+
+        async def set_baud(baud: int) -> bool:
+            try:
+                response = await asyncio.wait_for(
+                    session.set_collector(34, str(baud)), timeout=query_timeout
+                )
+            except Exception as exc:
+                logger.debug("Link baud sweep: set %s failed error=%s", baud, exc)
+                return False
+            return int(getattr(response, "code", 1)) == 0
+
+        sweep_budget = default_deep_driver_sweep_seconds()
+
+        def admit() -> bool:
+            ensure_remaining = getattr(deadline, "ensure_remaining", None)
+            if callable(ensure_remaining):
+                try:
+                    ensure_remaining(sweep_budget + _DEEP_SWEEP_FINALIZE_MARGIN)
+                except Exception:
+                    return False
+                return True
+            if deadline is not None:
+                return deadline.remaining_seconds > sweep_budget
+            return True
+
+        async def run_sweep(baud: int):
+            sweep_deadline = (
+                deadline.nested(sweep_budget)
+                if deadline is not None
+                else OnboardingDeadline.from_timeout(sweep_budget)
+            )
+            try:
+                return await self._async_detect_driver_with_retries(
+                    transport,
+                    depth=DETECTION_DEPTH_DEEP,
+                    deadline=sweep_deadline,
+                    preferred_driver_keys=preferred_driver_keys,
+                )
+            except (TimeoutError, RuntimeError) as exc:
+                logger.debug(
+                    "Link baud sweep: no driver at %s error=%s", baud, exc
+                )
+                return None
+
+        return await async_run_link_baud_sweep(
+            candidate_bauds=candidate_bauds,
+            read_baud=read_baud,
+            set_baud=set_baud,
+            run_sweep=run_sweep,
+            admit=admit,
+        )
 
     async def _async_enrich_collector_bridge_details(
         self,

@@ -181,6 +181,13 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("pv_charging_power",),
                 compute="passthrough",
             ),
+            # Aohai FSA has no PV power register; the vendor map derives it
+            # as PV voltage x current, so the canonical value does the same.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                source_keys=("pv_input_voltage", "pv_input_current"),
+                compute="multiply",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -254,6 +261,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("battery_load",),
                 compute="passthrough",
             ),
+            # Aohai FSA: BMS battery current is signed with charge > 0.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                source_keys=("battery_voltage", "battery_current"),
+                compute="multiply",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -276,6 +289,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                     "eybond_g_ascii",
                     "srne_modbus",
                     "must_pv_ph18",
+                    "modbus_catalog",
                 ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_home",
@@ -302,6 +316,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                     "eybond_g_ascii",
                     "srne_modbus",
                     "must_pv_ph18",
+                    "modbus_catalog",
                 ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_battery",
@@ -328,6 +343,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                     "eybond_g_ascii",
                     "srne_modbus",
                     "must_pv_ph18",
+                    "modbus_catalog",
                 ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_pv_to_grid",
@@ -354,6 +370,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                     "eybond_g_ascii",
                     "srne_modbus",
                     "must_pv_ph18",
+                    "modbus_catalog",
                 ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_battery_to_home",
@@ -380,6 +397,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                     "eybond_g_ascii",
                     "srne_modbus",
                     "must_pv_ph18",
+                    "modbus_catalog",
                 ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_home",
@@ -406,6 +424,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                     "eybond_g_ascii",
                     "srne_modbus",
                     "must_pv_ph18",
+                    "modbus_catalog",
                 ),
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="flow_grid_to_battery",
@@ -477,6 +496,15 @@ def _compute_variant(
 ) -> Any:
     if variant.compute == "passthrough":
         return values.get(variant.source_keys[0])
+
+    if variant.compute == "multiply":
+        product = 1.0
+        for key in variant.source_keys:
+            numeric = _numeric(values.get(key))
+            if numeric is None:
+                return None
+            product *= numeric
+        return round(product, 4)
 
     if variant.compute == "sum":
         total = 0.0
