@@ -28,8 +28,10 @@ class FixtureTransport:
         probe_target: ProbeTarget,
         name: str = "",
         collector: dict[str, Any] | None = None,
+        input_registers: dict[int, int] | None = None,
     ) -> None:
         self._registers = dict(registers or {})
+        self._input_registers = dict(input_registers or {})
         self._command_responses = dict(command_responses or {})
         self._probe_target = probe_target
         self.name = name
@@ -70,6 +72,8 @@ class FixtureTransport:
 
         if function_code == 0x03:
             return self._handle_read_holding(payload)
+        if function_code == 0x04:
+            return self._handle_read_input(payload)
         if function_code == 0x06:
             return self._handle_write_single(payload)
         if function_code == 0x10:
@@ -141,6 +145,22 @@ class FixtureTransport:
         return response_body + response_crc + b"\r"
 
     def _handle_read_holding(self, payload: bytes) -> bytes:
+        """FC 0x03 entrypoint — tests override this to observe/inject reads."""
+
+        return self._handle_read(payload, function=0x03, registers=self._registers)
+
+    def _handle_read_input(self, payload: bytes) -> bytes:
+        """FC 0x04 entrypoint — reads the separate input-register space."""
+
+        return self._handle_read(payload, function=0x04, registers=self._input_registers)
+
+    def _handle_read(
+        self,
+        payload: bytes,
+        *,
+        function: int,
+        registers: dict[int, int],
+    ) -> bytes:
         request_crc = int.from_bytes(payload[-2:], "little")
         expected_crc = crc16_modbus(payload[:-2])
         if request_crc != expected_crc:
@@ -150,11 +170,11 @@ class FixtureTransport:
         count = int.from_bytes(payload[4:6], "big")
         words: list[int] = []
         for register in range(address, address + count):
-            if register not in self._registers:
+            if register not in registers:
                 raise FixtureTransportError(f"missing_register:{register}")
-            words.append(self._registers[register])
+            words.append(registers[register])
 
-        response = bytearray([self._probe_target.device_addr, 0x03, count * 2])
+        response = bytearray([self._probe_target.device_addr, function, count * 2])
         for value in words:
             response.extend(value.to_bytes(2, "big", signed=False))
         response_crc = crc16_modbus(response)

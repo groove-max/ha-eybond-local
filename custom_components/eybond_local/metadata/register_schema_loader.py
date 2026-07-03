@@ -265,10 +265,14 @@ def _register_schema_source_scope(schema_path: Path) -> str:
 
 
 def _parse_block(raw: Mapping[str, Any]) -> RegisterBlockLayout:
+    function = int(raw.get("function", 3))
+    if function not in (3, 4):
+        raise ValueError(f"unsupported_block_function:{function}")
     return RegisterBlockLayout(
         key=str(raw["key"]),
         start=int(raw["start"]),
         count=int(raw["count"]),
+        function=function,
     )
 
 
@@ -290,9 +294,17 @@ def _parse_spec(
         signed=bool(raw.get("signed", False)),
         combine=str(raw.get("combine", "u16")),
         divisor=_optional_int(raw.get("divisor")),
+        multiplier=_optional_float(raw.get("multiplier")),
         decimals=_optional_int(raw.get("decimals")),
         enum_map=enum_map,
+        function=int(raw.get("function", 3)),
     )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
 
 
 def _optional_int(value: Any) -> int | None:
@@ -519,10 +531,17 @@ def _validate_schema(schema: RegisterSchemaMetadata) -> None:
         schema_key=schema.key,
     )
 
-    required_blocks = {"status", "serial", "live", "config"}
-    missing_blocks = sorted(required_blocks - block_keys)
-    if missing_blocks:
-        raise ValueError(f"register_schema:{schema.key}:missing_blocks:{','.join(missing_blocks)}")
+    # The classic driver schemas share a fixed block naming convention that
+    # driver code addresses by name (schema.block("serial") etc.).  Catalog
+    # device packs are consumed generically — every block is read as-is — so
+    # they only need the block keys to be unique.
+    if schema.driver_key != "modbus_catalog":
+        required_blocks = {"status", "serial", "live", "config"}
+        missing_blocks = sorted(required_blocks - block_keys)
+        if missing_blocks:
+            raise ValueError(
+                f"register_schema:{schema.key}:missing_blocks:{','.join(missing_blocks)}"
+            )
 
 
 def _unique_or_raise(*, items, kind: str, schema_key: str) -> set[str]:

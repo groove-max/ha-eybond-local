@@ -131,6 +131,8 @@ class CatalogProbeAction:
     retries: int = 0
     register: int | None = None
     count: int | None = None
+    # Modbus read function code: 3 = holding registers, 4 = input registers.
+    function: int = 3
     command: str = ""
     parser_key: str = ""
     fields: tuple[CatalogEvidenceField, ...] = ()
@@ -537,6 +539,7 @@ def _parse_probe_action(raw: dict[str, object]) -> CatalogProbeAction:
         retries=max(int(raw.get("retries", 0)), 0),
         register=_optional_int(raw.get("register")),
         count=_optional_int(raw.get("count")),
+        function=int(raw.get("function", 3)),
         command=str(raw.get("command", "")).strip(),
         parser_key=str(raw.get("parser_key", "")).strip(),
         fields=tuple(

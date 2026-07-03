@@ -29,6 +29,7 @@ from ..models import (
     decimals_for_divisor,
 )
 from .base import InverterDriver
+from .modbus_catalog import ModbusCatalogDriver
 from .must import MustPvPh18Driver
 from .pi18 import Pi18Driver
 from .pi30 import Pi30Driver
@@ -41,6 +42,7 @@ _DRIVERS: tuple[InverterDriver, ...] = (
     SmgModbusDriver(),
     SrneModbusDriver(),
     MustPvPh18Driver(),
+    ModbusCatalogDriver(),
     Pi30Driver(),
     EybondGAsciiDriver(),
     SmartEssLocalDriver(),

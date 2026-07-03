@@ -60,8 +60,13 @@ class RegisterValueSpec:
     signed: bool = False
     combine: str = "u16"
     divisor: int | None = None
+    multiplier: float | None = None
     decimals: int | None = None
     enum_map: dict[int | str, str] | None = None
+    # Modbus function the register lives under: 3 = holding, 4 = input.
+    # Input and holding registers are distinct address spaces, so specs are
+    # only decoded from blocks read with the same function.
+    function: int = 3
 
 
 @dataclass(frozen=True, slots=True)

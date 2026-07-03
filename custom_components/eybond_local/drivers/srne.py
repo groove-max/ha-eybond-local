@@ -6,8 +6,9 @@ from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.register_schema_loader import load_register_schema
-from ..models import DetectedInverter, ProbeTarget, RegisterValueSpec
-from ..payload.modbus import ModbusSession, to_signed_16
+from ..models import DetectedInverter, ProbeTarget
+from ..payload.modbus import ModbusSession
+from ..payload.register_decode import decode_ascii_low_bytes, read_spec_set_values
 from .base import InverterDriver
 
 
@@ -97,20 +98,7 @@ class SrneModbusDriver(InverterDriver):
             inverter.register_schema_name or self.register_schema_name
         )
         session = self._session(transport, inverter.probe_target)
-        values: dict[str, Any] = {}
-        for block in schema.blocks:
-            try:
-                words = await session.read_holding(block.start, block.count)
-            except Exception:
-                continue
-            specs = tuple(
-                spec
-                for spec in schema.spec_set("runtime")
-                if block.start <= spec.register
-                and spec.register + spec.word_count <= block.start + block.count
-            )
-            values.update(_decode_block(block.start, words, specs))
-        return values
+        return await read_spec_set_values(session, schema, ascii_style="printable")
 
     async def async_write_capability(
         self,
@@ -196,65 +184,4 @@ def _looks_like_srne_product_info(product_info: str) -> bool:
 
 
 def _decode_product_info(words: list[int]) -> str:
-    chars: list[str] = []
-    for word in words:
-        byte = int(word) & 0xFF
-        if byte in (0x00, 0xFF):
-            continue
-        char = chr(byte)
-        if char.isprintable():
-            chars.append(char)
-    return "".join(chars).strip()
-
-
-def _decode_ascii_word(value: int) -> str:
-    chars = []
-    for byte in ((int(value) >> 8) & 0xFF, int(value) & 0xFF):
-        if byte in (0x00, 0xFF):
-            continue
-        char = chr(byte)
-        if char.isprintable():
-            chars.append(char)
-    return "".join(chars).strip()
-
-
-def _decode_block(
-    start_register: int,
-    words: list[int],
-    specs: tuple[RegisterValueSpec, ...],
-) -> dict[str, Any]:
-    registers = {start_register + index: int(value) for index, value in enumerate(words)}
-    decoded: dict[str, Any] = {}
-    for spec in specs:
-        raw = _decode_raw_value(registers, spec)
-        if spec.enum_map is not None:
-            decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
-        elif spec.divisor and isinstance(raw, int):
-            decoded[spec.key] = round(raw / spec.divisor, spec.decimals or 0)
-        else:
-            decoded[spec.key] = raw
-    return decoded
-
-
-def _decode_raw_value(registers: dict[int, int], spec: RegisterValueSpec) -> int | str:
-    if spec.combine == "ascii_low_byte":
-        return _decode_product_info(
-            [registers.get(spec.register + offset, 0) for offset in range(spec.word_count)]
-        )
-    if spec.combine == "ascii":
-        chars: list[str] = []
-        for offset in range(spec.word_count):
-            chars.append(_decode_ascii_word(registers.get(spec.register + offset, 0)))
-        return "".join(chars).strip()
-    if spec.word_count >= 2:
-        high = registers.get(spec.register, 0)
-        low = registers.get(spec.register + 1, 0)
-        if spec.combine == "u32_low_first":
-            raw = (low << 16) | high
-        else:
-            raw = (high << 16) | low
-    else:
-        raw = registers.get(spec.register, 0)
-    if spec.signed and isinstance(raw, int) and spec.word_count == 1:
-        return to_signed_16(raw)
-    return raw
+    return decode_ascii_low_bytes(words)

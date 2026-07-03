@@ -59,6 +59,7 @@ class DetectionProbeActionDescriptor:
     fields: tuple[DetectionFieldDescriptor, ...]
     register: int | None = None
     count: int | None = None
+    function: int = 3
     command: str = ""
     parser_key: str = ""
 
@@ -346,6 +347,7 @@ def _build_protocol_descriptors(
                     retries=action.retries,
                     register=action.register,
                     count=action.count,
+                    function=action.function,
                     command=action.command,
                     parser_key=action.parser_key,
                     fields=tuple(

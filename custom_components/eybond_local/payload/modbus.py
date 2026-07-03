@@ -146,13 +146,21 @@ def decode_write_request(frame: bytes) -> ModbusWriteRequestFrame | None:
     )
 
 
-def build_read_holding_request(slave_id: int, address: int, count: int) -> bytes:
-    """Build a Modbus RTU read holding registers request."""
+def build_read_request(
+    slave_id: int,
+    address: int,
+    count: int,
+    *,
+    function: int = 0x03,
+) -> bytes:
+    """Build a Modbus RTU read registers request (function 0x03 or 0x04)."""
 
+    if function not in (0x03, 0x04):
+        raise ValueError(f"unsupported_read_function:{function}")
     payload = bytearray(
         [
             slave_id,
-            0x03,
+            function,
             (address >> 8) & 0xFF,
             address & 0xFF,
             (count >> 8) & 0xFF,
@@ -162,6 +170,12 @@ def build_read_holding_request(slave_id: int, address: int, count: int) -> bytes
     crc = crc16_modbus(payload)
     payload.extend(crc.to_bytes(2, "little"))
     return bytes(payload)
+
+
+def build_read_holding_request(slave_id: int, address: int, count: int) -> bytes:
+    """Build a Modbus RTU read holding registers request."""
+
+    return build_read_request(slave_id, address, count, function=0x03)
 
 
 def build_write_multiple_request(slave_id: int, address: int, values: list[int]) -> bytes:
@@ -205,9 +219,17 @@ def build_write_single_request(slave_id: int, address: int, value: int) -> bytes
     return bytes(payload)
 
 
-def parse_read_holding_response(frame: bytes, *, slave_id: int, count: int) -> list[int]:
-    """Decode a Modbus RTU read holding registers response."""
+def parse_read_registers_response(
+    frame: bytes,
+    *,
+    slave_id: int,
+    count: int,
+    function: int = 0x03,
+) -> list[int]:
+    """Decode a Modbus RTU read registers response (function 0x03 or 0x04)."""
 
+    if function not in (0x03, 0x04):
+        raise ValueError(f"unsupported_read_function:{function}")
     if len(frame) < 5:
         raise ModbusError("response_too_short")
 
@@ -215,9 +237,9 @@ def parse_read_holding_response(frame: bytes, *, slave_id: int, count: int) -> l
         raise ModbusError(f"unexpected_slave_id:{frame[0]}")
 
     function_code = frame[1]
-    if function_code == 0x83 and len(frame) >= 5:
+    if function_code == (function | 0x80) and len(frame) >= 5:
         raise ModbusError(f"exception_code:{frame[2]}")
-    if function_code != 0x03:
+    if function_code != function:
         raise ModbusError(f"unexpected_function:{function_code}")
 
     expected_byte_count = count * 2
@@ -239,6 +261,14 @@ def parse_read_holding_response(frame: bytes, *, slave_id: int, count: int) -> l
     for offset in range(0, len(payload), 2):
             registers.append(int.from_bytes(payload[offset : offset + 2], "big"))
     return registers
+
+
+def parse_read_holding_response(frame: bytes, *, slave_id: int, count: int) -> list[int]:
+    """Decode a Modbus RTU read holding registers response."""
+
+    return parse_read_registers_response(
+        frame, slave_id=slave_id, count=count, function=0x03
+    )
 
 
 def parse_write_single_response(
@@ -342,10 +372,16 @@ class ModbusSession:
         self._route = route
         self._slave_id = slave_id
 
-    async def read_holding(self, address: int, count: int) -> list[int]:
-        """Read holding registers from the inverter."""
+    async def read_registers(
+        self,
+        address: int,
+        count: int,
+        *,
+        function: int = 0x03,
+    ) -> list[int]:
+        """Read holding (0x03) or input (0x04) registers from the inverter."""
 
-        request = build_read_holding_request(self._slave_id, address, count)
+        request = build_read_request(self._slave_id, address, count, function=function)
         last_error: ModbusError | None = None
         for attempt in range(2):
             try:
@@ -361,7 +397,12 @@ class ModbusSession:
                     continue
                 raise last_error from exc
             try:
-                return parse_read_holding_response(response, slave_id=self._slave_id, count=count)
+                return parse_read_registers_response(
+                    response,
+                    slave_id=self._slave_id,
+                    count=count,
+                    function=function,
+                )
             except ModbusError as exc:
                 last_error = exc
                 if attempt == 0 and _is_retryable_read_error(exc):
@@ -369,6 +410,16 @@ class ModbusSession:
                     continue
                 raise
         raise last_error or ModbusError("read_failed")
+
+    async def read_holding(self, address: int, count: int) -> list[int]:
+        """Read holding registers from the inverter."""
+
+        return await self.read_registers(address, count, function=0x03)
+
+    async def read_input(self, address: int, count: int) -> list[int]:
+        """Read input registers from the inverter."""
+
+        return await self.read_registers(address, count, function=0x04)
 
     async def write_holding(self, address: int, values: list[int]) -> None:
         """Write one or more holding registers to the inverter."""

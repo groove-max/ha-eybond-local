@@ -1,0 +1,727 @@
+{
+ "schema_key": "aohai_fsa_base",
+ "title": "Aohai FSA Series (Sandi Solar) Register Schema",
+ "driver_key": "modbus_catalog",
+ "protocol_family": "aohai_fsa",
+ "blocks": [
+  {
+   "key": "runtime_core",
+   "start": 0,
+   "count": 14,
+   "function": 4
+  },
+  {
+   "key": "alarms",
+   "start": 32,
+   "count": 2,
+   "function": 4
+  },
+  {
+   "key": "grid",
+   "start": 42,
+   "count": 15,
+   "function": 4
+  },
+  {
+   "key": "pv",
+   "start": 64,
+   "count": 2,
+   "function": 4
+  },
+  {
+   "key": "generator_runtime",
+   "start": 96,
+   "count": 13,
+   "function": 4
+  },
+  {
+   "key": "battery_core",
+   "start": 127,
+   "count": 2,
+   "function": 4
+  },
+  {
+   "key": "battery_bms",
+   "start": 141,
+   "count": 12,
+   "function": 4
+  },
+  {
+   "key": "power_totals",
+   "start": 284,
+   "count": 6,
+   "function": 4
+  },
+  {
+   "key": "power_flow",
+   "start": 320,
+   "count": 12,
+   "function": 4
+  },
+  {
+   "key": "energy",
+   "start": 379,
+   "count": 12,
+   "function": 4
+  },
+  {
+   "key": "static_rated_power",
+   "start": 63,
+   "count": 2
+  }
+ ],
+ "enum_tables": {
+  "inverter_operation_mode": {
+   "0": "Waiting",
+   "1": "On-Grid",
+   "2": "Off-Grid",
+   "3": "Fault",
+   "4": "Flashing",
+   "5": "Bypass",
+   "6": "Self-Charge",
+   "7": "Generator"
+  },
+  "fault_code": {
+   "0": "No Fault",
+   "103": "Inverter DC offset is too high",
+   "105": "Bypass AC output is overloaded",
+   "200": "Off-grid output voltage is too low",
+   "201": "Off-grid output voltage is too high",
+   "202": "Off-grid output has a short circuit",
+   "203": "Off-grid output is overloaded",
+   "204": "Abnormal off-grid output DC component offset",
+   "301": "Battery open circuit",
+   "305": "Battery overvoltage",
+   "306": "Battery overcurrent",
+   "307": "Battery communication fault",
+   "308": "BMS fault",
+   "400": "PV overvoltage",
+   "403": "PV short circuit",
+   "404": "PV reverse connection",
+   "500": "Abnormal BUS voltage",
+   "501": "Abnormal BUS voltage sampling",
+   "502": "Abnormal communication in the device",
+   "505": "Abnormal connection of the temperature sensor",
+   "506": "Device over-temperature",
+   "507": "Abnormal relay",
+   "509": "Anti-counter-current output timeout",
+   "510": "Mismatched software version",
+   "511": "Fan fault"
+  },
+  "warning_code": {
+   "0": "No Warning",
+   "103": "Grid unavailable",
+   "104": "Overrange voltage of grid",
+   "105": "Overrange frequency of grid",
+   "106": "No output voltage from the generator",
+   "107": "Overrange output voltage of the generator",
+   "108": "Overrange output frequency of the generator",
+   "302": "Low battery",
+   "304": "Abnormal BMS information",
+   "305": "Low battery voltage alarm",
+   "502": "Abnormal memory reading and writing"
+  }
+ },
+ "spec_sets": {
+  "runtime": [
+   {
+    "key": "inverter_operation_mode",
+    "register": 0,
+    "enum_table": "inverter_operation_mode",
+    "function": 4
+   },
+   {
+    "key": "output_voltage",
+    "register": 2,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "output_current",
+    "register": 5,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "inverter_bus_voltage",
+    "register": 8,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "inverter_temperature",
+    "register": 10,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "boost_temperature",
+    "register": 11,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "llc_temperature",
+    "register": 12,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "external_ntc_temperature",
+    "register": 13,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "fault_code",
+    "register": 32,
+    "enum_table": "fault_code",
+    "function": 4
+   },
+   {
+    "key": "warning_code",
+    "register": 33,
+    "enum_table": "warning_code",
+    "function": 4
+   },
+   {
+    "key": "grid_voltage",
+    "register": 42,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "grid_current",
+    "register": 43,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "grid_frequency",
+    "register": 51,
+    "divisor": 100,
+    "decimals": 2,
+    "function": 4
+   },
+   {
+    "key": "power_factor",
+    "register": 52,
+    "signed": true,
+    "divisor": 10000,
+    "decimals": 2,
+    "function": 4
+   },
+   {
+    "key": "eps_voltage",
+    "register": 55,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "eps_current",
+    "register": 56,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "rated_power",
+    "register": 63,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1
+   },
+   {
+    "key": "pv_input_voltage",
+    "register": 64,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "pv_input_current",
+    "register": 65,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "generator_voltage",
+    "register": 96,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "generator_current",
+    "register": 97,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "total_operation_time",
+    "register": 107,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "multiplier": 0.00833333,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_voltage",
+    "register": 127,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_percent",
+    "register": 128,
+    "function": 4
+   },
+   {
+    "key": "battery_current",
+    "register": 141,
+    "signed": true,
+    "divisor": 100,
+    "decimals": 2,
+    "function": 4
+   },
+   {
+    "key": "battery_temperature",
+    "register": 142,
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "bms_max_charge_current",
+    "register": 143,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "bms_max_discharge_current",
+    "register": 144,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_soh",
+    "register": 152,
+    "function": 4
+   },
+   {
+    "key": "apparent_power",
+    "register": 284,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "output_power",
+    "register": 286,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "signed": true,
+    "multiplier": -0.1,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "reactive_power",
+    "register": 288,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "signed": true,
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "power_to_user",
+    "register": 320,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "load_power",
+    "register": 330,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "pv_generation_day",
+    "register": 379,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "pv_generation_sum",
+    "register": 381,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_charge_day",
+    "register": 383,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_charge_sum",
+    "register": 385,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_discharge_day",
+    "register": 387,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   },
+   {
+    "key": "battery_discharge_sum",
+    "register": 389,
+    "word_count": 2,
+    "combine": "u32_high_first",
+    "divisor": 10,
+    "decimals": 1,
+    "function": 4
+   }
+  ]
+ },
+ "measurement_descriptions": [
+  {
+   "key": "inverter_operation_mode",
+   "name": "Inverter Operation Mode",
+   "diagnostic": true
+  },
+  {
+   "key": "fault_code",
+   "name": "Inverter Fault",
+   "icon": "mdi:alert-circle-outline",
+   "diagnostic": true
+  },
+  {
+   "key": "warning_code",
+   "name": "Inverter Warning",
+   "icon": "mdi:alert-outline",
+   "diagnostic": true
+  },
+  {
+   "key": "output_voltage",
+   "name": "Output Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement"
+  },
+  {
+   "key": "output_current",
+   "name": "Output Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement"
+  },
+  {
+   "key": "inverter_bus_voltage",
+   "name": "Inverter Bus Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement",
+   "diagnostic": true
+  },
+  {
+   "key": "inverter_temperature",
+   "name": "Inverter Temperature",
+   "unit": "°C",
+   "device_class": "temperature",
+   "state_class": "measurement"
+  },
+  {
+   "key": "boost_temperature",
+   "name": "Boost Temperature",
+   "unit": "°C",
+   "device_class": "temperature",
+   "state_class": "measurement",
+   "diagnostic": true
+  },
+  {
+   "key": "llc_temperature",
+   "name": "LLC Temperature",
+   "unit": "°C",
+   "device_class": "temperature",
+   "state_class": "measurement",
+   "diagnostic": true
+  },
+  {
+   "key": "external_ntc_temperature",
+   "name": "External NTC Temperature",
+   "unit": "°C",
+   "device_class": "temperature",
+   "state_class": "measurement",
+   "diagnostic": true,
+   "enabled_default": false
+  },
+  {
+   "key": "grid_voltage",
+   "name": "Grid Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement"
+  },
+  {
+   "key": "grid_current",
+   "name": "Grid Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement"
+  },
+  {
+   "key": "grid_frequency",
+   "name": "Grid Frequency",
+   "unit": "Hz",
+   "device_class": "frequency",
+   "state_class": "measurement"
+  },
+  {
+   "key": "power_factor",
+   "name": "Power Factor",
+   "device_class": "power_factor",
+   "state_class": "measurement"
+  },
+  {
+   "key": "eps_voltage",
+   "name": "EPS Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement"
+  },
+  {
+   "key": "eps_current",
+   "name": "EPS Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement"
+  },
+  {
+   "key": "rated_power",
+   "name": "Rated Power",
+   "unit": "W",
+   "device_class": "power",
+   "diagnostic": true
+  },
+  {
+   "key": "pv_input_voltage",
+   "name": "PV Input Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement"
+  },
+  {
+   "key": "pv_input_current",
+   "name": "PV Input Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement"
+  },
+  {
+   "key": "generator_voltage",
+   "name": "Generator Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement",
+   "enabled_default": false
+  },
+  {
+   "key": "generator_current",
+   "name": "Generator Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement",
+   "enabled_default": false
+  },
+  {
+   "key": "total_operation_time",
+   "name": "Total Operation Time",
+   "unit": "h",
+   "state_class": "total_increasing",
+   "icon": "mdi:hourglass",
+   "diagnostic": true
+  },
+  {
+   "key": "battery_voltage",
+   "name": "Battery Voltage",
+   "unit": "V",
+   "device_class": "voltage",
+   "state_class": "measurement"
+  },
+  {
+   "key": "battery_percent",
+   "name": "Battery Percent",
+   "unit": "%",
+   "device_class": "battery",
+   "state_class": "measurement"
+  },
+  {
+   "key": "battery_current",
+   "name": "Battery Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement"
+  },
+  {
+   "key": "battery_temperature",
+   "name": "Battery Temperature",
+   "unit": "°C",
+   "device_class": "temperature",
+   "state_class": "measurement"
+  },
+  {
+   "key": "bms_max_charge_current",
+   "name": "BMS Max Charge Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement",
+   "diagnostic": true
+  },
+  {
+   "key": "bms_max_discharge_current",
+   "name": "BMS Max Discharge Current",
+   "unit": "A",
+   "device_class": "current",
+   "state_class": "measurement",
+   "diagnostic": true
+  },
+  {
+   "key": "battery_soh",
+   "name": "Battery SOH",
+   "unit": "%",
+   "state_class": "measurement",
+   "icon": "mdi:heart-pulse",
+   "diagnostic": true
+  },
+  {
+   "key": "apparent_power",
+   "name": "Apparent Power",
+   "unit": "VA",
+   "device_class": "apparent_power",
+   "state_class": "measurement"
+  },
+  {
+   "key": "output_power",
+   "name": "Output Power",
+   "unit": "W",
+   "device_class": "power",
+   "state_class": "measurement"
+  },
+  {
+   "key": "reactive_power",
+   "name": "Reactive Power",
+   "unit": "var",
+   "device_class": "reactive_power",
+   "state_class": "measurement",
+   "enabled_default": false
+  },
+  {
+   "key": "power_to_user",
+   "name": "Power To User",
+   "unit": "W",
+   "device_class": "power",
+   "state_class": "measurement"
+  },
+  {
+   "key": "load_power",
+   "name": "Load Power",
+   "unit": "W",
+   "device_class": "power",
+   "state_class": "measurement"
+  },
+  {
+   "key": "pv_generation_day",
+   "name": "PV Generation Today",
+   "unit": "kWh",
+   "device_class": "energy",
+   "state_class": "total_increasing"
+  },
+  {
+   "key": "pv_generation_sum",
+   "name": "PV Generation Total",
+   "unit": "kWh",
+   "device_class": "energy",
+   "state_class": "total_increasing"
+  },
+  {
+   "key": "battery_charge_day",
+   "name": "Battery Charge Today",
+   "unit": "kWh",
+   "device_class": "energy",
+   "state_class": "total_increasing"
+  },
+  {
+   "key": "battery_charge_sum",
+   "name": "Battery Charge Total",
+   "unit": "kWh",
+   "device_class": "energy",
+   "state_class": "total_increasing"
+  },
+  {
+   "key": "battery_discharge_day",
+   "name": "Battery Discharge Today",
+   "unit": "kWh",
+   "device_class": "energy",
+   "state_class": "total_increasing"
+  },
+  {
+   "key": "battery_discharge_sum",
+   "name": "Battery Discharge Total",
+   "unit": "kWh",
+   "device_class": "energy",
+   "state_class": "total_increasing"
+  }
+ ]
+}

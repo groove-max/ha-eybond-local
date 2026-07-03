@@ -67,6 +67,7 @@ class CompiledProbeAction:
     evidence_fields: tuple[CompiledEvidenceField, ...]
     register: int | None = None
     count: int | None = None
+    function: int = 3
     command: str = ""
     parser_key: str = ""
 
@@ -550,6 +551,7 @@ def _compile_protocol(
                     retries=action.retries,
                     register=action.register,
                     count=action.count,
+                    function=action.function,
                     command=action.command,
                     parser_key=action.parser_key,
                     evidence_fields=tuple(
