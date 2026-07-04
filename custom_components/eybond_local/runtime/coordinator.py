@@ -1071,6 +1071,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self._async_stop_proxy_capture_process(force=True)
             await self._runtime.async_stop()
             self._shutdown_complete = True
+        # Base-class teardown (debouncer shutdown, unschedule refresh) must
+        # run too, or a queued request_refresh can still drive a poll against
+        # the stopped link.
+        await super().async_shutdown()
 
     async def _async_cancel_diagnostic_run(self) -> None:
         """Cancel any in-flight diagnostic command run (called on unload)."""
@@ -1726,14 +1730,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Persist runtime metadata without reloading the entry we are actively running."""
 
         self._suppress_entry_reload_count = getattr(self, "_suppress_entry_reload_count", 0) + 1
+        changed = False
         try:
-            self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                **update_kwargs,
+            changed = bool(
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    **update_kwargs,
+                )
             )
-        except Exception:
-            self._suppress_entry_reload_count = max(self._suppress_entry_reload_count - 1, 0)
-            raise
+        finally:
+            if not changed:
+                # A no-op update fires no update listener, so nothing would
+                # ever consume the suppression - and the NEXT genuine options
+                # change would have its reload silently swallowed.
+                self._suppress_entry_reload_count = max(
+                    self._suppress_entry_reload_count - 1, 0
+                )
 
     def _normalized_remembered_collector_server_endpoint(self) -> str:
         endpoint = str(
@@ -2388,6 +2400,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             snapshot.values.pop(key, None)
 
     async def _async_update_data(self) -> RuntimeSnapshot:
+        if getattr(self, "_shutdown_complete", False) and self.data is not None:
+            # A refresh queued before shutdown (debounced request, connection
+            # watcher, write follow-up) must not drive the stopped link.
+            return self.data
         if self._diagnostic_active and self.data is not None:
             # A diagnostic command run holds the shared transport. Skip the live
             # poll so it does not contend on the bus; return the last snapshot.
@@ -4671,8 +4687,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         options = dict(self.config_entry.options)
         data[CONF_CONTROL_MODE] = normalized_mode
         options[CONF_CONTROL_MODE] = normalized_mode
-        self.hass.config_entries.async_update_entry(
-            self.config_entry,
+        self._async_update_entry_without_reload(
             data=data,
             options=options,
         )
