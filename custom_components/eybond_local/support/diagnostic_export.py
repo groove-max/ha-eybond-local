@@ -24,11 +24,14 @@ from pathlib import Path
 
 from ..const import LOCAL_DIAGNOSTIC_RUNS_DIR, LOCAL_METADATA_DIR
 from .diagnostic_runner import DiagnosticRunResult
+from .masking import (
+    _NUMERIC_IDENTIFIER_RE,
+    mask_identifier_token as _mask_identifier_token,
+    mask_numeric_identifiers as _mask_numeric_identifiers,
+)
 from .proxy_trace import anonymize_proxy_trace_line
 
 
-_NUMERIC_IDENTIFIER_RE = re.compile(r"(?<!\d)(\d{10,})(?!\d)")
-_NUMERIC_IDENTIFIER_BYTES_RE = re.compile(rb"(?<!\d)(\d{10,})(?!\d)")
 _SMG_SERIAL_REGISTER_START = 186
 _SMG_SERIAL_REGISTER_END = 197
 
@@ -85,48 +88,6 @@ def build_shareable_payload(result: DiagnosticRunResult) -> dict:
     payload = _mask_numeric_identifiers(payload)
     _redact_known_identity_registers(payload)
     return payload
-
-
-def _mask_identifier_token(token: str) -> str:
-    if len(token) <= 4:
-        return "*" * len(token)
-    return token[:4] + ("*" * max(len(token) - 8, 1)) + token[-4:]
-
-
-def _mask_numeric_identifiers(value):
-    """Mask long numeric identifiers in text and ASCII-encoded hex blobs."""
-
-    if isinstance(value, dict):
-        return {key: _mask_numeric_identifiers(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_mask_numeric_identifiers(item) for item in value]
-    if not isinstance(value, str):
-        return value
-
-    masked = _NUMERIC_IDENTIFIER_RE.sub(
-        lambda match: _mask_identifier_token(match.group(1)),
-        value,
-    )
-    normalized = "".join(masked.split())
-    if (
-        normalized
-        and len(normalized) >= 8
-        and len(normalized) % 2 == 0
-        and all(char in "0123456789abcdefABCDEF" for char in normalized)
-    ):
-        try:
-            raw = bytes.fromhex(normalized)
-        except ValueError:
-            return masked
-        redacted = _NUMERIC_IDENTIFIER_BYTES_RE.sub(
-            lambda match: _mask_identifier_token(
-                match.group(1).decode("ascii")
-            ).encode("ascii"),
-            raw,
-        )
-        if redacted != raw:
-            return redacted.hex()
-    return masked
 
 
 def _redact_known_identity_registers(payload: dict) -> None:

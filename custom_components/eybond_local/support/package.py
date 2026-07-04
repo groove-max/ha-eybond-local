@@ -18,6 +18,7 @@ from ..const import (
     LOCAL_SUPPORT_PACKAGES_DIR,
 )
 from .bundle import build_support_marker
+from .masking import mask_numeric_identifiers
 from .shadow_learning_review_model import build_control_discovery_evidence
 
 
@@ -116,8 +117,10 @@ def export_support_package(
             "recommended_artifact": destination.name,
             "note": (
                 "Send this ZIP file to the developer. It includes runtime metadata, "
-                "raw capture evidence, an anonymized replay fixture, and any "
-                "matching cloud evidence exported into the HA config dir."
+                "capture evidence, an anonymized replay fixture, and any "
+                "matching cloud evidence exported into the HA config dir. Long "
+                "numeric identifiers (collector PN, serial numbers) are masked "
+                "in every member."
             ),
         },
         "archive_members": {
@@ -202,6 +205,16 @@ def export_support_package(
         for member_name, payload in archive_members.items():
             if payload is None:
                 continue
+            # The whole archive is a sharing artifact ("send this ZIP to the
+            # developer"), so every member gets the same identifier masking
+            # the diagnostic exports use — a PN must not be starred out in
+            # one file and printed in full in the next.  JSONL members are
+            # masked per parsed record: masking their raw text would also
+            # star out epoch timestamps and other legitimate long numbers.
+            if isinstance(payload, str) and member_name.endswith(".jsonl"):
+                payload = _mask_jsonl_text(payload)
+            else:
+                payload = mask_numeric_identifiers(payload)
             if isinstance(payload, str):
                 archive.writestr(member_name, payload)
                 continue
@@ -672,6 +685,37 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, (tuple, list)):
         return list(value)
     return str(value)
+
+
+def _mask_jsonl_text(text: str) -> str:
+    """Mask identifiers per parsed JSONL record, preserving numeric fields.
+
+    Numbers stay numbers (epoch timestamps, register words); only strings
+    inside each record are masked. A line that fails to parse falls back to
+    plain-text masking rather than passing through unmasked.
+    """
+
+    masked_lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            masked_lines.append(line)
+            continue
+        try:
+            record = json.loads(stripped)
+        except ValueError:
+            masked_lines.append(mask_numeric_identifiers(line))
+            continue
+        masked_lines.append(
+            json.dumps(
+                mask_numeric_identifiers(record),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                default=_json_default,
+            )
+        )
+    return "\n".join(masked_lines) + ("\n" if text.endswith("\n") else "")
 
 
 def _to_jsonl(records: list[dict[str, Any]]) -> str:

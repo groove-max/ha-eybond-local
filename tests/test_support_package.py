@@ -22,7 +22,10 @@ from custom_components.eybond_local.support.download import (
     sign_support_package_download_url,
     support_package_authenticated_download_url,
 )
-from custom_components.eybond_local.support.package import export_support_package
+from custom_components.eybond_local.support.package import (
+    _mask_jsonl_text,
+    export_support_package,
+)
 
 
 class SupportPackageTests(unittest.TestCase):
@@ -179,6 +182,79 @@ class SupportPackageTests(unittest.TestCase):
             self.assertEqual(raw_capture["capture_kind"], "modbus_register_dump")
             self.assertTrue(anonymized_fixture["anonymized"])
             self.assertIn("collector, inverter, and integration role sections", readme)
+
+    def test_archive_members_mask_long_numeric_identifiers(self) -> None:
+        # Field report: the PN was starred out in some archive members and
+        # printed in full in others. Every member must use one masking rule.
+        pn = "E50000200000000001"
+        masked_pn = "E5000*********0001"
+        serial = "92632500000001"
+        frame_hex = ("AT+DTUPN:" + pn).encode("ascii").hex()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry123",
+                entry_title="Bridge",
+                connected=True,
+                collector={"collector_pn": pn},
+                inverter={"driver_key": "modbus_smg", "serial_number": serial},
+                values={"collector_pn": pn},
+                data={"collector_pn": pn, "server_ip": "192.168.1.50"},
+                options={},
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            )
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry123",
+                entry_title="Bridge",
+                support_bundle=support_bundle,
+                raw_capture={
+                    "capture_kind": "modbus_register_dump",
+                    "note": f"observed pn {pn}",
+                    "frames": [frame_hex],
+                },
+                fixture={"fixture_version": 1, "identity": pn},
+                anonymized_fixture=None,
+            )
+            with zipfile.ZipFile(result.path) as archive:
+                for name in archive.namelist():
+                    text = archive.read(name).decode("utf-8")
+                    self.assertNotIn(pn, text, f"unmasked PN in {name}")
+                    self.assertNotIn(serial, text, f"unmasked serial in {name}")
+                    self.assertNotIn(
+                        frame_hex, text, f"unmasked PN-bearing frame in {name}"
+                    )
+                bundled = json.loads(
+                    archive.read("support_bundle.json").decode("utf-8")
+                )
+                raw_capture = json.loads(
+                    archive.read("raw_capture.json").decode("utf-8")
+                )
+
+        self.assertEqual(bundled["runtime"]["collector"]["collector_pn"], masked_pn)
+        self.assertEqual(bundled["entry"]["data"]["collector_pn"], masked_pn)
+        self.assertEqual(raw_capture["note"], f"observed pn {masked_pn}")
+        # The hex frame stays hex, with the embedded ASCII identifier masked.
+        decoded_frame = bytes.fromhex(raw_capture["frames"][0]).decode("ascii")
+        self.assertEqual(decoded_frame, "AT+DTUPN:" + masked_pn)
+
+    def test_mask_jsonl_text_masks_strings_but_keeps_numbers(self) -> None:
+        lines = (
+            '{"ts": 1751600000.123, "pn": "E50000200000000001", "register": 12345678901}\n'
+            "not-json 92632500000001\n"
+        )
+
+        masked = _mask_jsonl_text(lines)
+
+        first, second = masked.splitlines()
+        record = json.loads(first)
+        # Numeric fields survive untouched — only strings are masked.
+        self.assertEqual(record["ts"], 1751600000.123)
+        self.assertEqual(record["register"], 12345678901)
+        self.assertEqual(record["pn"], "E5000*********0001")
+        self.assertEqual(second, "not-json 9263******0001")
+        self.assertTrue(masked.endswith("\n"))
 
     def test_resolves_authenticated_download_path_for_latest_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

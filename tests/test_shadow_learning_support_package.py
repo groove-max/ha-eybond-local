@@ -251,9 +251,11 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 )
 
             self.assertEqual(activation["status"], "draft_generated")
+            # Archive members are share-safe: long numeric identifiers are
+            # masked everywhere, including the activation scope.
             self.assertEqual(
                 activation["activation_scope"]["cloud_sn"],
-                "E50000200000000001000001",
+                "E5000***************0001",
             )
 
     def test_keeps_support_archive_compatible_when_shadow_artifacts_absent(self) -> None:
