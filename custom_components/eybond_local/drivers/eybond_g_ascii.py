@@ -436,11 +436,6 @@ def _load_command_schema() -> dict[str, Any]:
     return json.loads(_COMMAND_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def _support_command_specs() -> tuple[dict[str, Any], ...]:
-    schema = _load_command_schema()
-    return _support_command_specs_from_schema(schema)
-
-
 def _support_probe_plan() -> tuple[str, tuple[dict[str, Any], ...]]:
     schema = _load_command_schema()
     return str(schema.get("schema_key") or ""), _support_command_specs_from_schema(schema)

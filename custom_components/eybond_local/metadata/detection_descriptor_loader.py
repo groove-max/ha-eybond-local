@@ -178,17 +178,6 @@ class DetectionDescriptorCatalog:
         return None
 
 
-@dataclass(frozen=True, slots=True)
-class DetectionProbePlanStep:
-    """One static planner step chosen from descriptor anchor conditions."""
-
-    anchor_key: str
-    cost: int
-    candidate_keys: tuple[str, ...]
-    partition_count: int
-    score: float
-
-
 @lru_cache(maxsize=None)
 def load_detection_descriptor_catalog() -> DetectionDescriptorCatalog:
     """Load the normalized descriptor catalog from existing declarative sources."""
@@ -240,72 +229,6 @@ def mandatory_detection_anchor_keys(
     if str(protocol_family).startswith("pi"):
         return ("protocol.protocol_id",)
     return _MANDATORY_PROTOCOL_ANCHORS
-
-
-def build_detection_probe_plan(
-    *,
-    protocol_family: str,
-    catalog: DetectionDescriptorCatalog | None = None,
-) -> tuple[DetectionProbePlanStep, ...]:
-    """Build a deterministic static probe sequence for one protocol family.
-
-    This is deliberately offline and side-effect-free. It chooses anchors by
-    estimated information gain divided by declared probe cost, then continues on
-    unresolved candidate partitions. Runtime probing can later turn these steps
-    into a DAG/tree without changing descriptor semantics.
-    """
-
-    resolved = catalog if catalog is not None else load_detection_descriptor_catalog()
-    initial = resolved.descriptors_for_protocol(protocol_family)
-    if not initial:
-        return ()
-
-    chosen: list[DetectionProbePlanStep] = []
-    chosen_keys: set[str] = set()
-    groups: list[tuple[DetectionDeviceDescriptor, ...]] = [initial]
-
-    for anchor_key in mandatory_detection_anchor_keys(protocol_family):
-        groups = _append_probe_plan_step(
-            groups=groups,
-            chosen=chosen,
-            chosen_keys=chosen_keys,
-            anchor_key=anchor_key,
-            require_step=True,
-        )
-
-    while True:
-        best: tuple[float, int, int, str, tuple[DetectionDeviceDescriptor, ...], int] | None = None
-        for group in groups:
-            if len(group) <= 1:
-                continue
-            for anchor_key in _candidate_anchor_keys(group):
-                if anchor_key in chosen_keys:
-                    continue
-                partitions = _partition_descriptors_by_anchor(group, anchor_key)
-                if len(partitions) <= 1:
-                    continue
-                cost = detection_anchor_cost(anchor_key)
-                score = (len(partitions) - 1) * len(group) / cost
-                candidate = (score, len(partitions), len(group), anchor_key, group, cost)
-                if best is None or _probe_candidate_sort_key(candidate) > _probe_candidate_sort_key(best):
-                    best = candidate
-
-        if best is None:
-            break
-
-        score, partition_count, _group_size, anchor_key, group, cost = best
-        groups = _append_probe_plan_step(
-            groups=groups,
-            chosen=chosen,
-            chosen_keys=chosen_keys,
-            anchor_key=anchor_key,
-            selected_group=group,
-            selected_score=score,
-            selected_cost=cost,
-            selected_partition_count=partition_count,
-        )
-
-    return tuple(chosen)
 
 
 def _build_protocol_descriptors(
@@ -690,107 +613,8 @@ def _candidate_anchor_keys(
     return tuple(sorted(keys))
 
 
-def _partition_descriptors_by_anchor(
-    descriptors: tuple[DetectionDeviceDescriptor, ...],
-    anchor_key: str,
-) -> dict[str, tuple[DetectionDeviceDescriptor, ...]]:
-    partitions: dict[str, list[DetectionDeviceDescriptor]] = {}
-    for descriptor in descriptors:
-        signature = _anchor_signature(descriptor, anchor_key)
-        partitions.setdefault(signature, []).append(descriptor)
-    return {
-        signature: tuple(items)
-        for signature, items in partitions.items()
-    }
-
-
-def _anchor_signature(descriptor: DetectionDeviceDescriptor, anchor_key: str) -> str:
-    for anchor in descriptor.anchors:
-        if anchor.key != anchor_key:
-            continue
-        if anchor.equals is not None:
-            return f"equals:{_stable_signature_value(anchor.equals)}"
-        if anchor.one_of:
-            values = ",".join(_stable_signature_value(value) for value in anchor.one_of)
-            return f"one_of:{values}"
-        if anchor.min_value is not None or anchor.max_value is not None:
-            return f"range:{anchor.min_value}:{anchor.max_value}"
-        if anchor.known_enum:
-            return "known_enum"
-        return "present"
-    return "missing"
-
-
 def _stable_signature_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
 
-
-def _probe_candidate_sort_key(
-    candidate: tuple[float, int, int, str, tuple[DetectionDeviceDescriptor, ...], int],
-) -> tuple[float, int, int, int, str]:
-    score, partition_count, group_size, anchor_key, _group, cost = candidate
-    return (score, partition_count, group_size, -cost, anchor_key)
-
-
-def _append_probe_plan_step(
-    *,
-    groups: list[tuple[DetectionDeviceDescriptor, ...]],
-    chosen: list[DetectionProbePlanStep],
-    chosen_keys: set[str],
-    anchor_key: str,
-    selected_group: tuple[DetectionDeviceDescriptor, ...] | None = None,
-    selected_score: float | None = None,
-    selected_cost: int | None = None,
-    selected_partition_count: int | None = None,
-    require_step: bool = False,
-) -> list[tuple[DetectionDeviceDescriptor, ...]]:
-    if anchor_key in chosen_keys:
-        return groups
-
-    group = selected_group
-    if group is None:
-        candidate_groups = tuple(existing_group for existing_group in groups if len(existing_group) > 1)
-        if not candidate_groups:
-            return groups
-        group = tuple(descriptor for candidate_group in candidate_groups for descriptor in candidate_group)
-
-    partitions = _partition_descriptors_by_anchor(group, anchor_key)
-    if len(partitions) <= 1 and not require_step:
-        return groups
-
-    cost = selected_cost if selected_cost is not None else detection_anchor_cost(anchor_key)
-    partition_count = (
-        selected_partition_count
-        if selected_partition_count is not None
-        else len(partitions)
-    )
-    score = (
-        selected_score
-        if selected_score is not None
-        else (partition_count - 1) * len(group) / cost
-    )
-    chosen_keys.add(anchor_key)
-    chosen.append(
-        DetectionProbePlanStep(
-            anchor_key=anchor_key,
-            cost=cost,
-            candidate_keys=tuple(descriptor.key for descriptor in group),
-            partition_count=partition_count,
-            score=score,
-        )
-    )
-
-    next_groups: list[tuple[DetectionDeviceDescriptor, ...]] = []
-    for existing_group in groups:
-        if selected_group is not None and existing_group != selected_group:
-            next_groups.append(existing_group)
-            continue
-        if selected_group is None:
-            next_groups.extend(
-                _partition_descriptors_by_anchor(existing_group, anchor_key).values()
-            )
-            continue
-        next_groups.extend(partitions.values())
-    return next_groups

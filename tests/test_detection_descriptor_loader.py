@@ -7,7 +7,6 @@ from custom_components.eybond_local.metadata.detection_descriptor_loader import 
     DetectionBindingDescriptor,
     DetectionDescriptorCatalog,
     DetectionDeviceDescriptor,
-    build_detection_probe_plan,
     clear_detection_descriptor_catalog_cache,
     detection_anchor_cost,
     load_detection_descriptor_catalog,
@@ -117,129 +116,8 @@ class DetectionDescriptorLoaderTests(unittest.TestCase):
             detection_anchor_cost("variant.protocol_number"),
         )
 
-    def test_probe_plan_starts_with_mandatory_fingerprint_anchors(self) -> None:
-        plan = build_detection_probe_plan(protocol_family="modbus_smg")
 
-        self.assertGreaterEqual(len(plan), 2)
-        plan_keys = tuple(step.anchor_key for step in plan)
-        self.assertEqual(
-            plan_keys[:2],
-            ("fingerprint.layout_code", "fingerprint.model_code"),
-        )
-        self.assertEqual(len(plan_keys), len(set(plan_keys)))
-        self.assertTrue(all(step.partition_count > 1 for step in plan))
-        self.assertTrue(all(step.cost > 0 for step in plan))
 
-    def test_probe_plan_adds_variant_rules_when_fingerprint_is_not_unique(self) -> None:
-        base_catalog = load_detection_descriptor_catalog()
-        binding = DetectionBindingDescriptor(
-            driver_key="modbus_smg",
-            variant_key="synthetic",
-            profile_name="smg_modbus.json",
-            register_schema_name="modbus_smg/models/smg_6200.json",
-        )
-        catalog = DetectionDescriptorCatalog(
-            protocols=base_catalog.protocols,
-            devices=(
-                DetectionDeviceDescriptor(
-                    key="synthetic_a",
-                    protocol_family="modbus_smg",
-                    model_name="Synthetic A",
-                    tier="full",
-                    binding=binding,
-                    anchors=(
-                        DetectionAnchorCondition(
-                            key="fingerprint.layout_code",
-                            source="test",
-                            equals=1,
-                        ),
-                        DetectionAnchorCondition(
-                            key="fingerprint.model_code",
-                            source="test",
-                            equals=35,
-                        ),
-                        DetectionAnchorCondition(
-                            key="variant.protocol_number",
-                            source="test",
-                            equals=1,
-                            cost=2,
-                        ),
-                    ),
-                ),
-                DetectionDeviceDescriptor(
-                    key="synthetic_b",
-                    protocol_family="modbus_smg",
-                    model_name="Synthetic B",
-                    tier="full",
-                    binding=binding,
-                    anchors=(
-                        DetectionAnchorCondition(
-                            key="fingerprint.layout_code",
-                            source="test",
-                            equals=1,
-                        ),
-                        DetectionAnchorCondition(
-                            key="fingerprint.model_code",
-                            source="test",
-                            equals=35,
-                        ),
-                        DetectionAnchorCondition(
-                            key="variant.protocol_number",
-                            source="test",
-                            equals=3,
-                            cost=2,
-                        ),
-                    ),
-                ),
-            ),
-        )
-        validate_detection_descriptor_catalog(catalog)
-
-        plan_keys = tuple(
-            step.anchor_key
-            for step in build_detection_probe_plan(
-                protocol_family="modbus_smg",
-                catalog=catalog,
-            )
-        )
-
-        self.assertEqual(
-            plan_keys,
-            (
-                "fingerprint.layout_code",
-                "fingerprint.model_code",
-                "variant.protocol_number",
-            ),
-        )
-
-    def test_probe_plan_is_protocol_scoped(self) -> None:
-        catalog = load_detection_descriptor_catalog()
-
-        self.assertEqual(
-            build_detection_probe_plan(protocol_family="unknown", catalog=catalog),
-            (),
-        )
-        self.assertEqual(
-            tuple(
-                sorted(
-                    {
-                        key
-                        for step in build_detection_probe_plan(
-                            protocol_family="modbus_smg",
-                            catalog=catalog,
-                        )
-                        for key in step.candidate_keys
-                    }
-                )
-            ),
-            tuple(
-                sorted(
-                    descriptor.key
-                    for descriptor in catalog.devices
-                    if descriptor.protocol_family == "modbus_smg"
-                )
-            ),
-        )
 
     def test_validation_rejects_required_anchor_without_condition(self) -> None:
         with self.assertRaisesRegex(
