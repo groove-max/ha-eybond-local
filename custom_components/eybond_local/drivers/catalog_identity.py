@@ -27,7 +27,7 @@ from ..metadata.detection_decision_tree import evaluate_detection_decision_tree
 from ..metadata.detection_evidence import (
     build_descriptor_decision_report_from_catalog_identity_probe,
 )
-from .catalog_probe import action_for_evidence_key
+from .catalog_probe import async_walk_detection_dag
 
 logger = logging.getLogger(__name__)
 
@@ -138,33 +138,13 @@ async def async_probe_catalog_identity(
         return None
 
     words: dict[int, int] = {}
-    any_block_read = False
-    executed_actions: list[str] = []
-    failed_actions: list[str] = []
     raw_fields: dict[str, object] = {}
     evidence: dict[str, object] = {}
-    failed_evidence: set[str] = set()
     tree = compiled_catalog.decision_trees[protocol.key]
-    while True:
-        evaluation = evaluate_detection_decision_tree(
-            tree,
-            evidence,
-            unavailable_evidence_keys=frozenset(failed_evidence),
-        )
-        if evaluation.status != "missing_anchor":
-            break
-        action = action_for_evidence_key(
-            protocol,
-            evaluation.missing_anchor_key or "",
-            excluded_action_keys=frozenset((*executed_actions, *failed_actions)),
-        )
-        if action is None or action.kind != PROBE_ACTION_MODBUS_READ:
-            failed_evidence.add(evaluation.missing_anchor_key or "")
-            continue
+
+    async def _execute(action) -> str:
         if action.register is None or action.count is None:
-            failed_actions.append(action.key)
-            failed_evidence.update(field.key for field in action.evidence_fields)
-            continue
+            return "failed"
         values = None
         last_error: Exception | None = None
         for _attempt in range(action.retries + 1):
@@ -176,7 +156,7 @@ async def async_probe_catalog_identity(
                     else await request
                 )
                 break
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-except
                 last_error = exc
         if values is None:
             logger.debug(
@@ -184,11 +164,7 @@ async def async_probe_catalog_identity(
                 action.key,
                 last_error,
             )
-            failed_actions.append(action.key)
-            failed_evidence.update(field.key for field in action.evidence_fields)
-            continue
-        executed_actions.append(action.key)
-        any_block_read = True
+            return "failed"
         for index, value in enumerate(values):
             words[action.register + index] = int(value)
         for field in action.evidence_fields:
@@ -197,7 +173,20 @@ async def async_probe_catalog_identity(
                 continue
             raw_fields[field.source_key] = value
             evidence[field.key] = value
-    if not any_block_read:
+        return "executed"
+
+    walk = await async_walk_detection_dag(
+        protocol=protocol,
+        tree=tree,
+        evidence=evidence,
+        execute_action=_execute,
+        supported_kinds=frozenset({PROBE_ACTION_MODBUS_READ}),
+    )
+    evaluation = walk.evaluation
+    executed_actions = list(walk.executed_actions)
+    failed_actions = list(walk.failed_actions)
+    failed_evidence = set(walk.failed_evidence) | set(walk.unsupported_evidence)
+    if not executed_actions:
         return None
 
     layout_code = _optional_int(raw_fields.get("layout_code"))

@@ -24,7 +24,6 @@ from ..metadata.compiled_detection_catalog import (
     PROBE_ACTION_MODBUS_READ,
     load_compiled_detection_catalog,
 )
-from ..metadata.detection_decision_tree import evaluate_detection_decision_tree
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusSession
@@ -34,7 +33,7 @@ from ..payload.register_decode import (
     read_spec_set_values,
 )
 from .base import InverterDriver
-from .catalog_probe import action_for_evidence_key
+from .catalog_probe import async_walk_detection_dag
 
 logger = logging.getLogger(__name__)
 
@@ -88,37 +87,13 @@ class ModbusCatalogDriver(InverterDriver):
         session = self._session(transport, target)
         evidence: dict[str, object] = {}
         raw_values: dict[str, object] = {}
-        executed: list[str] = []
-        failed: list[str] = []
-        failed_evidence: set[str] = set()
 
-        while True:
-            evaluation = evaluate_detection_decision_tree(
-                tree,
-                evidence,
-                unavailable_evidence_keys=frozenset(failed_evidence),
-            )
-            if evaluation.status != "missing_anchor":
-                break
-            action = action_for_evidence_key(
-                protocol,
-                evaluation.missing_anchor_key or "",
-                excluded_action_keys=frozenset((*executed, *failed)),
-            )
-            if (
-                action is None
-                or action.kind != PROBE_ACTION_MODBUS_READ
-                or action.register is None
-                or action.count is None
-            ):
-                failed_evidence.add(evaluation.missing_anchor_key or "")
-                continue
+        async def _execute(action) -> str:
+            if action.register is None or action.count is None:
+                return "failed"
             words = await self._read_action(session, action)
             if words is None:
-                failed.append(action.key)
-                failed_evidence.update(field.key for field in action.evidence_fields)
-                continue
-            executed.append(action.key)
+                return "failed"
             registers = {
                 action.register + index: int(value) for index, value in enumerate(words)
             }
@@ -128,6 +103,16 @@ class ModbusCatalogDriver(InverterDriver):
                     continue
                 raw_values[field.source_key] = value
                 evidence[field.key] = value
+            return "executed"
+
+        walk = await async_walk_detection_dag(
+            protocol=protocol,
+            tree=tree,
+            evidence=evidence,
+            execute_action=_execute,
+            supported_kinds=frozenset({PROBE_ACTION_MODBUS_READ}),
+        )
+        evaluation = walk.evaluation
 
         if evaluation.status != "resolved":
             return None

@@ -70,31 +70,43 @@ class CatalogAsciiProbe:
         }
 
 
-async def async_probe_ascii_catalog(
-    *,
-    protocol_key: str,
-    session: Any,
-    parsers: Mapping[str, Parser],
-    collector: Any = None,
-    evidence_providers: Mapping[str, EvidenceProvider] | None = None,
-) -> CatalogAsciiProbe:
-    """Execute only the actions required by the compiled decision DAG."""
+@dataclass(frozen=True, slots=True)
+class DagWalkResult:
+    """What one decision-DAG walk executed and where it ended."""
 
-    catalog = load_compiled_detection_catalog()
-    protocol = catalog.protocols[protocol_key]
-    tree = catalog.decision_trees[protocol_key]
-    values: dict[str, Any] = {}
-    evidence: dict[str, object] = {}
+    evaluation: DetectionDecisionEvaluation
+    executed_actions: tuple[str, ...]
+    failed_actions: tuple[str, ...]
+    unsupported_actions: tuple[str, ...]
+    failed_evidence: frozenset[str]
+    unsupported_evidence: frozenset[str]
+
+
+async def async_walk_detection_dag(
+    *,
+    protocol: CompiledProtocolDescriptor,
+    tree,
+    evidence: dict[str, object],
+    execute_action,
+    supported_kinds: frozenset[str],
+    raise_on_required_failure: bool = False,
+) -> DagWalkResult:
+    """THE decision-DAG walk shared by every catalog prober.
+
+    This loop used to exist three times (ASCII, SMG identity, generic
+    Modbus), copy-varied and drift-prone. The transport-specific part is
+    injected as ``execute_action(action) -> "executed"|"failed"|
+    "unsupported"``, which must record any produced values into
+    ``evidence`` itself; everything else — anchor selection, exclusion
+    bookkeeping, unavailable-evidence routing — is identical by
+    construction.
+    """
+
     executed: list[str] = []
     failed: list[str] = []
     unsupported: list[str] = []
     failed_evidence: set[str] = set()
     unsupported_evidence: set[str] = set()
-
-    for action in protocol.probe_actions:
-        if action.kind == PROBE_ACTION_COLLECTOR_METADATA:
-            _collect_metadata_evidence(action, collector, values, evidence)
-            executed.append(action.key)
 
     while True:
         unavailable = frozenset((*failed_evidence, *unsupported_evidence))
@@ -110,17 +122,10 @@ async def async_probe_ascii_catalog(
             evaluation.missing_anchor_key or "",
             excluded_action_keys=frozenset((*executed, *failed, *unsupported)),
         )
-        if action is None:
+        if action is None or action.kind not in supported_kinds:
             unsupported_evidence.add(evaluation.missing_anchor_key or "")
             continue
-        outcome = await _execute_probe_action(
-            action,
-            session=session,
-            parsers=parsers,
-            values=values,
-            evidence=evidence,
-            evidence_providers=evidence_providers or {},
-        )
+        outcome = await execute_action(action)
         if outcome == "executed":
             executed.append(action.key)
         elif outcome == "unsupported":
@@ -129,8 +134,66 @@ async def async_probe_ascii_catalog(
         else:
             failed.append(action.key)
             failed_evidence.update(field.key for field in action.evidence_fields)
-            if not action.optional:
+            if raise_on_required_failure and not action.optional:
                 raise RuntimeError(f"required_catalog_action_failed:{action.key}")
+
+    return DagWalkResult(
+        evaluation=evaluation,
+        executed_actions=tuple(executed),
+        failed_actions=tuple(failed),
+        unsupported_actions=tuple(unsupported),
+        failed_evidence=frozenset(failed_evidence),
+        unsupported_evidence=frozenset(unsupported_evidence),
+    )
+
+
+async def async_probe_ascii_catalog(
+    *,
+    protocol_key: str,
+    session: Any,
+    parsers: Mapping[str, Parser],
+    collector: Any = None,
+    evidence_providers: Mapping[str, EvidenceProvider] | None = None,
+) -> CatalogAsciiProbe:
+    """Execute only the actions required by the compiled decision DAG."""
+
+    catalog = load_compiled_detection_catalog()
+    protocol = catalog.protocols[protocol_key]
+    tree = catalog.decision_trees[protocol_key]
+    values: dict[str, Any] = {}
+    evidence: dict[str, object] = {}
+
+    metadata_executed: list[str] = []
+    for action in protocol.probe_actions:
+        if action.kind == PROBE_ACTION_COLLECTOR_METADATA:
+            _collect_metadata_evidence(action, collector, values, evidence)
+            metadata_executed.append(action.key)
+
+    async def _execute(action: CompiledProbeAction) -> str:
+        return await _execute_probe_action(
+            action,
+            session=session,
+            parsers=parsers,
+            values=values,
+            evidence=evidence,
+            evidence_providers=evidence_providers or {},
+        )
+
+    walk = await async_walk_detection_dag(
+        protocol=protocol,
+        tree=tree,
+        evidence=evidence,
+        execute_action=_execute,
+        supported_kinds=frozenset(
+            {PROBE_ACTION_ASCII_COMMAND, PROBE_ACTION_SMARTESS_QUERY}
+        ),
+        raise_on_required_failure=True,
+    )
+    executed = [*metadata_executed, *walk.executed_actions]
+    failed = list(walk.failed_actions)
+    unsupported = list(walk.unsupported_actions)
+    failed_evidence = set(walk.failed_evidence)
+    unsupported_evidence = set(walk.unsupported_evidence)
 
     for action in protocol.probe_actions:
         if action.optional or action.key in executed:
