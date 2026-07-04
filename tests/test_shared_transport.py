@@ -788,14 +788,21 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         )
         listener._pending_sockets[pending.remote_ip] = pending
 
-        await listener._sniff_pending_socket(pending)
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+        await asyncio.sleep(0.4)
 
+        # No active probe was sent (mixed protocols make one ambiguous), and
+        # the identityless socket stays registered — parked under a watcher.
         self.assertEqual(bytes(writer.buffer), b"")
         self.assertIn(pending.remote_ip, listener._pending_sockets)
         self.assertEqual(
             listener.session_inventory_diagnostics()["sessions"][0]["state"],
-            "waiting_for_identity",
+            "parked_waiting_for_identity",
         )
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
 
     async def test_listener_routes_two_silent_at_collectors_from_same_peer_ip_by_pn(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -1841,8 +1848,9 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 self._pn = pn
 
             async def drain(self) -> None:
+                # The peer answers the identity probe but keeps the socket
+                # open, like a real collector between frames.
                 self._reader.feed_data(f"AT+DTUPN:{self._pn}\r\n".encode("ascii"))
-                self._reader.feed_eof()
 
         first_pending = _PendingCollectorSocket(
             remote_ip="203.0.113.10",
@@ -1896,6 +1904,14 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             listener.session_inventory_diagnostics()["pending_session_count"],
             1,
         )
+
+        # The mismatched socket is watched again after the paused sniff.
+        watch = first_pending.sniff_task
+        self.assertIsNotNone(watch)
+        self.assertFalse(watch.done())
+        first_reader.feed_eof()
+        await asyncio.wait_for(watch, timeout=2.0)
+        self.assertNotIn("session-one", listener._pending_sockets)
 
     async def test_at_transport_wait_until_connected_activates_pending_socket(self) -> None:
         port = _free_tcp_port()
@@ -2701,6 +2717,215 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(sniff_second, timeout=2.0)
         with self.assertRaises(asyncio.CancelledError):
             await sniff_first
+
+
+class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
+    """Session-epoch, bounded teardown, and pending-socket ownership rules."""
+
+    async def test_replaced_run_finally_does_not_tear_down_successor(self) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        drops: list[object] = []
+
+        reader1 = asyncio.StreamReader()
+        writer1 = _FakeWriter()
+        run1 = asyncio.create_task(
+            connection.run(reader1, writer1, disconnect_callback=drops.append)  # type: ignore[arg-type]
+        )
+        self.assertTrue(await connection.wait_until_connected(1.0))
+
+        reader2 = asyncio.StreamReader()
+        writer2 = _FakeWriter()
+        run2 = asyncio.create_task(
+            connection.run(reader2, writer2, disconnect_callback=drops.append)  # type: ignore[arg-type]
+        )
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(run1, timeout=2.0)
+
+        # The replaced session's finally must leave the successor alone: no
+        # index drop (the field symptom was a live collector "vanishing"),
+        # no closed writer, connection still up.
+        self.assertTrue(await connection.wait_until_connected(1.0))
+        self.assertEqual(drops, [])
+        self.assertTrue(writer1.closed)
+        self.assertFalse(writer2.closed)
+        self.assertTrue(connection.connected)
+
+        # A normal end still runs the teardown + unindex exactly once.
+        reader2.feed_eof()
+        await asyncio.wait_for(run2, timeout=2.0)
+        self.assertEqual(drops, [connection])
+        self.assertTrue(writer2.closed)
+
+    async def test_disconnect_does_not_wait_for_dead_peer_tcp_timeout(self) -> None:
+        class _HangingCloseWriter(_FakeWriter):
+            async def wait_closed(self) -> None:
+                await asyncio.Event().wait()
+
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        reader = asyncio.StreamReader()
+        writer = _HangingCloseWriter()
+        run = asyncio.create_task(connection.run(reader, writer))  # type: ignore[arg-type]
+        self.assertTrue(await connection.wait_until_connected(1.0))
+
+        with patch(
+            "custom_components.eybond_local.collector.transport._WRITER_CLOSE_TIMEOUT",
+            0.05,
+        ):
+            reader.feed_eof()
+            await asyncio.wait_for(run, timeout=2.0)
+        self.assertTrue(writer.closed)
+
+    async def test_identityless_pending_socket_is_parked_and_watched(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        reader = asyncio.StreamReader()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.4)
+        self.assertTrue(pending.parked)
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        states = {
+            session["session_id"]: session["state"]
+            for session in listener.session_inventory_diagnostics()["sessions"]
+        }
+        self.assertEqual(states["s1"], "parked_waiting_for_identity")
+
+        # The watcher notices the peer close and releases the socket — an
+        # unwatched dead socket would block same-IP routing as a duplicate.
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+        self.assertTrue(pending.writer.closed)
+        self.assertFalse(listener._pending_socket_still_registered(pending))
+
+    async def test_route_identity_mismatch_rearms_the_pending_watch(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        listener._mark_session_identity("s1", "V0000000000001", "framed_heartbeat")
+        reader = asyncio.StreamReader()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+
+        claimed = await listener.pop_pending_socket_for_route(
+            collector_ip="203.0.113.10",
+            collector_pn="Z9999999999999",
+        )
+
+        self.assertIsNone(claimed)
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        self.assertIsNotNone(pending.sniff_task)
+        self.assertFalse(pending.sniff_task.done())
+
+        reader.feed_eof()
+        await asyncio.wait_for(pending.sniff_task, timeout=2.0)
+        self.assertTrue(pending.writer.closed)
+        self.assertFalse(listener._pending_socket_still_registered(pending))
+
+    async def test_sniff_routes_at_shaped_bytes_framed_for_registered_framed_owner(
+        self,
+    ) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_payload_pn_owner("E5000020000000")
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"AT+DTUPN:E5000020000000\r\n")
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.3)
+        self.assertIn("203.0.113.10", listener._connections)
+        self.assertNotIn("203.0.113.10", listener._at_connections)
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+
+    async def test_sniff_routes_raw_bytes_to_at_for_registered_at_owner(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_at_owner("203.0.113.10")
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"(230.0 50.0 230.0 50.0\r")
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.3)
+        self.assertIn("203.0.113.10", listener._at_connections)
+        self.assertNotIn("203.0.113.10", listener._connections)
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+
+    async def test_sniff_shape_decides_when_both_owner_kinds_registered(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_payload_pn_owner("E5000020000000")
+        listener.register_at_pn_owner("E5000020000000")
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"AT+DTUPN:E5000020000000\r\n")
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.3)
+        self.assertIn("203.0.113.10", listener._at_connections)
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
 
 
 if __name__ == "__main__":

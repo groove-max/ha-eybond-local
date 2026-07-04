@@ -54,6 +54,74 @@ class CollectorListenerBindError(RuntimeError):
         )
 
 
+# Strong references to session/sniff tasks: asyncio keeps only weak ones, so
+# an unreferenced task can be garbage-collected mid-flight, and a crash in an
+# unobserved task surfaces only as a contextless "exception was never
+# retrieved" at GC time.
+_BACKGROUND_TASKS: set["asyncio.Task[Any]"] = set()
+
+
+def _reap_tracked_task(task: "asyncio.Task[Any]") -> None:
+    _BACKGROUND_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "Collector background task %s crashed: %s",
+            task.get_name(),
+            exc,
+            exc_info=exc,
+        )
+
+
+def _spawn_tracked_task(coro: Any, *, name: str) -> "asyncio.Task[Any]":
+    task = asyncio.create_task(coro, name=name)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_reap_tracked_task)
+    return task
+
+
+# Bounds every writer teardown: wait_closed() on a peer that vanished with
+# unflushed data (collector rebooting mid-frame) otherwise blocks until the
+# OS-level TCP timeout — minutes, observed hanging Home Assistant shutdown.
+_WRITER_CLOSE_TIMEOUT = 5.0
+
+
+async def _cancel_and_join_task(task: "asyncio.Task[Any]") -> None:
+    """Cancel a session task and wait for it, re-cancelling until it dies.
+
+    A single cancel() is not enough: on Python < 3.12 ``asyncio.wait_for``
+    swallows a cancellation that races its inner future completing
+    (gh-86296), so a task cancelled mid-write keeps running and a bare
+    ``await task`` then blocks for as long as the task stays alive — the
+    heartbeat loop, for one, never exits on a healthy socket.
+    """
+
+    while not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=0.25)
+    try:
+        task.result()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
+async def _close_writer_bounded(writer: Any) -> None:
+    """Close a stream writer without inheriting a dead peer's TCP timeout."""
+
+    try:
+        writer.close()
+    except Exception:
+        return
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=_WRITER_CLOSE_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
+
+
 async def _finish_cleanup_on_cancel(awaitable: Awaitable[Any]) -> Any:
     """Finish critical cleanup even if the caller is already being cancelled."""
 
@@ -430,6 +498,7 @@ class _CollectorConnection:
         self._last_heartbeat_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
+        self._run_epoch = 0
 
     @property
     def connected(self) -> bool:
@@ -599,6 +668,15 @@ class _CollectorConnection:
         session_identity_callback: Callable[[str, str, str], None] | None = None,
         disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
+        # The epoch marks THIS session as the connection's current owner.  A
+        # replacing run() bumps it before tearing the old session down, so the
+        # replaced session's ``finally`` below sees a stale epoch and must not
+        # touch shared state: its writer/tasks/pending futures were already
+        # torn down by the replacement, and running its disconnect_callback
+        # would drop the listener indexes the new session just registered
+        # (observed in the field as a live collector "vanishing" until redial).
+        self._run_epoch += 1
+        epoch = self._run_epoch
         if self.connected:
             self._collector.connection_replace_count += 1
             logger.warning("Replacing active collector connection for %s", self._collector.remote_ip)
@@ -625,8 +703,11 @@ class _CollectorConnection:
         try:
             await self._reader_task
         finally:
-            await self._disconnect(skip_task=current_task)
-            if disconnect_callback is not None:
+            if self._run_epoch == epoch:
+                await self._disconnect(skip_task=current_task)
+            # Re-check: a replacement may have started while the disconnect
+            # above was awaiting; the callback must not fire for it then.
+            if self._run_epoch == epoch and disconnect_callback is not None:
                 disconnect_callback(self)
 
     async def _heartbeat_loop(self) -> None:
@@ -790,25 +871,13 @@ class _CollectorConnection:
         self._heartbeat_task = None
 
         if heartbeat_task and heartbeat_task is not skip_task:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+            await _cancel_and_join_task(heartbeat_task)
 
         reader_task = self._reader_task
         self._reader_task = None
 
         if reader_task and reader_task is not skip_task:
-            reader_task.cancel()
-            try:
-                await reader_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+            await _cancel_and_join_task(reader_task)
 
         writer = self._writer
         self._reader = None
@@ -819,11 +888,7 @@ class _CollectorConnection:
         self._session_identity_callback = None
 
         if writer:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
+            await _close_writer_bounded(writer)
 
         for future in self._pending.values():
             if not future.done():
@@ -868,6 +933,7 @@ class _CollectorAtConnection:
         )
         self._raw_passthrough_last_write_monotonic = 0.0
         self._raw_passthrough_bootstrapped = False
+        self._run_epoch = 0
 
     @property
     def connected(self) -> bool:
@@ -1091,6 +1157,10 @@ class _CollectorAtConnection:
         session_identity_callback: Callable[[str, str, str], None] | None = None,
         disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
+        # Same epoch discipline as _CollectorConnection.run: a replaced
+        # session's ``finally`` must not tear down or unindex its successor.
+        self._run_epoch += 1
+        epoch = self._run_epoch
         if self.connected:
             self._collector.connection_replace_count += 1
             logger.warning("Replacing active AT collector connection for %s", self._collector.remote_ip)
@@ -1119,8 +1189,9 @@ class _CollectorAtConnection:
         try:
             await self._reader_task
         finally:
-            await self._disconnect(skip_task=current_task)
-            if disconnect_callback is not None:
+            if self._run_epoch == epoch:
+                await self._disconnect(skip_task=current_task)
+            if self._run_epoch == epoch and disconnect_callback is not None:
                 disconnect_callback(self)
 
     async def disconnect(self) -> None:
@@ -1424,13 +1495,7 @@ class _CollectorAtConnection:
         reader_task = self._reader_task
         self._reader_task = None
         if reader_task and reader_task is not skip_task:
-            reader_task.cancel()
-            try:
-                await reader_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+            await _cancel_and_join_task(reader_task)
 
         writer = self._writer
         self._reader = None
@@ -1440,11 +1505,7 @@ class _CollectorAtConnection:
         self._session_identity_callback = None
 
         if writer:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
+            await _close_writer_bounded(writer)
 
         future = self._pending_response
         self._pending_response = None
@@ -2079,8 +2140,11 @@ class _SharedEybondListener:
                     return self._claim_pending_socket(pending)
                 if pending_pn:
                     self._mark_session_state(pending.session_id, "route_identity_mismatch")
-                    continue
-                self._mark_session_state(pending.session_id, "waiting_for_route_identity")
+                else:
+                    self._mark_session_state(pending.session_id, "waiting_for_route_identity")
+                # The pause above cancelled the sniff task; the socket stays
+                # registered for another claimant, so it needs a watcher again.
+                self._resume_pending_watch(pending)
             return None
 
     def _claim_pending_socket(self, pending: _PendingCollectorSocket) -> _PendingCollectorSocket:
@@ -2221,12 +2285,9 @@ class _SharedEybondListener:
                 pass
             except Exception:
                 pass
-        pending.writer.close()
         try:
-            await pending.writer.wait_closed()
+            await _close_writer_bounded(pending.writer)
         except asyncio.CancelledError:
-            pass
-        except Exception:
             pass
 
     def _evict_parked_sockets(self, new_pending: _PendingCollectorSocket) -> None:
@@ -2282,7 +2343,28 @@ class _SharedEybondListener:
             pending.remote_ip,
             session_state,
         )
+        await self._watch_parked_pending_socket(pending)
 
+    def _resume_pending_watch(self, pending: _PendingCollectorSocket) -> None:
+        """Re-arm the park watch after a paused sniff left the socket registered.
+
+        A route-identity attempt pauses (cancels) the sniff task; when the
+        socket turns out to belong to another collector it stays registered —
+        without a watcher it would never notice a peer close, and a dead
+        socket blocks same-IP routing as a phantom duplicate.
+        """
+
+        if not self._pending_socket_still_registered(pending):
+            return
+        if pending.sniff_task is not None and not pending.sniff_task.done():
+            return
+        pending.parked = True
+        pending.sniff_task = _spawn_tracked_task(
+            self._watch_parked_pending_socket(pending),
+            name=f"collector_parked_watch_{pending.remote_ip}",
+        )
+
+    async def _watch_parked_pending_socket(self, pending: _PendingCollectorSocket) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._PARKED_SOCKET_TTL_SECONDS
         close_state = "parked_expired"
@@ -2317,11 +2399,7 @@ class _SharedEybondListener:
         if self._last_pending_ip == pending.remote_ip:
             self._last_pending_ip = ""
         self._mark_session_state(pending.session_id, close_state)
-        pending.writer.close()
-        try:
-            await pending.writer.wait_closed()
-        except Exception:
-            pass
+        await _close_writer_bounded(pending.writer)
 
     def _callback_ip_matches_collector(self, collector_ip: str, remote_ip: str) -> bool:
         if not collector_ip or not remote_ip:
@@ -2616,7 +2694,7 @@ class _SharedEybondListener:
         self._mark_session_state(pending.session_id, "routed_at_text")
         initial_bytes = pending.initial_bytes
         pending.initial_bytes = b""
-        asyncio.create_task(
+        _spawn_tracked_task(
             connection.run(
                 pending.reader,
                 pending.writer,
@@ -2661,7 +2739,7 @@ class _SharedEybondListener:
         self._mark_session_state(pending.session_id, "routed_framed")
         initial_bytes = pending.initial_bytes
         pending.initial_bytes = b""
-        asyncio.create_task(
+        _spawn_tracked_task(
             connection.run(
                 pending.reader,
                 pending.writer,
@@ -2779,16 +2857,20 @@ class _SharedEybondListener:
 
         if not chunk:
             if not exhausted:
+                # No identity yet, but the socket must stay WATCHED: an
+                # unwatched registered socket never notices a peer close, and
+                # a dead entry blocks same-IP routing as a phantom duplicate.
+                await self._park_unclaimed_pending_socket(
+                    pending,
+                    b"",
+                    session_state="parked_waiting_for_identity",
+                )
                 return
             self._remove_pending_socket(pending)
             if self._last_pending_ip == pending.remote_ip:
                 self._last_pending_ip = ""
             self._mark_session_state(pending.session_id, "closed_no_payload")
-            pending.writer.close()
-            try:
-                await pending.writer.wait_closed()
-            except Exception:
-                pass
+            await _close_writer_bounded(pending.writer)
             return
 
         self._remove_pending_socket(pending)
@@ -2804,7 +2886,41 @@ class _SharedEybondListener:
                 initial_pn_source,
             )
 
-        if _looks_like_at_traffic(chunk):
+        route_at = _looks_like_at_traffic(chunk)
+        # The byte-shape guess must not overrule a registered owner: the entry
+        # that owns this collector (by PN, or by IP when no PN was seen)
+        # already knows its session protocol.  A framed frame can begin with
+        # the bytes "AT+", and an at_text collector in raw-passthrough mode
+        # can open with non-AT bytes — shape only decides when ownership is
+        # absent or ambiguous.
+        framed_owner = self._has_owner_for_collector_pn(
+            self._payload_pn_owner_counts, initial_pn
+        ) or (
+            not initial_pn
+            and self._has_owner_for_remote_ip(
+                self._payload_owner_counts, pending.remote_ip
+            )
+        )
+        at_owner = self._has_owner_for_collector_pn(
+            self._at_pn_owner_counts, initial_pn
+        ) or (
+            not initial_pn
+            and self._has_owner_for_remote_ip(self._at_owner_counts, pending.remote_ip)
+        )
+        if route_at and framed_owner and not at_owner:
+            logger.debug(
+                "Sniffed AT-shaped bytes from %s but a framed owner is registered; routing framed",
+                pending.remote_ip,
+            )
+            route_at = False
+        elif not route_at and at_owner and not framed_owner:
+            logger.debug(
+                "Sniffed non-AT bytes from %s but an AT owner is registered; routing at_text",
+                pending.remote_ip,
+            )
+            route_at = True
+
+        if route_at:
             connection = None
             if initial_pn:
                 connection = self._connection_by_collector_pn(
@@ -2924,11 +3040,7 @@ class _SharedEybondListener:
         remote_ip = peer[0] or ""
         remote_port = peer[1]
         if not remote_ip:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
+            await _close_writer_bounded(writer)
             return
 
         session_id = self._next_session_id()
@@ -2946,7 +3058,7 @@ class _SharedEybondListener:
         )
         self._pending_sockets[session_id] = pending
         self._last_pending_ip = remote_ip
-        pending.sniff_task = asyncio.create_task(
+        pending.sniff_task = _spawn_tracked_task(
             self._sniff_pending_socket(pending),
             name=f"collector_pending_sniff_{remote_ip}",
         )
@@ -3147,6 +3259,16 @@ class SharedProxyCaptureRoute:
                 pending.initial_bytes = b""
                 try:
                     await self._handler(reader, pending.writer)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A handler crash must not kill the route loop and leave
+                    # the claimed socket dangling open.
+                    logger.exception(
+                        "Proxy capture handler failed for %s; closing the claimed socket",
+                        pending.remote_ip,
+                    )
+                    await _close_writer_bounded(pending.writer)
                 finally:
                     if pump_task is not None:
                         pump_task.cancel()
