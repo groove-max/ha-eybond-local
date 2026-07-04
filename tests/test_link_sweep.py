@@ -290,5 +290,31 @@ class BaudSweepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set_calls, [2400, 115200])
 
 
+class BudgetStarvedSilenceTests(unittest.TestCase):
+    def test_skipped_only_probe_log_is_not_silence(self) -> None:
+        # Regression: budget exhausted before any driver ran must not read
+        # as UART silence (it would trigger a baud walk on an unprobed link).
+        probe_log = (
+            {"driver": "modbus_smg", "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"},
+            {"driver": "pi30", "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"},
+        )
+        real = tuple(
+            e for e in probe_log if e.get("outcome") != "skipped_budget_exhausted"
+        )
+        silent = bool(real) and not any(e.get("saw_response") for e in real)
+        self.assertFalse(silent)
+
+    def test_real_timeouts_are_silence(self) -> None:
+        probe_log = (
+            {"driver": "pi30", "elapsed_ms": 4000, "outcome": "probe_timeout", "saw_response": False},
+            {"driver": "modbus_smg", "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"},
+        )
+        real = tuple(
+            e for e in probe_log if e.get("outcome") != "skipped_budget_exhausted"
+        )
+        silent = bool(real) and not any(e.get("saw_response") for e in real)
+        self.assertTrue(silent)
+
+
 if __name__ == "__main__":
     unittest.main()

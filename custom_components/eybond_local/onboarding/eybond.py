@@ -498,7 +498,10 @@ class OnboardingDetector:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:
-                break
+                # The wait timed out against a STALE snapshot of the deadline:
+                # a target admitted mid-wait may have extended it. Loop and
+                # re-snapshot — the top-of-loop guard is the real terminator.
+                continue
             should_stop = False
             for task in done:
                 result = task.result()
@@ -1012,6 +1015,9 @@ class OnboardingDetector:
                             collector_ip=candidate.ip,
                         )
                     silent_details: dict[str, Any] = {}
+                    exc_probe_log = tuple(getattr(exc, "probe_log", ()) or ())
+                    if exc_probe_log:
+                        silent_details["probe_log"] = list(exc_probe_log)
                     if exc_silent:
                         silent_details["link_baud_hints"] = list(catalog_link_baud_hints())
                     if sweep_outcome is not None:
@@ -1038,8 +1044,17 @@ class OnboardingDetector:
                 # so the sweep budget exhausts before the registry completes.
                 # The link baud walk must therefore trigger from this branch
                 # too when the probe log shows no observed response at all.
-                scan_silent = bool(scan.probe_log) and not any(
-                    entry.get("saw_response") for entry in scan.probe_log
+                real_probes = tuple(
+                    entry
+                    for entry in scan.probe_log
+                    if entry.get("outcome") != "skipped_budget_exhausted"
+                )
+                # Only probes that actually RAN can testify to silence: a log
+                # of budget-skipped entries means the flashed speed was never
+                # tried, and walking baud rates from that would rewrite the
+                # UART of a collector we never listened to.
+                scan_silent = bool(real_probes) and not any(
+                    entry.get("saw_response") for entry in real_probes
                 )
                 if depth == DETECTION_DEPTH_DEEP and scan_silent:
                     sweep_outcome = await self._async_attempt_link_baud_sweep(
