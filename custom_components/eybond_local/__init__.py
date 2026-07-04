@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SETUP_INITIAL_REFRESH_TIMEOUT = 20.0
+_STOP_SHUTDOWN_TIMEOUT = 15.0
 _EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT = 1.0
 _FLOAT_PRECISION_DEVICE_CLASSES = {
     "current",
@@ -97,8 +98,24 @@ def _register_entry_stop_shutdown(hass: HomeAssistant, entry: ConfigEntry, coord
     """Stop the runtime explicitly when Home Assistant is shutting down."""
 
     async def _async_shutdown_on_stop(_event) -> None:
+        # Bounded: the process exits right after HA stop, so an unfinished
+        # network teardown dies with it anyway — but an unbounded await here
+        # keeps this task pending through every shutdown stage (observed
+        # hanging >60s on a shielded listener release). asyncio.wait, not
+        # wait_for: wait_for would await the cancelled task, and the shielded
+        # cleanup inside re-awaits its future on cancel — the hang would
+        # simply move here.
+        task = asyncio.ensure_future(coordinator.async_shutdown())
+        done, pending = await asyncio.wait({task}, timeout=_STOP_SHUTDOWN_TIMEOUT)
+        if pending:
+            logger.warning(
+                "EyeBond runtime shutdown for entry %s did not finish within %.0fs on Home Assistant stop; abandoning cleanup",
+                entry.entry_id,
+                _STOP_SHUTDOWN_TIMEOUT,
+            )
+            return
         try:
-            await coordinator.async_shutdown()
+            task.result()
         except Exception:
             logger.exception("Failed to shut down EyeBond runtime for entry %s on Home Assistant stop", entry.entry_id)
 

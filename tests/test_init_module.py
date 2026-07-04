@@ -98,6 +98,7 @@ from custom_components.eybond_local import (
     _default_enabled_unique_ids_for_current_runtime,
     _is_integration_disabled,
     _prime_metadata_caches,
+    _register_entry_stop_shutdown,
     async_setup_entry,
 )
 from custom_components.eybond_local.collector.transport import CollectorListenerBindError
@@ -1548,6 +1549,63 @@ class InitModuleTests(unittest.TestCase):
             self.assertIsNone(entry.runtime_data)
             self.assertEqual(len(coordinators), 1)
             self.assertEqual(coordinators[0].shutdown_calls, 1)
+
+        asyncio.run(_run())
+
+
+class StopShutdownHookTests(unittest.TestCase):
+    """The HA-stop hook must never keep shutdown hostage to a hung teardown."""
+
+    @staticmethod
+    def _registered_hook(coordinator):
+        captured = {}
+
+        class _Bus:
+            def async_listen_once(self, _event, callback):
+                captured["callback"] = callback
+                return lambda: None
+
+        class _Hass:
+            bus = _Bus()
+
+        class _Entry:
+            entry_id = "entry-stop-test"
+
+            def async_on_unload(self, _unsub) -> None:
+                return None
+
+        _register_entry_stop_shutdown(_Hass(), _Entry(), coordinator)
+        return captured["callback"]
+
+    def test_stop_hook_awaits_clean_shutdown(self) -> None:
+        coordinator = types.SimpleNamespace(async_shutdown=AsyncMock())
+
+        async def _run() -> None:
+            hook = self._registered_hook(coordinator)
+            await hook(None)
+
+        asyncio.run(_run())
+        coordinator.async_shutdown.assert_awaited_once()
+
+    def test_stop_hook_abandons_hung_shutdown_after_timeout(self) -> None:
+        release = asyncio.Event()
+
+        async def _hung_shutdown() -> None:
+            await release.wait()
+
+        coordinator = types.SimpleNamespace(async_shutdown=_hung_shutdown)
+
+        async def _run() -> None:
+            hook = self._registered_hook(coordinator)
+            with patch("custom_components.eybond_local._STOP_SHUTDOWN_TIMEOUT", 0.05):
+                with self.assertLogs(
+                    "custom_components.eybond_local", level="WARNING"
+                ) as logs:
+                    await asyncio.wait_for(hook(None), timeout=5.0)
+            self.assertTrue(
+                any("did not finish" in line for line in logs.output)
+            )
+            release.set()
 
         asyncio.run(_run())
 
