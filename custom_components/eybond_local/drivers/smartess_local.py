@@ -16,6 +16,7 @@ from ..models import (
     decimals_for_divisor,
 )
 from ..payload.modbus import ModbusSession, to_signed_16
+from ..payload.register_decode import decode_block as shared_decode_block
 from .base import InverterDriver
 from .command_support import (
     apply_unsupported_diagnostics,
@@ -638,48 +639,18 @@ def _decode_block(
     words: list[int],
     specs: tuple[RegisterValueSpec, ...],
 ) -> dict[str, Any]:
-    registers = {start_register + index: int(value) for index, value in enumerate(words)}
-    decoded: dict[str, Any] = {}
-    for spec in specs:
-        raw = _decode_raw_value(registers, spec)
-        if spec.enum_map is not None:
-            decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
-        elif spec.divisor and isinstance(raw, int):
-            decoded[spec.key] = round(raw / spec.divisor, spec.decimals or decimals_for_divisor(spec.divisor))
-        else:
-            decoded[spec.key] = raw
-    return decoded
+    """Decode one SmartESS block via the shared decoder.
+
+    The historical private copy was a near-verbatim clone; equivalence was
+    verified against the schema corpus (all multi-word specs are
+    u32_high_first/unsigned, no multipliers).
+    """
+
+    return shared_decode_block(start_register, [int(value) for value in words], specs)
 
 
-def _decode_raw_value(registers: dict[int, int], spec: RegisterValueSpec) -> int | str:
-    if spec.combine == "ascii":
-        chars: list[str] = []
-        for offset in range(spec.word_count):
-            chars.append(_decode_ascii_word(registers.get(spec.register + offset, 0)))
-        return "".join(chars).strip()
-    if spec.word_count >= 2:
-        high = registers.get(spec.register, 0)
-        low = registers.get(spec.register + 1, 0)
-        if spec.combine == "u32_low_first":
-            raw = (low << 16) | high
-        else:
-            raw = (high << 16) | low
-    else:
-        raw = registers.get(spec.register, 0)
-    if spec.signed and isinstance(raw, int) and spec.word_count == 1:
-        return to_signed_16(raw)
-    return raw
 
 
-def _decode_ascii_word(value: int) -> str:
-    chars: list[str] = []
-    for byte in ((int(value) >> 8) & 0xFF, int(value) & 0xFF):
-        if byte in (0x00, 0xFF):
-            continue
-        char = chr(byte)
-        if char.isprintable():
-            chars.append(char)
-    return "".join(chars).strip()
 
 
 def _apply_capability_read_back(

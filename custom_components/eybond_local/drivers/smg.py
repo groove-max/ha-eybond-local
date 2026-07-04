@@ -18,6 +18,7 @@ from ..payload.modbus import (
     merge_register_field,
     to_signed_16,
 )
+from ..payload.register_decode import decode_block as shared_decode_block
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.detection_evidence import (
@@ -727,53 +728,21 @@ def _decode_block(
     values: list[int],
     specs: tuple[RegisterValueSpec, ...],
 ) -> dict[str, Any]:
-    registers = {start_register + index: value for index, value in enumerate(values)}
-    decoded: dict[str, Any] = {}
-    for spec in specs:
-        raw = _decode_raw_value(registers, spec)
-        if spec.enum_map is not None:
-            decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
-            continue
-        if _is_unavailable_sentinel(raw, spec):
-            # An all-ones UNSIGNED register is the modbus "value not available"
-            # marker: a variant that does not populate this register reads
-            # 0xFFFF (or 0xFFFFFFFF combined). Surface it as unavailable instead
-            # of a bogus 65535 W / 6553.5 V. Signed specs are excluded because
-            # there 0xFFFF == -1 is a legitimate reading.
-            decoded[spec.key] = None
-            continue
-        if spec.divisor:
-            scaled = raw / spec.divisor
-            decoded[spec.key] = round(scaled, spec.decimals or 0)
-            continue
-        decoded[spec.key] = raw
-    return decoded
+    """Decode one SMG block via the shared decoder (all-ones sentinel on).
 
-
-def _is_unavailable_sentinel(raw: int, spec: RegisterValueSpec) -> bool:
-    """Return whether ``raw`` is the modbus all-ones "not available" sentinel.
-
-    Unsigned specs only: for a signed register ``0xFFFF == -1`` is a legitimate
-    reading. A 16-bit register's sentinel is ``0xFFFF``; a combined 32-bit
-    register's is ``0xFFFFFFFF``.
+    Kept as a module symbol: tests exercise the sentinel semantics through
+    this name. Behavioral equivalence with the historical private copy was
+    verified against the schema corpus: every multi-word SMG spec is
+    u32_high_first/unsigned, and no SMG spec uses multiplier or ascii
+    combines.
     """
 
-    if spec.signed:
-        return False
-    width_bits = 32 if spec.combine == "u32_high_first" else 16
-    return raw == (1 << width_bits) - 1
-
-
-def _decode_raw_value(registers: dict[int, int], spec: RegisterValueSpec) -> int:
-    if spec.combine == "u32_high_first":
-        high = registers[spec.register]
-        low = registers[spec.register + 1]
-        return (high << 16) | low
-
-    value = registers[spec.register]
-    if spec.signed:
-        return to_signed_16(value)
-    return value
+    return shared_decode_block(
+        start_register,
+        [int(value) for value in values],
+        specs,
+        all_ones_unavailable=True,
+    )
 
 
 def _group_optional_specs(

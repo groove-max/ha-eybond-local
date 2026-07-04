@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from ..models import RegisterValueSpec
+from ..models import RegisterValueSpec, decimals_for_divisor
 from .modbus import to_signed_16
 
 AsciiStyle = Literal["printable", "model"]
@@ -86,14 +86,35 @@ def decode_raw_value(
     return raw
 
 
+def is_all_ones_unavailable(raw: object, spec: RegisterValueSpec) -> bool:
+    """Return whether ``raw`` is the Modbus all-ones "not available" marker.
+
+    An all-ones UNSIGNED register is the conventional "value not populated"
+    sentinel: a variant that does not implement the register reads 0xFFFF
+    (or 0xFFFFFFFF combined). Signed specs are excluded — there 0xFFFF is a
+    legitimate -1.
+    """
+
+    if spec.signed or not isinstance(raw, int):
+        return False
+    if spec.word_count >= 2:
+        return raw == 0xFFFF_FFFF
+    return raw == 0xFFFF
+
+
 def decode_block(
     start_register: int,
     words: list[int],
     specs: tuple[RegisterValueSpec, ...],
     *,
     ascii_style: AsciiStyle = "printable",
+    all_ones_unavailable: bool = False,
 ) -> dict[str, Any]:
-    """Decode one register block into logical values keyed by spec key."""
+    """Decode one register block into logical values keyed by spec key.
+
+    ``all_ones_unavailable`` opts into the SMG-style sentinel: unsigned
+    all-ones raw values decode to ``None`` instead of a bogus 65535/6553.5.
+    """
 
     registers = {start_register + index: int(value) for index, value in enumerate(words)}
     decoded: dict[str, Any] = {}
@@ -101,10 +122,18 @@ def decode_block(
         raw = decode_raw_value(registers, spec, ascii_style=ascii_style)
         if spec.enum_map is not None:
             decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
+        elif all_ones_unavailable and is_all_ones_unavailable(raw, spec):
+            decoded[spec.key] = None
         elif spec.multiplier is not None and isinstance(raw, (int, float)):
             decoded[spec.key] = round(raw * spec.multiplier, spec.decimals or 0)
         elif spec.divisor and isinstance(raw, (int, float)):
-            decoded[spec.key] = round(raw / spec.divisor, spec.decimals or 0)
+            # Without explicit decimals the divisor implies the precision
+            # (divisor 10 -> 1 decimal): rounding a scaled reading to an
+            # integer would silently truncate real telemetry.
+            decoded[spec.key] = round(
+                raw / spec.divisor,
+                spec.decimals or decimals_for_divisor(spec.divisor),
+            )
         else:
             decoded[spec.key] = raw
     return decoded
