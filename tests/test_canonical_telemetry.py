@@ -161,6 +161,33 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["pv_to_battery_power"], 264.0)
         self.assertEqual(values["battery_to_home_power"], 0.0)
 
+    def test_canonical_entity_surface_respects_variant_gate(self) -> None:
+        aohai = {
+            d.key
+            for d in canonical_measurements_for_driver(
+                "modbus_catalog", variant_key="aohai_fsa"
+            )
+        }
+        other = {
+            d.key
+            for d in canonical_measurements_for_driver(
+                "modbus_catalog", variant_key="other_pack"
+            )
+        }
+        legacy = {
+            d.key for d in canonical_measurements_for_driver("modbus_catalog")
+        }
+
+        self.assertIn("pv_power", aohai)
+        self.assertIn("battery_power", aohai)
+        # A different pack must not grow never-populated canonical entities.
+        self.assertNotIn("pv_power", other)
+        self.assertNotIn("battery_power", other)
+        # Ungated flow descriptions stay available to every pack.
+        self.assertIn("pv_to_home_power", other)
+        # No variant context keeps the legacy driver-wide surface.
+        self.assertIn("pv_power", legacy)
+
     def test_modbus_catalog_variants_do_not_leak_to_other_packs(self) -> None:
         # A future pack served by the same generic driver may reuse key names
         # with different semantics; Aohai's V*I computes must not apply.

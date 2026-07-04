@@ -448,15 +448,34 @@ def all_canonical_measurements() -> tuple[MeasurementDescription, ...]:
     return tuple(spec.description for spec in _CANONICAL_TELEMETRY)
 
 
-def canonical_measurements_for_driver(driver_key: str | None) -> tuple[MeasurementDescription, ...]:
-    """Return canonical telemetry descriptions that a driver can populate."""
+def canonical_measurements_for_driver(
+    driver_key: str | None,
+    *,
+    variant_key: str | None = None,
+) -> tuple[MeasurementDescription, ...]:
+    """Return canonical telemetry descriptions that a driver can populate.
+
+    ``variant_key`` narrows pack-gated variants (multi-pack drivers such as
+    ``modbus_catalog``): with a concrete variant, descriptions whose only
+    matching variants belong to other packs are excluded, so those packs do
+    not grow canonical entities that would never receive a value.  ``None``
+    keeps the legacy driver-wide surface.
+    """
 
     if not driver_key:
         return ()
     return tuple(
         spec.description
         for spec in _CANONICAL_TELEMETRY
-        if any(driver_key in variant.driver_keys for variant in spec.variants)
+        if any(
+            driver_key in variant.driver_keys
+            and (
+                not variant.variant_keys
+                or variant_key is None
+                or variant_key in variant.variant_keys
+            )
+            for variant in spec.variants
+        )
     )
 
 

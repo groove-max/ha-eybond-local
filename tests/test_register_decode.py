@@ -136,5 +136,48 @@ class SchemaFunctionValidationTests(unittest.TestCase):
         self.assertEqual(transport._input_registers[100], 22)
 
 
+class CatalogSchemaCoverageTests(unittest.TestCase):
+    def test_uncovered_spec_fails_schema_load(self) -> None:
+        import json
+        import tempfile
+
+        from custom_components.eybond_local.metadata.register_schema_loader import (
+            clear_register_schema_loader_cache,
+            load_register_schema,
+            set_external_register_schema_roots,
+        )
+
+        schema = {
+            "schema_key": "coverage_probe",
+            "title": "Coverage Probe",
+            "driver_key": "modbus_catalog",
+            "protocol_family": "coverage_probe",
+            "blocks": [{"key": "core", "start": 0, "count": 4, "function": 3}],
+            "enum_tables": {},
+            "spec_sets": {
+                "runtime": [
+                    # Same address range as the block but the INPUT space:
+                    # no block covers it, so loading must fail.
+                    {"key": "orphan", "register": 1, "function": 4}
+                ]
+            },
+            "measurement_descriptions": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "coverage_probe").mkdir()
+            (root / "coverage_probe" / "base.json").write_text(
+                json.dumps(schema), encoding="utf-8"
+            )
+            set_external_register_schema_roots((root,))
+            try:
+                with self.assertRaises(ValueError) as ctx:
+                    load_register_schema("coverage_probe/base.json")
+                self.assertIn("uncovered_spec", str(ctx.exception))
+            finally:
+                set_external_register_schema_roots(())
+                clear_register_schema_loader_cache()
+
+
 if __name__ == "__main__":
     unittest.main()

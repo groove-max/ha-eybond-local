@@ -24,6 +24,43 @@ class _Scan:
     candidates: tuple = ()
 
 
+class StructuredSilenceTests(unittest.TestCase):
+    def test_sweep_no_match_carries_silent_verdict(self) -> None:
+        from custom_components.eybond_local.onboarding.driver_detection import (
+            DriverSweepNoMatch,
+            _sweep_saw_response,
+        )
+
+        silent_exc = DriverSweepNoMatch("pi18:probe_timeout", silent=True)
+        self.assertIsInstance(silent_exc, RuntimeError)
+        self.assertTrue(silent_exc.silent)
+
+        # A hypothetical future error whose STRING would fool a suffix check
+        # still carries the tracked verdict.
+        tricky = DriverSweepNoMatch("answered_then_probe_timeout", silent=False)
+        self.assertFalse(tricky.silent)
+
+    def test_saw_response_classification(self) -> None:
+        from custom_components.eybond_local.onboarding.driver_detection import (
+            _sweep_saw_response,
+        )
+
+        self.assertFalse(
+            _sweep_saw_response(
+                ["pi30:probe_timeout", "smg:inverter_link_down"],
+                matched_or_no_match=False,
+            )
+        )
+        # A CRC error proves bytes arrived: not silence.
+        self.assertTrue(
+            _sweep_saw_response(
+                ["pi30:probe_timeout", "srne_modbus:crc_mismatch"],
+                matched_or_no_match=False,
+            )
+        )
+        self.assertTrue(_sweep_saw_response([], matched_or_no_match=True))
+
+
 class SilenceClassifierTests(unittest.TestCase):
     def test_link_down_is_silence(self) -> None:
         self.assertTrue(is_silent_detection_error("inverter_link_down"))

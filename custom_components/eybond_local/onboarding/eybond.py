@@ -988,7 +988,10 @@ class OnboardingDetector:
                 )
             except RuntimeError as exc:
                 scan = None
-                if depth == DETECTION_DEPTH_DEEP and is_silent_detection_error(str(exc)):
+                exc_silent = getattr(exc, "silent", None)
+                if exc_silent is None:
+                    exc_silent = is_silent_detection_error(str(exc))
+                if depth == DETECTION_DEPTH_DEEP and exc_silent:
                     sweep_outcome = await self._async_attempt_link_baud_sweep(
                         transport,
                         deadline=deadline,
@@ -1008,7 +1011,7 @@ class OnboardingDetector:
                             collector_ip=candidate.ip,
                         )
                     silent_details: dict[str, Any] = {}
-                    if is_silent_detection_error(str(exc)):
+                    if exc_silent:
                         silent_details["link_baud_hints"] = list(catalog_link_baud_hints())
                     if sweep_outcome is not None:
                         silent_details["link_baud_sweep"] = sweep_outcome.as_details()

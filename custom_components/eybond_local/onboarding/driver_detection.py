@@ -102,6 +102,41 @@ async def _ordered_driver_targets(
     return await _ordered_driver_targets_by_signature(driver_targets, transport)
 
 
+class DriverSweepNoMatch(RuntimeError):
+    """No driver matched; carries a structured verdict about the failure.
+
+    ``silent`` is computed from what the sweep actually observed — True only
+    when NO probe saw an inverter response (every attempt timed out or the
+    identity region read as zeros).  Consumers must prefer this attribute
+    over parsing the error string: a future outcome like
+    ``answered_then_probe_timeout`` would fool a string suffix check but not
+    the tracked verdict.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        silent: bool,
+        probe_log: tuple[dict[str, object], ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.silent = silent
+        self.probe_log = probe_log
+
+
+def _sweep_saw_response(errors: list[str], *, matched_or_no_match: bool) -> bool:
+    """Return whether any probe demonstrably received inverter bytes."""
+
+    if matched_or_no_match:
+        return True
+    return any(
+        not error.endswith(":probe_timeout")
+        and not error.endswith(f":{ERROR_INVERTER_LINK_DOWN}")
+        for error in errors
+    )
+
+
 async def async_detect_inverter(
     transport: Any,
     *,
@@ -152,9 +187,12 @@ async def async_detect_inverter(
                 match=_build_driver_match(driver, inverter),
             )
 
+    silent = not _sweep_saw_response(errors, matched_or_no_match=False)
     if inverter_link_down:
-        raise RuntimeError(ERROR_INVERTER_LINK_DOWN)
-    raise RuntimeError(errors[-1] if errors else "no_supported_driver_matched")
+        raise DriverSweepNoMatch(ERROR_INVERTER_LINK_DOWN, silent=silent)
+    raise DriverSweepNoMatch(
+        errors[-1] if errors else "no_supported_driver_matched", silent=silent
+    )
 
 
 async def async_detect_inverter_candidates(
@@ -259,9 +297,19 @@ async def async_detect_inverter_candidates(
             budget_exhausted=budget_exhausted,
             probe_log=tuple(probe_log),
         )
+    had_answer = any(
+        entry.get("outcome") == "no_match" for entry in probe_log
+    ) or _sweep_saw_response(errors, matched_or_no_match=False)
+    silent = not had_answer
     if inverter_link_down:
-        raise RuntimeError(ERROR_INVERTER_LINK_DOWN)
-    raise RuntimeError(errors[-1] if errors else "no_supported_driver_matched")
+        raise DriverSweepNoMatch(
+            ERROR_INVERTER_LINK_DOWN, silent=silent, probe_log=tuple(probe_log)
+        )
+    raise DriverSweepNoMatch(
+        errors[-1] if errors else "no_supported_driver_matched",
+        silent=silent,
+        probe_log=tuple(probe_log),
+    )
 
 
 async def _ordered_driver_targets_by_signature(

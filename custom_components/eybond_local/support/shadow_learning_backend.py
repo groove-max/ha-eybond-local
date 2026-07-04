@@ -1139,7 +1139,9 @@ def _register_bank_from_ranges(ranges: list[Any]) -> dict[int, int]:
         # The learning bank models the HOLDING register space only.  Input
         # registers (function 4) share addresses with holding registers but
         # are a separate space; mixing them here would corrupt inference.
-        if _maybe_int(range_item.get("function", 3)) not in (None, 3):
+        # Fail closed: a range with an unparseable function is not provably
+        # holding data either.
+        if _maybe_int(range_item.get("function", 3)) != 3:
             continue
         start = _maybe_int(range_item.get("start"))
         values = range_item.get("values")

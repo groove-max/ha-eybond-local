@@ -99,6 +99,7 @@ def measurements_for_runtime(
     *,
     driver_key: str | None = None,
     register_schema_name: str = "",
+    variant_key: str | None = None,
     write_capabilities: tuple[WriteCapability, ...] | None = None,
     include_all_drivers_when_unknown: bool = True,
     collector_only_mode: bool = False,
@@ -131,7 +132,9 @@ def measurements_for_runtime(
         else:
             resolved_write_capabilities = () if write_capabilities is None else write_capabilities
     else:
-        driver_measurements.append(canonical_measurements_for_driver(driver_key))
+        driver_measurements.append(
+            canonical_measurements_for_driver(driver_key, variant_key=variant_key)
+        )
         resolved_write_capabilities = (
             get_driver(driver_key).write_capabilities
             if write_capabilities is None

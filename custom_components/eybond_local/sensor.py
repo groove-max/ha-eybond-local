@@ -204,6 +204,7 @@ async def async_setup_entry(
     measurement_descriptions = measurements_for_runtime(
         driver_key=driver_key,
         register_schema_name=register_schema_name,
+        variant_key=(getattr(inverter, "variant_key", "") or None) if inverter is not None else None,
         write_capabilities=write_capabilities,
         include_all_drivers_when_unknown=False,
         collector_only_mode=not has_inverter_identity,
