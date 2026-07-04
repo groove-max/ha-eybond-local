@@ -41,6 +41,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 |---|---|---|---|---|
 | `aohai_fsa_family` | modbus_catalog | aohai_fsa_read_only | partial | yes |
 | `eybond_g_ascii_family` | eybond_g_ascii | eybond_g_ascii_read_only | partial | yes |
+| `growatt_spf_family` | modbus_catalog | growatt_spf_untested | full | no |
 | `pi18_family` | pi18 | pi18_read_only | partial | yes |
 | `pi30_family` | pi30 | pi30_default_full | full | no |
 | `pi30_max_qflag` | pi30 | pi30_max_full | full | no |

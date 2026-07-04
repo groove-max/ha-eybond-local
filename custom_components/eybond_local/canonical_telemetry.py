@@ -195,6 +195,33 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("pv_input_voltage", "pv_input_current"),
                 compute="multiply",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("growatt_spf",),
+                source_keys=("pv1_input_power", "pv2_input_power"),
+                compute="sum",
+            ),
+        ),
+    ),
+    CanonicalTelemetryDescription(
+        description=MeasurementDescription(
+            key="pv_charging_power",
+            name="PV Charging Power",
+            unit="W",
+            device_class="power",
+            state_class="measurement",
+            icon="mdi:solar-power",
+        ),
+        variants=(
+            # Growatt SPF PV registers are charger-side readings ("PV charge
+            # power"), so their sum is also the explicit PV charging power the
+            # flow split trusts over derived headroom.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("growatt_spf",),
+                source_keys=("pv1_input_power", "pv2_input_power"),
+                compute="sum",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(

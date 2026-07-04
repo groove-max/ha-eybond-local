@@ -591,6 +591,41 @@
        "decoder": "u32_high_first"
       }
      ]
+    },
+    {
+     "key": "modbus_catalog.growatt_identity_dtc",
+     "kind": "modbus_read",
+     "register": 43,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.growatt_device_type_code_raw",
+       "source_key": "growatt_device_type_code_raw",
+       "register": 43,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.growatt_identity_rated_power",
+     "kind": "modbus_read",
+     "register": 76,
+     "count": 2,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.growatt_rated_power_raw",
+       "source_key": "growatt_rated_power_raw",
+       "register": 76,
+       "words": 2,
+       "decoder": "u32_high_first"
+      }
+     ]
     }
    ],
    "layouts": [],
@@ -893,6 +928,25 @@
    "notes": [
     "Aohai FSA support is read-only. Runtime telemetry lives in input registers (function 4); rated power is holding 63-64. Modbus RTU 9600 8N1, slave address 1."
    ]
+  },
+  "growatt_spf": {
+   "ranges": [
+    [
+     0,
+     45
+    ],
+    [
+     48,
+     35
+    ],
+    [
+     93,
+     1
+    ]
+   ],
+   "notes": [
+    "Growatt SPF telemetry lives in input registers (function 4); identity/serial/config in holding registers. Reads must stay inside 45-register aligned blocks and respect the 850 ms inter-command period. Modbus RTU 9600 8N1, slave address 1."
+   ]
   }
  },
  "surfaces": [
@@ -1100,6 +1154,17 @@
    "read_only": true,
    "default_for_driver": true,
    "support_capture_policy": "aohai_fsa"
+  },
+  {
+   "key": "growatt_spf_untested",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "growatt_spf",
+   "profile_name": "modbus_catalog/growatt_spf.json",
+   "register_schema_name": "growatt_spf/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "growatt_spf"
   }
  ],
  "devices": [
@@ -2042,6 +2107,33 @@
      "community ESPHome map: Sandisolar-Aohai-FSA-Series-Home-Assistant-integration-via-RS485 (Modbus RTU 9600 8N1, slave 1)"
     ],
     "confidence": "third-party-map-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "growatt_spf_family",
+   "surface_key": "growatt_spf_untested",
+   "model_name": "Growatt SPF Off-Grid (Modbus)",
+   "priority": 112,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.growatt_device_type_code_raw",
+     "min": 3400,
+     "max": 3499,
+     "cost": 1
+    },
+    {
+     "key": "identity.growatt_rated_power_raw",
+     "min": 10000,
+     "max": 160000,
+     "cost": 2
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "GrowattModBusProtocol.pdf V0.11 (OffGrid SPF3-5K RTU, 9600 8N1, slave 1; DTC 034xx = OffGrid SPF 3-5K)"
+    ],
+    "confidence": "datasheet-unconfirmed"
    }
   }
  ],
