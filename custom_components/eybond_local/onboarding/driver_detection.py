@@ -125,18 +125,6 @@ class DriverSweepNoMatch(RuntimeError):
         self.probe_log = probe_log
 
 
-def _sweep_saw_response(errors: list[str], *, matched_or_no_match: bool) -> bool:
-    """Return whether any probe demonstrably received inverter bytes."""
-
-    if matched_or_no_match:
-        return True
-    return any(
-        not error.endswith(":probe_timeout")
-        and not error.endswith(f":{ERROR_INVERTER_LINK_DOWN}")
-        for error in errors
-    )
-
-
 async def async_detect_inverter(
     transport: Any,
     *,
@@ -155,14 +143,17 @@ async def async_detect_inverter(
         preferred_driver_keys=preferred_driver_keys,
     )
 
+    saw_any_response = False
     for driver, targets in driver_targets:
+        tracked = _ResponseTrackingTransport(transport)
         try:
             inverter = await _async_probe_driver_with_budget(
                 driver,
-                transport,
+                tracked,
                 targets,
             )
         except asyncio.TimeoutError:
+            saw_any_response = saw_any_response or tracked.saw_response
             errors.append(f"{driver.key}:probe_timeout")
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
             continue
@@ -176,10 +167,12 @@ async def async_detect_inverter(
             logger.debug("Identity region read as zeros driver=%s", driver.key)
             continue
         except Exception as exc:
+            saw_any_response = saw_any_response or tracked.saw_response
             errors.append(f"{driver.key}:{exc}")
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
             continue
 
+        saw_any_response = saw_any_response or tracked.saw_response
         if inverter is not None:
             return DetectedDriverContext(
                 driver=driver,
@@ -187,7 +180,7 @@ async def async_detect_inverter(
                 match=_build_driver_match(driver, inverter),
             )
 
-    silent = not _sweep_saw_response(errors, matched_or_no_match=False)
+    silent = not saw_any_response
     if inverter_link_down:
         raise DriverSweepNoMatch(ERROR_INVERTER_LINK_DOWN, silent=silent)
     raise DriverSweepNoMatch(
@@ -227,13 +220,20 @@ async def async_detect_inverter_candidates(
     def _remaining() -> float | None:
         return remaining_seconds() if remaining_seconds is not None else None
 
-    def _log_probe(driver: InverterDriver, started: float, outcome: str) -> int:
+    def _log_probe(
+        driver: InverterDriver,
+        started: float,
+        outcome: str,
+        *,
+        saw_response: bool = False,
+    ) -> int:
         elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
         probe_log.append(
             {
                 "driver": driver.key,
                 "elapsed_ms": elapsed_ms,
                 "outcome": outcome,
+                "saw_response": saw_response,
             }
         )
         return elapsed_ms
@@ -249,10 +249,11 @@ async def async_detect_inverter_candidates(
             )
             break
         probe_started = loop.time()
+        tracked = _ResponseTrackingTransport(transport)
         try:
             probe = _async_probe_driver_with_budget(
                 driver,
-                transport,
+                tracked,
                 targets,
             )
             if remaining is not None:
@@ -261,23 +262,30 @@ async def async_detect_inverter_candidates(
                 inverter = await probe
         except asyncio.TimeoutError:
             errors.append(f"{driver.key}:probe_timeout")
-            _log_probe(driver, probe_started, "probe_timeout")
+            _log_probe(driver, probe_started, "probe_timeout", saw_response=tracked.saw_response)
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
             continue
         except InverterIdentityNoDataError:
             errors.append(f"{driver.key}:{ERROR_INVERTER_LINK_DOWN}")
             inverter_link_down = True
-            _log_probe(driver, probe_started, ERROR_INVERTER_LINK_DOWN)
+            # The collector answered with zeros — the INVERTER did not speak;
+            # this must never count as a link-level response.
+            _log_probe(driver, probe_started, ERROR_INVERTER_LINK_DOWN, saw_response=False)
             logger.debug("Identity region read as zeros driver=%s", driver.key)
             continue
         except Exception as exc:
             errors.append(f"{driver.key}:{exc}")
-            _log_probe(driver, probe_started, f"error:{str(exc)[:80]}")
+            _log_probe(
+                driver,
+                probe_started,
+                f"error:{str(exc)[:80]}",
+                saw_response=tracked.saw_response,
+            )
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
             continue
 
         if inverter is not None:
-            elapsed_ms = _log_probe(driver, probe_started, "matched")
+            elapsed_ms = _log_probe(driver, probe_started, "matched", saw_response=True)
             # Measured identification time: the driver-choice step shows it so
             # the user can compare candidates on something real.
             inverter.details["probe_elapsed_ms"] = elapsed_ms
@@ -289,7 +297,10 @@ async def async_detect_inverter_candidates(
                 )
             )
         else:
-            _log_probe(driver, probe_started, "no_match")
+            # None from async_probe is NOT evidence of an answer: drivers
+            # swallow read timeouts internally. Only the transport-observed
+            # response counter may claim the inverter spoke.
+            _log_probe(driver, probe_started, "no_match", saw_response=tracked.saw_response)
 
     if candidates or budget_exhausted:
         return DriverCandidateScan(
@@ -297,10 +308,7 @@ async def async_detect_inverter_candidates(
             budget_exhausted=budget_exhausted,
             probe_log=tuple(probe_log),
         )
-    had_answer = any(
-        entry.get("outcome") == "no_match" for entry in probe_log
-    ) or _sweep_saw_response(errors, matched_or_no_match=False)
-    silent = not had_answer
+    silent = not any(entry.get("saw_response") for entry in probe_log)
     if inverter_link_down:
         raise DriverSweepNoMatch(
             ERROR_INVERTER_LINK_DOWN, silent=silent, probe_log=tuple(probe_log)
@@ -363,6 +371,41 @@ async def _async_probe_driver_signature_targets(
         except Exception as exc:
             logger.debug("Signature probe failed driver=%s target=%s error=%s", driver.key, target, exc)
     return False
+
+
+class _ResponseTrackingTransport:
+    """Delegating transport proxy that records observed payload responses.
+
+    Drivers swallow read timeouts internally and return ``None`` from
+    ``async_probe``, so "no match" alone is NOT evidence that the inverter
+    ever answered.  The proxy watches the payload-level send methods: any
+    non-empty response means bytes actually came back over the link during
+    this probe.  This is the ground truth the silence verdict is built from.
+    """
+
+    _WATCHED = ("async_send_forward", "async_send_payload", "async_send_collector")
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.responses = 0
+
+    @property
+    def saw_response(self) -> bool:
+        return self.responses > 0
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if name not in self._WATCHED or not callable(attr):
+            return attr
+
+        async def _watched(*args: Any, **kwargs: Any):
+            result = await attr(*args, **kwargs)
+            payload = result[1] if isinstance(result, tuple) and len(result) > 1 else result
+            if payload:
+                self.responses += 1
+            return result
+
+        return _watched
 
 
 async def _async_probe_driver_with_budget(

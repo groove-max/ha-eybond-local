@@ -24,11 +24,10 @@ class _Scan:
     candidates: tuple = ()
 
 
-class StructuredSilenceTests(unittest.TestCase):
+class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
     def test_sweep_no_match_carries_silent_verdict(self) -> None:
         from custom_components.eybond_local.onboarding.driver_detection import (
             DriverSweepNoMatch,
-            _sweep_saw_response,
         )
 
         silent_exc = DriverSweepNoMatch("pi18:probe_timeout", silent=True)
@@ -40,25 +39,74 @@ class StructuredSilenceTests(unittest.TestCase):
         tricky = DriverSweepNoMatch("answered_then_probe_timeout", silent=False)
         self.assertFalse(tricky.silent)
 
-    def test_saw_response_classification(self) -> None:
+    async def test_response_tracking_transport_observes_payloads(self) -> None:
         from custom_components.eybond_local.onboarding.driver_detection import (
-            _sweep_saw_response,
+            _ResponseTrackingTransport,
         )
 
-        self.assertFalse(
-            _sweep_saw_response(
-                ["pi30:probe_timeout", "smg:inverter_link_down"],
-                matched_or_no_match=False,
-            )
+        class Inner:
+            async def async_send_forward(self, payload, **kwargs):
+                return b"\x01\x03\x02\x00\x2a"
+
+            async def async_send_collector(self, **kwargs):
+                return (7, b"payload")
+
+            async def async_send_payload(self, payload, **kwargs):
+                return b""
+
+        tracked = _ResponseTrackingTransport(Inner())
+        self.assertFalse(tracked.saw_response)
+        await tracked.async_send_forward(b"req")
+        self.assertEqual(tracked.responses, 1)
+        await tracked.async_send_collector()
+        self.assertEqual(tracked.responses, 2)
+        # Empty payloads are not responses.
+        await tracked.async_send_payload(b"req")
+        self.assertEqual(tracked.responses, 2)
+
+    async def test_answering_garbage_device_is_not_silent(self) -> None:
+        # A device that RESPONDS with out-of-envelope registers must not be
+        # classified as silence even though every driver returns no-match
+        # (drivers swallow their own errors and return None).
+        from custom_components.eybond_local.fixtures.transport import FixtureTransport
+        from custom_components.eybond_local.models import ProbeTarget
+        from custom_components.eybond_local.onboarding.driver_detection import (
+            DriverSweepNoMatch,
+            async_detect_inverter_candidates,
         )
-        # A CRC error proves bytes arrived: not silence.
-        self.assertTrue(
-            _sweep_saw_response(
-                ["pi30:probe_timeout", "srne_modbus:crc_mismatch"],
-                matched_or_no_match=False,
-            )
+
+        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
+        garbage_inputs = {register: 0xFEFE for register in range(0, 512)}
+        transport = FixtureTransport(
+            registers={},
+            input_registers=garbage_inputs,
+            command_responses=None,
+            probe_target=target,
         )
-        self.assertTrue(_sweep_saw_response([], matched_or_no_match=True))
+        with self.assertRaises(DriverSweepNoMatch) as ctx:
+            await async_detect_inverter_candidates(transport, driver_hint="modbus_catalog")
+        self.assertFalse(ctx.exception.silent)
+        outcomes = {entry["outcome"] for entry in ctx.exception.probe_log}
+        self.assertIn("no_match", outcomes)
+
+    async def test_fully_dead_link_is_silent(self) -> None:
+        from custom_components.eybond_local.fixtures.transport import FixtureTransport
+        from custom_components.eybond_local.models import ProbeTarget
+        from custom_components.eybond_local.onboarding.driver_detection import (
+            DriverSweepNoMatch,
+            async_detect_inverter_candidates,
+        )
+
+        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
+        transport = FixtureTransport(
+            registers={},
+            input_registers={},
+            command_responses=None,
+            probe_target=target,
+        )
+        with self.assertRaises(DriverSweepNoMatch) as ctx:
+            await async_detect_inverter_candidates(transport, driver_hint="modbus_catalog")
+        self.assertTrue(ctx.exception.silent)
 
 
 class SilenceClassifierTests(unittest.TestCase):
