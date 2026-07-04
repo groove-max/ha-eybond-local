@@ -692,8 +692,15 @@ def _format_home_assistant_collector_endpoint(
     server_host: str,
     template_endpoint: str = "",
     cloud_family: str = "",
+    server_port_override: int = 0,
 ) -> str:
-    """Build the Home Assistant callback endpoint using the cloud profile shape."""
+    """Build the Home Assistant callback endpoint using the cloud profile shape.
+
+    ``server_port_override`` pins the port to this entry's actual listener:
+    the callback target must never inherit the cloud/proxy port from the
+    template shape (the proxy-capture path, by contrast, deliberately keeps
+    the template port because the proxy listener mirrors the cloud port).
+    """
 
     server_port = default_collector_server_port(cloud_family=cloud_family)
     server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
@@ -706,6 +713,8 @@ def _format_home_assistant_collector_endpoint(
         except ValueError:
             server_port = DEFAULT_COLLECTOR_SERVER_PORT
             server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
+    if server_port_override > 0:
+        server_port = int(server_port_override)
     return format_collector_server_endpoint_for_cloud_profile(
         server_host=server_host,
         cloud_family=cloud_family,
@@ -4215,6 +4224,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             server_host=self._effective_callback_server_host,
             template_endpoint=template_endpoint,
             cloud_family=self.collector_cloud_family,
+            server_port_override=int(
+                getattr(self._connection_spec, "effective_advertised_tcp_port", 0)
+                or getattr(self._connection_spec, "tcp_port", 0)
+                or 0
+            ),
         )
 
     @property

@@ -3590,13 +3590,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         session.set_collector.assert_not_awaited()
 
-    async def test_collector_callback_target_uses_legacy_cloud_port(self) -> None:
+    async def test_collector_callback_target_uses_listener_port_not_cloud_port(self) -> None:
+        # The HA-only callback target must point at OUR listener port. The
+        # collector's cloud endpoint port (18899) is the vendor cloud /
+        # proxy-capture port: mirroring it aimed collectors at the proxy
+        # listener while the runtime announcer advertised the real one, and
+        # the two endpoints then fought on every reconnect.
         flow = self._make_flow()
         flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
 
         self.assertEqual(
             flow._collector_callback_target_endpoint(),
-            "192.168.1.50,18899,TCP",
+            "192.168.1.50,8899,TCP",
         )
 
     async def test_collector_callback_target_preserves_host_only_shape(self) -> None:
@@ -3608,13 +3613,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "192.168.1.50",
         )
 
-    async def test_collector_callback_target_uses_valuecloud_host_profile_before_18899_port_fallback(self) -> None:
+    async def test_collector_callback_target_uses_listener_port_for_valuecloud_shape(self) -> None:
         flow = self._make_flow()
         flow._collector_current_server_endpoint = "iot.eybond.com,18899,TCP"
 
         self.assertEqual(
             flow._collector_callback_target_endpoint(),
-            "192.168.1.50,18899,TCP",
+            "192.168.1.50,8899,TCP",
         )
 
     async def test_collector_original_endpoint_options_use_valuecloud_host_profile_before_18899_port_fallback(self) -> None:

@@ -3681,7 +3681,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             or ""
         ).strip()
         cloud_family = ""
-        server_port = DEFAULT_COLLECTOR_SERVER_PORT
+        # The callback target is ALWAYS this Home Assistant listener. Its
+        # port must come from the connection spec, never from the collector
+        # cloud default (18899 is the vendor cloud port): with no readable
+        # template endpoint the old fallback pointed the collector at a port
+        # nothing listens on, and the runtime UDP announcer then fought the
+        # persisted endpoint every reconnect.
+        server_port = int(
+            getattr(spec, "effective_advertised_tcp_port", 0)
+            or getattr(spec, "tcp_port", 0)
+            or DEFAULT_COLLECTOR_SERVER_PORT
+        )
         server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
         if template_endpoint:
             try:
@@ -3698,7 +3708,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 ).family
                 if cloud_family == "unknown":
                     cloud_family = ""
-                _host, server_port, server_protocol = resolve_collector_server_endpoint(
+                _host, _template_port, server_protocol = resolve_collector_server_endpoint(
                     template_endpoint,
                     require_explicit_port=False,
                     require_explicit_protocol=False,

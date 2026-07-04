@@ -1938,7 +1938,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_home_assistant_callback_target_uses_legacy_cloud_port_for_full_endpoints(self) -> None:
+    def test_home_assistant_callback_target_pins_listener_port_over_cloud_port(self) -> None:
+        # The callback target must always carry THIS entry's listener port:
+        # inheriting the cloud/proxy port (18899) from the collector-reported
+        # endpoint pointed collectors at the proxy-capture listener while the
+        # UDP announcer advertised the real one, fighting on every reconnect.
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator._connection_spec = types.SimpleNamespace(
             effective_advertised_server_ip="192.168.1.50",
@@ -1954,7 +1958,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(
             coordinator.collector_callback_target_endpoint,
-            "192.168.1.50,18899,TCP",
+            "192.168.1.50,8899,TCP",
         )
 
     def test_proxy_capture_upstream_endpoint_uses_default_smartess_fallback(self) -> None:
@@ -2205,14 +2209,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             ):
                 result = await coordinator.async_trigger_collector_rediscovery()
 
-            self.assertEqual(prepared_targets, ["192.168.1.104,18899,TCP"])
+            self.assertEqual(prepared_targets, ["192.168.1.104,8899,TCP"])
             self.assertEqual(
                 reverse_discovery_calls,
                 [{"port": 0, "timeout": 0.75}],
             )
             self.assertEqual(
                 result["collector_callback_target_endpoint"],
-                "192.168.1.104,18899,TCP",
+                "192.168.1.104,8899,TCP",
             )
             self.assertEqual(result["target_role"], "bootstrap")
             self.assertEqual(refresh_calls, [True])
