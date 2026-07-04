@@ -58,6 +58,24 @@ def catalog_link_baud_hints() -> tuple[int, ...]:
     return tuple(sorted(hints))
 
 
+def driver_keys_for_link_baud(baud: int) -> tuple[str, ...]:
+    """Return driver keys whose protocol families expect the given baud.
+
+    The per-baud re-sweep probes only these drivers: walking the FULL driver
+    registry at every candidate speed multiplies scan time for nothing — a
+    protocol family that lives at 2400 cannot match at 19200.
+    """
+
+    catalog = load_device_catalog()
+    return tuple(
+        sorted(
+            key
+            for key, protocol in catalog.protocols.items()
+            if baud in protocol.link_baud_hints
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class LinkBaudSweepOutcome:
     """What one transactional baud sweep did and found."""

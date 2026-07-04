@@ -195,6 +195,7 @@ async def async_detect_inverter_candidates(
     depth: str = "deep",
     remaining_seconds: Callable[[], float | None] | None = None,
     preferred_driver_keys: tuple[str, ...] = (),
+    allowed_driver_keys: tuple[str, ...] = (),
 ) -> DriverCandidateScan:
     """Probe all drivers and return every successful driver candidate.
 
@@ -214,6 +215,14 @@ async def async_detect_inverter_candidates(
         driver_hint=driver_hint,
         preferred_driver_keys=preferred_driver_keys,
     )
+    if allowed_driver_keys:
+        # Restricted re-sweeps (the link baud walk) probe only the drivers
+        # whose protocol family is expected at the current link speed.
+        driver_targets = tuple(
+            (driver, targets)
+            for driver, targets in driver_targets
+            if driver.key in allowed_driver_keys
+        )
 
     loop = asyncio.get_running_loop()
 

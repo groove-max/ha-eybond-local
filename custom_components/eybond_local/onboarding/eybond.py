@@ -43,6 +43,7 @@ from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogE
 from .link_sweep import (
     async_run_link_baud_sweep,
     catalog_link_baud_hints,
+    driver_keys_for_link_baud,
     is_silent_detection_error,
     parse_reported_baud,
 )
@@ -1127,6 +1128,7 @@ class OnboardingDetector:
         depth: str = DETECTION_DEPTH_FAST,
         deadline: OnboardingDeadline | None = None,
         preferred_driver_keys: tuple[str, ...] = (),
+        allowed_driver_keys: tuple[str, ...] = (),
     ) -> DriverCandidateScan:
         """Retry one-shot driver probing when the collector responds too early."""
 
@@ -1144,6 +1146,7 @@ class OnboardingDetector:
                             deadline.remaining_seconds if deadline is not None else None
                         ),
                         preferred_driver_keys=preferred_driver_keys,
+                        allowed_driver_keys=allowed_driver_keys,
                     )
                 context = await async_detect_inverter(
                     transport,
@@ -1239,6 +1242,9 @@ class OnboardingDetector:
             return True
 
         async def run_sweep(baud: int):
+            allowed = driver_keys_for_link_baud(baud)
+            if not allowed:
+                return None
             sweep_deadline = (
                 deadline.nested(sweep_budget)
                 if deadline is not None
@@ -1250,6 +1256,7 @@ class OnboardingDetector:
                     depth=DETECTION_DEPTH_DEEP,
                     deadline=sweep_deadline,
                     preferred_driver_keys=preferred_driver_keys,
+                    allowed_driver_keys=allowed,
                 )
             except (TimeoutError, RuntimeError) as exc:
                 logger.debug(

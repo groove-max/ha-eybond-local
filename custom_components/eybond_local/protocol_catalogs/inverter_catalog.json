@@ -525,7 +525,7 @@
   {
    "key": "modbus_catalog",
    "transport_key": "eybond_modbus",
-   "probe_timeout": 10.0,
+   "probe_timeout": 6.0,
    "probe_targets": [
     {
      "devcode": 1,

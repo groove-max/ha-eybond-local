@@ -123,6 +123,20 @@ class SilenceClassifierTests(unittest.TestCase):
 
 
 class CatalogHintTests(unittest.TestCase):
+    def test_driver_keys_for_link_baud_restrict_the_resweep(self) -> None:
+        from custom_components.eybond_local.onboarding.link_sweep import (
+            driver_keys_for_link_baud,
+        )
+
+        self.assertEqual(driver_keys_for_link_baud(2400), ("pi30",))
+        self.assertEqual(driver_keys_for_link_baud(19200), ("must_pv_ph18",))
+        at_9600 = driver_keys_for_link_baud(9600)
+        self.assertIn("modbus_smg", at_9600)
+        self.assertIn("srne_modbus", at_9600)
+        self.assertIn("modbus_catalog", at_9600)
+        self.assertNotIn("pi30", at_9600)
+        self.assertEqual(driver_keys_for_link_baud(115200), ())
+
     def test_hints_are_distinct_and_sorted(self) -> None:
         hints = catalog_link_baud_hints()
         self.assertEqual(hints, tuple(sorted(set(hints))))
