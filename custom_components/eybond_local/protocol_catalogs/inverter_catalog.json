@@ -626,6 +626,40 @@
        "decoder": "u32_high_first"
       }
      ]
+    },
+    {
+     "key": "modbus_catalog.solis_identity_model_definition",
+     "kind": "modbus_read",
+     "register": 35000,
+     "count": 1,
+     "function": 4,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.solis_model_definition_raw",
+       "source_key": "solis_model_definition_raw",
+       "register": 35000,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.solis_identity_battery_soc",
+     "kind": "modbus_read",
+     "register": 33139,
+     "count": 1,
+     "function": 4,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.solis_battery_soc_raw",
+       "source_key": "solis_battery_soc_raw",
+       "register": 33139,
+       "words": 1
+      }
+     ]
     }
    ],
    "layouts": [],
@@ -947,6 +981,33 @@
    "notes": [
     "Growatt SPF telemetry lives in input registers (function 4); identity/serial/config in holding registers. Reads must stay inside 45-register aligned blocks and respect the 850 ms inter-command period. Modbus RTU 9600 8N1, slave address 1."
    ]
+  },
+  "solis_esinv": {
+   "ranges": [
+    [
+     35000,
+     1
+    ],
+    [
+     33000,
+     49
+    ],
+    [
+     33049,
+     47
+    ],
+    [
+     33115,
+     7
+    ],
+    [
+     33132,
+     50
+    ]
+   ],
+   "notes": [
+    "Solis/Ginlong ESINV energy-storage telemetry is all input registers (function 4) in the 33xxx area; 35000 is the model/protocol definition word. Fixed 9600 8N1, >300 ms inter-frame gap, max 50 registers per read. The protocol document is the read-only ESINV-33000ID translation."
+   ]
   }
  },
  "surfaces": [
@@ -1165,6 +1226,17 @@
    "tier": "full",
    "read_only": false,
    "support_capture_policy": "growatt_spf"
+  },
+  {
+   "key": "solis_esinv_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "solis_esinv",
+   "profile_name": "",
+   "register_schema_name": "solis_esinv/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "solis_esinv"
   }
  ],
  "devices": [
@@ -2132,6 +2204,43 @@
    "provenance": {
     "sources": [
      "GrowattModBusProtocol.pdf V0.11 (OffGrid SPF3-5K RTU, 9600 8N1, slave 1; DTC 034xx = OffGrid SPF 3-5K)"
+    ],
+    "confidence": "datasheet-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "solis_esinv_family",
+   "surface_key": "solis_esinv_read_only",
+   "model_name": "Solis Hybrid (ESINV Modbus)",
+   "priority": 114,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.solis_model_definition_raw",
+     "one_of": [
+      8240,
+      8241,
+      8256,
+      8272,
+      8288,
+      2030,
+      2031,
+      2040,
+      2050,
+      2060
+     ],
+     "cost": 1
+    },
+    {
+     "key": "identity.solis_battery_soc_raw",
+     "min": 0,
+     "max": 100,
+     "cost": 1
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "ESINV-33000ID hybrid RS485 Modbus RTU protocol V002B000D01B (read-only translation, 2020-09-15; fixed 9600 8N1). Model-definition word 35000 documents hybrid variants as hex 2030/2031/2040/2050/2060; the anchor accepts both the hex-decoded and literal-decimal readings until hardware confirms which the firmware reports."
     ],
     "confidence": "datasheet-unconfirmed"
    }

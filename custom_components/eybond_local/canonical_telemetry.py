@@ -97,6 +97,14 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("output_active_power",),
                 compute="passthrough",
             ),
+            # Solis hybrids report grid-side household load and EPS backup
+            # load separately; total consumption is their sum.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("solis_esinv",),
+                source_keys=("household_load_power", "backup_load_power"),
+                compute="sum",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -301,6 +309,35 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 variant_keys=("aohai_fsa",),
                 source_keys=("battery_voltage", "battery_current"),
                 compute="multiply",
+            ),
+            # Solis firmwares disagree on the sign of the battery-power
+            # register, but the current-direction word is explicit — trust
+            # the direction and the power magnitude.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("solis_esinv",),
+                source_keys=("battery_power_magnitude", "battery_current_direction"),
+                compute="magnitude_with_direction",
+            ),
+        ),
+    ),
+    CanonicalTelemetryDescription(
+        description=MeasurementDescription(
+            key="grid_power",
+            name="Grid Power",
+            unit="W",
+            device_class="power",
+            state_class="measurement",
+            icon="mdi:transmission-tower",
+        ),
+        variants=(
+            # Solis grid-port power is export-positive on the wire; the
+            # canonical convention is import-positive.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("solis_esinv",),
+                source_keys=("grid_port_power",),
+                compute="negate",
             ),
         ),
     ),
@@ -589,6 +626,21 @@ def _compute_variant(
 
     if variant.compute == "eybond_g_ascii_battery_power":
         return _compute_eybond_g_ascii_battery_power(values, variant)
+
+    if variant.compute == "negate":
+        value = values.get(variant.source_keys[0])
+        if not isinstance(value, (int, float)):
+            return None
+        return round(-float(value), 4)
+
+    if variant.compute == "magnitude_with_direction":
+        magnitude = values.get(variant.source_keys[0])
+        direction = values.get(variant.source_keys[1])
+        if not isinstance(magnitude, (int, float)) or direction is None:
+            return None
+        normalized = str(direction).strip().lower()
+        sign = 1.0 if normalized in ("0", "charge", "charging") else -1.0
+        return round(abs(float(magnitude)) * sign, 4)
 
     if variant.compute.startswith("flow_"):
         flows = _compute_flow_split(values)

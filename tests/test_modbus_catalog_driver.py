@@ -119,6 +119,34 @@ def _growatt_holding_registers() -> dict[int, int]:
     return registers
 
 
+def _solis_input_registers() -> dict[int, int]:
+    registers: dict[int, int] = {}
+    for start, count in (
+        (35000, 1), (33000, 49), (33049, 47), (33115, 7), (33132, 50),
+    ):
+        for offset in range(count):
+            registers[start + offset] = 0
+    registers.update(
+        {
+            35000: 8240,   # 0x2030: 1-phase LV hybrid, protocol 0x20
+            33095: 15,     # Normal Running
+            33049: 3210,   # PV1 321.0 V
+            33057: 0, 33058: 2500,  # PV 2500 W
+            33073: 2302,   # grid 230.2 V
+            33094: 5002,   # 50.02 Hz
+            33133: 512,    # battery 51.2 V
+            33135: 0,      # charging
+            33139: 77,     # SOC 77 %
+            33147: 900,    # household load 900 W
+            33148: 150,    # backup load 150 W
+            33149: 0, 33150: 1200,  # battery power magnitude 1200 W
+            33151: 0xFFFF, 33152: 0xFE0C,  # grid port -500 W (importing)
+            33035: 123,    # 12.3 kWh today
+        }
+    )
+    return registers
+
+
 class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_matches_aohai_plausibility_anchors(self) -> None:
         driver = ModbusCatalogDriver()
@@ -231,6 +259,52 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["charge_source_priority"], "PV Only")
         self.assertEqual(values["max_charge_current"], 70)
         self.assertEqual(values["rated_power"], 5000.0)
+
+    async def test_probe_matches_solis_hybrid_by_model_definition(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers=_solis_input_registers(),
+            holding_registers={},
+        )
+
+        inverter = await driver.async_probe(transport, _target())
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "Solis Hybrid (ESINV Modbus)")
+        self.assertEqual(inverter.variant_key, "solis_esinv")
+        self.assertEqual(inverter.register_schema_name, "solis_esinv/base.json")
+        self.assertEqual(inverter.profile_name, "")
+
+    async def test_solis_read_values_and_canonical_sign_conventions(self) -> None:
+        from custom_components.eybond_local.canonical_telemetry import (
+            apply_canonical_measurements,
+        )
+
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers=_solis_input_registers(),
+            holding_registers={},
+        )
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["inverter_current_status"], "Normal Running")
+        self.assertEqual(values["pv_power"], 2500)
+        self.assertEqual(values["battery_percent"], 77)
+        self.assertEqual(values["battery_current_direction"], "Charging")
+        self.assertEqual(values["pv_generation_day"], 12.3)
+
+        apply_canonical_measurements(
+            "modbus_catalog", values, variant_key="solis_esinv"
+        )
+        # Household 900 W + backup 150 W = total load.
+        self.assertEqual(values["output_power"], 1050)
+        # Magnitude 1200 W with direction "Charging" -> +1200 W.
+        self.assertEqual(values["battery_power"], 1200.0)
+        # Wire value -500 W (export-positive) -> canonical +500 W import.
+        self.assertEqual(values["grid_power"], 500.0)
 
     async def test_write_capability_uses_fc16_by_default_and_fc06_on_override(self) -> None:
         from custom_components.eybond_local.models import WriteCapability
