@@ -98,9 +98,21 @@ async def _cancel_and_join_task(task: "asyncio.Task[Any]") -> None:
     heartbeat loop, for one, never exits on a healthy socket.
     """
 
+    attempts = 0
     while not task.done():
         task.cancel()
         await asyncio.wait({task}, timeout=0.25)
+        attempts += 1
+        if attempts >= 20 and not task.done():
+            # A task that survives 20 cancellations is swallowing
+            # CancelledError; waiting longer would recreate the very hang
+            # this helper exists to prevent.
+            logger.error(
+                "Session task %s ignored %d cancellations; abandoning join",
+                task.get_name(),
+                attempts,
+            )
+            return
     try:
         task.result()
     except (asyncio.CancelledError, Exception):
@@ -867,18 +879,16 @@ class _CollectorConnection:
                 or "collector_disconnected"
             )
 
+        # Detach the session from shared state and close the writer BEFORE
+        # cancelling the reader: cancelling the reader wakes the session's
+        # run() coroutine, and anything observing the connection at that
+        # moment (the replaced run's finally, a concurrent waiter) must
+        # already see the old session fully torn down — not a half-open
+        # writer that only closes a few event-loop steps later.
         heartbeat_task = self._heartbeat_task
         self._heartbeat_task = None
-
-        if heartbeat_task and heartbeat_task is not skip_task:
-            await _cancel_and_join_task(heartbeat_task)
-
         reader_task = self._reader_task
         self._reader_task = None
-
-        if reader_task and reader_task is not skip_task:
-            await _cancel_and_join_task(reader_task)
-
         writer = self._writer
         self._reader = None
         self._writer = None
@@ -887,8 +897,14 @@ class _CollectorConnection:
         self._session_id = ""
         self._session_identity_callback = None
 
+        if heartbeat_task and heartbeat_task is not skip_task:
+            await _cancel_and_join_task(heartbeat_task)
+
         if writer:
             await _close_writer_bounded(writer)
+
+        if reader_task and reader_task is not skip_task:
+            await _cancel_and_join_task(reader_task)
 
         for future in self._pending.values():
             if not future.done():
@@ -1492,11 +1508,10 @@ class _CollectorAtConnection:
                 or "collector_disconnected"
             )
 
+        # Same ordering rule as _CollectorConnection._disconnect: detach and
+        # close the writer before the reader cancellation wakes the session.
         reader_task = self._reader_task
         self._reader_task = None
-        if reader_task and reader_task is not skip_task:
-            await _cancel_and_join_task(reader_task)
-
         writer = self._writer
         self._reader = None
         self._writer = None
@@ -1506,6 +1521,9 @@ class _CollectorAtConnection:
 
         if writer:
             await _close_writer_bounded(writer)
+
+        if reader_task and reader_task is not skip_task:
+            await _cancel_and_join_task(reader_task)
 
         future = self._pending_response
         self._pending_response = None

@@ -94,6 +94,16 @@ def _cancel_task_callback(task: asyncio.Task) -> None:
     task.cancel()
 
 
+def _log_abandoned_shutdown_result(task: asyncio.Task) -> None:
+    """Retrieve the result of a shutdown task abandoned after its timeout."""
+
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Abandoned EyeBond shutdown task failed: %s", exc, exc_info=exc)
+
+
 def _register_entry_stop_shutdown(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Stop the runtime explicitly when Home Assistant is shutting down."""
 
@@ -108,6 +118,10 @@ def _register_entry_stop_shutdown(hass: HomeAssistant, entry: ConfigEntry, coord
         task = asyncio.ensure_future(coordinator.async_shutdown())
         done, pending = await asyncio.wait({task}, timeout=_STOP_SHUTDOWN_TIMEOUT)
         if pending:
+            # The abandoned task still needs its result retrieved, or a late
+            # failure surfaces as a contextless "exception was never
+            # retrieved" during interpreter teardown.
+            task.add_done_callback(_log_abandoned_shutdown_result)
             logger.warning(
                 "EyeBond runtime shutdown for entry %s did not finish within %.0fs on Home Assistant stop; abandoning cleanup",
                 entry.entry_id,

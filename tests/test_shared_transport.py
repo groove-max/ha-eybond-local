@@ -2745,12 +2745,16 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(run1, timeout=2.0)
 
+        # By the time the replaced session finishes, its writer must already
+        # be closed — the reader cancellation that wakes it fires only after
+        # the old session was detached and its writer torn down.
+        self.assertTrue(writer1.closed)
+
         # The replaced session's finally must leave the successor alone: no
         # index drop (the field symptom was a live collector "vanishing"),
         # no closed writer, connection still up.
         self.assertTrue(await connection.wait_until_connected(1.0))
         self.assertEqual(drops, [])
-        self.assertTrue(writer1.closed)
         self.assertFalse(writer2.closed)
         self.assertTrue(connection.connected)
 
