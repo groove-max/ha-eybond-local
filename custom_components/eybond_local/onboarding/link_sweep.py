@@ -98,9 +98,15 @@ async def async_run_link_baud_sweep(
     """
 
     original = await read_baud()
+    if original is None:
+        # Fail closed: without a known original speed the sweep cannot be
+        # transactional — a failed walk would strand the collector on the
+        # last tested rate with nothing to restore.
+        logger.debug("Link baud sweep skipped: current baud is unreadable")
+        return LinkBaudSweepOutcome(original_baud=None, restored=False)
     attempted: list[int] = []
     for baud in candidate_bauds:
-        if original is not None and baud == original:
+        if baud == original:
             continue
         if admit is not None and not admit():
             logger.debug("Link baud sweep stopped by budget admission at %s", baud)
@@ -123,7 +129,7 @@ async def async_run_link_baud_sweep(
             )
 
     restored = True
-    if attempted and original is not None:
+    if attempted:
         restored = await set_baud(original)
         if not restored:
             logger.warning(

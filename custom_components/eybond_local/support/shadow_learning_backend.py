@@ -1136,6 +1136,11 @@ def _register_bank_from_ranges(ranges: list[Any]) -> dict[int, int]:
     for range_item in ranges:
         if not isinstance(range_item, dict):
             continue
+        # The learning bank models the HOLDING register space only.  Input
+        # registers (function 4) share addresses with holding registers but
+        # are a separate space; mixing them here would corrupt inference.
+        if _maybe_int(range_item.get("function", 3)) not in (None, 3):
+            continue
         start = _maybe_int(range_item.get("start"))
         values = range_item.get("values")
         if start is None or not isinstance(values, list):

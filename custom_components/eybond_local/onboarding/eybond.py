@@ -1231,7 +1231,8 @@ class OnboardingDetector:
                     return False
                 return True
             if deadline is not None:
-                return deadline.remaining_seconds > sweep_budget
+                remaining = deadline.remaining_seconds()
+                return remaining is None or remaining > sweep_budget
             return True
 
         async def run_sweep(baud: int):
@@ -1403,7 +1404,11 @@ class OnboardingDetector:
                 exc,
             )
         else:
-            apply_canonical_measurements(context.inverter.driver_key, runtime_values)
+            apply_canonical_measurements(
+                context.inverter.driver_key,
+                runtime_values,
+                variant_key=context.inverter.variant_key,
+            )
             for key in _ONBOARDING_RUNTIME_DETAIL_KEYS:
                 value = runtime_values.get(key)
                 if value not in (None, ""):

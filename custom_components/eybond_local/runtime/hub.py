@@ -2017,7 +2017,11 @@ class EybondHub:
             values.pop("collector_signal_strength_source", None)
 
         if self._inverter is not None:
-            apply_canonical_measurements(self._inverter.driver_key, values)
+            apply_canonical_measurements(
+                self._inverter.driver_key,
+                values,
+                variant_key=self._inverter.variant_key,
+            )
 
         values["runtime_recovery_streak"] = self._recovery_streak
         values["runtime_reconnect_count"] = self._reconnect_count

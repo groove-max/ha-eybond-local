@@ -112,11 +112,13 @@ class BaudSweepTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejected_set_is_skipped_without_sweep(self) -> None:
         sweeps: list[int] = []
+        set_calls: list[int] = []
 
         async def read_baud():
-            return None
+            return 115200
 
         async def set_baud(baud):
+            set_calls.append(baud)
             return baud != 9600  # collector rejects 9600
 
         async def run_sweep(baud):
@@ -132,8 +134,35 @@ class BaudSweepTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sweeps, [19200])
         self.assertFalse(outcome.matched)
-        # Original baud unknown: nothing to restore to.
         self.assertEqual(outcome.attempted_bauds, (19200,))
+        self.assertEqual(set_calls, [9600, 19200, 115200])
+
+    async def test_unreadable_original_baud_fails_closed(self) -> None:
+        # Without a known original speed the sweep cannot restore anything,
+        # so it must not touch the collector at all.
+        set_calls: list[int] = []
+
+        async def read_baud():
+            return None
+
+        async def set_baud(baud):
+            set_calls.append(baud)
+            return True
+
+        async def run_sweep(baud):
+            return _Scan(candidates=("ctx",))
+
+        outcome = await async_run_link_baud_sweep(
+            candidate_bauds=(9600, 19200),
+            read_baud=read_baud,
+            set_baud=set_baud,
+            run_sweep=run_sweep,
+        )
+
+        self.assertFalse(outcome.matched)
+        self.assertEqual(set_calls, [])
+        self.assertEqual(outcome.attempted_bauds, ())
+        self.assertFalse(outcome.restored)
 
     async def test_admission_stops_the_sweep(self) -> None:
         admissions = iter((True, False))

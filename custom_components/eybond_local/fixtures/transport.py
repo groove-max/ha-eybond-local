@@ -248,11 +248,15 @@ def load_fixture_payload(
     )
     ranges = raw.get("ranges", [])
     registers: dict[int, int] = {}
+    input_registers: dict[int, int] = {}
     for range_item in ranges:
         start = int(range_item["start"])
+        # Input (0x04) and holding (0x03) registers are distinct address
+        # spaces; captures record the function per range.
+        target = input_registers if int(range_item.get("function", 3)) == 4 else registers
         values = [int(value) for value in range_item["values"]]
         for offset, value in enumerate(values):
-            registers[start + offset] = value
+            target[start + offset] = value
 
     command_responses_raw = raw.get("command_responses", {})
     command_responses: dict[tuple[int, int, str], str] = {}
@@ -271,6 +275,7 @@ def load_fixture_payload(
 
     transport = FixtureTransport(
         registers=registers,
+        input_registers=input_registers,
         command_responses=command_responses,
         probe_target=probe_target,
         name=name or str(raw.get("name", "fixture")),

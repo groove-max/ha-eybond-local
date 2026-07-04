@@ -153,13 +153,29 @@ class CanonicalTelemetryTests(unittest.TestCase):
             "battery_percent": 78,
         }
 
-        apply_canonical_measurements("modbus_catalog", values)
+        apply_canonical_measurements("modbus_catalog", values, variant_key="aohai_fsa")
 
         self.assertEqual(values["pv_power"], 1400.0)
         self.assertEqual(values["battery_power"], 264.0)
         self.assertEqual(values["pv_to_home_power"], 900.0)
         self.assertEqual(values["pv_to_battery_power"], 264.0)
         self.assertEqual(values["battery_to_home_power"], 0.0)
+
+    def test_modbus_catalog_variants_do_not_leak_to_other_packs(self) -> None:
+        # A future pack served by the same generic driver may reuse key names
+        # with different semantics; Aohai's V*I computes must not apply.
+        values = {
+            "output_power": 900.0,
+            "pv_input_voltage": 350.0,
+            "pv_input_current": 4.0,
+            "battery_voltage": 26.4,
+            "battery_current": 10.0,
+        }
+
+        apply_canonical_measurements("modbus_catalog", values, variant_key="other_pack")
+
+        self.assertNotIn("pv_power", values)
+        self.assertNotIn("battery_power", values)
 
     def test_apply_canonical_measurements_builds_pi30_common_values(self) -> None:
         values = {

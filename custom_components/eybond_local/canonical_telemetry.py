@@ -19,6 +19,12 @@ class CanonicalTelemetryVariant:
     driver_keys: tuple[str, ...]
     source_keys: tuple[str, ...]
     compute: str
+    # Optional pack-level gate for multi-pack drivers (modbus_catalog): when
+    # set, the variant only applies to inverters whose surface variant_key is
+    # listed. Driver-level gating alone would silently impose one pack's
+    # semantics (source-key meaning, sign conventions) on every future pack
+    # served by the same generic driver.
+    variant_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +191,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
             # as PV voltage x current, so the canonical value does the same.
             CanonicalTelemetryVariant(
                 driver_keys=("modbus_catalog",),
+                variant_keys=("aohai_fsa",),
                 source_keys=("pv_input_voltage", "pv_input_current"),
                 compute="multiply",
             ),
@@ -264,6 +271,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
             # Aohai FSA: BMS battery current is signed with charge > 0.
             CanonicalTelemetryVariant(
                 driver_keys=("modbus_catalog",),
+                variant_keys=("aohai_fsa",),
                 source_keys=("battery_voltage", "battery_current"),
                 compute="multiply",
             ),
@@ -455,6 +463,8 @@ def canonical_measurements_for_driver(driver_key: str | None) -> tuple[Measureme
 def apply_canonical_measurements(
     driver_key: str | None,
     values: dict[str, Any],
+    *,
+    variant_key: str | None = None,
 ) -> dict[str, Any]:
     """Populate canonical telemetry aliases without overwriting native values."""
 
@@ -466,7 +476,7 @@ def apply_canonical_measurements(
         canonical_key = spec.description.key
         if canonical_key in values:
             continue
-        variant = _matching_variant(spec, driver_key, available_keys)
+        variant = _matching_variant(spec, driver_key, available_keys, variant_key=variant_key)
         if variant is None:
             continue
         value = _compute_variant(variant, values)
@@ -481,9 +491,13 @@ def _matching_variant(
     spec: CanonicalTelemetryDescription,
     driver_key: str,
     available_keys: set[str],
+    *,
+    variant_key: str | None = None,
 ) -> CanonicalTelemetryVariant | None:
     for variant in spec.variants:
         if driver_key not in variant.driver_keys:
+            continue
+        if variant.variant_keys and variant_key not in variant.variant_keys:
             continue
         if set(variant.source_keys).issubset(available_keys):
             return variant

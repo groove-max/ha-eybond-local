@@ -106,5 +106,35 @@ class ReadInputRegistersTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await session.read_input(100, 1), [22])
 
 
+class SchemaFunctionValidationTests(unittest.TestCase):
+    def test_spec_function_must_be_read_function(self) -> None:
+        from custom_components.eybond_local.metadata.register_schema_loader import (
+            _parse_read_function,
+        )
+
+        self.assertEqual(_parse_read_function(4), 4)
+        with self.assertRaises(ValueError):
+            _parse_read_function(5)
+
+    def test_fixture_payload_splits_register_spaces(self) -> None:
+        from custom_components.eybond_local.fixtures.transport import (
+            load_fixture_payload,
+        )
+
+        transport, _raw = load_fixture_payload(
+            {
+                "fixture_version": 1,
+                "probe_target": {"devcode": 1, "collector_addr": 255, "device_addr": 1},
+                "ranges": [
+                    {"start": 100, "values": [11]},
+                    {"start": 100, "function": 4, "values": [22]},
+                ],
+            },
+            name="split-spaces",
+        )
+        self.assertEqual(transport._registers[100], 11)
+        self.assertEqual(transport._input_registers[100], 22)
+
+
 if __name__ == "__main__":
     unittest.main()

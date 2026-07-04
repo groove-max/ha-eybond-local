@@ -297,8 +297,15 @@ def _parse_spec(
         multiplier=_optional_float(raw.get("multiplier")),
         decimals=_optional_int(raw.get("decimals")),
         enum_map=enum_map,
-        function=int(raw.get("function", 3)),
+        function=_parse_read_function(raw.get("function", 3)),
     )
+
+
+def _parse_read_function(value: Any) -> int:
+    function = int(value)
+    if function not in (3, 4):
+        raise ValueError(f"unsupported_spec_function:{function}")
+    return function
 
 
 def _optional_float(value: Any) -> float | None:
@@ -542,6 +549,23 @@ def _validate_schema(schema: RegisterSchemaMetadata) -> None:
             raise ValueError(
                 f"register_schema:{schema.key}:missing_blocks:{','.join(missing_blocks)}"
             )
+    else:
+        # Catalog packs are read exclusively through the generic block loop:
+        # a spec no block covers (same function, containing range) would be
+        # silent dead data, so fail at load time instead.
+        for spec_set_key, specs in schema.spec_sets.items():
+            for spec in specs:
+                covered = any(
+                    block.function == spec.function
+                    and block.start <= spec.register
+                    and spec.register + spec.word_count <= block.start + block.count
+                    for block in schema.blocks
+                )
+                if not covered:
+                    raise ValueError(
+                        f"register_schema:{schema.key}:uncovered_spec:"
+                        f"{spec_set_key}:{spec.key}:fc{spec.function}@{spec.register}"
+                    )
 
 
 def _unique_or_raise(*, items, kind: str, schema_key: str) -> set[str]:
