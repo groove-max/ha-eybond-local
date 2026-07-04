@@ -155,6 +155,19 @@ def resolve_collector_transport_profile(
     )
 
 
+def _entry_context_is_virtual_bridge(
+    data: Mapping[str, object],
+    options: Mapping[str, object],
+) -> bool:
+    for source in (options, data):
+        if bool(source.get("collector_virtual_bridge")):
+            return True
+        bridge_kind = str(source.get("collector_bridge_kind", "") or "").strip().lower()
+        if bridge_kind == "esp-collector":
+            return True
+    return False
+
+
 def resolve_collector_transport_profile_from_entry_context(
     data: Mapping[str, object],
     options: Mapping[str, object],
@@ -169,6 +182,22 @@ def resolve_collector_transport_profile_from_entry_context(
         extra_endpoints=extra_endpoints,
     )
     runtime_owner_key = runtime_owner_key_from_entry_context(data, options)
+    if _entry_context_is_virtual_bridge(data, options):
+        # The esp-eybond-collector bridge speaks the framed FC protocol by
+        # construction. Its cloud-family observation may say "smartess_at"
+        # (the bridge answers SmartESS-style FC=2 metadata queries), but
+        # deriving an at_text session from that would hand the runtime the
+        # AT transport and every driver probe would die with
+        # unsupported_link_route.
+        return CollectorTransportProfile(
+            cloud_family=known_collector_cloud_family(cloud_family),
+            runtime_owner_key=str(runtime_owner_key or "").strip().lower(),
+            session_protocol="eybond_framed",
+            identity_strategy="framed_heartbeat_then_fc2_pn",
+            raw_passthrough_bootstrap="",
+            raw_passthrough_frame_format="",
+            raw_passthrough_min_interval_ms=0,
+        )
     return resolve_collector_transport_profile(
         cloud_family=cloud_family,
         runtime_owner_key=runtime_owner_key,

@@ -35,3 +35,37 @@ class ConnectionBranchRegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class VirtualBridgeTransportProfileTests(unittest.TestCase):
+    def test_virtual_bridge_entry_is_always_framed(self) -> None:
+        from custom_components.eybond_local.collector.transport_profile import (
+            resolve_collector_transport_profile_from_entry_context,
+        )
+
+        profile = resolve_collector_transport_profile_from_entry_context(
+            {
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+                "collector_cloud_family": "smartess_at",
+            },
+            {},
+        )
+
+        # The bridge answers SmartESS-style metadata, but its session is the
+        # framed FC protocol - an at_text profile would route every driver
+        # probe into the AT transport (unsupported_link_route).
+        self.assertEqual(profile.session_protocol, "eybond_framed")
+        self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
+
+    def test_factory_smartess_at_family_keeps_at_text_session(self) -> None:
+        from custom_components.eybond_local.collector.transport_profile import (
+            resolve_collector_transport_profile_from_entry_context,
+        )
+
+        profile = resolve_collector_transport_profile_from_entry_context(
+            {"collector_cloud_family": "smartess_at"},
+            {},
+        )
+
+        self.assertNotEqual(profile.session_protocol, "eybond_framed")
+
