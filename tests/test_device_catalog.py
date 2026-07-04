@@ -38,6 +38,33 @@ from custom_components.eybond_local.metadata.device_catalog_loader import (  # n
 COMPONENT_ROOT = REPO_ROOT / "custom_components" / "eybond_local"
 
 
+
+def _tree_resolve(catalog, *, protocol_key, evidence):
+    """Resolve a FIXED evidence dict through the decision tree.
+
+    Replaces the retired value-based CompiledDetectionCatalog.resolve():
+    these tests guard catalog-data integrity, and the tree is the single
+    production resolution engine.
+    """
+
+    from custom_components.eybond_local.metadata.detection_decision_tree import (
+        evaluate_detection_decision_tree_static,
+    )
+
+    evaluation = evaluate_detection_decision_tree_static(
+        catalog.decision_trees[protocol_key], evidence
+    )
+    candidate_keys = (
+        evaluation.candidate_keys
+        if evaluation.status in {"resolved", "ambiguous"}
+        else ()
+    )
+    return catalog.resolution_for_candidates(
+        protocol_key=protocol_key,
+        candidate_keys=candidate_keys,
+        evidence=evidence,
+    )
+
 class CatalogValidationGuardTest(unittest.TestCase):
     """The source catalog rejects ambiguity at load, never resolves it by order."""
 
@@ -246,13 +273,13 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             }
             if entry.fingerprint.rated_power_one_of:
                 evidence["fingerprint.rated_power"] = entry.fingerprint.rated_power_one_of[0]
-            result = compiled.resolve(protocol_key="modbus_smg", evidence=evidence)
+            result = _tree_resolve(compiled, protocol_key="modbus_smg", evidence=evidence)
             self.assertEqual(result.resolution, RESOLUTION_EXACT, entry.entry_key)
             self.assertEqual(result.candidate_keys, (entry.entry_key,))
             self.assertEqual(result.surface_key, entry.surface_key)
 
     def test_unknown_known_layout_resolves_family(self) -> None:
-        result = load_compiled_detection_catalog().resolve(
+        result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -263,7 +290,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.surface_key, "smg_family_read_only")
 
     def test_conflicting_optional_rated_power_resolves_family(self) -> None:
-        result = load_compiled_detection_catalog().resolve(
+        result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -274,7 +301,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.resolution, RESOLUTION_FAMILY)
 
     def test_unknown_layout_remains_unresolved(self) -> None:
-        result = load_compiled_detection_catalog().resolve(
+        result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 99,
@@ -284,7 +311,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
 
     def test_must_pv1800_numeric_marker_resolves_to_issue_5_descriptor(self) -> None:
-        result = load_compiled_detection_catalog().resolve(
+        result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="must_pv_ph18",
             evidence={
                 "protocol.protocol_id": "MUST_PV_PH18",

@@ -616,5 +616,11 @@ def _candidate_anchor_keys(
 def _stable_signature_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    # Integral floats must collapse to the int spelling: catalog anchors say
+    # equals: 220 while parsed telemetry arrives as 220.0, and the signature
+    # match is a STRING comparison. (The retired value-based engine compared
+    # numerics natively, which masked this divergence.)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
     return str(value)
 

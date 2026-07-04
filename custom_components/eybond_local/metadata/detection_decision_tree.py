@@ -12,6 +12,7 @@ from .detection_descriptor_loader import (
     detection_anchor_cost,
     load_detection_descriptor_catalog,
     mandatory_detection_anchor_keys,
+    _stable_signature_value,
 )
 
 
@@ -164,6 +165,30 @@ def serialize_detection_decision_evaluation(
             for step in evaluation.path
         ],
     }
+
+
+def evaluate_detection_decision_tree_static(
+    tree: "DetectionDecisionTree",
+    evidence: Mapping[str, object],
+) -> "DetectionDecisionEvaluation":
+    """Evaluate a tree against a FIXED evidence dict (no more probing).
+
+    The interactive walkers answer ``missing_anchor`` by executing another
+    probe action; a one-shot resolver over already-collected evidence must
+    instead declare each missing key unavailable and let the tree route
+    around it, exactly as the walkers do for unsupported actions.
+    """
+
+    unavailable: set[str] = set()
+    while True:
+        evaluation = evaluate_detection_decision_tree(
+            tree,
+            evidence,
+            unavailable_evidence_keys=frozenset(unavailable),
+        )
+        if evaluation.status != "missing_anchor" or not evaluation.missing_anchor_key:
+            return evaluation
+        unavailable.add(evaluation.missing_anchor_key)
 
 
 def evaluate_detection_decision_tree(
@@ -334,12 +359,6 @@ def _condition_signature(anchor: DetectionAnchorCondition) -> str:
     if anchor.contains_any:
         return "contains_any:" + ",".join(anchor.contains_any)
     return "present"
-
-
-def _stable_signature_value(value: object) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
 
 
 def _count_ambiguous_leaves(

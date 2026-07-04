@@ -14,6 +14,7 @@ from ..eybond_g_ascii_settings import (
     GAsciiSettingDefinition,
 )
 from ..metadata.device_catalog_loader import resolve_catalog_surface_binding
+from ..metadata.detection_decision_tree import evaluate_detection_decision_tree_static
 from ..metadata.compiled_detection_catalog import (
     RESOLUTION_COMPATIBLE_GROUP,
     RESOLUTION_EXACT,
@@ -1167,15 +1168,28 @@ def _extend_eybond_g_ascii_offline_fingerprint_evidence(
 def _resolve_eybond_g_ascii_catalog(catalog, evidence: dict[str, Any]):
     """Resolve exact G-ASCII model only when the local fingerprint is complete.
 
-    The compiled catalog is intentionally fail-closed when a higher-priority exact
-    descriptor is viable but incomplete. For G-ASCII that would incorrectly block
-    the generic read-only family fallback on devices that do not answer F/SVFW.
-    Exact matching is therefore attempted only after the local offline fingerprint
-    keys required by the LVYUAN descriptor are present.
+    Exact matching goes through the same compiled decision tree every other
+    catalog driver uses (the value-based resolve() engine had divergent
+    priority semantics and is gone). The tree is fail-closed on missing
+    anchors, so exact matching is attempted only once the offline fingerprint
+    keys required by the LVYUAN descriptor are present; anything else falls
+    back to the explicit family-fallback operation, which is the degraded
+    path for devices that do not answer F/SVFW.
     """
 
     if all(key in evidence for key in _EYBOND_G_ASCII_EXACT_FINGERPRINT_KEYS):
-        return catalog.resolve(protocol_key=_EYBOND_G_ASCII_DRIVER_KEY, evidence=evidence)
+        tree = catalog.decision_trees.get(_EYBOND_G_ASCII_DRIVER_KEY)
+        if tree is not None:
+            evaluation = evaluate_detection_decision_tree_static(tree, evidence)
+            if evaluation.status in {"resolved", "ambiguous"} and evaluation.candidate_keys:
+                return catalog.resolution_for_candidates(
+                    protocol_key=_EYBOND_G_ASCII_DRIVER_KEY,
+                    candidate_keys=evaluation.candidate_keys,
+                    evidence=evidence,
+                    decision_path=tuple(
+                        f"{step.anchor_key}={step.value!r}" for step in evaluation.path
+                    ),
+                )
     return catalog.resolve_family(protocol_key=_EYBOND_G_ASCII_DRIVER_KEY, evidence=evidence)
 
 

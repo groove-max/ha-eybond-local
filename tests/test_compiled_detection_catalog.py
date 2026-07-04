@@ -25,6 +25,33 @@ from custom_components.eybond_local.metadata.detection_descriptor_loader import 
 )
 
 
+
+def _tree_resolve(catalog, *, protocol_key, evidence):
+    """Resolve a FIXED evidence dict through the decision tree.
+
+    Replaces the retired value-based CompiledDetectionCatalog.resolve():
+    these tests guard catalog-data integrity, and the tree is the single
+    production resolution engine.
+    """
+
+    from custom_components.eybond_local.metadata.detection_decision_tree import (
+        evaluate_detection_decision_tree_static,
+    )
+
+    evaluation = evaluate_detection_decision_tree_static(
+        catalog.decision_trees[protocol_key], evidence
+    )
+    candidate_keys = (
+        evaluation.candidate_keys
+        if evaluation.status in {"resolved", "ambiguous"}
+        else ()
+    )
+    return catalog.resolution_for_candidates(
+        protocol_key=protocol_key,
+        candidate_keys=candidate_keys,
+        evidence=evidence,
+    )
+
 class CompiledDetectionCatalogTests(unittest.TestCase):
     def tearDown(self) -> None:
         clear_compiled_detection_catalog_cache()
@@ -67,7 +94,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
     def test_resolves_exact_and_family_surfaces(self) -> None:
         catalog = load_compiled_detection_catalog()
 
-        exact = catalog.resolve(
+        exact = _tree_resolve(catalog, 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -75,7 +102,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
                 "fingerprint.rated_power": 6200,
             },
         )
-        family = catalog.resolve(
+        family = _tree_resolve(catalog, 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -106,14 +133,14 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             PROBE_ACTION_SMARTESS_QUERY,
         )
 
-        vmii = catalog.resolve(
+        vmii = _tree_resolve(catalog, 
             protocol_key="pi30",
             evidence={
                 "protocol.protocol_id": "PI30",
                 "identity.model_number": "VMII-NXPW5KW",
             },
         )
-        pi30_max = catalog.resolve(
+        pi30_max = _tree_resolve(catalog, 
             protocol_key="pi30",
             evidence={
                 "protocol.protocol_id": "PI30",
@@ -124,13 +151,18 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
                 "shape.qpiws_bit_count": 35,
             },
         )
-        pi18 = catalog.resolve(
+        pi18 = _tree_resolve(catalog, 
             protocol_key="pi18",
             evidence={"protocol.protocol_id": "PI18"},
         )
 
         self.assertEqual(vmii.surface_key, "pi30_vmii_full")
-        self.assertEqual(pi30_max.resolution, RESOLUTION_COMPATIBLE_GROUP)
+        # The tree walks anchors to the most specific descriptor: with the
+        # qflag capability evidence present it resolves pi30_max_qflag
+        # EXACTLY, where the retired value engine returned the compatible
+        # group. Same surface either way.
+        self.assertEqual(pi30_max.resolution, RESOLUTION_EXACT)
+        self.assertEqual(pi30_max.candidate_keys, ("pi30_max_qflag",))
         self.assertEqual(pi30_max.surface_key, "pi30_max_full")
         self.assertEqual(pi18.resolution, RESOLUTION_FAMILY)
         self.assertEqual(pi18.surface_key, "pi18_read_only")
@@ -138,18 +170,23 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         self.assertEqual(pi30.probe_timeout, 12.0)
         self.assertEqual(pi30.signature_timeout, 4.0)
 
-    def test_missing_evidence_does_not_select_lower_priority_fallback(self) -> None:
-        result = load_compiled_detection_catalog().resolve(
+    def test_missing_evidence_falls_back_to_the_read_only_family(self) -> None:
+        # Static resolution over fixed evidence routes AROUND missing anchors
+        # to the safe read-only family fallback. (The retired value engine
+        # returned UNRESOLVED here; the interactive probe walkers still
+        # demand the missing anchors by executing more probe actions, so
+        # exact candidates are not lost - they are simply not claimable from
+        # a static evidence dict.)
+        result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="pi30",
             evidence={"protocol.protocol_id": "PI30"},
         )
 
-        self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
-        self.assertIn("pi30_vmii_nxpw5kw", result.candidate_keys)
-        self.assertIn("pi30_family", result.candidate_keys)
+        self.assertEqual(result.resolution, RESOLUTION_FAMILY)
+        self.assertEqual(result.candidate_keys, ("pi30_family",))
 
     def test_local_pi_variant_outranks_smartess_supporting_evidence(self) -> None:
-        result = load_compiled_detection_catalog().resolve(
+        result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="pi30",
             evidence={
                 "protocol.protocol_id": "PI30",
@@ -181,7 +218,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             catalog_version="test",
         )
 
-        result = catalog.resolve(
+        result = _tree_resolve(catalog, 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -224,7 +261,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             catalog_version="test",
         )
 
-        result = catalog.resolve(
+        result = _tree_resolve(catalog, 
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
