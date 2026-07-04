@@ -29,7 +29,14 @@ def mask_numeric_identifiers(value):
     """Mask long numeric identifiers in text and ASCII-encoded hex blobs."""
 
     if isinstance(value, dict):
-        return {key: mask_numeric_identifiers(item) for key, item in value.items()}
+        # Keys are masked too: a PN/serial used as a mapping key would
+        # otherwise leave the artifact unmasked.
+        return {
+            (mask_numeric_identifiers(key) if isinstance(key, str) else key): (
+                mask_numeric_identifiers(item)
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [mask_numeric_identifiers(item) for item in value]
     if not isinstance(value, str):

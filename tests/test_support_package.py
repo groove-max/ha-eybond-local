@@ -239,6 +239,48 @@ class SupportPackageTests(unittest.TestCase):
         decoded_frame = bytes.fromhex(raw_capture["frames"][0]).decode("ascii")
         self.assertEqual(decoded_frame, "AT+DTUPN:" + masked_pn)
 
+    def test_manifest_recommended_artifact_survives_masking(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry123",
+                entry_title="Bridge",
+                connected=True,
+                collector={"collector_pn": "E5000020000000"},
+                inverter=None,
+                values={},
+                data={},
+                options={},
+                profile_name="smg_modbus.json",
+                register_schema_name="modbus_smg/models/smg_6200.json",
+            )
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry123",
+                entry_title="Bridge",
+                support_bundle=support_bundle,
+                raw_capture=None,
+                fixture=None,
+                anonymized_fixture=None,
+            )
+            with zipfile.ZipFile(result.path) as archive:
+                manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+
+        # The archive filename carries a compact timestamp the identifier
+        # mask would star out; the manifest must reference the real file.
+        self.assertEqual(
+            manifest["sharing_guidance"]["recommended_artifact"], result.path.name
+        )
+
+    def test_masking_covers_dict_keys(self) -> None:
+        from custom_components.eybond_local.support.masking import (
+            mask_numeric_identifiers,
+        )
+
+        masked = mask_numeric_identifiers({"E50000200000000001": {"nested": "ok"}})
+        self.assertEqual(list(masked), ["E5000*********0001"])
+        self.assertEqual(masked["E5000*********0001"], {"nested": "ok"})
+
     def test_mask_jsonl_text_masks_strings_but_keeps_numbers(self) -> None:
         lines = (
             '{"ts": 1751600000.123, "pn": "E50000200000000001", "register": 12345678901}\n'

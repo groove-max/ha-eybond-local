@@ -215,6 +215,11 @@ def export_support_package(
                 payload = _mask_jsonl_text(payload)
             else:
                 payload = mask_numeric_identifiers(payload)
+            if member_name == "manifest.json":
+                # The archive's own filename carries a compact timestamp that
+                # the identifier mask would star out, leaving the manifest
+                # pointing at a file that does not exist.
+                payload["sharing_guidance"]["recommended_artifact"] = destination.name
             if isinstance(payload, str):
                 archive.writestr(member_name, payload)
                 continue

@@ -24,6 +24,7 @@ from ..metadata.compiled_detection_catalog import (
     PROBE_ACTION_MODBUS_READ,
     load_compiled_detection_catalog,
 )
+from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusSession
@@ -146,6 +147,11 @@ class ModbusCatalogDriver(InverterDriver):
             None,
         )
         model_name = descriptor.model_name if descriptor is not None else PROTOCOL_KEY
+        # Live entity setup reads capabilities from the DetectedInverter, not
+        # from the driver — and this driver is a multi-pack singleton whose
+        # own profile is whatever the default surface says, so the pack's
+        # profile must ride along with the detection result.
+        profile = _profile_for_name(surface.profile_name)
         details: dict[str, Any] = {
             "protocol_id": PROTOCOL_KEY.upper(),
             "identity_evidence": dict(raw_values),
@@ -167,6 +173,9 @@ class ModbusCatalogDriver(InverterDriver):
             details=details,
             profile_name=surface.profile_name,
             register_schema_name=surface.register_schema_name,
+            capability_groups=tuple(profile.groups) if profile is not None else (),
+            capabilities=tuple(profile.capabilities) if profile is not None else (),
+            capability_presets=tuple(profile.presets) if profile is not None else (),
         )
 
     async def async_read_values(
@@ -206,8 +215,15 @@ class ModbusCatalogDriver(InverterDriver):
         capability_key: str,
         value: Any,
     ) -> Any:
+        # A restored entry may carry a profile_name but no materialized
+        # capabilities; the driver-level fallback is useless here because
+        # this multi-pack singleton's own profile is the default surface's.
+        capabilities = inverter.capabilities
+        if not capabilities and inverter.profile_name:
+            profile = _profile_for_name(inverter.profile_name)
+            capabilities = tuple(profile.capabilities) if profile is not None else ()
         capability = find_capability(
-            capability_key, inverter.capabilities or self.write_capabilities
+            capability_key, capabilities or self.write_capabilities
         )
         raw_words = encode_capability_words(capability, value)
         session = self._session(transport, inverter.probe_target)
@@ -323,6 +339,19 @@ class ModbusCatalogDriver(InverterDriver):
             action.key,
             last_error,
         )
+        return None
+
+
+def _profile_for_name(profile_name: str):
+    """Load a pack's controls profile, tolerating packs without one."""
+
+    name = str(profile_name or "").strip()
+    if not name:
+        return None
+    try:
+        return load_driver_profile(name)
+    except Exception:
+        logger.warning("Failed to load catalog pack profile %s", name, exc_info=True)
         return None
 
 

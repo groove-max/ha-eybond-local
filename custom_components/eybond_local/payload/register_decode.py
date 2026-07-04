@@ -120,13 +120,17 @@ def decode_block(
     decoded: dict[str, Any] = {}
     for spec in specs:
         raw = decode_raw_value(registers, spec, ascii_style=ascii_style)
-        if spec.offset and isinstance(raw, (int, float)):
-            raw = raw + spec.offset
         if spec.enum_map is not None:
             decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
-        elif all_ones_unavailable and is_all_ones_unavailable(raw, spec):
+            continue
+        if all_ones_unavailable and is_all_ones_unavailable(raw, spec):
             decoded[spec.key] = None
-        elif spec.multiplier is not None and isinstance(raw, (int, float)):
+            continue
+        # The offset applies to the WIRE value, so it must come after the
+        # all-ones sentinel check: shifting 0xFFFF first would unmask it.
+        if spec.offset and isinstance(raw, (int, float)):
+            raw = raw + spec.offset
+        if spec.multiplier is not None and isinstance(raw, (int, float)):
             decoded[spec.key] = round(raw * spec.multiplier, spec.decimals or 0)
         elif spec.divisor and isinstance(raw, (int, float)):
             # Without explicit decimals the divisor implies the precision

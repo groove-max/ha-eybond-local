@@ -380,6 +380,64 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         apply_canonical_measurements("modbus_catalog", values, variant_key="deye_lv")
         self.assertEqual(values["pv_power"], 2000)
 
+    async def test_probe_attaches_pack_profile_capabilities(self) -> None:
+        from custom_components.eybond_local.control_policy import can_expose_capability
+        from custom_components.eybond_local.const import (
+            CONTROL_MODE_AUTO,
+            CONTROL_MODE_FULL,
+        )
+
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers=_growatt_input_registers(),
+            holding_registers=_growatt_holding_registers(),
+        )
+
+        inverter = await driver.async_probe(transport, _target())
+
+        assert inverter is not None
+        # Live entity setup reads inverter.capabilities — they must ride
+        # along with the detection result, not sit only in the profile file.
+        self.assertTrue(inverter.capabilities)
+        self.assertTrue(inverter.capability_groups)
+        keys = {capability.key for capability in inverter.capabilities}
+        self.assertIn("max_charge_current", keys)
+        for capability in inverter.capabilities:
+            self.assertFalse(capability.tested, capability.key)
+            self.assertFalse(
+                can_expose_capability(capability, control_mode=CONTROL_MODE_AUTO),
+                capability.key,
+            )
+            self.assertTrue(
+                can_expose_capability(capability, control_mode=CONTROL_MODE_FULL),
+                capability.key,
+            )
+
+        # The write path works straight off the probe result too.
+        result = await driver.async_write_capability(
+            transport, inverter, "max_charge_current", 80
+        )
+        self.assertEqual(result, 80)
+        self.assertEqual(transport._registers[34], 80)
+
+    async def test_write_capability_reloads_profile_for_restored_entries(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers=_growatt_input_registers(),
+            holding_registers=_growatt_holding_registers(),
+        )
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+        # A restored entry can carry the profile name without materialized
+        # capabilities; the driver must fall back to the pack profile.
+        inverter.capabilities = ()
+
+        result = await driver.async_write_capability(
+            transport, inverter, "buzzer_enabled", False
+        )
+        self.assertIs(result, False)
+        self.assertEqual(transport._registers[22], 0)
+
     async def test_write_capability_uses_fc16_by_default_and_fc06_on_override(self) -> None:
         from custom_components.eybond_local.models import WriteCapability
 

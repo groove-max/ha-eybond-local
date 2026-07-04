@@ -76,6 +76,8 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.profile_name, "must_pv_ph18/base.json")
         self.assertEqual(inverter.register_schema_name, "must_pv_ph18/base.json")
         self.assertEqual(inverter.probe_target.device_addr, 4)
+        # The profile's untested controls ride along with the probe result.
+        self.assertTrue(inverter.capabilities)
 
     async def test_probe_detects_numeric_pv1800_model_register(self) -> None:
         driver = MustPvPh18Driver()

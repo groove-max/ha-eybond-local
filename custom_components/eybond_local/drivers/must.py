@@ -89,6 +89,9 @@ class MustPvPh18Driver(InverterDriver):
                 },
             },
         }
+        # Entity setup reads capabilities from the DetectedInverter; carry
+        # the profile's untested controls with the detection result.
+        profile = self.profile_metadata if surface.profile_name else None
         return DetectedInverter(
             driver_key=self.key,
             protocol_family="must_pv_ph18",
@@ -99,6 +102,9 @@ class MustPvPh18Driver(InverterDriver):
             details=details,
             profile_name=surface.profile_name,
             register_schema_name=surface.register_schema_name,
+            capability_groups=tuple(profile.groups) if profile is not None else (),
+            capabilities=tuple(profile.capabilities) if profile is not None else (),
+            capability_presets=tuple(profile.presets) if profile is not None else (),
         )
 
     async def async_read_values(

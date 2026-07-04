@@ -55,6 +55,16 @@ class DecodeBlockTests(unittest.TestCase):
         decoded = decode_block(10, [512], specs)
         self.assertEqual(decoded["value"], 51)
 
+    def test_offset_applies_after_the_all_ones_sentinel(self) -> None:
+        specs = (_spec(offset=-1000, divisor=10, decimals=1),)
+        # A live reading shifts by the offset before scaling...
+        decoded = decode_block(10, [1385], specs)
+        self.assertEqual(decoded["value"], 38.5)
+        # ...but the all-ones sentinel is checked on the WIRE value, so the
+        # offset must not unmask 0xFFFF into a plausible number.
+        decoded = decode_block(10, [0xFFFF], specs, all_ones_unavailable=True)
+        self.assertIsNone(decoded["value"])
+
     def test_signed_u32_combines_negative_value(self) -> None:
         specs = (_spec(word_count=2, signed=True),)
         decoded = decode_block(10, [0xFFFF, 0xFFF6], specs)
