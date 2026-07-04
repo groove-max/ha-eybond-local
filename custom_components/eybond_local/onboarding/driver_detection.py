@@ -77,6 +77,7 @@ async def _ordered_driver_targets(
     *,
     driver_hint: str,
     preferred_driver_keys: tuple[str, ...] = (),
+    allowed_driver_keys: tuple[str, ...] = (),
 ) -> tuple[tuple[InverterDriver, tuple[ProbeTarget, ...]], ...]:
     """Return the probe order, seeded by collector metadata when available.
 
@@ -84,11 +85,16 @@ async def _ordered_driver_targets(
     itself reports, so it outranks the signature pre-pass — and skipping that
     pre-pass saves its per-driver probe budget, which matters inside the
     shared deep-scan deadline.
+
+    ``allowed_driver_keys`` must restrict the set BEFORE the signature
+    pre-pass: a restricted re-sweep (the link baud walk) would otherwise
+    still spend wire probes signing drivers it is never going to run.
     """
 
     driver_targets = tuple(
         (driver, _ordered_probe_targets(driver, transport))
         for driver in iter_drivers(driver_hint)
+        if not allowed_driver_keys or driver.key in allowed_driver_keys
     )
     preferred = {key for key in preferred_driver_keys if key}
     if preferred and any(driver.key in preferred for driver, _ in driver_targets):
@@ -210,19 +216,15 @@ async def async_detect_inverter_candidates(
     inverter_link_down = False
     budget_exhausted = False
     logger.debug("Starting multi-candidate inverter detection depth=%s hint=%s", depth, driver_hint)
+    # Restricted re-sweeps (the link baud walk) probe only the drivers whose
+    # protocol family is expected at the current link speed; the restriction
+    # applies before the signature pre-pass inside.
     driver_targets = await _ordered_driver_targets(
         transport,
         driver_hint=driver_hint,
         preferred_driver_keys=preferred_driver_keys,
+        allowed_driver_keys=allowed_driver_keys,
     )
-    if allowed_driver_keys:
-        # Restricted re-sweeps (the link baud walk) probe only the drivers
-        # whose protocol family is expected at the current link speed.
-        driver_targets = tuple(
-            (driver, targets)
-            for driver, targets in driver_targets
-            if driver.key in allowed_driver_keys
-        )
 
     loop = asyncio.get_running_loop()
 
