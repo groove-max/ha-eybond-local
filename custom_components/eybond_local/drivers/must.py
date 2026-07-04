@@ -11,16 +11,37 @@ from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
 from ..payload.register_decode import decode_ascii_word, read_spec_set_values
 from .base import InverterDriver
+from .capability_codec import (
+    decode_capability_value,
+    encode_capability_words,
+    find_capability,
+)
 
 
 _MODEL_PREFIXES = ("PV", "PH", "EP")
 
 
 class MustPvPh18Driver(InverterDriver):
-    """Read-only driver for MUST PV/PH18 Modbus devices."""
+    """Driver for MUST PV/PH18 Modbus devices (untested controls)."""
 
     key = "must_pv_ph18"
     name = "MUST PV/PH18"
+    profile_name = "must_pv_ph18/base.json"
+
+    @property
+    def capability_groups(self):
+        profile = self.profile_metadata
+        return profile.groups if profile is not None else ()
+
+    @property
+    def write_capabilities(self):
+        profile = self.profile_metadata
+        return profile.capabilities if profile is not None else ()
+
+    @property
+    def capability_presets(self):
+        profile = self.profile_metadata
+        return profile.presets if profile is not None else ()
 
     @property
     def probe_timeout(self) -> float:
@@ -111,7 +132,23 @@ class MustPvPh18Driver(InverterDriver):
         capability_key: str,
         value: Any,
     ) -> Any:
-        raise ValueError(f"unsupported_capability:{self.key}:{capability_key}")
+        capability = find_capability(
+            capability_key, inverter.capabilities or self.write_capabilities
+        )
+        raw_words = encode_capability_words(capability, value)
+        session = self._session(transport, inverter.probe_target)
+        if capability.write_function == 6:
+            # The PH protocol document does not state the write function
+            # code; the profile pins single-register writes.
+            for offset, word in enumerate(raw_words):
+                await session.write_single_holding(
+                    capability.register + offset, int(word)
+                )
+        else:
+            await session.write_holding(capability.register, [int(w) for w in raw_words])
+        native_value = decode_capability_value(capability, raw_words)
+        inverter.details[capability.key] = native_value
+        return native_value
 
     async def async_capture_support_evidence(
         self,

@@ -25,11 +25,11 @@
     "controls": "none"
   },
   "coverage": {
-    "runtime_control_surface": "read_only",
+    "runtime_control_surface": "available",
     "smartess_control_surface": "cloud_catalog",
     "vendor_register_map": "partial",
     "notes": [
-      "Runtime support uses a third-party MUST PV/PH18 Modbus map for read-only telemetry.",
+      "Runtime support uses the MUST PH RS485 map (v1.4.3 xlsx, cross-checked against the third-party implementation); controls from the settings block ship untested and appear only in full-control mode.",
       "cloud settings were observed as a catalog-only control surface; they are not exposed as local controls because no safe write/readback correlation exists."
     ]
   },

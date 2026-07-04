@@ -1,0 +1,111 @@
+{
+  "profile_key": "must_pv_ph18/base.json",
+  "title": "MUST PV/PH18 (untested controls)",
+  "driver_key": "must_pv_ph18",
+  "protocol_family": "must_pv_ph18",
+  "groups": [
+    {
+      "key": "output",
+      "title": "Output",
+      "order": 100,
+      "description": "Inverter output behavior.",
+      "icon": "mdi:transmission-tower-export"
+    },
+    {
+      "key": "charging",
+      "title": "Charging",
+      "order": 200,
+      "description": "Charger source and current limits.",
+      "icon": "mdi:battery-charging"
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "offgrid_output_enable",
+      "title": "Off-Grid Output",
+      "register": 20101,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "output",
+      "note": "MUST PH holding register 20101; the write function code is undocumented, single-register write assumed.",
+      "change_summary": "Enables inverter output when the grid is absent.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+    },
+    {
+      "key": "power_save_mode",
+      "title": "Power Save (Search Mode)",
+      "register": 20104,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "output",
+      "note": "MUST PH holding register 20104.",
+      "change_summary": "Enables load-search power saving.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+    },
+    {
+      "key": "grid_charge_enable",
+      "title": "Grid Charging",
+      "register": 20106,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "charging",
+      "note": "MUST PH holding register 20106.",
+      "change_summary": "Allows the battery to charge from the grid.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+    },
+    {
+      "key": "charge_source_priority",
+      "title": "Charge Source Priority",
+      "register": 20143,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "charging",
+      "note": "MUST PH holding register 20143; the protocol defines no value 1.",
+      "change_summary": "Chooses which source charges the battery.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "choices": [
+        {"value": 0, "label": "Solar First", "order": 0, "description": "Charge from solar first, utility assists."},
+        {"value": 2, "label": "Solar and Utility", "order": 1, "description": "Charge from solar and utility together."},
+        {"value": 3, "label": "Only Solar", "order": 2, "description": "Charge from solar only."}
+      ]
+    },
+    {
+      "key": "grid_max_charge_current",
+      "title": "Grid Max Charge Current",
+      "register": 20125,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "charging",
+      "unit": "A",
+      "divisor": 10,
+      "minimum": 10,
+      "maximum": 800,
+      "step": 1,
+      "note": "MUST PH holding register 20125 (1.0-80.0 A DC, raw 0.1 A).",
+      "change_summary": "Limits the battery charge current taken from the grid.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+    },
+    {
+      "key": "max_combined_charge_current",
+      "title": "Max Combined Charge Current",
+      "register": 20132,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "charging",
+      "unit": "A",
+      "divisor": 10,
+      "minimum": 10,
+      "maximum": 1400,
+      "step": 1,
+      "note": "MUST PH holding register 20132 (solar + grid total, 1.0-140.0 A DC, raw 0.1 A).",
+      "change_summary": "Limits the total battery charge current from all sources.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+    }
+  ]
+}

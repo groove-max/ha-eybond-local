@@ -1235,10 +1235,10 @@
    "protocol_key": "must_pv_ph18",
    "driver_key": "must_pv_ph18",
    "variant_key": "pv_ph18",
-   "profile_name": "",
+   "profile_name": "must_pv_ph18/base.json",
    "register_schema_name": "must_pv_ph18/base.json",
-   "tier": "partial",
-   "read_only": true,
+   "tier": "full",
+   "read_only": false,
    "default_for_driver": true,
    "support_capture_policy": "must_pv_ph18"
   },

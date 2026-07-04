@@ -73,7 +73,7 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.protocol_family, "must_pv_ph18")
         self.assertEqual(inverter.model_name, "MUST PV18")
         self.assertEqual(inverter.variant_key, "pv_ph18")
-        self.assertEqual(inverter.profile_name, "")
+        self.assertEqual(inverter.profile_name, "must_pv_ph18/base.json")
         self.assertEqual(inverter.register_schema_name, "must_pv_ph18/base.json")
         self.assertEqual(inverter.probe_target.device_addr, 4)
 
@@ -133,6 +133,50 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["grid_frequency"], 49.98)
         self.assertEqual(values["grid_power"], -50)
         self.assertEqual(values["battery_load"], -100)
+
+    async def test_write_capability_uses_single_register_writes(self) -> None:
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=4)
+        transport = FixtureTransport(
+            registers=_must_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+        assert inverter is not None
+
+        result = await driver.async_write_capability(
+            transport, inverter, "charge_source_priority", "Only Solar"
+        )
+        self.assertEqual(result, "Only Solar")
+        self.assertEqual(transport._registers[20143], 3)
+
+        result = await driver.async_write_capability(
+            transport, inverter, "grid_max_charge_current", 45.0
+        )
+        self.assertEqual(result, 45.0)
+        self.assertEqual(transport._registers[20125], 450)
+
+    async def test_untested_capabilities_stay_hidden_outside_full_control(self) -> None:
+        from custom_components.eybond_local.control_policy import can_expose_capability
+        from custom_components.eybond_local.const import (
+            CONTROL_MODE_AUTO,
+            CONTROL_MODE_FULL,
+        )
+
+        driver = MustPvPh18Driver()
+        capabilities = driver.write_capabilities
+        self.assertTrue(capabilities)
+        for capability in capabilities:
+            self.assertFalse(capability.tested, capability.key)
+            self.assertFalse(
+                can_expose_capability(capability, control_mode=CONTROL_MODE_AUTO),
+                capability.key,
+            )
+            self.assertTrue(
+                can_expose_capability(capability, control_mode=CONTROL_MODE_FULL),
+                capability.key,
+            )
 
     async def test_support_evidence_captures_planned_ranges(self) -> None:
         driver = MustPvPh18Driver()
