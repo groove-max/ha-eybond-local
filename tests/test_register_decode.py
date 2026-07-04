@@ -45,6 +45,16 @@ class DecodeBlockTests(unittest.TestCase):
         decoded = decode_block(10, [512], specs)
         self.assertEqual(decoded["value"], 51.2)
 
+    def test_divisor_without_decimals_keeps_implied_precision(self) -> None:
+        specs = (_spec(divisor=10),)
+        decoded = decode_block(10, [512], specs)
+        self.assertEqual(decoded["value"], 51.2)
+
+    def test_explicit_zero_decimals_rounds_to_integer_despite_divisor(self) -> None:
+        specs = (_spec(divisor=10, decimals=0),)
+        decoded = decode_block(10, [512], specs)
+        self.assertEqual(decoded["value"], 51)
+
     def test_signed_u32_combines_negative_value(self) -> None:
         specs = (_spec(word_count=2, signed=True),)
         decoded = decode_block(10, [0xFFFF, 0xFFF6], specs)

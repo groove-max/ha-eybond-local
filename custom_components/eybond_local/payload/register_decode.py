@@ -129,11 +129,14 @@ def decode_block(
         elif spec.divisor and isinstance(raw, (int, float)):
             # Without explicit decimals the divisor implies the precision
             # (divisor 10 -> 1 decimal): rounding a scaled reading to an
-            # integer would silently truncate real telemetry.
-            decoded[spec.key] = round(
-                raw / spec.divisor,
-                spec.decimals or decimals_for_divisor(spec.divisor),
+            # integer would silently truncate real telemetry.  An explicit
+            # decimals — including 0 — always wins over the implied value.
+            precision = (
+                spec.decimals
+                if spec.decimals is not None
+                else decimals_for_divisor(spec.divisor)
             )
+            decoded[spec.key] = round(raw / spec.divisor, precision)
         else:
             decoded[spec.key] = raw
     return decoded
