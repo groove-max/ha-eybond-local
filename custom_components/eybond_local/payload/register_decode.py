@@ -120,6 +120,8 @@ def decode_block(
     decoded: dict[str, Any] = {}
     for spec in specs:
         raw = decode_raw_value(registers, spec, ascii_style=ascii_style)
+        if spec.offset and isinstance(raw, (int, float)):
+            raw = raw + spec.offset
         if spec.enum_map is not None:
             decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
         elif all_ones_unavailable and is_all_ones_unavailable(raw, spec):

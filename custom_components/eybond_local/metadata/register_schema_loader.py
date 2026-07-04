@@ -296,6 +296,7 @@ def _parse_spec(
         divisor=_optional_int(raw.get("divisor")),
         multiplier=_optional_float(raw.get("multiplier")),
         decimals=_optional_int(raw.get("decimals")),
+        offset=_optional_int(raw.get("offset")),
         enum_map=enum_map,
         function=_parse_read_function(raw.get("function", 3)),
     )

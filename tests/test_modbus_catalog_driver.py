@@ -147,6 +147,34 @@ def _solis_input_registers() -> dict[int, int]:
     return registers
 
 
+def _deye_holding_registers() -> dict[int, int]:
+    registers: dict[int, int] = {}
+    for start, count in ((0, 20), (59, 50), (109, 8), (150, 47), (312, 12)):
+        for offset in range(count):
+            registers[start + offset] = 0
+    registers.update(
+        {
+            0: 768,      # 0x0300 single-phase LV storage
+            16: 50000,   # rated 5000.0 W (low word)
+            59: 2,       # Normal
+            79: 5000,    # 50.00 Hz
+            90: 1385,    # DC transformer 38.5 C
+            108: 156,    # PV today 15.6 kWh
+            150: 2305,   # grid 230.5 V
+            169: 0xFF38, # grid power -200 W (selling)
+            178: 850,    # load 850 W
+            182: 1215,   # battery 21.5 C
+            183: 5230,   # battery 52.30 V
+            184: 91,     # SOC 91 %
+            186: 1200,   # PV1 1200 W
+            187: 800,    # PV2 800 W
+            190: 0xFC18, # battery power raw -1000 (charging) -> +1000 W
+            192: 5001,   # 50.01 Hz
+        }
+    )
+    return registers
+
+
 class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_matches_aohai_plausibility_anchors(self) -> None:
         driver = ModbusCatalogDriver()
@@ -305,6 +333,52 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["battery_power"], 1200.0)
         # Wire value -500 W (export-positive) -> canonical +500 W import.
         self.assertEqual(values["grid_power"], 500.0)
+
+    async def test_probe_matches_deye_lv_hybrid_by_device_type(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers={},
+            holding_registers=_deye_holding_registers(),
+        )
+
+        inverter = await driver.async_probe(transport, _target())
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "Deye Single-Phase LV Hybrid (Modbus)")
+        self.assertEqual(inverter.variant_key, "deye_lv")
+        self.assertEqual(inverter.profile_name, "modbus_catalog/deye_lv.json")
+
+    async def test_deye_read_values_decode_offsets_and_signs(self) -> None:
+        from custom_components.eybond_local.canonical_telemetry import (
+            apply_canonical_measurements,
+        )
+
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers={},
+            holding_registers=_deye_holding_registers(),
+        )
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["run_state"], "Normal")
+        self.assertEqual(values["rated_power"], 5000.0)
+        # Offset-1000 temperature encoding: raw 1385 -> 38.5 C.
+        self.assertEqual(values["dc_transformer_temperature"], 38.5)
+        self.assertEqual(values["battery_temperature"], 21.5)
+        self.assertEqual(values["battery_voltage"], 52.3)
+        self.assertEqual(values["battery_percent"], 91)
+        # Wire is discharge-positive; raw -1000 flips to +1000 W charging.
+        self.assertEqual(values["battery_power"], 1000.0)
+        # Grid power is already import-positive on the wire (buy > 0).
+        self.assertEqual(values["grid_power"], -200)
+        self.assertEqual(values["output_power"], 850)
+        self.assertEqual(values["pv_generation_day"], 15.6)
+
+        apply_canonical_measurements("modbus_catalog", values, variant_key="deye_lv")
+        self.assertEqual(values["pv_power"], 2000)
 
     async def test_write_capability_uses_fc16_by_default_and_fc06_on_override(self) -> None:
         from custom_components.eybond_local.models import WriteCapability

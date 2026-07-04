@@ -660,6 +660,40 @@
        "words": 1
       }
      ]
+    },
+    {
+     "key": "modbus_catalog.deye_identity_device_type",
+     "kind": "modbus_read",
+     "register": 0,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.deye_device_type_raw",
+       "source_key": "deye_device_type_raw",
+       "register": 0,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.deye_identity_rated_power",
+     "kind": "modbus_read",
+     "register": 16,
+     "count": 1,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.deye_rated_power_low_raw",
+       "source_key": "deye_rated_power_low_raw",
+       "register": 16,
+       "words": 1
+      }
+     ]
     }
    ],
    "layouts": [],
@@ -1008,6 +1042,33 @@
    "notes": [
     "Solis/Ginlong ESINV energy-storage telemetry is all input registers (function 4) in the 33xxx area; 35000 is the model/protocol definition word. Fixed 9600 8N1, >300 ms inter-frame gap, max 50 registers per read. The protocol document is the read-only ESINV-33000ID translation."
    ]
+  },
+  "deye_lv": {
+   "ranges": [
+    [
+     0,
+     20
+    ],
+    [
+     59,
+     50
+    ],
+    [
+     109,
+     8
+    ],
+    [
+     150,
+     47
+    ],
+    [
+     312,
+     12
+    ]
+   ],
+   "notes": [
+    "Deye single-phase LV storage/hybrid map: everything is holding registers (function 3 only; writes use function 16). 32-bit counters are low-word-first; temperatures are (raw-1000)*0.1 degC. Registers 150-218 are the STORAGE meaning of an address space that string inverters reuse differently — device type (register 0) must be 0x0300. Modbus RTU 9600, slave address in register 1 (default 1)."
+   ]
   }
  },
  "surfaces": [
@@ -1237,6 +1298,17 @@
    "tier": "partial",
    "read_only": true,
    "support_capture_policy": "solis_esinv"
+  },
+  {
+   "key": "deye_lv_untested",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "deye_lv",
+   "profile_name": "modbus_catalog/deye_lv.json",
+   "register_schema_name": "deye_lv/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "deye_lv"
   }
  ],
  "devices": [
@@ -2241,6 +2313,32 @@
    "provenance": {
     "sources": [
      "ESINV-33000ID hybrid RS485 Modbus RTU protocol V002B000D01B (read-only translation, 2020-09-15; fixed 9600 8N1). Model-definition word 35000 documents hybrid variants as hex 2030/2031/2040/2050/2060; the anchor accepts both the hex-decoded and literal-decimal readings until hardware confirms which the firmware reports."
+    ],
+    "confidence": "datasheet-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "deye_lv_family",
+   "surface_key": "deye_lv_untested",
+   "model_name": "Deye Single-Phase LV Hybrid (Modbus)",
+   "priority": 116,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.deye_device_type_raw",
+     "equals": 768,
+     "cost": 1
+    },
+    {
+     "key": "identity.deye_rated_power_low_raw",
+     "min": 10000,
+     "max": 65535,
+     "cost": 2
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "Deye Modbus RTU protocol V1.18 (storage/string/micro) and V1.19 (one-phase) — same register map; SUN-xK-SG04LP1-class single-phase LV hybrids. Device type 0x0300 (768) selects the storage meaning of the overloaded 150-218 register area; rated power anchor reads the low word of the 0.1 W u32 (covers units up to 6.5 kW)."
     ],
     "confidence": "datasheet-unconfirmed"
    }

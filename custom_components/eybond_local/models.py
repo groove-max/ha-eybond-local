@@ -62,6 +62,9 @@ class RegisterValueSpec:
     divisor: int | None = None
     multiplier: float | None = None
     decimals: int | None = None
+    # Added to the raw register value before any scaling. Deye-style
+    # temperatures encode as (raw - 1000) * 0.1 degC -> offset -1000.
+    offset: int | None = None
     enum_map: dict[int | str, str] | None = None
     # Modbus function the register lives under: 3 = holding, 4 = input.
     # Input and holding registers are distinct address spaces, so specs are
