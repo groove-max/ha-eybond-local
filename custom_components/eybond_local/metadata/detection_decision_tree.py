@@ -14,6 +14,11 @@ from .detection_descriptor_loader import (
     mandatory_detection_anchor_keys,
     _stable_signature_value,
 )
+from .anchor_matching import (
+    contains_any_matches,
+    known_enum_matches,
+    range_matches,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,31 +605,31 @@ def _signature_range_contains_value(signature: str, value: object) -> bool:
     if not signature.startswith(prefix):
         return False
     _range, min_value, max_value = signature.split(":", 2)
-    try:
-        observed = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return False
-    if min_value != "None" and observed < float(min_value):
-        return False
-    if max_value != "None" and observed > float(max_value):
-        return False
-    return True
+    return range_matches(
+        None if min_value == "None" else float(min_value),
+        None if max_value == "None" else float(max_value),
+        value,
+    )
 
 
 def _signature_known_or_present(signature: str, value: object) -> bool:
-    if value is None:
-        return False
-    return signature in {"known_enum", "present"}
+    if signature == "known_enum":
+        # Strict, matching the family-fallback contradiction checks: the
+        # value must be a decoded enum label, not an "Unknown (n)"
+        # placeholder. Accepting any non-None value here would validate
+        # garbage that the other evaluator rejects.
+        return known_enum_matches(value)
+    if signature == "present":
+        return value is not None
+    return False
 
 
 def _signature_contains_any(signature: str, value: object) -> bool:
     prefix = "contains_any:"
     if not signature.startswith(prefix):
         return False
-    observed = str(value).lower()
-    return any(
-        token and token in observed
-        for token in signature.removeprefix(prefix).split(",")
+    return contains_any_matches(
+        tuple(signature.removeprefix(prefix).split(",")), value
     )
 
 

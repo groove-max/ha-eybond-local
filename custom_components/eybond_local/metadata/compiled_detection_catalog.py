@@ -20,6 +20,7 @@ from .detection_descriptor_loader import (
     DetectionProtocolDescriptor,
     load_detection_descriptor_catalog,
 )
+from .anchor_matching import anchor_condition_matches
 from .device_catalog_loader import load_device_catalog
 
 
@@ -681,22 +682,4 @@ def _descriptor_has_required_evidence(
 
 
 def _anchor_matches(anchor: DetectionAnchorCondition, value: object) -> bool:
-    if anchor.equals is not None and value != anchor.equals:
-        return False
-    if anchor.one_of and value not in anchor.one_of:
-        return False
-    if anchor.contains_any:
-        observed = str(value).lower()
-        if not any(token in observed for token in anchor.contains_any):
-            return False
-    if anchor.known_enum and (
-        not isinstance(value, str) or value.startswith("Unknown")
-    ):
-        return False
-    if anchor.min_value is not None:
-        if not isinstance(value, (int, float)) or value < anchor.min_value:
-            return False
-    if anchor.max_value is not None:
-        if not isinstance(value, (int, float)) or value > anchor.max_value:
-            return False
-    return True
+    return anchor_condition_matches(anchor, value)
