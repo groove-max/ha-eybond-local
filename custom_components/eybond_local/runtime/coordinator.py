@@ -32,6 +32,7 @@ from ..collector_endpoint import (
     normalize_collector_server_endpoint as normalize_runtime_collector_server_endpoint,
     parse_collector_server_endpoint as parse_runtime_collector_server_endpoint,
     resolve_collector_server_endpoint as resolve_runtime_collector_server_endpoint,
+    home_assistant_callback_endpoint,
 )
 from ..collector.cloud_family import (
     COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY,
@@ -693,14 +694,13 @@ def _format_home_assistant_collector_endpoint(
     server_host: str,
     template_endpoint: str = "",
     cloud_family: str = "",
-    server_port_override: int = 0,
 ) -> str:
-    """Build the Home Assistant callback endpoint using the cloud profile shape.
+    """Build a proxy-capture endpoint mirroring the template's port shape.
 
-    ``server_port_override`` pins the port to this entry's actual listener:
-    the callback target must never inherit the cloud/proxy port from the
-    template shape (the proxy-capture path, by contrast, deliberately keeps
-    the template port because the proxy listener mirrors the cloud port).
+    Deliberately keeps the template port: the proxy-capture listener mirrors
+    the cloud port. The HA CALLBACK target must never use this — it goes
+    through collector_endpoint.home_assistant_callback_endpoint, which pins
+    the entry's listener port.
     """
 
     server_port = default_collector_server_port(cloud_family=cloud_family)
@@ -714,8 +714,6 @@ def _format_home_assistant_collector_endpoint(
         except ValueError:
             server_port = DEFAULT_COLLECTOR_SERVER_PORT
             server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
-    if server_port_override > 0:
-        server_port = int(server_port_override)
     return format_collector_server_endpoint_for_cloud_profile(
         server_host=server_host,
         cloud_family=cloud_family,
@@ -4237,15 +4235,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             or self.collector_server_endpoint_rollback_target
             or ""
         ).strip()
-        return _format_home_assistant_collector_endpoint(
+        return home_assistant_callback_endpoint(
             server_host=self._effective_callback_server_host,
-            template_endpoint=template_endpoint,
-            cloud_family=self.collector_cloud_family,
-            server_port_override=int(
+            listener_port=int(
                 getattr(self._connection_spec, "effective_advertised_tcp_port", 0)
                 or getattr(self._connection_spec, "tcp_port", 0)
                 or 0
             ),
+            template_endpoint=template_endpoint,
+            cloud_family=self.collector_cloud_family,
         )
 
     @property

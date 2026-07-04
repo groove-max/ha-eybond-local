@@ -45,6 +45,7 @@ from .collector_endpoint import (
     format_collector_server_endpoint,
     inspect_collector_server_endpoint,
     resolve_collector_server_endpoint,
+    home_assistant_callback_endpoint,
 )
 from .connection.branch_registry import get_connection_branch, supported_connection_types
 from .connection.entry import (
@@ -3680,47 +3681,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             or self._collector_original_server_endpoint
             or ""
         ).strip()
-        cloud_family = ""
-        # The callback target is ALWAYS this Home Assistant listener. Its
-        # port must come from the connection spec, never from the collector
-        # cloud default (18899 is the vendor cloud port): with no readable
-        # template endpoint the old fallback pointed the collector at a port
-        # nothing listens on, and the runtime UDP announcer then fought the
-        # persisted endpoint every reconnect.
-        server_port = int(
-            getattr(spec, "effective_advertised_tcp_port", 0)
-            or getattr(spec, "tcp_port", 0)
-            or DEFAULT_COLLECTOR_SERVER_PORT
-        )
-        server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
-        if template_endpoint:
-            try:
-                parsed = inspect_collector_server_endpoint(
-                    template_endpoint,
-                    require_explicit_port=False,
-                    require_explicit_protocol=False,
-                )
-            except ValueError:
-                pass
-            else:
-                cloud_family = collector_cloud_family_observation_from_endpoint(
-                    template_endpoint
-                ).family
-                if cloud_family == "unknown":
-                    cloud_family = ""
-                _host, _template_port, server_protocol = resolve_collector_server_endpoint(
-                    template_endpoint,
-                    require_explicit_port=False,
-                    require_explicit_protocol=False,
-                    cloud_family=cloud_family,
-                )
-        return format_collector_server_endpoint_for_cloud_profile(
+        return home_assistant_callback_endpoint(
             server_host=spec.effective_advertised_server_ip,
-            cloud_family=cloud_family,
-            server_port=server_port,
-            server_protocol=server_protocol,
+            listener_port=int(
+                getattr(spec, "effective_advertised_tcp_port", 0)
+                or getattr(spec, "tcp_port", 0)
+                or 0
+            ),
             template_endpoint=template_endpoint,
-            require_tcp=True,
         )
 
     def _collector_original_endpoint_options(self, endpoint: str) -> dict[str, str]:
