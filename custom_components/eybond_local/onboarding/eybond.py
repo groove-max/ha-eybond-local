@@ -1032,30 +1032,53 @@ class OnboardingDetector:
                     )
 
             if not scan.candidates:
-                # Deep sweep ran out of budget before any driver confirmed;
-                # keep the per-driver probe log so diagnostics can show what
-                # was tried and how long each probe took.
-                if candidate.collector is not None:
-                    await self._async_enrich_collector_bridge_details(
-                        transport,
-                        candidate.collector,
-                        collector_ip=candidate.ip,
-                    )
-                return _with_detection_evidence(
-                    OnboardingResult(
-                        collector=candidate,
-                        connection_type=CONNECTION_TYPE_EYBOND,
-                        connection_mode=target.source,
-                        warnings=tuple(warnings),
-                        next_action="manual_driver_selection",
-                        last_error="target_detection_timeout",
-                    ),
-                    depth=depth,
-                    status="target_timeout",
-                    reason="driver_detection_budget_exhausted",
-                    budget_exhausted=True,
-                    details={"probe_log": list(scan.probe_log)} if scan.probe_log else None,
+                # Deep sweep ran out of budget before any driver confirmed.
+                # A silent target usually lands HERE, not in the RuntimeError
+                # branch: on a dead UART every probe burns its full timeout,
+                # so the sweep budget exhausts before the registry completes.
+                # The link baud walk must therefore trigger from this branch
+                # too when the probe log shows no observed response at all.
+                scan_silent = bool(scan.probe_log) and not any(
+                    entry.get("saw_response") for entry in scan.probe_log
                 )
+                if depth == DETECTION_DEPTH_DEEP and scan_silent:
+                    sweep_outcome = await self._async_attempt_link_baud_sweep(
+                        transport,
+                        deadline=deadline,
+                        preferred_driver_keys=_smartess_preferred_driver_keys(smartess_probe),
+                    )
+                if sweep_outcome is not None and sweep_outcome.matched:
+                    scan = sweep_outcome.scan
+                    warnings = [*warnings, "link_baud_changed"]
+                else:
+                    if candidate.collector is not None:
+                        await self._async_enrich_collector_bridge_details(
+                            transport,
+                            candidate.collector,
+                            collector_ip=candidate.ip,
+                        )
+                    budget_details: dict[str, Any] = {}
+                    if scan.probe_log:
+                        budget_details["probe_log"] = list(scan.probe_log)
+                    if scan_silent:
+                        budget_details["link_baud_hints"] = list(catalog_link_baud_hints())
+                    if sweep_outcome is not None:
+                        budget_details["link_baud_sweep"] = sweep_outcome.as_details()
+                    return _with_detection_evidence(
+                        OnboardingResult(
+                            collector=candidate,
+                            connection_type=CONNECTION_TYPE_EYBOND,
+                            connection_mode=target.source,
+                            warnings=tuple(warnings),
+                            next_action="manual_driver_selection",
+                            last_error="target_detection_timeout",
+                        ),
+                        depth=depth,
+                        status="target_timeout",
+                        reason="driver_detection_budget_exhausted",
+                        budget_exhausted=True,
+                        details=budget_details or None,
+                    )
 
             context = scan.candidates[0]
             alternative_contexts = tuple(scan.candidates[1:])

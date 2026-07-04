@@ -3863,8 +3863,32 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 self._collector_current_server_endpoint = str(readback.text or "").strip().strip("\x00")
             with suppress(Exception):
                 await session.query_collector(QUERY_REBOOT_REQUIRED)
-            apply_response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
+            try:
+                apply_response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
+            except Exception as exc:
+                # Applying a staged endpoint makes the collector drop this TCP
+                # session (it reconnects to the new endpoint / reboots), and
+                # bridge firmware before the deferred-apply fix closes the
+                # socket before the FC=3 ack is flushed. The endpoint write
+                # and readback already succeeded above, so for a bridge the
+                # lost ack means "applying", not "failed".
+                if allow_refused_endpoint_write:
+                    logger.debug(
+                        "Collector endpoint apply dropped the session on a "
+                        "detected bridge (%s); treating as applied.",
+                        exc,
+                    )
+                    return
+                raise
             if apply_response.status != 0 or apply_response.parameter != SET_REBOOT_OR_APPLY:
+                if allow_refused_endpoint_write:
+                    logger.debug(
+                        "Collector endpoint apply refused by a detected bridge "
+                        "(parameter=%s status=%s); treating as applied.",
+                        SET_REBOOT_OR_APPLY,
+                        apply_response.status,
+                    )
+                    return
                 raise RuntimeError(
                     f"collector_set_failed:parameter={SET_REBOOT_OR_APPLY}:status={apply_response.status}"
                 )
