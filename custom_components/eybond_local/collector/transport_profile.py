@@ -122,9 +122,23 @@ def resolve_collector_transport_profile(
     *,
     cloud_family: object,
     runtime_owner_key: object = "",
+    virtual_bridge: bool = False,
 ) -> CollectorTransportProfile:
-    """Resolve callback session protocol and identity strategy."""
+    """Resolve callback session protocol and identity strategy.
 
+    ``virtual_bridge`` is THE single home of the "esp bridge speaks framed
+    FC" rule: the bridge answers SmartESS-style metadata (so its cloud-family
+    observation can read smartess_at), but deriving an at_text session from
+    that would hand the runtime the AT transport and kill every driver
+    probe. Callers must pass their best bridge verdict here instead of
+    re-implementing the branch.
+    """
+
+    if virtual_bridge:
+        return framed_collector_transport_profile(
+            cloud_family=cloud_family,
+            runtime_owner_key=runtime_owner_key,
+        )
     normalized_family = known_collector_cloud_family(cloud_family)
     normalized_owner = str(runtime_owner_key or "").strip().lower()
     if normalized_owner in EYBOND_FRAMED_RUNTIME_OWNER_KEYS:
@@ -200,20 +214,10 @@ def resolve_collector_transport_profile_from_entry_context(
         extra_endpoints=extra_endpoints,
     )
     runtime_owner_key = runtime_owner_key_from_entry_context(data, options)
-    if entry_context_is_virtual_bridge(data, options):
-        # The esp-eybond-collector bridge speaks the framed FC protocol by
-        # construction. Its cloud-family observation may say "smartess_at"
-        # (the bridge answers SmartESS-style FC=2 metadata queries), but
-        # deriving an at_text session from that would hand the runtime the
-        # AT transport and every driver probe would die with
-        # unsupported_link_route.
-        return framed_collector_transport_profile(
-            cloud_family=cloud_family,
-            runtime_owner_key=runtime_owner_key,
-        )
     return resolve_collector_transport_profile(
         cloud_family=cloud_family,
         runtime_owner_key=runtime_owner_key,
+        virtual_bridge=entry_context_is_virtual_bridge(data, options),
     )
 
 

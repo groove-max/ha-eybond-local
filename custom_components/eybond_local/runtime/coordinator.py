@@ -47,7 +47,6 @@ from ..collector.capabilities import (
 from ..collector.transport_profile import (
     collector_cloud_family_from_entry_context,
     resolve_collector_transport_profile,
-    framed_collector_transport_profile,
 )
 from ..metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_provider,
@@ -4361,17 +4360,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def collector_transport_profile(self):
         """Return the resolved callback transport profile for this runtime."""
 
-        if self._collector_is_virtual_bridge():
-            # Runtime reconciliation must never override a bridge back to an
-            # at_text profile: the cloud-family observation (smartess_at) is
-            # a metadata artifact, the bridge session is framed FC.
-            return framed_collector_transport_profile(
-                cloud_family=self.collector_cloud_family,
-                runtime_owner_key=self._collector_runtime_owner_key(),
-            )
         return resolve_collector_transport_profile(
             cloud_family=self.collector_cloud_family,
             runtime_owner_key=self._collector_runtime_owner_key(),
+            virtual_bridge=self._collector_is_virtual_bridge(),
         )
 
     def _collector_runtime_owner_key(self) -> str:
