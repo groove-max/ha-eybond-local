@@ -639,10 +639,16 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float] | None:
     pv_to_home = min(load, pv)
     pv_remaining = max(0.0, pv - pv_to_home)
 
-    desired_pv_to_battery = battery_charge
     if pv_charging_power is not None:
-        desired_pv_to_battery = min(desired_pv_to_battery, pv_charging_power)
-    pv_to_battery = min(desired_pv_to_battery, pv_remaining)
+        # The charger's own PV-side measurement outranks the derived
+        # headroom: units whose pv_power register under-reads (measured
+        # 1718 W while the charger logged 1786 W into the battery and the
+        # load drew 781 W) would otherwise have real PV charge clamped to
+        # the phantom remainder and re-attributed to the grid — a PV-only
+        # system accumulated 1.17 kWh of fake daily grid import that way.
+        pv_to_battery = min(battery_charge, pv_charging_power)
+    else:
+        pv_to_battery = min(battery_charge, pv_remaining)
     pv_remaining = max(0.0, pv_remaining - pv_to_battery)
 
     desired_pv_to_grid = pv_export_power if pv_export_power is not None else grid_export

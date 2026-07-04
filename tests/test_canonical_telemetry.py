@@ -248,6 +248,12 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_power"], -315.0)
 
     def test_apply_canonical_measurements_builds_flow_split_from_direct_pv_charge(self) -> None:
+        # The charger's own measurement (pv_charging_power) covers the whole
+        # battery charge, so none of it is grid-bound even though the
+        # under-reading pv_power register leaves no derived headroom; the
+        # grid import measurement then belongs to the home.  (The old
+        # headroom clamp attributed 246 W to grid_to_battery — MORE than the
+        # 203 W the grid was actually importing.)
         values = {
             "output_power": 109.0,
             "pv_power": 492.0,
@@ -260,11 +266,36 @@ class CanonicalTelemetryTests(unittest.TestCase):
 
         self.assertEqual(values["battery_power"], 629.0)
         self.assertEqual(values["pv_to_home_power"], 109.0)
-        self.assertEqual(values["pv_to_battery_power"], 383.0)
+        self.assertEqual(values["pv_to_battery_power"], 629.0)
         self.assertEqual(values["pv_to_grid_power"], 0.0)
         self.assertEqual(values["battery_to_home_power"], 0.0)
-        self.assertEqual(values["grid_to_battery_power"], 246.0)
-        self.assertEqual(values["grid_to_home_power"], 0.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+        self.assertEqual(values["grid_to_home_power"], 203.0)
+
+    def test_pv_only_charging_is_not_reattributed_to_grid_when_pv_power_under_reads(
+        self,
+    ) -> None:
+        # Field regression (SMG 6200, charge source "PV Only", 2026-07-04):
+        # pv_power read 1718 W while the PV charger logged 1786 W into the
+        # battery and the load drew 781 W.  The derived-headroom clamp sent
+        # the 850 W shortfall to grid_to_battery, accumulating 1.17 kWh of
+        # fake daily grid import; the grid meter recorded ~0.23 kWh.
+        values = {
+            "output_power": 781.0,
+            "pv_power": 1718.0,
+            "battery_average_power": 1787.0,
+            "grid_power": 30.0,
+            "pv_charging_power": 1786.0,
+            "grid_voltage": 230.0,
+        }
+
+        apply_canonical_measurements("modbus_smg", values)
+
+        self.assertEqual(values["pv_to_home_power"], 781.0)
+        self.assertEqual(values["pv_to_battery_power"], 1786.0)
+        self.assertEqual(values["grid_to_battery_power"], 1.0)
+        self.assertEqual(values["grid_to_home_power"], 29.0)
+        self.assertEqual(values["battery_to_home_power"], 0.0)
 
     def test_apply_canonical_measurements_routes_residual_grid_import_to_home(self) -> None:
         values = {
