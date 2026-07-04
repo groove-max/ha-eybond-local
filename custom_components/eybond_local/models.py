@@ -223,6 +223,10 @@ class WriteCapability:
     editable_if: tuple["CapabilityCondition", ...] = ()
     experimental: bool = False
     metadata_scope: str = ""
+    # Modbus write function override: some firmwares only accept single-register
+    # writes (0x06) for their config registers. None keeps the driver default
+    # (multiple-register write, 0x10).
+    write_function: int | None = None
 
     @property
     def value_key(self) -> str:

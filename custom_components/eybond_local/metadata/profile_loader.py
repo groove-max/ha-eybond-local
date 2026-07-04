@@ -337,6 +337,7 @@ def _parse_capability(
         editable_if=_resolve_conditions(resolved_raw.get("editable_if", []), named_conditions),
         experimental=experimental,
         metadata_scope=metadata_scope,
+        write_function=_optional_int(resolved_raw.get("write_function")),
     )
 
 

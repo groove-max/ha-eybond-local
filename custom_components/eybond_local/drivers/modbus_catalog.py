@@ -33,6 +33,11 @@ from ..payload.register_decode import (
     read_spec_set_values,
 )
 from .base import InverterDriver
+from .capability_codec import (
+    decode_capability_value,
+    encode_capability_words,
+    find_capability,
+)
 from .catalog_probe import async_walk_detection_dag
 
 logger = logging.getLogger(__name__)
@@ -69,6 +74,11 @@ class ModbusCatalogDriver(InverterDriver):
     def register_schema_name(self) -> str:
         surface = self._default_surface()
         return surface.register_schema_name if surface is not None else ""
+
+    @property
+    def profile_name(self) -> str:
+        surface = self._default_surface()
+        return surface.profile_name if surface is not None else ""
 
     @property
     def measurements(self):
@@ -174,6 +184,21 @@ class ModbusCatalogDriver(InverterDriver):
         session = self._session(transport, inverter.probe_target)
         return await read_spec_set_values(session, schema, ascii_style="printable")
 
+    @property
+    def capability_groups(self):
+        profile = self.profile_metadata
+        return profile.groups if profile is not None else ()
+
+    @property
+    def write_capabilities(self):
+        profile = self.profile_metadata
+        return profile.capabilities if profile is not None else ()
+
+    @property
+    def capability_presets(self):
+        profile = self.profile_metadata
+        return profile.presets if profile is not None else ()
+
     async def async_write_capability(
         self,
         transport,
@@ -181,7 +206,23 @@ class ModbusCatalogDriver(InverterDriver):
         capability_key: str,
         value: Any,
     ) -> Any:
-        raise ValueError(f"unsupported_capability:{self.key}:{capability_key}")
+        capability = find_capability(
+            capability_key, inverter.capabilities or self.write_capabilities
+        )
+        raw_words = encode_capability_words(capability, value)
+        session = self._session(transport, inverter.probe_target)
+        if capability.write_function == 6:
+            # Firmwares like Growatt SPF only accept single-register writes
+            # for their holding config block.
+            for offset, word in enumerate(raw_words):
+                await session.write_single_holding(
+                    capability.register + offset, int(word)
+                )
+        else:
+            await session.write_holding(capability.register, [int(w) for w in raw_words])
+        native_value = decode_capability_value(capability, raw_words)
+        inverter.details[capability.key] = native_value
+        return native_value
 
     async def async_capture_support_evidence(
         self,

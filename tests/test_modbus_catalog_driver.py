@@ -70,6 +70,55 @@ def _transport(
     )
 
 
+def _growatt_input_registers() -> dict[int, int]:
+    registers: dict[int, int] = {}
+    for start, count in ((0, 45), (48, 35), (93, 1)):
+        for offset in range(count):
+            registers[start + offset] = 0
+    registers.update(
+        {
+            0: 5,        # PV Charge
+            1: 1200,     # PV1 120.0 V
+            3: 0, 4: 15000,   # PV1 1500.0 W
+            17: 5210,    # battery 52.10 V
+            18: 88,      # SOC 88 %
+            20: 2299,    # grid 229.9 V
+            21: 5001,    # 50.01 Hz
+            22: 2301,    # output 230.1 V
+            23: 5000,    # 50.00 Hz
+            25: 412,     # 41.2 C
+            27: 305,     # load 30.5 %
+            36: 0, 37: 0,
+            48: 0, 49: 123,   # PV1 today 12.3 kWh
+            64: 0, 65: 87,    # load today 8.7 kWh
+            77: 0xFFFF, 78: 0xEC78,  # battery power raw -5000 -> +500.0 W charging
+            93: 89,      # BMS SOC
+        }
+    )
+    return registers
+
+
+def _growatt_holding_registers() -> dict[int, int]:
+    registers: dict[int, int] = {}
+    for start, count in ((0, 9), (18, 26), (73, 7)):
+        for offset in range(count):
+            registers[start + offset] = 0
+    registers.update(
+        {
+            1: 1,        # PV First
+            2: 2,        # PV Only
+            8: 0,        # APL
+            22: 1,       # buzzer on
+            34: 70,      # max charge current
+            43: 3450,    # DTC: OffGrid SPF 3-5K
+            73: 207,     # modbus v2.07
+            76: 0, 77: 50000,  # rated 5000.0 W
+            78: 0, 79: 50000,
+        }
+    )
+    return registers
+
+
 class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_matches_aohai_plausibility_anchors(self) -> None:
         driver = ModbusCatalogDriver()
@@ -139,6 +188,87 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         # Signed 32-bit with negative multiplier (raw -12000 -> +1200.0 W).
         self.assertEqual(values["output_power"], 1200.0)
         self.assertEqual(values["pv_generation_day"], 12.3)
+
+    async def test_probe_matches_growatt_spf_by_device_type_code(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers=_growatt_input_registers(),
+            holding_registers=_growatt_holding_registers(),
+        )
+
+        inverter = await driver.async_probe(transport, _target())
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "Growatt SPF Off-Grid (Modbus)")
+        self.assertEqual(inverter.variant_key, "growatt_spf")
+        self.assertEqual(inverter.register_schema_name, "growatt_spf/base.json")
+        self.assertEqual(inverter.profile_name, "modbus_catalog/growatt_spf.json")
+
+    async def test_growatt_read_values_decode_including_battery_sign_flip(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers=_growatt_input_registers(),
+            holding_registers=_growatt_holding_registers(),
+        )
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["inverter_operation_mode"], "PV Charge")
+        self.assertEqual(values["pv1_input_power"], 1500.0)
+        self.assertEqual(values["battery_voltage"], 52.1)
+        self.assertEqual(values["battery_percent"], 88)
+        self.assertEqual(values["grid_voltage"], 229.9)
+        self.assertEqual(values["load_percent"], 30.5)
+        # Growatt reports discharge-positive; canonical convention is
+        # charge-positive, so raw -5000 decodes to +500.0 W.
+        self.assertEqual(values["battery_power"], 500.0)
+        self.assertEqual(values["pv1_generation_day"], 12.3)
+        self.assertEqual(values["load_consumption_day"], 8.7)
+        # Holding-space config values decode via their enum tables.
+        self.assertEqual(values["output_source_priority"], "PV First")
+        self.assertEqual(values["charge_source_priority"], "PV Only")
+        self.assertEqual(values["max_charge_current"], 70)
+        self.assertEqual(values["rated_power"], 5000.0)
+
+    async def test_write_capability_uses_fc16_by_default_and_fc06_on_override(self) -> None:
+        from custom_components.eybond_local.models import WriteCapability
+
+        driver = ModbusCatalogDriver()
+        transport = _transport()
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+        inverter.capabilities = (
+            WriteCapability(
+                key="max_charge_current",
+                register=34,
+                value_kind="u16",
+                note="",
+                minimum=10,
+                maximum=130,
+            ),
+            WriteCapability(
+                key="output_source_priority",
+                register=1,
+                value_kind="enum",
+                note="",
+                enum_map={0: "Battery first", 1: "PV first", 2: "Utility first"},
+                write_function=6,
+            ),
+        )
+
+        result = await driver.async_write_capability(
+            transport, inverter, "max_charge_current", 70
+        )
+        self.assertEqual(result, 70)
+        self.assertEqual(transport._registers[34], 70)
+
+        result = await driver.async_write_capability(
+            transport, inverter, "output_source_priority", "PV first"
+        )
+        self.assertEqual(result, "PV first")
+        self.assertEqual(transport._registers[1], 1)
 
     async def test_registry_exposes_driver_and_measurements(self) -> None:
         from custom_components.eybond_local.drivers.registry import (
