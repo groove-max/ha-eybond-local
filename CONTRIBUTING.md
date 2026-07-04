@@ -92,6 +92,11 @@ To refresh generated documentation reports before running the quality gate:
 python3 tools/quality_gate.py --refresh-generated
 ```
 
+`pytest tests/` works too (`pytest.ini` disables the auto-plugins that
+conflict with the suite), and with `pytest-xdist` installed
+(`pip install pytest-xdist`) `pytest tests/ -n auto` runs it in parallel —
+that plugin is optional and not part of the base environment.
+
 The quality gate checks profile validity, unit tests, and public generated-doc freshness. PRs should leave it green.
 
 Fixture replay and fixture-derived reports are local-only workflows. Keep those artifacts under `.local/` and run them manually when you need debugging evidence.
