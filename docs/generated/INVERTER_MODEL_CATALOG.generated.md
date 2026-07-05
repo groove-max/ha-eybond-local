@@ -161,7 +161,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_op2_6200` → surface `anenji_op2_6200_full` (driver modbus_smg, variant default)
       - Protocol: modbus_smg | Detection: fingerprint (layout 11, model 30979, rated 6200)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_op2_6200.json | Schema: modbus_smg/models/anenji_op2_6200.json
-      - Capabilities: 34 (tested 25, untested 9); support tiers: blocked 2, conditional 24, standard 8 | Telemetry: 106 measurements, 18 binary sensors
+      - Capabilities: 37 (tested 25, untested 12); support tiers: blocked 2, conditional 24, standard 11 | Telemetry: 106 measurements, 18 binary sensors
 - Known limitations:
   - No official manufacturer register document is available for this exact commercial model family.
   - Charge Source Priority value 4 is exposed from owner-supplied YAML evidence; if a particular unit rejects it, Home Assistant will surface the inverter rejection.

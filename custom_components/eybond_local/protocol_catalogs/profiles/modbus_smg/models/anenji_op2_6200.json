@@ -50,9 +50,60 @@
       "change_summary": "Turns the second output (OP2) on or off.",
       "note": "OP2 enable is bit 0 of register 354 (other bits unknown -> read-modify-write via bitmask). Owner-supplied ESPHome modbus_controller switch used address 354, bitmask 0x0001, use_write_multiple.",
       "choices": [
-        {"value": 0, "label": "Off", "order": 0, "description": "Second output disabled."},
-        {"value": 1, "label": "On", "order": 1, "description": "Second output enabled."}
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Second output disabled."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Second output enabled."
+        }
       ]
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "title": "Automatic Mains Output",
+      "register": 338,
+      "value_kind": "bool",
+      "group": "output",
+      "provenance": "cloud_hint",
+      "note": "SMG config register 338; the vendor cloud writes it on this model (shadow-learning capture, 2026-06-20).",
+      "change_summary": "Enables automatic mains output switching.",
+      "support_notes": "Cloud-observed write on an Aninerel 6200 dual-output unit; not yet confirmed by a local write test."
+    },
+    {
+      "key": "output2_cutoff_soc",
+      "title": "Output 2 Cutoff SOC",
+      "register": 344,
+      "value_kind": "u16",
+      "group": "output",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 100,
+      "step": 1,
+      "provenance": "cloud_hint",
+      "note": "SMG config register 344; the vendor cloud writes it on this model (shadow-learning capture, 2026-06-20).",
+      "change_summary": "Battery SOC below which output 2 switches off.",
+      "support_notes": "Cloud-observed write on an Aninerel 6200 dual-output unit; not yet confirmed by a local write test."
+    },
+    {
+      "key": "output2_overload_warning_percent",
+      "title": "Output 2 Overload Warning",
+      "register": 353,
+      "value_kind": "u16",
+      "group": "output",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 150,
+      "step": 5,
+      "provenance": "cloud_hint",
+      "note": "SMG config register 353; the vendor cloud writes it on this model (shadow-learning capture, 2026-06-20).",
+      "change_summary": "Load percentage that raises the output 2 overload warning.",
+      "support_notes": "Cloud-observed write on an Aninerel 6200 dual-output unit; not yet confirmed by a local write test."
     }
   ]
 }

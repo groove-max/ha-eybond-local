@@ -36,11 +36,11 @@ class RuntimeInventoryTests(unittest.TestCase):
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
         self.assertEqual(summary["profiles"], 15)
-        self.assertEqual(summary["capabilities"], 357)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 229, "untested": 128})
+        self.assertEqual(summary["capabilities"], 360)
+        self.assertEqual(summary["validation_state_counts"], {"tested": 229, "untested": 131})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 6, "conditional": 188, "standard": 163},
+            {"blocked": 6, "conditional": 188, "standard": 166},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
@@ -61,7 +61,7 @@ class RuntimeInventoryTests(unittest.TestCase):
             profile_by_key["modbus_smg_anenji_anj_11kw_48v_wifi_p"]["capabilities"],
             47,
         )
-        self.assertEqual(profile_by_key["modbus_smg_anenji_op2_6200"]["capabilities"], 34)
+        self.assertEqual(profile_by_key["modbus_smg_anenji_op2_6200"]["capabilities"], 37)
         self.assertEqual(
             profile_by_key["eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1"]["capabilities"],
             34,
