@@ -278,11 +278,10 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             self.assertEqual(result.candidate_keys, (entry.entry_key,))
             self.assertEqual(result.surface_key, entry.surface_key)
 
-    def test_aninerel_anl_4200t_binds_untested_full_surface(self) -> None:
-        # Field request (0.3.0-beta.1 tester): the model resolved exactly but
-        # sat on the read-only family surface with no controls. It now gets
-        # the SMG control set as UNTESTED capabilities — exposed only in
-        # full-control mode until the tester confirms writes.
+    def test_aninerel_anl_4200t_binds_full_surface_with_confirmed_controls(self) -> None:
+        # Field history (0.3.0-beta.1): the model resolved exactly but sat on
+        # the read-only family surface with no controls; it then shipped the
+        # SMG control set as untested, and the tester confirmed writes.
         from custom_components.eybond_local.metadata.profile_loader import (
             load_driver_profile,
         )
@@ -292,8 +291,27 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertFalse(surface.read_only)
         profile = load_driver_profile(surface.profile_name)
         self.assertTrue(profile.capabilities)
-        for capability in profile.capabilities:
-            self.assertFalse(capability.tested, capability.key)
+        # The tester confirmed writes on 2026-07-05: the family-proven set is
+        # tested (exposed in auto mode); the family's unverified extras stay
+        # untested (full-control only).
+        tested = {c.key for c in profile.capabilities if c.tested}
+        untested = {c.key for c in profile.capabilities if not c.tested}
+        self.assertIn("output_source_priority", tested)
+        self.assertIn("battery_bulk_voltage", tested)
+        self.assertIn("charge_source_priority", tested)
+        self.assertEqual(
+            untested,
+            {
+                "exit_fault_mode",
+                "output_mode",
+                "output_rating_frequency",
+                "output_rating_voltage",
+                "overload_bypass_mode",
+                "power_saving_mode",
+                "remote_shutdown",
+                "remote_turn_on",
+            },
+        )
 
     def test_aninerel_anl_4200t_uses_24v_battery_voltage_windows(self) -> None:
         # The unit is 24 V (the "24L" in the model name); the family templates

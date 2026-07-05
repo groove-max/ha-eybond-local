@@ -18,7 +18,7 @@
   "validation": {
     "hardware": "captured",
     "telemetry": "partial",
-    "controls": "none"
+    "controls": "partial"
   },
   "coverage": {
     "runtime_control_surface": "available",
