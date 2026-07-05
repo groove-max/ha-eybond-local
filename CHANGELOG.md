@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is inspired by Keep a Changelog, with one practical rule for this repository:
 the GitHub release body should be rendered from the matching version section here.
 
-## [0.3.0] - 2026-07-05
+## [0.3.0-beta.1] - 2026-07-05
 
 ### Added
 
