@@ -319,6 +319,48 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(collector.collector_pn_prefix, "E")
         self.assertEqual(collector.collector_pn_digits, "50000200000000001")
 
+    def test_collector_info_merges_raw_passthrough_diagnostics_from_at_side(self) -> None:
+        # For at_text collectors all raw inverter traffic happens on the AT
+        # connection; a support bundle built from the framed-side info alone
+        # reports zero raw requests while probes are timing out on the wire.
+        manager = self._build_manager()
+        transport = _FakeTransport(connected=True)
+        at_transport = _FakeTransport(connected=True)
+        at_transport.collector_info = CollectorInfo(
+            remote_ip="192.168.1.14",
+            collector_pn="PN123",
+            raw_request_count=7,
+            raw_response_count=2,
+            raw_timeout_count=5,
+            raw_unhandled_line_count=1,
+            raw_last_request_ascii="QPI..",
+            raw_last_request_hex="515049beac0d",
+            raw_last_response_ascii="(PI30..",
+            raw_last_response_hex="285049333012340d",
+            raw_last_timeout_request_ascii="QPIGS..",
+            raw_last_parser="raw_prefix_ascii",
+            raw_last_frame_format="transparent",
+            raw_last_spacing_wait_ms=10,
+            raw_last_response_duration_ms=450,
+            raw_last_total_duration_ms=470,
+        )
+        manager._transport = transport  # type: ignore[assignment]
+        manager._at_transport = at_transport  # type: ignore[assignment]
+        manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
+
+        collector = manager.collector_info
+
+        self.assertEqual(collector.raw_request_count, 7)
+        self.assertEqual(collector.raw_response_count, 2)
+        self.assertEqual(collector.raw_timeout_count, 5)
+        self.assertEqual(collector.raw_unhandled_line_count, 1)
+        self.assertEqual(collector.raw_last_request_ascii, "QPI..")
+        self.assertEqual(collector.raw_last_response_ascii, "(PI30..")
+        self.assertEqual(collector.raw_last_timeout_request_ascii, "QPIGS..")
+        self.assertEqual(collector.raw_last_parser, "raw_prefix_ascii")
+        self.assertEqual(collector.raw_last_frame_format, "transparent")
+        self.assertEqual(collector.raw_last_response_duration_ms, 450)
+
     def test_collector_info_uses_pn_binding_without_remote_ip_ambiguity(self) -> None:
         manager = self._build_manager(collector_ip="")
         manager._collector_pn = "PN-TWO"

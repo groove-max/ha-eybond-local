@@ -45,8 +45,12 @@ from ..drivers.command_support import (
 )
 from ..drivers.registry import iter_drivers
 from ..onboarding.driver_detection import async_detect_inverter
+from ..link_models import EybondLinkRoute
+from ..link_transport import async_send_payload, select_payload_route
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
+from ..payload.ascii_line import build_ascii_line_request
 from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
+from ..payload.pi30 import build_request as build_pi30_request
 from ..runtime_labels import runtime_path_label
 from .link import EybondRuntimeLinkManager, resolve_server_ip
 
@@ -92,6 +96,11 @@ RUNTIME_DRIVER_STATE_DRIVER_UNBOUND = "driver_unbound"
 # some firmwares support it — the channel is probed empirically and the
 # verdict persists (cleared by the "Re-check Supported Commands" button).
 _AT_METADATA_CHANNEL_KEY = "collector:at_metadata"
+
+# Bounded per-command timeout for the at_text support-archive ASCII probe;
+# generous enough for a 2400-baud QPIRI response, small enough that the six
+# probe commands stay under half a minute even in total silence.
+_AT_TEXT_ASCII_PROBE_TIMEOUT = 3.0
 RUNTIME_DRIVER_STATE_DRIVER_BOUND = "driver_bound"
 _VOLATILE_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
     {
@@ -1575,6 +1584,71 @@ class EybondHub:
             ),
         }
 
+    async def _async_capture_at_text_ascii_probe(self) -> dict[str, object] | None:
+        """Capture a raw ASCII probe trace over an at_text collector callback.
+
+        Generic register dumps only cover Modbus drivers, but at_text
+        collectors bridge raw-serial ASCII inverters (PI30 family, G-ASCII).
+        When detection fails there, the register scans abort on the route
+        guard and the archive carries no wire evidence at all — this bounded
+        read-only sweep records what each query actually got back.
+        """
+
+        session_protocol = str(
+            self._connection.collector_session_protocol or ""
+        ).strip().lower()
+        if session_protocol != "at_text":
+            return None
+
+        transport = self._link_manager.transport
+        attempts: list[dict[str, object]] = []
+        for payload_family, command, request in (
+            ("pi30_ascii", "QPI", build_pi30_request("QPI")),
+            ("pi30_ascii", "QMOD", build_pi30_request("QMOD")),
+            ("pi30_ascii", "QPIGS", build_pi30_request("QPIGS")),
+            ("pi30_ascii", "QPIRI", build_pi30_request("QPIRI")),
+            ("pi30_ascii", "QID", build_pi30_request("QID")),
+            ("eybond_g_ascii", "GPV", build_ascii_line_request("GPV")),
+        ):
+            route = select_payload_route(
+                transport,
+                EybondLinkRoute(devcode=1, collector_addr=255),
+                payload_family=payload_family,
+            )
+            attempt: dict[str, object] = {
+                "payload_family": payload_family,
+                "command": command,
+                "request_hex": request.hex(),
+            }
+            try:
+                response = await async_send_payload(
+                    transport,
+                    request,
+                    route=route,
+                    request_timeout=_AT_TEXT_ASCII_PROBE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                attempt["error"] = "request_timeout"
+            except Exception as exc:
+                attempt["error"] = str(exc)
+            else:
+                attempt["response_hex"] = response.hex()
+                attempt["response_ascii"] = response.decode(
+                    "ascii", errors="replace"
+                )
+            attempts.append(attempt)
+
+        collector = self._link_manager.collector_info
+        return {
+            "session_protocol": session_protocol,
+            "raw_passthrough_frame_format": collector.raw_last_frame_format,
+            "raw_request_count": collector.raw_request_count,
+            "raw_response_count": collector.raw_response_count,
+            "raw_timeout_count": collector.raw_timeout_count,
+            "raw_unhandled_line_count": collector.raw_unhandled_line_count,
+            "attempts": attempts,
+        }
+
     async def _async_capture_generic_support_evidence(
         self,
         detect_error: str,
@@ -1649,13 +1723,17 @@ class EybondHub:
                 }
             )
 
-        return {
+        evidence: dict[str, object] = {
             "capture_kind": "generic_register_dump",
             "driver_hint": self._driver_hint,
             "connection_mode": self._connection_mode,
             "detection_error": detect_error or "no_supported_driver_matched",
             "captures": captures,
         }
+        ascii_probe = await self._async_capture_at_text_ascii_probe()
+        if ascii_probe is not None:
+            evidence["at_text_ascii_probe"] = ascii_probe
+        return evidence
 
     async def _async_query_collector_text(
         self,

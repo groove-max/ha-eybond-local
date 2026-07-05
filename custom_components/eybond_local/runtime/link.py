@@ -466,6 +466,33 @@ class EybondRuntimeLinkManager:
             collector.disconnect_count = at_collector.disconnect_count
             collector.last_disconnect_reason = at_collector.last_disconnect_reason
             collector.pending_request_drop_count = at_collector.pending_request_drop_count
+        # For at_text collectors all raw inverter traffic lives on the AT
+        # connection; without this merge support bundles report zero raw
+        # requests even while probes are actively timing out on the wire.
+        if (
+            at_collector.raw_request_count > collector.raw_request_count
+            or at_collector.raw_unhandled_line_count > collector.raw_unhandled_line_count
+        ):
+            collector.raw_request_count = at_collector.raw_request_count
+            collector.raw_response_count = at_collector.raw_response_count
+            collector.raw_timeout_count = at_collector.raw_timeout_count
+            collector.raw_unhandled_line_count = at_collector.raw_unhandled_line_count
+            collector.raw_last_request_ascii = at_collector.raw_last_request_ascii
+            collector.raw_last_request_hex = at_collector.raw_last_request_hex
+            collector.raw_last_response_ascii = at_collector.raw_last_response_ascii
+            collector.raw_last_response_hex = at_collector.raw_last_response_hex
+            collector.raw_last_timeout_request_ascii = (
+                at_collector.raw_last_timeout_request_ascii
+            )
+            collector.raw_last_parser = at_collector.raw_last_parser
+            collector.raw_last_frame_format = at_collector.raw_last_frame_format
+            collector.raw_last_spacing_wait_ms = at_collector.raw_last_spacing_wait_ms
+            collector.raw_last_response_duration_ms = (
+                at_collector.raw_last_response_duration_ms
+            )
+            collector.raw_last_total_duration_ms = (
+                at_collector.raw_last_total_duration_ms
+            )
         merged_pn = _prefer_more_complete_collector_pn(
             collector.collector_pn,
             at_collector.collector_pn,
