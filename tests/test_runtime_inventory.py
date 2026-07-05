@@ -36,11 +36,11 @@ class RuntimeInventoryTests(unittest.TestCase):
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
         self.assertEqual(summary["profiles"], 15)
-        self.assertEqual(summary["capabilities"], 360)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 251, "untested": 109})
+        self.assertEqual(summary["capabilities"], 381)
+        self.assertEqual(summary["validation_state_counts"], {"tested": 271, "untested": 110})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 6, "conditional": 188, "standard": 166},
+            {"blocked": 6, "conditional": 188, "standard": 187},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}

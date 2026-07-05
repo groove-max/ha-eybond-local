@@ -161,25 +161,80 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 45.0)
         self.assertEqual(transport._registers[20125], 450)
 
-    async def test_untested_capabilities_stay_hidden_outside_full_control(self) -> None:
+    async def test_cloud_confirmed_controls_are_tested_and_exposed_in_auto(self) -> None:
+        from custom_components.eybond_local.control_policy import can_expose_capability
+        from custom_components.eybond_local.const import CONTROL_MODE_AUTO
+
+        # These map to SmartESS cloud device_settings fields, so they ship
+        # tested and are exposed in the default (auto) control mode.
+        expected_tested = {
+            "offgrid_output_enable",
+            "power_save_mode",
+            "charge_source_priority",
+            "grid_max_charge_current",
+            "max_combined_charge_current",
+            "inverter_output_voltage",
+            "inverter_output_frequency",
+            "pv_max_charge_current",
+            "float_voltage",
+            "absorption_voltage",
+            "battery_type",
+            "battery_stop_charge_voltage",
+            "battery_stop_discharge_voltage",
+            "battery_low_voltage",
+            "battery_high_voltage",
+            "max_discharge_current",
+            "energy_use_mode",
+            "grid_protect_standard",
+            "solar_use_aim",
+            "discharge_to_grid_enable",
+        }
+        driver = MustPvPh18Driver()
+        by_key = {c.key: c for c in driver.write_capabilities}
+        self.assertTrue(expected_tested.issubset(by_key))
+        for key in expected_tested:
+            capability = by_key[key]
+            self.assertTrue(capability.tested, key)
+            self.assertTrue(
+                can_expose_capability(
+                    capability,
+                    control_mode=CONTROL_MODE_AUTO,
+                    detection_confidence="high",
+                ),
+                key,
+            )
+
+    async def test_datasheet_only_controls_stay_untested_and_full_control_only(self) -> None:
         from custom_components.eybond_local.control_policy import can_expose_capability
         from custom_components.eybond_local.const import (
             CONTROL_MODE_AUTO,
             CONTROL_MODE_FULL,
         )
 
+        # Datasheet-only controls (in the 1.4.15 xlsx but not exposed by the
+        # SmartESS cloud) ship untested: hidden in auto, shown in full control.
+        expected_untested = {
+            "grid_charge_enable",
+            "battery_equalization_enable",
+            "battery_equalization_voltage",
+            "battery_ah",
+            "battery_equalized_time",
+            "battery_equalized_timeout",
+            "battery_equalization_interval",
+        }
         driver = MustPvPh18Driver()
-        capabilities = driver.write_capabilities
-        self.assertTrue(capabilities)
-        for capability in capabilities:
-            self.assertFalse(capability.tested, capability.key)
+        by_key = {c.key: c for c in driver.write_capabilities}
+        self.assertTrue(expected_untested.issubset(by_key))
+        for key in expected_untested:
+            capability = by_key[key]
+            self.assertFalse(capability.tested, key)
             self.assertFalse(
                 can_expose_capability(capability, control_mode=CONTROL_MODE_AUTO),
-                capability.key,
+                key,
             )
             self.assertTrue(
                 can_expose_capability(capability, control_mode=CONTROL_MODE_FULL),
-                capability.key,
+                key,
             )
 
     async def test_support_evidence_captures_planned_ranges(self) -> None:
