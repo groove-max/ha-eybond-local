@@ -265,13 +265,13 @@
       "choices": [
         {
           "value": 0,
-          "label": "No Choose",
+          "label": "No choose",
           "order": 0,
           "description": "No battery type selected."
         },
         {
           "value": 1,
-          "label": "User Default",
+          "label": "User defined",
           "order": 1,
           "description": "User-defined battery profile."
         },

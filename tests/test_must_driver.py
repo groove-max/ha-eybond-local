@@ -102,6 +102,60 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.variant_key, "pv_ph18")
         self.assertEqual(inverter.register_schema_name, "must_pv_ph18/base.json")
 
+    async def test_every_control_reads_back_a_current_value(self) -> None:
+        # The control registers are sparse; the read blocks must be gap-free so
+        # the device does not reject them and every control shows its current
+        # value (not just after a write). Regression guard for the batch where
+        # the wide 20101-20106 / 20125-20132 blocks spanned absent registers and
+        # left all controls blank.
+        from custom_components.eybond_local.control_policy import can_expose_capability
+        from custom_components.eybond_local.const import CONTROL_MODE_FULL
+
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=4)
+        registers = _must_registers()
+        registers.update(
+            {
+                20101: 1, 20102: 2300, 20103: 5000, 20104: 0, 20106: 1,
+                20108: 1, 20109: 1, 20111: 0, 20112: 1, 20113: 200,
+                20118: 480, 20119: 560, 20125: 450, 20127: 440, 20128: 590,
+                20132: 600, 20143: 3,
+                10103: 540, 10104: 560, 10108: 600, 10110: 2, 10111: 200,
+                10118: 1, 10119: 600, 10121: 60, 10122: 120, 10123: 30,
+            }
+        )
+        transport = FixtureTransport(
+            registers=registers, command_responses=None, probe_target=target
+        )
+        inverter = await driver.async_probe(transport, target)
+        assert inverter is not None
+
+        values = await driver.async_read_values(transport, inverter)
+
+        # Every writable control resolves a current value from its own register.
+        for capability in inverter.capabilities:
+            self.assertIn(capability.value_key, values, capability.key)
+        # The four that used to sit inside the gap-spanning blocks.
+        self.assertEqual(values["inverter_output_voltage"], 230.0)
+        self.assertEqual(values["inverter_output_frequency"], "50 Hz")
+        self.assertEqual(values["battery_low_voltage"], 44.0)
+        self.assertEqual(values["battery_high_voltage"], 59.0)
+        # Enum read-back decodes to the exact select option label.
+        self.assertEqual(values["energy_use_mode"], "SBU (Solar, Battery, Utility)")
+        self.assertEqual(values["grid_protect_standard"], "VDE4105")
+        # And those decoded labels are valid options on the exposed selects.
+        by_key = {c.key: c for c in inverter.capabilities}
+        for key in ("energy_use_mode", "grid_protect_standard", "solar_use_aim"):
+            capability = by_key[key]
+            self.assertTrue(
+                can_expose_capability(
+                    capability,
+                    control_mode=CONTROL_MODE_FULL,
+                )
+            )
+            labels = {choice.label for choice in capability.choices}
+            self.assertIn(values[key], labels, key)
+
     async def test_read_values_decodes_third_party_register_map(self) -> None:
         driver = MustPvPh18Driver()
         target = ProbeTarget(devcode=1, collector_addr=255, device_addr=4)
