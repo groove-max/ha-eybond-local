@@ -313,6 +313,47 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             },
         )
 
+    def test_smg_variant_4200_binds_full_surface_from_shadow_learning(self) -> None:
+        # dc6514 SMG-4200 variant: a full shadow-learning run correlated the
+        # SmartESS cloud writes to real registers, confirming the field->register
+        # map. The entry previously sat on the read-only family surface; it now
+        # ships those hardware-correlated controls tested (exposed in auto mode),
+        # with the fault-lock action left untested.
+        from custom_components.eybond_local.metadata.profile_loader import (
+            load_driver_profile,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        surface = catalog.surfaces["smg_variant_4200_full"]
+        self.assertFalse(surface.read_only)
+        self.assertEqual(
+            surface.profile_name, "modbus_smg/models/smg_variant_4200.json"
+        )
+        profile = load_driver_profile(surface.profile_name)
+        tested = {c.key for c in profile.capabilities if c.tested}
+        expected_tested = {
+            "input_voltage_range",
+            "buzzer_mode",
+            "lcd_backlight_mode",
+            "lcd_auto_return_mode",
+            "turn_on_mode",
+            "output_rating_voltage",
+            "output_rating_frequency",
+            "battery_under_voltage",
+            "battery_under_voltage_off_grid",
+        }
+        self.assertEqual(tested, expected_tested)
+        # The fault-lock exit action is only effective in a fault state that was
+        # never exercised on hardware, so it stays untested (full-control only).
+        by_key = {c.key: c for c in profile.capabilities}
+        self.assertFalse(by_key["exit_fault_mode"].tested)
+        # This device's Input Mode has three values (APL/UPS/GNT), overriding
+        # the two-value family default.
+        input_mode = by_key["input_voltage_range"]
+        self.assertEqual(
+            [choice.value for choice in input_mode.choices], [0, 1, 2]
+        )
+
     def test_aninerel_anl_4200t_uses_24v_battery_voltage_windows(self) -> None:
         # The unit is 24 V (the "24L" in the model name); the family templates
         # carry 48 V-class windows (40.0-65.0 V) that would reject every valid

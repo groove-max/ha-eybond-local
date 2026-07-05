@@ -1118,6 +1118,17 @@
    "support_capture_policy": "smg_protocol_1"
   },
   {
+   "key": "smg_variant_4200_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "smg_variant_4200",
+   "profile_name": "modbus_smg/models/smg_variant_4200.json",
+   "register_schema_name": "modbus_smg/models/smg_variant_4200.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
    "key": "anenji_anj_11kw_full",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1491,7 +1502,7 @@
     "serial_ascii_plausible"
    ],
    "model_name": "SMG family 4200 variant",
-   "surface_key": "smg_base_partial",
+   "surface_key": "smg_variant_4200_full",
    "runtime_probe": {
     "validation": [
      {

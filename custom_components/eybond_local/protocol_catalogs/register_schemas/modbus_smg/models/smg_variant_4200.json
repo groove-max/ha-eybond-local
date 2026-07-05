@@ -1,0 +1,33 @@
+{
+  "extends": "../base.json",
+  "schema_key": "modbus_smg_smg_variant_4200",
+  "title": "SMG family 4200 variant register schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "enum_tables": {
+    "input_voltage_range": {
+      "0": "APL",
+      "1": "UPS",
+      "2": "GNT"
+    },
+    "buzzer_mode": {
+      "0": "Beeps Off",
+      "1": "Beeps On",
+      "2": "Mute When Input Source Changes",
+      "3": "Beeps Only In Fault Mode"
+    },
+    "lcd_backlight_mode": {
+      "0": "Timed Off",
+      "1": "Always On"
+    },
+    "lcd_auto_return_mode": {
+      "0": "Do Not Return Automatically",
+      "1": "Return After 1 Minute"
+    },
+    "turn_on_mode": {
+      "0": "Local Or Remote",
+      "1": "Only Local",
+      "2": "Only Remote"
+    }
+  }
+}

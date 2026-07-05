@@ -20,7 +20,7 @@ class RuntimeInventoryTests(unittest.TestCase):
     def test_profile_names_are_derived_from_compiled_runtime_surfaces(self) -> None:
         names = runtime_profile_names()
 
-        self.assertEqual(len(names), 15)
+        self.assertEqual(len(names), 16)
         self.assertIn("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json", names)
         self.assertIn("modbus_smg/default.json", names)
         self.assertIn("modbus_smg/models/smg_6200.json", names)
@@ -35,12 +35,12 @@ class RuntimeInventoryTests(unittest.TestCase):
         summary = inventory["summary"]
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
-        self.assertEqual(summary["profiles"], 15)
-        self.assertEqual(summary["capabilities"], 381)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 271, "untested": 110})
+        self.assertEqual(summary["profiles"], 16)
+        self.assertEqual(summary["capabilities"], 411)
+        self.assertEqual(summary["validation_state_counts"], {"tested": 280, "untested": 131})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 6, "conditional": 188, "standard": 187},
+            {"blocked": 6, "conditional": 209, "standard": 196},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
