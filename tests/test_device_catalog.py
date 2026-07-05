@@ -295,6 +295,35 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         for capability in profile.capabilities:
             self.assertFalse(capability.tested, capability.key)
 
+    def test_aninerel_anl_4200t_uses_24v_battery_voltage_windows(self) -> None:
+        # The unit is 24 V (the "24L" in the model name); the family templates
+        # carry 48 V-class windows (40.0-65.0 V) that would reject every valid
+        # 24 V setpoint. The exact limits for this model are undocumented,
+        # so the windows are deliberately wide and the inverter's own write
+        # validation is the authority.
+        from custom_components.eybond_local.metadata.profile_loader import (
+            load_driver_profile,
+        )
+
+        profile = load_driver_profile(
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json"
+        )
+        caps = {c.key: c for c in profile.capabilities}
+        for key in (
+            "battery_bulk_voltage",
+            "battery_float_voltage",
+            "battery_under_voltage",
+            "battery_under_voltage_off_grid",
+            "battery_redischarge_voltage",
+            "battery_overvoltage_protection_voltage",
+            "battery_equalization_voltage",
+        ):
+            self.assertEqual(caps[key].minimum, 0, key)
+            self.assertEqual(caps[key].maximum, 700, key)
+        # Overrides keep the template identity (scaled 0.1 V writes).
+        self.assertEqual(caps["battery_bulk_voltage"].value_kind, "scaled_u16")
+        self.assertEqual(caps["battery_bulk_voltage"].divisor, 10)
+
     def test_unknown_known_layout_resolves_family(self) -> None:
         result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",
