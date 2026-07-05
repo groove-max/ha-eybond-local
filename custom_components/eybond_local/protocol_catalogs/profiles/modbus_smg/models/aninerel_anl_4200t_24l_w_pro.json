@@ -50,7 +50,7 @@
     {
       "key": "output_source_priority",
       "note": "This firmware generation uses a five-value output-priority enum (vendor app field bse_eybond_read_55); the family's three-value SMG enum mislabeled it (register read 3 = SUB).",
-      "provenance": "cloud_hint",
+      "provenance": "doc_backed",
       "support_notes": "Enum from the tester's vendor-app field definitions (2026-07-05); write not yet confirmed.",
       "choices": [
         {
@@ -88,7 +88,7 @@
     {
       "key": "charge_source_priority",
       "note": "This firmware generation uses charger-priority values 1-3 (vendor app field bat_eybond_read_74); there is no value 0.",
-      "provenance": "cloud_hint",
+      "provenance": "doc_backed",
       "support_notes": "Enum from the tester's vendor-app field definitions (2026-07-05); write not yet confirmed.",
       "choices": [
         {

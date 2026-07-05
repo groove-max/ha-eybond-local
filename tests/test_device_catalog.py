@@ -361,6 +361,41 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         for choice in caps["output_source_priority"].choices:
             self.assertEqual(spec.enum_map[choice.value], choice.label)
 
+    def test_model_profile_capabilities_are_exposable_in_full_control(self) -> None:
+        # Field regression: capabilities labeled provenance=cloud_hint are
+        # write-suppressed in EVERY mode (cloud hints are metadata only), so
+        # the tester's Output Priority select vanished entirely. Model-bound
+        # untested capabilities must all pass the full-control exposure gate.
+        from custom_components.eybond_local.metadata.profile_loader import (
+            load_driver_profile,
+        )
+        from custom_components.eybond_local.schema import (
+            capability_write_exposure_allowed,
+        )
+
+        for profile_name, variant_key in (
+            ("modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json", "aninerel_anl_4200t_24l_w_pro"),
+            ("modbus_smg/models/anenji_op2_6200.json", "default"),
+            ("modbus_catalog/growatt_spf.json", "growatt_spf"),
+            ("modbus_catalog/deye_lv.json", "deye_lv"),
+            ("must_pv_ph18/base.json", "pv_ph18"),
+        ):
+            profile = load_driver_profile(profile_name)
+            hidden = [
+                capability.key
+                for capability in profile.capabilities
+                if not capability_write_exposure_allowed(
+                    capability,
+                    control_mode="full",
+                    detection_confidence="high",
+                    variant_key=variant_key,
+                    profile_source_scope="builtin",
+                    schema_source_scope="builtin",
+                    profile_name=profile_name,
+                )
+            ]
+            self.assertEqual(hidden, [], profile_name)
+
     def test_unknown_known_layout_resolves_family(self) -> None:
         result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",
