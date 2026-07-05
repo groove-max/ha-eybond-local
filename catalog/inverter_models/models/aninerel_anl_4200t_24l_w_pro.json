@@ -21,7 +21,7 @@
     "controls": "none"
   },
   "coverage": {
-    "runtime_control_surface": "read_only",
+    "runtime_control_surface": "available",
     "smartess_control_surface": "unknown",
     "vendor_register_map": "unknown",
     "notes": [

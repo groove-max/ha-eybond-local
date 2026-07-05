@@ -278,6 +278,23 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             self.assertEqual(result.candidate_keys, (entry.entry_key,))
             self.assertEqual(result.surface_key, entry.surface_key)
 
+    def test_aninerel_anl_4200t_binds_untested_full_surface(self) -> None:
+        # Field request (0.3.0-beta.1 tester): the model resolved exactly but
+        # sat on the read-only family surface with no controls. It now gets
+        # the SMG control set as UNTESTED capabilities — exposed only in
+        # full-control mode until the tester confirms writes.
+        from custom_components.eybond_local.metadata.profile_loader import (
+            load_driver_profile,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        surface = catalog.surfaces["aninerel_anl_4200t_24l_w_pro_full"]
+        self.assertFalse(surface.read_only)
+        profile = load_driver_profile(surface.profile_name)
+        self.assertTrue(profile.capabilities)
+        for capability in profile.capabilities:
+            self.assertFalse(capability.tested, capability.key)
+
     def test_unknown_known_layout_resolves_family(self) -> None:
         result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",

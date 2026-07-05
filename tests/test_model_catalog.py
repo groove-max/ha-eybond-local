@@ -144,7 +144,7 @@ class RealCatalogTests(unittest.TestCase):
         self.assertEqual(pi.detection, "anchors")
 
     def test_read_only_model_is_marked_read_only(self) -> None:
-        resolved = resolve_descriptor("aninerel_anl_4200t_24l_w_pro", RUNTIME)
+        resolved = resolve_descriptor("srne_modbus_family", RUNTIME)
         self.assertTrue(resolved.read_only)
         self.assertEqual(resolved.tier, "partial")
 
@@ -362,7 +362,7 @@ class CoverageCrossCheckTests(unittest.TestCase):
             return validate_catalog(base, runtime_catalog=RUNTIME)
 
     def test_available_coverage_on_read_only_surface_errors(self) -> None:
-        model = _ok_model(descriptor="aninerel_anl_4200t_24l_w_pro")  # read-only surface
+        model = _ok_model(descriptor="srne_modbus_family")  # read-only surface
         model["coverage"]["runtime_control_surface"] = "available"
         report = self._validate(model)
         self.assertTrue(
@@ -380,7 +380,7 @@ class CoverageCrossCheckTests(unittest.TestCase):
         )
 
     def test_read_only_coverage_on_read_only_surface_is_clean(self) -> None:
-        model = _ok_model(descriptor="aninerel_anl_4200t_24l_w_pro")
+        model = _ok_model(descriptor="srne_modbus_family")
         model["coverage"]["runtime_control_surface"] = "read_only"
         report = self._validate(model)
         self.assertFalse(
@@ -404,7 +404,7 @@ class JournalGroupingTests(unittest.TestCase):
             "schema_version": 1, "model_key": "ro", "manufacturer": "A", "model": "M",
             "aliases": [], "lifecycle": "supported",
             "variants": [{"variant_key": "v", "label": "V",
-                          "device_descriptor_keys": ["aninerel_anl_4200t_24l_w_pro"]}],
+                          "device_descriptor_keys": ["srne_modbus_family"]}],
             "validation": {"hardware": "confirmed", "telemetry": "confirmed", "controls": "confirmed"},
             "coverage": {
                 "runtime_control_surface": "read_only",

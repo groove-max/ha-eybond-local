@@ -1096,6 +1096,17 @@
    "support_capture_policy": "smg_protocol_1"
   },
   {
+   "key": "aninerel_anl_4200t_24l_w_pro_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "aninerel_anl_4200t_24l_w_pro",
+   "profile_name": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
+   "register_schema_name": "modbus_smg/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
    "key": "smg_base_partial",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1760,7 +1771,7 @@
     "serial_ascii_plausible"
    ],
    "model_name": "Aninerel ANL-4200T-24L-W-PRO",
-   "surface_key": "smg_family_read_only",
+   "surface_key": "aninerel_anl_4200t_24l_w_pro_full",
    "runtime_probe": {
     "validation": [
      {
