@@ -159,7 +159,7 @@ When the work changes which commercial devices are known or supported:
 - add a sanitized source record under `catalog/inverter_models/sources/`
 - link each model variant to the relevant runtime `device_descriptor_keys`
 - keep raw private support archives, serial numbers, collector identifiers, IP addresses, and account details out of git
-- put durable public links in public sources, and use opaque `private:` references for private conversations or local archives
+- use durable opaque references (`project-issue:<id>`, `project-attachment:<token>`, `sha256:<hash>`, `fixture:<name>`, `private:<token>` for private conversations or local archives); raw public or private source URLs stay out of the public model catalog unless a record explicitly intends to publish one
 
 Then validate and refresh the journal:
 
