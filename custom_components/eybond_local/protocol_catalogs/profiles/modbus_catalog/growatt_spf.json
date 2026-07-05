@@ -53,10 +53,26 @@
       "provenance": "doc_backed",
       "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "Battery First", "order": 0, "description": "Prefer battery, fall back to PV and utility."},
-        {"value": 1, "label": "PV First", "order": 1, "description": "Prefer PV, fall back to battery and utility."},
-        {"value": 2, "label": "Utility First", "order": 2, "description": "Prefer utility, fall back to PV and battery."}
-      ]
+        {
+          "value": 0,
+          "label": "Battery First",
+          "order": 0,
+          "description": "Prefer battery, fall back to PV and utility."
+        },
+        {
+          "value": 1,
+          "label": "PV First",
+          "order": 1,
+          "description": "Prefer PV, fall back to battery and utility."
+        },
+        {
+          "value": 2,
+          "label": "Utility First",
+          "order": 2,
+          "description": "Prefer utility, fall back to PV and battery."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "charge_source_priority",
@@ -70,10 +86,26 @@
       "provenance": "doc_backed",
       "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "PV First", "order": 0, "description": "Charge from PV first, utility assists."},
-        {"value": 1, "label": "PV and Utility", "order": 1, "description": "Charge from PV and utility together."},
-        {"value": 2, "label": "PV Only", "order": 2, "description": "Charge from PV only."}
-      ]
+        {
+          "value": 0,
+          "label": "PV First",
+          "order": 0,
+          "description": "Charge from PV first, utility assists."
+        },
+        {
+          "value": 1,
+          "label": "PV and Utility",
+          "order": 1,
+          "description": "Charge from PV and utility together."
+        },
+        {
+          "value": 2,
+          "label": "PV Only",
+          "order": 2,
+          "description": "Charge from PV only."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "ac_input_mode",
@@ -87,9 +119,20 @@
       "provenance": "doc_backed",
       "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "APL (90-280 VAC)", "order": 0, "description": "Wide appliance input window."},
-        {"value": 1, "label": "UPS (170-280 VAC)", "order": 1, "description": "Narrow UPS input window."}
-      ]
+        {
+          "value": 0,
+          "label": "APL (90-280 VAC)",
+          "order": 0,
+          "description": "Wide appliance input window."
+        },
+        {
+          "value": 1,
+          "label": "UPS (170-280 VAC)",
+          "order": 1,
+          "description": "Narrow UPS input window."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "overload_restart_mode",
@@ -103,10 +146,26 @@
       "provenance": "doc_backed",
       "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "Restart", "order": 0, "description": "Auto-restart after overload."},
-        {"value": 1, "label": "No Restart", "order": 1, "description": "Stay off after overload."},
-        {"value": 2, "label": "Switch to Utility", "order": 2, "description": "Hand the load to utility after overload."}
-      ]
+        {
+          "value": 0,
+          "label": "Restart",
+          "order": 0,
+          "description": "Auto-restart after overload."
+        },
+        {
+          "value": 1,
+          "label": "No Restart",
+          "order": 1,
+          "description": "Stay off after overload."
+        },
+        {
+          "value": 2,
+          "label": "Switch to Utility",
+          "order": 2,
+          "description": "Hand the load to utility after overload."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "overtemp_restart_mode",
@@ -120,9 +179,20 @@
       "provenance": "doc_backed",
       "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "Restart", "order": 0, "description": "Auto-restart after cooling down."},
-        {"value": 1, "label": "No Restart", "order": 1, "description": "Stay off after an overtemperature trip."}
-      ]
+        {
+          "value": 0,
+          "label": "Restart",
+          "order": 0,
+          "description": "Auto-restart after cooling down."
+        },
+        {
+          "value": 1,
+          "label": "No Restart",
+          "order": 1,
+          "description": "Stay off after an overtemperature trip."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "buzzer_enabled",
@@ -134,7 +204,8 @@
       "note": "Growatt SPF holding register 22; single-register write (FC 0x06).",
       "change_summary": "Enables or disables the audible buzzer.",
       "provenance": "doc_backed",
-      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware."
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "max_charge_current",
@@ -150,7 +221,8 @@
       "note": "Growatt SPF holding register 34 (10-130 A, utility + PV combined).",
       "change_summary": "Limits the total battery charge current.",
       "provenance": "doc_backed",
-      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware."
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "enabled_default": true
     }
   ]
 }

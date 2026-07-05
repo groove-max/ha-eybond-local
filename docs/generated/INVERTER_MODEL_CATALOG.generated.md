@@ -234,7 +234,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `must_pv18_3024` → surface `must_pv_ph18_read_only` (driver must_pv_ph18, variant pv_ph18)
       - Protocol: must_pv_ph18 | Detection: anchors (protocol.protocol_id=MUST_PV_PH18; identity.model_number=['PV18', 'PV1800'])
       - Tier: full | Read-only: no | Profile: must_pv_ph18/base.json | Schema: must_pv_ph18/base.json
-      - Capabilities: 6 (untested 6); support tiers: standard 6 | Telemetry: 36 measurements, 0 binary sensors
+      - Capabilities: 6 (untested 6); support tiers: standard 6 | Telemetry: 37 measurements, 0 binary sensors
 - Known limitations:
   - Read-only first implementation; no write controls are exposed.
   - Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.

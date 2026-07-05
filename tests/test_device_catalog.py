@@ -413,6 +413,20 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
                 )
             ]
             self.assertEqual(hidden, [], profile_name)
+            # An exposable capability must also register ENABLED: entities
+            # default-disabled in the registry read as "no controls appeared"
+            # (0.3.0-beta.1 MUST PV1800 field report).
+            registry_disabled = [
+                capability.key
+                for capability in profile.capabilities
+                if not capability.enabled_default
+            ]
+            if profile_name in (
+                "must_pv_ph18/base.json",
+                "modbus_catalog/growatt_spf.json",
+                "modbus_catalog/deye_lv.json",
+            ):
+                self.assertEqual(registry_disabled, [], profile_name)
 
     def test_unknown_known_layout_resolves_family(self) -> None:
         result = _tree_resolve(load_compiled_detection_catalog(), 

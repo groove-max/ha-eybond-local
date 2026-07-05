@@ -30,7 +30,8 @@
       "note": "MUST PH holding register 20101; the write function code is undocumented, single-register write assumed.",
       "change_summary": "Enables inverter output when the grid is absent.",
       "provenance": "doc_backed",
-      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "power_save_mode",
@@ -42,7 +43,8 @@
       "note": "MUST PH holding register 20104.",
       "change_summary": "Enables load-search power saving.",
       "provenance": "doc_backed",
-      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "grid_charge_enable",
@@ -54,7 +56,8 @@
       "note": "MUST PH holding register 20106.",
       "change_summary": "Allows the battery to charge from the grid.",
       "provenance": "doc_backed",
-      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "charge_source_priority",
@@ -68,10 +71,26 @@
       "provenance": "doc_backed",
       "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "Solar First", "order": 0, "description": "Charge from solar first, utility assists."},
-        {"value": 2, "label": "Solar and Utility", "order": 1, "description": "Charge from solar and utility together."},
-        {"value": 3, "label": "Only Solar", "order": 2, "description": "Charge from solar only."}
-      ]
+        {
+          "value": 0,
+          "label": "Solar First",
+          "order": 0,
+          "description": "Charge from solar first, utility assists."
+        },
+        {
+          "value": 2,
+          "label": "Solar and Utility",
+          "order": 1,
+          "description": "Charge from solar and utility together."
+        },
+        {
+          "value": 3,
+          "label": "Only Solar",
+          "order": 2,
+          "description": "Charge from solar only."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "grid_max_charge_current",
@@ -88,7 +107,8 @@
       "note": "MUST PH holding register 20125 (1.0-80.0 A DC, raw 0.1 A).",
       "change_summary": "Limits the battery charge current taken from the grid.",
       "provenance": "doc_backed",
-      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "max_combined_charge_current",
@@ -105,7 +125,8 @@
       "note": "MUST PH holding register 20132 (solar + grid total, 1.0-140.0 A DC, raw 0.1 A).",
       "change_summary": "Limits the total battery charge current from all sources.",
       "provenance": "doc_backed",
-      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware."
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "enabled_default": true
     }
   ]
 }

@@ -65,9 +65,9 @@
       "count": 2
     },
     {
-      "key": "battery_load",
-      "start": 25274,
-      "count": 1
+      "key": "battery_power",
+      "start": 25273,
+      "count": 2
     },
     {
       "key": "inverter_config",
@@ -287,7 +287,7 @@
         "register": 25234
       },
       {
-        "key": "battery_load",
+        "key": "battery_current",
         "register": 25274,
         "signed": true
       },
@@ -319,6 +319,11 @@
         "key": "charge_source_priority",
         "register": 20143,
         "enum_table": "charge_source_priority"
+      },
+      {
+        "key": "battery_power",
+        "register": 25273,
+        "signed": true
       }
     ]
   },
@@ -519,10 +524,10 @@
       "state_class": "measurement"
     },
     {
-      "key": "battery_load",
-      "name": "Battery Load",
-      "unit": "W",
-      "device_class": "power",
+      "key": "battery_current",
+      "name": "Battery Current",
+      "unit": "A",
+      "device_class": "current",
       "state_class": "measurement"
     },
     {
@@ -558,6 +563,13 @@
       "key": "charge_source_priority",
       "name": "Charge Source Priority",
       "diagnostic": true
+    },
+    {
+      "key": "battery_power",
+      "name": "Battery Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
     }
   ]
 }

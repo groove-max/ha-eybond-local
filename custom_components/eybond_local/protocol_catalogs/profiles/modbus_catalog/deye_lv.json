@@ -53,9 +53,20 @@
       "provenance": "doc_backed",
       "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "Off", "order": 0, "description": "Power the inverter off."},
-        {"value": 1, "label": "On", "order": 1, "description": "Power the inverter on."}
-      ]
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Power the inverter off."
+        },
+        {
+          "value": 1,
+          "label": "On",
+          "order": 1,
+          "description": "Power the inverter on."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "energy_management_mode",
@@ -68,9 +79,20 @@
       "provenance": "doc_backed",
       "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
       "choices": [
-        {"value": 0, "label": "Battery First", "order": 0, "description": "PV charges the battery before serving load."},
-        {"value": 1, "label": "Load First", "order": 1, "description": "PV serves the load before charging."}
-      ]
+        {
+          "value": 0,
+          "label": "Battery First",
+          "order": 0,
+          "description": "PV charges the battery before serving load."
+        },
+        {
+          "value": 1,
+          "label": "Load First",
+          "order": 1,
+          "description": "PV serves the load before charging."
+        }
+      ],
+      "enabled_default": true
     },
     {
       "key": "solar_sell_enable",
@@ -81,7 +103,8 @@
       "note": "Deye holding register 247.",
       "change_summary": "Allows PV surplus to be sold to the grid.",
       "provenance": "doc_backed",
-      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware."
+      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "export_power_limit",
@@ -96,7 +119,8 @@
       "note": "Deye holding register 245 (total export limit).",
       "change_summary": "Caps the power exported to the grid.",
       "provenance": "doc_backed",
-      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware."
+      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "grid_charge_enable",
@@ -107,7 +131,8 @@
       "note": "Deye holding register 232.",
       "change_summary": "Allows the battery to charge from the grid.",
       "provenance": "doc_backed",
-      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware."
+      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "generator_charge_enable",
@@ -118,7 +143,8 @@
       "note": "Deye holding register 231.",
       "change_summary": "Allows the battery to charge from the generator port.",
       "provenance": "doc_backed",
-      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware."
+      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "battery_max_charge_current",
@@ -133,7 +159,8 @@
       "note": "Deye holding register 210.",
       "change_summary": "Limits the battery charge current.",
       "provenance": "doc_backed",
-      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware."
+      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
+      "enabled_default": true
     },
     {
       "key": "battery_max_discharge_current",
@@ -148,7 +175,8 @@
       "note": "Deye holding register 211.",
       "change_summary": "Limits the battery discharge current.",
       "provenance": "doc_backed",
-      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware."
+      "support_notes": "From Deye Modbus V1.19 one-phase doc; not yet confirmed on hardware.",
+      "enabled_default": true
     }
   ]
 }

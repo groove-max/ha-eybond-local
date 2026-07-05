@@ -308,12 +308,11 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("charge_power",),
                 compute="passthrough",
             ),
-            # MUST register 25274 is signed battery power (charge > 0).
-            CanonicalTelemetryVariant(
-                driver_keys=("must_pv_ph18",),
-                source_keys=("battery_load",),
-                compute="passthrough",
-            ),
+            # MUST register 25273 is the vendor's "Batt power"; the schema
+            # exposes it directly as battery_power. (25274 turned out to be
+            # battery CURRENT — the third-party map mislabeled it
+            # "Battery_Load", and a 0.3.0-beta.1 tester caught the sensor
+            # showing amps as watts.)
             # Aohai FSA: BMS battery current is signed with charge > 0.
             CanonicalTelemetryVariant(
                 driver_keys=("modbus_catalog",),

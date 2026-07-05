@@ -50,6 +50,7 @@ def _must_registers() -> dict[int, int]:
         25226: 4998,
         25233: 41,
         25234: 42,
+        25273: 16,
         25274: 0xFF9C,
     }
     return registers
@@ -134,7 +135,8 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["output_frequency"], 50.01)
         self.assertEqual(values["grid_frequency"], 49.98)
         self.assertEqual(values["grid_power"], -50)
-        self.assertEqual(values["battery_load"], -100)
+        self.assertEqual(values["battery_current"], -100)
+        self.assertEqual(values["battery_power"], 16)
 
     async def test_write_capability_uses_single_register_writes(self) -> None:
         driver = MustPvPh18Driver()

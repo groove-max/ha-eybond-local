@@ -90,7 +90,9 @@ class CanonicalTelemetryTests(unittest.TestCase):
         }
 
         self.assertIn("pv_power", keys)
-        self.assertIn("battery_power", keys)
+        # battery_power is a native schema measurement (register 25273),
+        # not a canonical alias, since the 25273/25274 fix.
+        self.assertNotIn("battery_power", keys)
         self.assertIn("pv_to_home_power", keys)
         self.assertIn("grid_to_battery_power", keys)
 
@@ -125,12 +127,15 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["pv_power"], 350)
 
     def test_apply_canonical_measurements_builds_must_card_values(self) -> None:
+        # battery_power is a native schema key since the 25273/25274 fix
+        # (25273 is the vendor's Batt power; 25274 is battery current that
+        # the third-party map mislabeled "Battery_Load").
         values = {
             "grid_voltage": 231.0,
             "output_power": 1200,
             "grid_power": 700.0,
             "pv_charging_power": 500,
-            "battery_load": -300.0,
+            "battery_power": -300.0,
         }
 
         apply_canonical_measurements("must_pv_ph18", values)
