@@ -324,6 +324,43 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(caps["battery_bulk_voltage"].value_kind, "scaled_u16")
         self.assertEqual(caps["battery_bulk_voltage"].divisor, 10)
 
+    def test_aninerel_anl_4200t_uses_five_value_output_priority_enum(self) -> None:
+        # The tester's vendor-app field list shows this firmware generation
+        # uses a five-value output-priority enum (0 UTI .. 4 SUF) and a
+        # charger-priority enum of 1-3; the family's SMG enums mislabeled
+        # both (his live register 301 read 3 = SUB showed "Unknown (3)").
+        from custom_components.eybond_local.metadata.profile_loader import (
+            load_driver_profile,
+        )
+        from custom_components.eybond_local.metadata.register_schema_loader import (
+            load_register_schema,
+        )
+
+        profile = load_driver_profile(
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json"
+        )
+        caps = {c.key: c for c in profile.capabilities}
+        self.assertEqual(
+            [choice.value for choice in caps["output_source_priority"].choices],
+            [0, 1, 2, 3, 4],
+        )
+        self.assertEqual(
+            [choice.value for choice in caps["charge_source_priority"].choices],
+            [1, 2, 3],
+        )
+
+        schema = load_register_schema(
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json"
+        )
+        spec = next(
+            s for s in schema.spec_set("config") if s.register == 301
+        )
+        self.assertEqual(spec.enum_map[3], "Solar-Utility-Battery (SUB)")
+        # Select current-option matching requires byte-identical labels
+        # between the schema enum table and the capability choices.
+        for choice in caps["output_source_priority"].choices:
+            self.assertEqual(spec.enum_map[choice.value], choice.label)
+
     def test_unknown_known_layout_resolves_family(self) -> None:
         result = _tree_resolve(load_compiled_detection_catalog(), 
             protocol_key="modbus_smg",

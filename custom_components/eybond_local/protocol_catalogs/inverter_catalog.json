@@ -1101,7 +1101,7 @@
    "driver_key": "modbus_smg",
    "variant_key": "aninerel_anl_4200t_24l_w_pro",
    "profile_name": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
-   "register_schema_name": "modbus_smg/base.json",
+   "register_schema_name": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
    "tier": "full",
    "read_only": false,
    "support_capture_policy": "smg_protocol_1"

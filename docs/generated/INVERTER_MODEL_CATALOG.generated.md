@@ -183,7 +183,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - Known firmware: —
     - `aninerel_anl_4200t_24l_w_pro` → surface `aninerel_anl_4200t_24l_w_pro_full` (driver modbus_smg, variant aninerel_anl_4200t_24l_w_pro)
       - Protocol: modbus_smg | Detection: fingerprint (layout 11, model 30723, rated 4200)
-      - Tier: full | Read-only: no | Profile: modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json | Schema: modbus_smg/base.json
+      - Tier: full | Read-only: no | Profile: modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json | Schema: modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json
       - Capabilities: 30 (untested 30); support tiers: conditional 21, standard 9 | Telemetry: 100 measurements, 18 binary sensors
 - Known limitations:
   - Read-only family-fallback surface; no model-specific profile and no confirmed controls.

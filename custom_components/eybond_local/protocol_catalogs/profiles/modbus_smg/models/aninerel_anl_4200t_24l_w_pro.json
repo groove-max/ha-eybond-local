@@ -46,6 +46,70 @@
       "minimum": 0,
       "maximum": 700,
       "note": "24 V unit: the exact setpoint limits for this model are undocumented, so the window deliberately spans both battery classes and the inverter's own write validation is the authority; a rejected write surfaces as a capability block."
+    },
+    {
+      "key": "output_source_priority",
+      "note": "This firmware generation uses a five-value output-priority enum (vendor app field bse_eybond_read_55); the family's three-value SMG enum mislabeled it (register read 3 = SUB).",
+      "provenance": "cloud_hint",
+      "support_notes": "Enum from the tester's vendor-app field definitions (2026-07-05); write not yet confirmed.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Utility First (UTI)",
+          "order": 0,
+          "description": "Utility powers the load first."
+        },
+        {
+          "value": 1,
+          "label": "Solar First (SOL)",
+          "order": 1,
+          "description": "Solar powers the load first."
+        },
+        {
+          "value": 2,
+          "label": "Solar-Battery-Utility (SBU)",
+          "order": 2,
+          "description": "Solar, then battery, then utility."
+        },
+        {
+          "value": 3,
+          "label": "Solar-Utility-Battery (SUB)",
+          "order": 3,
+          "description": "Solar, then utility, then battery."
+        },
+        {
+          "value": 4,
+          "label": "SUF",
+          "order": 4,
+          "description": "Vendor mode SUF (meaning not documented)."
+        }
+      ]
+    },
+    {
+      "key": "charge_source_priority",
+      "note": "This firmware generation uses charger-priority values 1-3 (vendor app field bat_eybond_read_74); there is no value 0.",
+      "provenance": "cloud_hint",
+      "support_notes": "Enum from the tester's vendor-app field definitions (2026-07-05); write not yet confirmed.",
+      "choices": [
+        {
+          "value": 1,
+          "label": "Solar First (CSO)",
+          "order": 0,
+          "description": "Charge from solar first, utility assists."
+        },
+        {
+          "value": 2,
+          "label": "Solar and Utility (SNU)",
+          "order": 1,
+          "description": "Charge from solar and utility together."
+        },
+        {
+          "value": 3,
+          "label": "Only Solar (OSO)",
+          "order": 2,
+          "description": "Charge from solar only."
+        }
+      ]
     }
   ]
 }
