@@ -115,6 +115,16 @@ def measurements_for_runtime(
             or description.key in _COLLECTOR_ONLY_BASE_SENSOR_EXTRA_KEYS
         )
     ]
+    if collector_only_mode:
+        # No inverter identity yet (e.g. a manual driver hint on a collector
+        # with nothing attached): schema, driver, and canonical measurements
+        # describe an inverter that does not exist and would materialize as
+        # unavailable entities on the collector device. The entry reloads
+        # once detection persists an identity, so nothing is lost.
+        return _promote_readback_defaults(
+            merge_descriptions(*driver_measurements),
+            (),
+        )
     if register_schema_name:
         driver_measurements.append(load_register_schema(register_schema_name).measurement_descriptions)
     elif driver_key is None:
@@ -220,10 +230,15 @@ def binary_sensors_for_runtime(
     driver_key: str | None = None,
     register_schema_name: str = "",
     include_all_drivers_when_unknown: bool = True,
+    collector_only_mode: bool = False,
 ) -> tuple[BinarySensorDescription, ...]:
     """Return binary sensors for one concrete runtime schema selection."""
 
     driver_binary_sensors = [BASE_BINARY_SENSOR_DESCRIPTIONS]
+    if collector_only_mode:
+        # Same rule as measurements_for_runtime: without an inverter
+        # identity, schema/driver binary sensors describe a phantom device.
+        return merge_descriptions(*driver_binary_sensors)
     if register_schema_name:
         driver_binary_sensors.append(load_register_schema(register_schema_name).binary_sensor_descriptions)
     elif driver_key is None:

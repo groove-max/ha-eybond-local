@@ -223,6 +223,7 @@ async def async_setup_entry(
         driver_key=driver_key,
         register_schema_name=register_schema_name,
         include_all_drivers_when_unknown=False,
+        collector_only_mode=not has_inverter_identity,
     )
     measurement_keys = {description.key for description in measurement_descriptions}
     runtime_keys = measurement_keys | {

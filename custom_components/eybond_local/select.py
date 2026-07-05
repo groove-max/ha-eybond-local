@@ -74,8 +74,17 @@ async def async_setup_entry(
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
     driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
+    # Without an inverter identity, capability selects would describe a
+    # phantom inverter on the collector device (manual driver hint, nothing
+    # attached yet). The entry reloads once detection persists an identity.
     capabilities = (
-        inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
+        (
+            inverter.capabilities
+            if inverter is not None
+            else (driver.write_capabilities if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
     collector_capabilities = coordinator.collector_capabilities
     runtime_specs = tuple(

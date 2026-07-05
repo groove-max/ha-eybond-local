@@ -40,13 +40,28 @@ async def async_setup_entry(
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
     driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
+    # Without an inverter identity, capability presets would describe a
+    # phantom inverter on the collector device (manual driver hint, nothing
+    # attached yet). The entry reloads once detection persists an identity.
     capabilities = (
-        inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
+        (
+            inverter.capabilities
+            if inverter is not None
+            else (driver.write_capabilities if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
     capability_keys = {capability.key for capability in capabilities}
     profile_name = getattr(inverter, "profile_name", "") or coordinator.effective_profile_name
     presets = (
-        inverter.capability_presets if inverter is not None else (driver.capability_presets if driver is not None else ())
+        (
+            inverter.capability_presets
+            if inverter is not None
+            else (driver.capability_presets if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
     collector_capabilities = getattr(coordinator, "collector_capabilities", None)
     collector_proxy_capture_allowed = bool(

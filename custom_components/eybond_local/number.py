@@ -69,9 +69,18 @@ async def async_setup_entry(
     """Create number entities for numeric write capabilities."""
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
-    driver, inverter, _has_inverter_identity = entity_setup_context(entry, coordinator)
+    driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
+    # Without an inverter identity, capability entities would describe a
+    # phantom inverter on the collector device (manual driver hint, nothing
+    # attached yet). The entry reloads once detection persists an identity.
     capabilities = (
-        inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
+        (
+            inverter.capabilities
+            if inverter is not None
+            else (driver.write_capabilities if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
     async_add_entities(
         [
