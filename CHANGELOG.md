@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is inspired by Keep a Changelog, with one practical rule for this repository:
 the GitHub release body should be rendered from the matching version section here.
 
-## [0.3.0-beta.1] - 2026-07-05
+## [0.3.0-beta.1] - 2026-07-06
 
 ### Added
 
@@ -24,13 +24,35 @@ the GitHub release body should be rendered from the matching version section her
     register meanings, so detection strictly gates on the storage device type.
   - **Solis / Ginlong storage hybrids** speaking the ESINV energy-storage protocol
     (read-only telemetry; the public protocol document ships without control registers).
-- Added **untested controls** as a first-class support state: controls derived from a vendor
-  document but never exercised on real hardware are hidden in the default control mode and
-  appear only when the user explicitly selects **Full control**. Growatt SPF, Deye LV, and
-  MUST PV/PH18 ship their control sets this way (priorities, charge-current limits,
-  grid/generator charge enables, and similar low-risk settings; registers that can damage
-  equipment — output voltage/frequency types, battery chemistry, SOC protection points,
-  factory reset — are deliberately not exposed).
+- Added **untested controls** as a first-class support state: controls derived only from a
+  vendor document and never corroborated by cloud evidence or hardware are hidden in the
+  default control mode and appear only when the user explicitly selects **Full control**.
+  Growatt SPF and Deye LV ship their control sets this way (priorities, charge-current limits,
+  grid/generator charge enables, and similar settings).
+- Added **model-specific control surfaces** for three EyeBond/SmartESS-collector inverters,
+  cross-referenced from cloud evidence and vendor register maps:
+  - **MUST PV/PH18** now exposes a control surface built from the SmartESS cloud
+    device-settings catalog and the vendor 1.4.15 register map — output voltage/frequency,
+    energy-use mode, grid-protection standard, charge-source priority, battery type, PV/grid/
+    combined charge-current limits, discharge current, and the battery voltage windows. The
+    20 controls the cloud exposes ship visible in the default control mode; datasheet-only
+    settings the cloud does not expose (grid charging, the battery-equalization block) stay
+    in Full control. Every control reads back its current value. Hardware write confirmation
+    is still pending a tester report, and the inverter validates its own writes (a locked or
+    absent register self-disables).
+  - **Aninerel ANL-4200T-24L-W-PRO** binds a model-specific full-control surface instead of
+    the read-only family fallback; a tester confirmed writes on hardware, so the
+    family-proven SMG settings are visible in the default control mode. Battery-voltage
+    windows are left wide because this is a 24 V unit and the family templates carry 48 V
+    windows, so the inverter's own validation is the authority.
+  - **SMG family 4200 variant** (a new SMG model) ships controls graduated from a full
+    shadow-learning run that correlated the SmartESS cloud's writes to real registers
+    (input/buzzer/LCD/boot mode, output voltage/frequency, and mains/off-grid battery
+    low-voltage protection).
+- Added a **raw AT wire-evidence probe** to support archives for `at_text` collectors: when
+  detection fails on a raw-serial ASCII collector, the archive now records a bounded PI30 and
+  G-ASCII read sweep with per-command request/response bytes, and the collector diagnostics
+  surface the raw request/response counters from the AT connection.
 - Added a **transactional inverter-link baud sweep** to the deep scan for ESP EyeBond
   Collector bridges: when the inverter stays silent on the configured UART speed, the scan
   walks the candidate speeds a protocol family declares, probing only the drivers expected at
@@ -51,6 +73,9 @@ the GitHub release body should be rendered from the matching version section her
 - The deep-scan silence verdict is now grounded in transport-observed responses instead of
   driver-reported outcomes, so "no supported device" and "device never answered" are
   distinguished honestly.
+- Switching the control mode now reloads the config entry, so control entities that only
+  materialize at platform setup (the untested/Full-control set) appear and disappear
+  immediately instead of after a manual restart.
 - Support packages are now uniformly share-safe: every archive member masks long numeric
   identifiers (collector PN, serial numbers) with the same rule, including identifiers
   embedded in hex payload dumps; replay fixtures keep an anonymized twin, and the manifest
@@ -58,6 +83,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- **MUST PV/PH18 battery power vs current**: register 25274 is the battery *current* (A),
+  which a third-party map mislabeled "Battery_Load"; it is now exposed as Battery Current,
+  and the vendor's actual "Batt power" register 25273 is exposed as Battery Power (W).
+- **MUST PV/PH18 control read-back**: the settings blocks were widened to gap-free register
+  ranges so the inverter no longer rejects them, and every control decodes its current value
+  (previously the wide blocks spanned absent registers and left the controls blank).
+- Pack control entities are registered enabled by default, so a device that exposes its pack
+  controls no longer needs each entity enabled by hand; the enabled-defaults self-heal
+  re-enables entities that a previous version had left disabled.
 - **ESP EyeBond Collector bridges**: the Home Assistant callback endpoint written into the
   collector is now always the entry's own listener port (a proxy-template port could
   previously leak into the collector and strand it), and bridge entries always resolve to the

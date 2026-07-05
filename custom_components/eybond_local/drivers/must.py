@@ -76,7 +76,7 @@ class MustPvPh18Driver(InverterDriver):
         if not model_name.startswith(_MODEL_PREFIXES):
             return None
 
-        surface = load_compiled_detection_catalog().surfaces["must_pv_ph18_read_only"]
+        surface = load_compiled_detection_catalog().surfaces["must_pv_ph18_full"]
         details = {
             "model_number": model_name,
             "protocol_id": "MUST_PV_PH18",

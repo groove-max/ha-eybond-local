@@ -1253,7 +1253,7 @@
    "support_capture_policy": "srne_modbus"
   },
   {
-   "key": "must_pv_ph18_read_only",
+   "key": "must_pv_ph18_full",
    "protocol_key": "must_pv_ph18",
    "driver_key": "must_pv_ph18",
    "variant_key": "pv_ph18",
@@ -2114,7 +2114,7 @@
   },
   {
    "entry_key": "must_pv18_3024",
-   "surface_key": "must_pv_ph18_read_only",
+   "surface_key": "must_pv_ph18_full",
    "model_name": "MUST PV18-3024",
    "priority": 220,
    "anchors": [

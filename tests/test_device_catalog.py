@@ -512,7 +512,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
 
         self.assertEqual(result.resolution, RESOLUTION_EXACT)
         self.assertEqual(result.candidate_keys, ("must_pv18_3024",))
-        self.assertEqual(result.surface_key, "must_pv_ph18_read_only")
+        self.assertEqual(result.surface_key, "must_pv_ph18_full")
 
     def test_serial_plausibility_helper(self) -> None:
         self.assertTrue(serial_ascii_plausible("92632500000001"))
