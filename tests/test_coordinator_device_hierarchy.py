@@ -5016,9 +5016,12 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 if "options" in kwargs:
                     entry.options = dict(kwargs["options"])
 
+            reloads: list[str] = []
+
             coordinator.hass = types.SimpleNamespace(
                 config_entries=types.SimpleNamespace(
                     async_update_entry=_async_update_entry,
+                    async_schedule_reload=reloads.append,
                 )
             )
 
@@ -5028,6 +5031,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertEqual(coordinator.config_entry.data["control_mode"], "full")
             self.assertEqual(coordinator.config_entry.options["control_mode"], "full")
             self.assertEqual(calls, [("update", {"data": {"control_mode": "full"}, "options": {"control_mode": "full"}})])
+            # The capability-entity surface depends on the mode, and platforms
+            # materialize entities once at setup: the switch must reload.
+            self.assertEqual(reloads, ["entry-1"])
+
+            # A no-op mode change must not reload.
+            result = await coordinator.async_set_control_mode("full")
+            self.assertEqual(result, "full")
+            self.assertEqual(reloads, ["entry-1"])
 
         asyncio.run(_run())
 

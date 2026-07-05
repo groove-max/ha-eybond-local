@@ -4665,7 +4665,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return normalized_mode
 
     async def async_set_control_mode(self, mode: str) -> str:
-        """Persist one integration control policy mode without reloading the entry."""
+        """Persist one integration control policy mode and reload the entry."""
 
         normalized_mode = str(mode or "").strip()
         if normalized_mode not in {CONTROL_MODE_AUTO, CONTROL_MODE_READ_ONLY, CONTROL_MODE_FULL}:
@@ -4681,6 +4681,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             data=data,
             options=options,
         )
+        # The exposed capability-entity surface depends on the control mode
+        # (untested capabilities exist only in full-control mode), and the
+        # platforms materialize entities exactly once at setup — without a
+        # reload, switching the mode changes nothing the user can see
+        # (0.3.0-beta.1 field report: MUST PV1800 got no controls after
+        # enabling full control). The suppressed update above plus one
+        # explicit scheduled reload keeps this a single deterministic reload.
+        self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         return normalized_mode
 
     @property
