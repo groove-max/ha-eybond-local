@@ -5,6 +5,80 @@ All notable changes to this project are documented in this file.
 The format is inspired by Keep a Changelog, with one practical rule for this repository:
 the GitHub release body should be rendered from the matching version section here.
 
+## [0.3.0] - 2026-07-05
+
+### Added
+
+- Added a **catalog-driven generic Modbus driver**: supporting a new Modbus inverter family
+  is now a declarative device pack (identity anchors + register schema JSON) instead of a
+  Python driver. Detection uses plausibility anchors (device-type codes, rated power, value
+  envelopes) so one pack covers a whole family, and electrical variants (24 V vs 48 V) never
+  fork the map.
+- Added four inverter families from vendor protocol documents. These are
+  **datasheet-based and not yet confirmed on hardware** — telemetry should work out of the
+  box, and we would love a support package from early adopters:
+  - **Sandi Aohai FSA** (read-only telemetry).
+  - **Growatt SPF** off-grid series (telemetry + controls).
+  - **Deye single-phase LV storage hybrids** (SUN-3/3.6/5/6K-SG04LP1 class; telemetry +
+    controls). String inverters and microinverters share the wire protocol but not the
+    register meanings, so detection strictly gates on the storage device type.
+  - **Solis / Ginlong storage hybrids** speaking the ESINV energy-storage protocol
+    (read-only telemetry; the public protocol document ships without control registers).
+- Added **untested controls** as a first-class support state: controls derived from a vendor
+  document but never exercised on real hardware are hidden in the default control mode and
+  appear only when the user explicitly selects **Full control**. Growatt SPF, Deye LV, and
+  MUST PV/PH18 ship their control sets this way (priorities, charge-current limits,
+  grid/generator charge enables, and similar low-risk settings; registers that can damage
+  equipment — output voltage/frequency types, battery chemistry, SOC protection points,
+  factory reset — are deliberately not exposed).
+- Added a **transactional inverter-link baud sweep** to the deep scan for ESP EyeBond
+  Collector bridges: when the inverter stays silent on the configured UART speed, the scan
+  walks the candidate speeds a protocol family declares, probing only the drivers expected at
+  each speed, and always restores the original speed. This finds e.g. SRNE/MUST-class units
+  on 19200 behind a bridge provisioned at 9600 (ESP32/ESP8266 bridges only; bk72xx UARTs are
+  fixed at runtime).
+- Added Modbus **input-register (FC 0x04) support** to the shared Modbus core, plus new
+  decode features packs needed: per-spec raw offset (Deye-style `(raw-1000)*0.1`
+  temperatures), low-word-first 32-bit counters, and divisor-implied precision.
+
+### Changed
+
+- Detection internals were consolidated around single owners: one anchor-matching semantic,
+  one resolution engine (the compiled decision tree), one decision-DAG walker shared by all
+  catalog probers, and one register decoder shared by SMG, SmartESS, and the generic packs.
+  Along the way a real mis-detection was fixed: integral-float signature values
+  (`220.0` vs `220`) could push a known LVYUAN unit into the read-only family fallback.
+- The deep-scan silence verdict is now grounded in transport-observed responses instead of
+  driver-reported outcomes, so "no supported device" and "device never answered" are
+  distinguished honestly.
+- Support packages are now uniformly share-safe: every archive member masks long numeric
+  identifiers (collector PN, serial numbers) with the same rule, including identifiers
+  embedded in hex payload dumps; replay fixtures keep an anonymized twin, and the manifest
+  always references the real archive file.
+
+### Fixed
+
+- **ESP EyeBond Collector bridges**: the Home Assistant callback endpoint written into the
+  collector is now always the entry's own listener port (a proxy-template port could
+  previously leak into the collector and strand it), and bridge entries always resolve to the
+  framed transport profile — both at onboarding and through runtime reconciliation — fixing
+  scans that silently probed the wrong protocol after SmartESS-style metadata answers.
+  Endpoint changes pair best with esp-eybond-collector **v0.1.8**, which defers the endpoint
+  apply until the acknowledgement is flushed.
+- **Collector transport lifecycle**: a replacing collector session can no longer tear down
+  its successor (previously a live collector could "vanish" until it redialed); teardown no
+  longer inherits a dead peer's TCP timeout or a swallowed task cancellation (both could hang
+  Home Assistant shutdown); unidentified callback sockets are parked under a watcher instead
+  of lingering unwatched where a dead socket blocked same-IP routing; and the byte-shape
+  sniff defers to registered per-PN session owners.
+- **Phantom daily grid import on SMG-class hybrids**: the power-flow split now trusts the
+  charger's own PV measurement over headroom derived from an under-reading `pv_power`
+  register. A PV-only system no longer accrues fake grid-import energy.
+- Onboarding fixes from a deep review pass: the scan aggregator no longer cancels an
+  extendable deadline based on a stale snapshot, probe logs survive scan errors, a slow first
+  refresh no longer blocks entry setup, restricted re-scans no longer spend probes on
+  excluded drivers, and explicit `decimals: 0` is honored in register decoding.
+
 ## [0.2.0] - 2026-07-02
 
 ### Added
