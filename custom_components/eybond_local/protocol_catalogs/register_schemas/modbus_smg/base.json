@@ -43,22 +43,26 @@
       "1": "Parallel",
       "2": "3 Phase-P1",
       "3": "3 Phase-P2",
-      "4": "3 Phase-P3"
+      "4": "3 Phase-P3",
+      "5": "Split-Phase-P1",
+      "6": "Split-Phase-P2"
     },
     "output_source_priority": {
-      "0": "Utility-PV-Battery",
-      "1": "PV-Utility-Battery",
-      "2": "PV-Battery-Utility"
+      "0": "Utility First (UTI)",
+      "1": "Solar First (SOL)",
+      "2": "Solar-Battery-Utility (SBU)",
+      "3": "Solar-Utility-Battery (SUB)"
     },
     "input_voltage_range": {
-      "0": "Wide Range",
-      "1": "Narrow Range"
+      "0": "Appliances",
+      "1": "UPS",
+      "2": "Generator"
     },
     "buzzer_mode": {
-      "0": "Mute",
-      "1": "Source Change, Warning, Fault",
-      "2": "Warning and Fault",
-      "3": "Fault Only"
+      "0": "Beeps Off",
+      "1": "Beeps On",
+      "2": "Mute When Input Source Changes",
+      "3": "Beeps Only In Fault Mode"
     },
     "lcd_backlight_mode": {
       "0": "Timed Off",
@@ -170,9 +174,9 @@
       "15": "PV Energy Too Low To Use",
       "16": "Parallel Communication Interrupted",
       "17": "Single/Parallel Output Mode Mismatch",
-        "18": "Parallel Battery Voltage Difference Too Large",
-        "19": "Lithium Battery Communication Abnormal",
-        "20": "Battery Discharge Current Exceeds Set Value"
+      "18": "Parallel Battery Voltage Difference Too Large",
+      "19": "Lithium Battery Communication Abnormal",
+      "20": "Battery Discharge Current Exceeds Set Value"
     }
   },
   "spec_sets": {
@@ -1156,41 +1160,41 @@
       "diagnostic": true,
       "enabled_default": false
     },
-      {
-        "key": "power_flow_pv_connection_state",
-        "name": "Power Flow PV Connection",
-        "icon": "mdi:solar-power-variant",
-        "diagnostic": true,
-        "enabled_default": false
-      },
-      {
-        "key": "power_flow_utility_connection_state",
-        "name": "Power Flow Utility Connection",
-        "icon": "mdi:transmission-tower",
-        "diagnostic": true,
-        "enabled_default": false
-      },
-      {
-        "key": "power_flow_battery_state",
-        "name": "Power Flow Battery State",
-        "icon": "mdi:battery-sync",
-        "diagnostic": true,
-        "enabled_default": false
-      },
-      {
-        "key": "power_flow_load_state",
-        "name": "Power Flow Load State",
-        "icon": "mdi:home-lightning-bolt-outline",
-        "diagnostic": true,
-        "enabled_default": false
-      },
-      {
-        "key": "power_flow_charge_source_state",
-        "name": "Power Flow Charge Source",
-        "icon": "mdi:battery-charging-medium",
-        "diagnostic": true,
-        "enabled_default": false
-      },
+    {
+      "key": "power_flow_pv_connection_state",
+      "name": "Power Flow PV Connection",
+      "icon": "mdi:solar-power-variant",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "power_flow_utility_connection_state",
+      "name": "Power Flow Utility Connection",
+      "icon": "mdi:transmission-tower",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "power_flow_battery_state",
+      "name": "Power Flow Battery State",
+      "icon": "mdi:battery-sync",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "power_flow_load_state",
+      "name": "Power Flow Load State",
+      "icon": "mdi:home-lightning-bolt-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "power_flow_charge_source_state",
+      "name": "Power Flow Charge Source",
+      "icon": "mdi:battery-charging-medium",
+      "diagnostic": true,
+      "enabled_default": false
+    },
     {
       "key": "charge_source_policy_state",
       "name": "Charging Policy",

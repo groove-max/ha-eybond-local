@@ -345,25 +345,25 @@
       "choices": [
         {
           "value": 0,
-          "label": "Mute",
+          "label": "Beeps Off",
           "order": 0,
           "description": "Mute the buzzer in all situations."
         },
         {
           "value": 1,
-          "label": "Source Change, Warning, Fault",
+          "label": "Beeps On",
           "order": 1,
-          "description": "Sound on input source changes and on specific warnings or faults."
+          "description": "Buzzer enabled."
         },
         {
           "value": 2,
-          "label": "Warning and Fault",
+          "label": "Mute When Input Source Changes",
           "order": 2,
-          "description": "Sound only for specific warnings or faults."
+          "description": "Silent on input source changes."
         },
         {
           "value": 3,
-          "label": "Fault Only",
+          "label": "Beeps Only In Fault Mode",
           "order": 3,
           "description": "Sound only when a fault occurs."
         }

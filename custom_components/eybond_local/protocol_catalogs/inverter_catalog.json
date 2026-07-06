@@ -939,7 +939,7 @@
     ]
    ],
    "notes": [
-    "MUST PV/PH18 support is read-only. Devices are expected to use Modbus RTU 19200 8N1 and slave address 4.",
+    "MUST PV/PH18 uses Modbus RTU 19200 8N1 and slave address 4. Runtime exposes telemetry and a partial writable control surface; hardware write confirmation is still pending.",
     "Support capture includes extra read-only ranges observed in SmartESS cloud proxy traffic; these ranges are diagnostic evidence only and are not part of normal runtime polling."
    ]
   },

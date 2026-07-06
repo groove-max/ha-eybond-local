@@ -49,31 +49,43 @@
           "value": 0,
           "label": "Single",
           "order": 0,
-          "description": "Single inverter output mode."
+          "description": "Single-phase output."
         },
         {
           "value": 1,
           "label": "Parallel",
           "order": 1,
-          "description": "Parallel-capable output mode."
+          "description": "Parallel output."
         },
         {
           "value": 2,
           "label": "3 Phase-P1",
           "order": 2,
-          "description": "Three-phase mode, phase 1."
+          "description": "Three-phase, phase 1."
         },
         {
           "value": 3,
           "label": "3 Phase-P2",
           "order": 3,
-          "description": "Three-phase mode, phase 2."
+          "description": "Three-phase, phase 2."
         },
         {
           "value": 4,
           "label": "3 Phase-P3",
           "order": 4,
-          "description": "Three-phase mode, phase 3."
+          "description": "Three-phase, phase 3."
+        },
+        {
+          "value": 5,
+          "label": "Split-Phase-P1",
+          "order": 5,
+          "description": "Split-phase, phase 1."
+        },
+        {
+          "value": 6,
+          "label": "Split-Phase-P2",
+          "order": 6,
+          "description": "Split-phase, phase 2."
         }
       ]
     },
@@ -86,21 +98,27 @@
       "choices": [
         {
           "value": 0,
-          "label": "Utility-PV-Battery",
+          "label": "Utility First (UTI)",
           "order": 0,
-          "description": "Prefer utility first, then PV, then battery."
+          "description": "Utility powers the load first."
         },
         {
           "value": 1,
-          "label": "PV-Utility-Battery",
+          "label": "Solar First (SOL)",
           "order": 1,
-          "description": "Prefer PV first, then utility, then battery."
+          "description": "Solar powers the load first."
         },
         {
           "value": 2,
-          "label": "PV-Battery-Utility",
+          "label": "Solar-Battery-Utility (SBU)",
           "order": 2,
-          "description": "Prefer PV first, then battery, then utility."
+          "description": "Solar, then battery, then utility."
+        },
+        {
+          "value": 3,
+          "label": "Solar-Utility-Battery (SUB)",
+          "order": 3,
+          "description": "Solar, then utility, then battery."
         }
       ],
       "recommendations": [
@@ -129,15 +147,21 @@
       "choices": [
         {
           "value": 0,
-          "label": "Wide Range",
+          "label": "Appliances",
           "order": 0,
-          "description": "Allow a wider AC input voltage tolerance."
+          "description": "Wide appliance input voltage window."
         },
         {
           "value": 1,
-          "label": "Narrow Range",
+          "label": "UPS",
           "order": 1,
-          "description": "Restrict AC input to a narrower utility range."
+          "description": "Narrow UPS input voltage window."
+        },
+        {
+          "value": 2,
+          "label": "Generator",
+          "order": 2,
+          "description": "Generator input mode."
         }
       ]
     },

@@ -22,7 +22,7 @@ _MODEL_PREFIXES = ("PV", "PH", "EP")
 
 
 class MustPvPh18Driver(InverterDriver):
-    """Driver for MUST PV/PH18 Modbus devices (untested controls)."""
+    """Driver for MUST PV/PH18 Modbus devices."""
 
     key = "must_pv_ph18"
     name = "MUST PV/PH18"
