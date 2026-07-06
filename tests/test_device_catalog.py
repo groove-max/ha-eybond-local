@@ -332,6 +332,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         profile = load_driver_profile(surface.profile_name)
         tested = {c.key for c in profile.capabilities if c.tested}
         expected_tested = {
+            # First graduation batch (base-referenced controls).
             "input_voltage_range",
             "buzzer_mode",
             "lcd_backlight_mode",
@@ -341,12 +342,34 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             "output_rating_frequency",
             "battery_under_voltage",
             "battery_under_voltage_off_grid",
+            # Second batch: a follow-up shadow-learning run correlated these
+            # cloud writes to their own registers, so they graduate tested too.
+            "battery_type",
+            "float_charge_wait_time",
+            "automatic_mains_output_enabled",
+            "lithium_auto_activation",
+            "low_dc_protection_soc_ac_mode",
+            "low_dc_recovery_soc_ac_mode",
+            "op1_offgrid_soc_protection",
+            "battery_low_cutoff_soc",
+            "max_discharge_current_protection",
+            "op1_offgrid_battery_low_voltage",
+            "op2_overload_warning_percent",
+            "output2_allow_output",
         }
         self.assertEqual(tested, expected_tested)
-        # The fault-lock exit action is only effective in a fault state that was
-        # never exercised on hardware, so it stays untested (full-control only).
+        # The fault-lock exit action and the momentary equalization action stay
+        # untested (full-control only): the exit is only effective in a fault
+        # state, and the equalization action was never confirmed on hardware.
         by_key = {c.key: c for c in profile.capabilities}
         self.assertFalse(by_key["exit_fault_mode"].tested)
+        self.assertFalse(by_key["equalization_activate_now"].tested)
+        # The battery-type enum for this device uses the vendor's
+        # non-contiguous value set (0/1/2/4/6/8).
+        self.assertEqual(
+            [choice.value for choice in by_key["battery_type"].choices],
+            [0, 1, 2, 4, 6, 8],
+        )
         # This device's Input Mode has three values (APL/UPS/GNT), overriding
         # the two-value family default.
         input_mode = by_key["input_voltage_range"]
