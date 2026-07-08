@@ -1557,7 +1557,10 @@ def _is_ipv4(ip: str) -> bool:
 class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     """Create a config entry for an inverter behind an EyeBond collector."""
 
-    VERSION = 1
+    # Version 2 introduces the explicit connection architecture axes
+    # (connection_strategy / endpoint_control_policy / proxy_enabled). See
+    # ``connection/connection_policy.py`` and ``async_migrate_entry``.
+    VERSION = 2
 
     def __init__(self) -> None:
         self._translation_bundle: dict[str, Any] = {}
@@ -3041,6 +3044,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         endpoint=remembered_endpoint,
                         options=original_endpoint_options,
                     )
+        # Stamp the explicit connection architecture axes onto the new entry so
+        # its transport ownership / endpoint control is opaque state, not derived
+        # from hostnames at runtime. A passive-callback (inbound) entry resolves
+        # to inbound/external; an HA-only bind that wrote the endpoint resolves
+        # to integration_managed via its original-endpoint provenance.
+        from .connection.connection_policy import migrate_entry_axes
+
+        data.update(migrate_entry_axes(data, options))
         return self.async_create_entry(
             title=title,
             data=data,

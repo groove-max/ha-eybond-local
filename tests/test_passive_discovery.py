@@ -527,6 +527,41 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(hass.config_entries.flow.flows, [])
 
+    async def test_poll_upgrades_existing_callback_entry_from_short_to_full_pn(self) -> None:
+        entry = types.SimpleNamespace(
+            data={
+                "collector_pn": "V0011073728229",
+                "connection_mode": "callback_listener",
+                "collector_operation_mode": "home_assistant_only",
+                "tcp_port": 18899,
+                "collector_session_protocol": "eybond_framed",
+            },
+            unique_id="collector:V0011073728229",
+            title="Collector PN V0011073728229",
+        )
+        hass = _FakeHass(entries=[entry])
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[18899] = _FakeListener(
+            [
+                {
+                    "session_id": "listener-18899-1",
+                    "peer_ip": "192.168.1.1",
+                    "collector_pn": "V00110737282291016",
+                    "protocol_shape": "at_text",
+                    "state": "routed_at_text",
+                    "collector_identity_source": "at_dtupn",
+                }
+            ]
+        )
+
+        await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.flows, [])
+        self.assertEqual(entry.data["collector_pn"], "V00110737282291016")
+        self.assertEqual(entry.data["collector_session_protocol"], "at_text")
+        self.assertEqual(entry.unique_id, "collector:V00110737282291016")
+        self.assertEqual(entry.title, "Collector PN V00110737282291016")
+
     async def test_poll_does_not_treat_existing_short_pn_entry_as_full_pn_match(self) -> None:
         entry = types.SimpleNamespace(
             data={

@@ -1,0 +1,401 @@
+"""Callback session ownership registry.
+
+Today the shared listener spreads "who owns which live collector session" across
+several reference-counter dicts and connection-index maps keyed inconsistently by
+peer IP, collector PN, or session id. There is no single object that answers
+"which config entry owns which inbound session". This module introduces that
+object as an explicit facade on top of the existing shared listener inventory.
+
+Identity rules (the whole point of the facade):
+
+- **Full collector PN is durable identity.** Two sessions with different full PNs
+  are always distinct collectors, even behind one NAT peer IP.
+- **Short PN is temporary discovery identity only.** A short PN observed from a
+  weak source may be a prefix of the full PN read later; the registry enriches a
+  short-PN claim into the full PN rather than creating a second owner.
+- **Session id is transient socket identity only.**
+- **Peer IP is diagnostic/display information only** and is never used as an
+  ownership or dedup key.
+- A session is either unclaimed or owned by exactly one config entry.
+
+Short/full PN reconciliation lives here and only here.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
+from typing import Callable
+
+# One canonical prefix-match length for short/full PN reconciliation. A weak
+# short PN (e.g. the heartbeat prefix) can be a prefix of the full AT+DTUPN PN;
+# below this length a prefix is too ambiguous to treat as the same collector.
+CALLBACK_PN_PREFIX_MATCH_MIN_LEN = 10
+
+# Normalized session lifecycle states.
+SESSION_STATE_ACCEPTED = "accepted"
+SESSION_STATE_IDENTIFIED_WEAK = "identified_weak"
+SESSION_STATE_IDENTIFIED_STRONG = "identified_strong"
+SESSION_STATE_CLAIMED = "claimed"
+SESSION_STATE_ACTIVE = "active"
+SESSION_STATE_CLOSED = "closed"
+
+# Identity sources considered strong (a full, authoritative PN).
+_STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn"})
+
+# Listener inventory states that mean the socket is routed/live.
+_ACTIVE_INVENTORY_STATES = frozenset({"routed_at_text", "routed_framed"})
+_CLAIMED_INVENTORY_STATES = frozenset({"claimed"})
+
+
+def normalize_pn(value: object) -> str:
+    """Return a trimmed collector PN string."""
+
+    return str(value or "").strip()
+
+
+def pn_is_same_identity(
+    left: object,
+    right: object,
+    *,
+    min_prefix_len: int = CALLBACK_PN_PREFIX_MATCH_MIN_LEN,
+) -> bool:
+    """Return whether two PNs denote the same durable collector identity.
+
+    Exact match, or one is a prefix of the other and both are at least
+    ``min_prefix_len`` characters. This is the *only* place short/full PN
+    reconciliation is defined for ownership purposes.
+    """
+
+    a = normalize_pn(left)
+    b = normalize_pn(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if min(len(a), len(b)) < min_prefix_len:
+        return False
+    return a.startswith(b) or b.startswith(a)
+
+
+def prefer_full_pn(left: object, right: object) -> str:
+    """Return the more complete PN of two same-identity PNs (the longer one)."""
+
+    a = normalize_pn(left)
+    b = normalize_pn(right)
+    if not a:
+        return b
+    if not b:
+        return a
+    return a if len(a) >= len(b) else b
+
+
+def _identity_is_strong(source: object) -> bool:
+    return str(source or "").strip() in _STRONG_IDENTITY_SOURCES
+
+
+def _state_from_inventory(inventory_state: str, identity_source: str) -> str:
+    """Map a listener inventory state + identity source to a registry state."""
+
+    if inventory_state in _ACTIVE_INVENTORY_STATES:
+        return SESSION_STATE_ACTIVE
+    if inventory_state in _CLAIMED_INVENTORY_STATES:
+        return SESSION_STATE_CLAIMED
+    if _identity_is_strong(identity_source):
+        return SESSION_STATE_IDENTIFIED_STRONG
+    return SESSION_STATE_IDENTIFIED_WEAK
+
+
+@dataclass(frozen=True, slots=True)
+class CallbackSession:
+    """One normalized inbound collector session with ownership state."""
+
+    session_id: str
+    peer_ip: str = ""
+    peer_port: int = 0
+    listener_port: int = 0
+    protocol_shape: str = ""
+    session_protocol: str = ""
+    collector_pn: str = ""
+    identity_source: str = ""
+    state: str = SESSION_STATE_ACCEPTED
+    owner_entry_id: str = ""
+    # The original observed session mapping (listener inventory shape), kept so
+    # consumers can work with the raw dict without re-deriving fields. Coalescing
+    # keeps the winning session's raw mapping.
+    raw: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def has_strong_identity(self) -> bool:
+        return _identity_is_strong(self.identity_source)
+
+    @property
+    def claimed(self) -> bool:
+        return bool(self.owner_entry_id)
+
+
+@dataclass(slots=True)
+class _Claim:
+    """One entry's ownership claim over a durable collector identity."""
+
+    entry_id: str
+    collector_pn: str = ""
+    session_id: str = ""
+    session_protocol: str = ""
+
+
+@dataclass(slots=True)
+class CallbackSessionRegistry:
+    """Ownership + short/full PN reconciliation over observed inbound sessions.
+
+    Phase 1 scope: this is an ownership + reconciliation *facade*. Transport
+    ownership is NOT fully solved yet -- the registry does not own sockets. The
+    shared listener still accepts and claims the actual TCP sockets (via
+    ``pop_pending_socket_for_route`` / ``activate_pending_connection``); the
+    registry owns the ownership bookkeeping and the identity reconciliation that
+    used to be duplicated across passive discovery, config flow, and the
+    listener. A later phase can route the listener's socket-claim through this
+    registry so there is a single claim path end to end.
+
+    ``sessions_source`` is a callable returning the raw session dicts observed by
+    the listener(s) (the shape of ``_SharedEybondListener.discovered_collector_sessions``
+    plus an optional ``listener_port`` / ``session_protocol`` key). It is injected
+    so the registry can be unit-tested without a live listener.
+    """
+
+    sessions_source: Callable[[], Iterable[Mapping[str, object]]] | None = None
+    _claims: dict[str, _Claim] = field(default_factory=dict)
+
+    # --- observation ----------------------------------------------------------
+
+    def _raw_sessions(self) -> tuple[Mapping[str, object], ...]:
+        if self.sessions_source is None:
+            return ()
+        try:
+            return tuple(self.sessions_source() or ())
+        except Exception:
+            return ()
+
+    @staticmethod
+    def _normalize(raw: Mapping[str, object]) -> CallbackSession:
+        identity_source = str(raw.get("collector_identity_source") or "").strip()
+        inventory_state = str(raw.get("state") or "").strip()
+        return CallbackSession(
+            session_id=str(raw.get("session_id") or "").strip(),
+            peer_ip=str(raw.get("peer_ip") or "").strip(),
+            peer_port=int(raw.get("peer_port") or 0),
+            listener_port=int(raw.get("listener_port") or 0),
+            protocol_shape=str(raw.get("protocol_shape") or "").strip(),
+            session_protocol=str(raw.get("session_protocol") or "").strip(),
+            collector_pn=normalize_pn(raw.get("collector_pn")),
+            identity_source=identity_source,
+            state=_state_from_inventory(inventory_state, identity_source),
+            raw=MappingProxyType(dict(raw)),
+        )
+
+    def _coalesce(
+        self,
+        sessions: Iterable[CallbackSession],
+    ) -> list[CallbackSession]:
+        """Collapse short/full PN duplicates of one collector into one session.
+
+        Distinct full PNs are always kept distinct -- this is what keeps two
+        collectors behind one NAT peer IP separate. Peer IP is never used to
+        merge or split.
+        """
+
+        coalesced: list[CallbackSession] = []
+        for session in sessions:
+            if not session.collector_pn:
+                coalesced.append(session)
+                continue
+            for index, existing in enumerate(coalesced):
+                if not existing.collector_pn:
+                    continue
+                if not pn_is_same_identity(existing.collector_pn, session.collector_pn):
+                    continue
+                # Same collector observed twice (short + full / weak + strong):
+                # keep the strongest, most complete identity.
+                keep_new = False
+                if session.has_strong_identity and not existing.has_strong_identity:
+                    keep_new = True
+                elif (
+                    session.has_strong_identity == existing.has_strong_identity
+                    and len(session.collector_pn) > len(existing.collector_pn)
+                ):
+                    keep_new = True
+                if keep_new:
+                    merged_pn = prefer_full_pn(existing.collector_pn, session.collector_pn)
+                    coalesced[index] = replace(session, collector_pn=merged_pn)
+                break
+            else:
+                coalesced.append(session)
+        return coalesced
+
+    def observed_sessions(self) -> tuple[CallbackSession, ...]:
+        """Return coalesced observed sessions with ownership state attached."""
+
+        normalized = [self._normalize(raw) for raw in self._raw_sessions()]
+        normalized = [session for session in normalized if session.session_id]
+        coalesced = self._coalesce(normalized)
+        return tuple(self._attach_owner(session) for session in coalesced)
+
+    def _attach_owner(self, session: CallbackSession) -> CallbackSession:
+        owner = self._owner_for_session(session)
+        if not owner:
+            return session
+        state = session.state
+        if state not in (SESSION_STATE_ACTIVE,):
+            state = SESSION_STATE_CLAIMED
+        return replace(session, owner_entry_id=owner, state=state)
+
+    def list_unclaimed_sessions(self) -> tuple[CallbackSession, ...]:
+        """Return observed sessions that no config entry owns yet."""
+
+        return tuple(
+            session for session in self.observed_sessions() if not session.owner_entry_id
+        )
+
+    # --- ownership ------------------------------------------------------------
+
+    def _owner_for_session(self, session: CallbackSession) -> str:
+        for entry_id, claim in self._claims.items():
+            if claim.session_id and claim.session_id == session.session_id:
+                return entry_id
+            if claim.collector_pn and pn_is_same_identity(
+                claim.collector_pn, session.collector_pn
+            ):
+                return entry_id
+        return ""
+
+    def owner_for_pn(self, collector_pn: object) -> str:
+        """Return the entry id that owns a durable PN identity, if any."""
+
+        pn = normalize_pn(collector_pn)
+        if not pn:
+            return ""
+        for entry_id, claim in self._claims.items():
+            if claim.collector_pn and pn_is_same_identity(claim.collector_pn, pn):
+                return entry_id
+        return ""
+
+    def claim(
+        self,
+        entry_id: str,
+        *,
+        collector_pn: object = "",
+        session_id: object = "",
+        session_protocol: object = "",
+    ) -> CallbackSession | None:
+        """Claim a session for one entry by durable PN and/or transient session id.
+
+        Enforces single ownership: a PN already owned by another entry raises
+        ``ValueError``. A short PN is enriched to the full PN if a matching
+        session is observed. Returns the matched observed session, or ``None`` if
+        nothing matches yet (the claim is still recorded so a later-arriving
+        session binds to it).
+        """
+
+        entry_id = str(entry_id or "").strip()
+        if not entry_id:
+            raise ValueError("entry_id_required")
+        pn = normalize_pn(collector_pn)
+        sid = str(session_id or "").strip()
+
+        if pn:
+            other = self.owner_for_pn(pn)
+            if other and other != entry_id:
+                raise ValueError(f"session_already_claimed:{pn}:{other}")
+
+        # Enrich the durable PN from the strongest matching observed session.
+        matched: CallbackSession | None = None
+        for session in self.observed_sessions():
+            if sid and session.session_id == sid:
+                matched = session
+                break
+            if pn and pn_is_same_identity(pn, session.collector_pn):
+                if matched is None or (
+                    session.has_strong_identity and not matched.has_strong_identity
+                ):
+                    matched = session
+        if matched is not None:
+            if matched.collector_pn:
+                pn = prefer_full_pn(pn, matched.collector_pn)
+            if not sid:
+                sid = matched.session_id
+
+        self._claims[entry_id] = _Claim(
+            entry_id=entry_id,
+            collector_pn=pn,
+            session_id=sid,
+            session_protocol=str(session_protocol or "").strip()
+            or (matched.session_protocol if matched else ""),
+        )
+        if matched is None:
+            return None
+        return self._attach_owner(matched)
+
+    def reconcile_identity(self, *, session_id: object, full_pn: object) -> bool:
+        """Promote a claim's short PN to a full PN observed on the same session.
+
+        Reconciliation happens in exactly one place: here. Returns whether a
+        claim was updated.
+        """
+
+        sid = str(session_id or "").strip()
+        full = normalize_pn(full_pn)
+        if not sid or not full:
+            return False
+        for claim in self._claims.values():
+            if claim.session_id == sid and pn_is_same_identity(claim.collector_pn, full):
+                if full != claim.collector_pn:
+                    claim.collector_pn = prefer_full_pn(claim.collector_pn, full)
+                    return True
+        return False
+
+    def release(self, entry_id: str) -> bool:
+        """Release any claim held by one entry. Returns whether one existed."""
+
+        return self._claims.pop(str(entry_id or "").strip(), None) is not None
+
+    def claimed_identity(self, entry_id: str) -> str:
+        """Return the durable PN currently claimed by one entry."""
+
+        claim = self._claims.get(str(entry_id or "").strip())
+        return claim.collector_pn if claim else ""
+
+    # --- diagnostics ----------------------------------------------------------
+
+    def diagnostics(self) -> dict[str, object]:
+        """Return an opaque, masking-free ownership view for support bundles."""
+
+        sessions = self.observed_sessions()
+        return {
+            "claim_count": len(self._claims),
+            "observed_session_count": len(sessions),
+            "unclaimed_session_count": sum(
+                1 for session in sessions if not session.owner_entry_id
+            ),
+            "claims": [
+                {
+                    "entry_id": claim.entry_id,
+                    "collector_pn": claim.collector_pn,
+                    "session_id": claim.session_id,
+                    "session_protocol": claim.session_protocol,
+                }
+                for claim in self._claims.values()
+            ],
+            "sessions": [
+                {
+                    "session_id": session.session_id,
+                    "peer_ip": session.peer_ip,
+                    "listener_port": session.listener_port,
+                    "collector_pn": session.collector_pn,
+                    "identity_source": session.identity_source,
+                    "state": session.state,
+                    "owner_entry_id": session.owner_entry_id,
+                }
+                for session in sessions
+            ],
+        }

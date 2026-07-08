@@ -49,6 +49,7 @@ from ..collector.capabilities import (
 from ..collector.transport_profile import (
     CollectorTransportProfile,
     EYBOND_FRAMED_RUNTIME_OWNER_KEYS,
+    collector_session_protocol_from_inventory_state,
     collector_cloud_family_from_entry_context,
     normalize_collector_session_protocol,
     resolve_collector_transport_profile,
@@ -65,9 +66,13 @@ from ..const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_PN,
+    CONF_CONNECTION_STRATEGY,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
     CONF_CONTROL_MODE,
+    CONF_ENDPOINT_CONTROL_POLICY,
+    CONF_ENDPOINT_WRITTEN_AT,
+    CONF_ENDPOINT_WRITTEN_VALUE,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
     CONF_DETECTION_CONFIDENCE,
@@ -102,6 +107,10 @@ from ..const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
     COLLECTOR_OPERATION_MODES,
+    CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+    CONNECTION_STRATEGY_INBOUND,
+    ENDPOINT_CONTROL_EXTERNAL,
+    ENDPOINT_CONTROL_INTEGRATION_MANAGED,
     DOMAIN,
     DRIVER_HINT_AUTO,
     LOCAL_METADATA_DIR,
@@ -111,6 +120,12 @@ from ..const import (
     POLL_MODE_MANUAL,
 )
 from ..connection.models import build_connection_spec
+from ..connection.connection_policy import (
+    may_auto_manage_endpoint,
+    may_run_steady_reverse_discovery,
+    resolve_connection_strategy,
+    resolve_endpoint_control_policy,
+)
 from ..collector.entity_scope import is_collector_entity_key
 from ..control_policy import (
     controls_enabled,
@@ -1912,6 +1927,34 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         return self.collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
 
+    @property
+    def connection_strategy(self) -> str:
+        """Return the explicit connection strategy for this entry.
+
+        Opaque, hostname-free: ``inbound`` (the collector dials Home Assistant
+        by itself) or ``callback_on_demand`` (Home Assistant must trigger a
+        callback). This is the single top-level branch for transport ownership.
+        """
+
+        return resolve_connection_strategy(
+            self.config_entry.data,
+            self.config_entry.options,
+        )
+
+    @property
+    def endpoint_control_policy(self) -> str:
+        """Return whether the integration may manage the collector endpoint.
+
+        ``external`` (never write/restore/auto-heal) or ``integration_managed``
+        (the integration wrote the endpoint through an explicit action and may
+        keep it aligned).
+        """
+
+        return resolve_endpoint_control_policy(
+            self.config_entry.data,
+            self.config_entry.options,
+        )
+
     def _sync_forced_collector_operation_mode(self) -> None:
         """Persist forced HA-only mode once runtime proves the collector requires it."""
 
@@ -1983,7 +2026,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
 
     def _configure_reverse_discovery_mode(self) -> None:
-        """Control steady reverse discovery according to the collector ownership mode."""
+        """Enable steady reverse discovery only for the callback_on_demand strategy.
+
+        Reverse discovery is the UDP ``set>server`` callback trigger. It is now
+        gated purely on the explicit ``connection_strategy`` axis, not on the
+        operation mode, the endpoint hostname, or the collector type:
+
+        - ``inbound``: the collector dials Home Assistant by itself. Runtime must
+          never send a UDP callback probe -- it claims or waits for the inbound
+          session. Reverse discovery is disabled.
+        - ``callback_on_demand``: Home Assistant may ask the collector to dial
+          back. Reverse discovery is enabled.
+        """
 
         set_reverse_discovery_enabled = getattr(
             self._runtime,
@@ -1992,30 +2046,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         if set_reverse_discovery_enabled is None:
             return
-        current_endpoint = ""
-        snapshot = getattr(self, "data", None)
-        values = getattr(snapshot, "values", None)
-        if isinstance(values, dict):
-            current_endpoint = str(values.get("collector_server_endpoint") or "").strip()
-        endpoint_already_targets_ha = bool(
-            current_endpoint
-            and self._endpoint_host_targets_this_home_assistant(current_endpoint)
+        set_reverse_discovery_enabled(
+            may_run_steady_reverse_discovery(self.connection_strategy)
         )
-        # HA-only normally disables steady reverse discovery, because a factory
-        # collector reconnects to the persisted (param-21-written) endpoint on
-        # its own. A virtual bridge has no cloud fallback, and older bridge
-        # firmware may not persist that endpoint, so keep reverse discovery
-        # ENABLED even when forced to HA-only unless its live endpoint already
-        # points at this HA host. For any collector mode, once CLDSRVHOST1 is
-        # already local, repeated UDP redirects are redundant.
-        keep_reverse_discovery = (
-            not endpoint_already_targets_ha
-            and (
-                not self.collector_home_assistant_primary
-                or self._collector_is_virtual_bridge()
-            )
-        )
-        set_reverse_discovery_enabled(keep_reverse_discovery)
 
     def consume_entry_reload_suppression(self) -> bool:
         """Return whether the next config-entry update listener should skip reload."""
@@ -2045,6 +2078,34 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 self._suppress_entry_reload_count = max(
                     self._suppress_entry_reload_count - 1, 0
                 )
+
+    def _persist_connection_axes(
+        self,
+        updates: dict[str, Any] | None = None,
+        *,
+        clear: tuple[str, ...] = (),
+    ) -> None:
+        """Persist explicit connection-architecture axis fields into entry data.
+
+        The three axes are durable, opaque entry state. Explicit endpoint
+        actions set them here so runtime never has to re-derive transport
+        ownership from the endpoint hostname.
+        """
+
+        if getattr(self, "hass", None) is None or getattr(self, "config_entry", None) is None:
+            return
+        data = dict(self.config_entry.data)
+        changed = False
+        for key, value in (updates or {}).items():
+            if data.get(key) != value:
+                data[key] = value
+                changed = True
+        for key in clear:
+            if key in data:
+                del data[key]
+                changed = True
+        if changed:
+            self._async_update_entry_without_reload(data=data)
 
     def _normalized_remembered_collector_server_endpoint(self) -> str:
         endpoint = str(
@@ -2589,9 +2650,23 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self,
         snapshot: RuntimeSnapshot,
     ) -> None:
-        """Keep collector parameter 21 aligned with Home-Assistant-primary mode."""
+        """Keep collector parameter 21 aligned when the integration manages it.
+
+        The automatic per-poll write/restore is gated on the explicit
+        ``endpoint_control_policy`` axis. Under ``external`` the integration
+        never silently writes, restores, or auto-heals the endpoint -- it only
+        surfaces the endpoint as diagnostic state. Only ``integration_managed``
+        (the integration previously wrote the endpoint through an explicit user
+        action) may reconcile it automatically. Explicit user actions
+        (``async_set_collector_operation_mode`` / bind / rollback services) are
+        separate and are not gated here.
+        """
 
         snapshot.values.pop("collector_operation_endpoint_sync_error", None)
+        if not may_auto_manage_endpoint(self.endpoint_control_policy):
+            self._collector_operation_pending_target_endpoint = ""
+            snapshot.values["collector_operation_endpoint_sync_status"] = "external_not_managed"
+            return
         current_endpoint = str(snapshot.values.get("collector_server_endpoint") or "").strip()
         current_parts = self._endpoint_effective_parts(current_endpoint)
         pending_target_endpoint = str(
@@ -3582,6 +3657,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         target_endpoint = self.collector_callback_target_endpoint
         current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
         if current_endpoint == target_endpoint:
+            # Already pointing at Home Assistant and no write happens: the
+            # collector dials Home Assistant on its own (inbound). The endpoint
+            # control policy is left to derivation (external unless a prior
+            # integration write recorded provenance) -- per the "no write =>
+            # external" rule, we do not claim ownership without a write.
+            self._persist_connection_axes(
+                {CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND}
+            )
             self._publish_snapshot_values(
                 collector_callback_endpoint_pending=None,
                 collector_callback_endpoint_pending_apply_required=None,
@@ -3599,6 +3682,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             apply_changes=True,
         )
         result["target_role"] = "home_assistant"
+        # A successful apply means the integration wrote the endpoint: the
+        # collector now dials Home Assistant (inbound) and the integration owns
+        # the endpoint (integration_managed) with recorded write provenance.
+        written_value = str(
+            result.get("readback_endpoint")
+            or result.get("requested_endpoint")
+            or target_endpoint
+        )
+        self._persist_connection_axes(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+                CONF_ENDPOINT_WRITTEN_VALUE: written_value,
+                CONF_ENDPOINT_WRITTEN_AT: datetime.now(timezone.utc).isoformat(),
+            }
+        )
         self._publish_snapshot_values(
             collector_callback_endpoint_pending=None,
             collector_callback_endpoint_pending_apply_required=None,
@@ -3688,12 +3787,24 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         result["rollback_endpoint"] = rollback_endpoint
         result.setdefault("target_role", "smartess")
         if not apply_changes:
+            # Staging must not change durable axes: nothing was written yet.
             self._publish_snapshot_values(
                 collector_callback_endpoint_pending=rollback_endpoint,
                 collector_callback_endpoint_pending_apply_required=True,
             )
             await self.async_request_refresh()
         else:
+            # A successful rollback hands endpoint control back to the external
+            # target: the collector points elsewhere again (callback_on_demand)
+            # and the integration no longer manages the endpoint (external), so
+            # the recorded write provenance is cleared.
+            self._persist_connection_axes(
+                {
+                    CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                    CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_EXTERNAL,
+                },
+                clear=(CONF_ENDPOINT_WRITTEN_VALUE, CONF_ENDPOINT_WRITTEN_AT),
+            )
             self._publish_snapshot_values(
                 collector_callback_endpoint_pending=None,
                 collector_callback_endpoint_pending_apply_required=None,
@@ -4714,12 +4825,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return resolved
         if resolved.runtime_owner_key in EYBOND_FRAMED_RUNTIME_OWNER_KEYS:
             return resolved
-        if (
-            resolved.session_protocol == "at_text"
-            and resolved.raw_passthrough_frame_format == "transparent"
-            and observed_protocol == "eybond_framed"
-        ):
-            return resolved
         if observed_protocol == "at_text":
             return CollectorTransportProfile(
                 cloud_family=resolved.cloud_family,
@@ -4758,15 +4863,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             except Exception:  # pragma: no cover - defensive runtime inspection
                 diagnostics = {}
             protocol = normalize_collector_session_protocol(
-                diagnostics.get("collector_callback_session_protocol")
+                diagnostics.get("collector_callback_observed_session_protocol")
             )
+            if not protocol and not str(
+                self.config_entry.data.get(CONF_COLLECTOR_PN, "") or ""
+            ).strip():
+                protocol = self._observed_collector_session_protocol_from_diagnostics(
+                    diagnostics
+                )
             if protocol:
                 return protocol
 
         values = getattr(self.data, "values", {})
         if isinstance(values, Mapping):
             for key in (
-                "collector_callback_session_protocol",
                 "collector_runtime_link_session_protocol",
                 "collector_session_protocol",
             ):
@@ -4779,6 +4889,36 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
             if protocol:
                 return protocol
+        return ""
+
+    @staticmethod
+    def _observed_collector_session_protocol_from_diagnostics(
+        diagnostics: Mapping[str, object],
+    ) -> str:
+        """Return observed protocol from live listener inventory diagnostics.
+
+        ``collector_callback_session_protocol`` is the link manager's configured
+        protocol, not a byte-shape observation.  The actual observation lives in
+        ``collector_callback_session_inventory``.  Prefer it so a newly-added
+        inbound collector can switch from a stale/persisted profile to the
+        protocol proven by the current TCP session before runtime claims it.
+        """
+
+        sessions = diagnostics.get("collector_callback_session_inventory")
+        if not isinstance(sessions, (list, tuple)):
+            return ""
+        protocols: set[str] = set()
+        for session in sessions:
+            if not isinstance(session, Mapping):
+                continue
+            protocol = collector_session_protocol_from_inventory_state(
+                state=session.get("state"),
+                protocol_shape=session.get("protocol_shape"),
+            )
+            if protocol:
+                protocols.add(protocol)
+        if len(protocols) == 1:
+            return next(iter(protocols))
         return ""
 
     def _collector_runtime_owner_key(self) -> str:
@@ -5067,6 +5207,30 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         options = dict(self.config_entry.options)
         data[CONF_COLLECTOR_OPERATION_MODE] = normalized_mode
         options[CONF_COLLECTOR_OPERATION_MODE] = normalized_mode
+        # Switching the operation mode is an explicit user action, so it also
+        # sets the new connection architecture axes. Home-Assistant-only means
+        # the integration wrote the endpoint (integration_managed) and the
+        # collector now dials Home Assistant on its own (inbound); SmartESS+HA
+        # restores the endpoint to the vendor cloud and hands control back
+        # (external / callback_on_demand).
+        if normalized_mode == COLLECTOR_OPERATION_HA_ONLY:
+            data[CONF_CONNECTION_STRATEGY] = CONNECTION_STRATEGY_INBOUND
+            if applied_endpoint:
+                # The integration wrote the endpoint, so it now manages it.
+                data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_INTEGRATION_MANAGED
+                data[CONF_ENDPOINT_WRITTEN_VALUE] = applied_endpoint
+                data[CONF_ENDPOINT_WRITTEN_AT] = datetime.now(timezone.utc).isoformat()
+            else:
+                # The endpoint already equalled the target: no write happened, so
+                # the integration does not own it -- inbound + external.
+                data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_EXTERNAL
+                data.pop(CONF_ENDPOINT_WRITTEN_VALUE, None)
+                data.pop(CONF_ENDPOINT_WRITTEN_AT, None)
+        else:
+            data[CONF_CONNECTION_STRATEGY] = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+            data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_EXTERNAL
+            data.pop(CONF_ENDPOINT_WRITTEN_VALUE, None)
+            data.pop(CONF_ENDPOINT_WRITTEN_AT, None)
         self._async_update_entry_without_reload(data=data, options=options)
 
         self._configure_reverse_discovery_mode()
@@ -7432,7 +7596,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         hw_version = str(values.get("collector_hardware_version") or "").strip()
         collector_type = str(values.get("collector_type") or "").strip()
 
-        manufacturer = "OEM / EyeBond"
+        manufacturer = ""
         configuration_url = ""
         profile = collector_capability_profile_from_runtime(
             collector=collector,
@@ -7481,9 +7645,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         info: dict[str, object] = {
             "identifiers": {(DOMAIN, f"{self.config_entry.entry_id}:collector")},
             "name": name,
-            "manufacturer": manufacturer,
             "model": model,
         }
+        if manufacturer:
+            info["manufacturer"] = manufacturer
         if serial_number:
             info["serial_number"] = serial_number
         if sw_version:
@@ -7598,7 +7763,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if meta == self._last_synced_collector_device_meta:
             return
 
-        registry.async_get_or_create(config_entry_id=self.config_entry.entry_id, **info)
+        device = registry.async_get_or_create(config_entry_id=self.config_entry.entry_id, **info)
+        if not desired_manufacturer and getattr(device, "manufacturer", "") == "OEM / EyeBond":
+            update_device = getattr(registry, "async_update_device", None)
+            if callable(update_device):
+                update_device(device.id, manufacturer=None)
         self._last_synced_collector_device_meta = meta
 
 

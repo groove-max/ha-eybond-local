@@ -17,6 +17,7 @@ from ..collector.cloud_family import (
     select_preferred_collector_cloud_family,
 )
 from ..collector.discovery import DiscoveryAnnouncer, async_probe_target
+from ..collector.transport_profile import collector_session_protocol_from_inventory_state
 from ..collector.transport import (
     CollectorAtTransport,
     CollectorListenerBindError,
@@ -566,6 +567,9 @@ class EybondRuntimeLinkManager:
             "collector_listener_rebind_count": self._listener_rebind_count,
             "collector_listener_last_error": self._listener_last_error,
             "collector_callback_session_protocol": self._collector_session_protocol,
+            "collector_callback_observed_session_protocol": (
+                self._owned_observed_session_protocol()
+            ),
             "collector_callback_identity_strategy": self._collector_identity_strategy,
             "collector_callback_raw_passthrough_bootstrap": (
                 self._collector_raw_passthrough_bootstrap
@@ -579,6 +583,42 @@ class EybondRuntimeLinkManager:
         }
         diagnostics.update(self._session_inventory_diagnostics())
         return diagnostics
+
+    def _owned_observed_session_protocol(self) -> str:
+        """Return observed protocol for this entry's collector PN only."""
+
+        collector_pn = str(self._collector_pn or "").strip()
+        if not collector_pn:
+            return ""
+        protocols: set[str] = set()
+        seen_listeners: set[int] = set()
+        for transport in self._payload_transports():
+            listener = getattr(transport, "_listener", None)
+            if listener is None:
+                continue
+            listener_id = id(listener)
+            if listener_id in seen_listeners:
+                continue
+            seen_listeners.add(listener_id)
+            inventory = getattr(listener, "_session_inventory", {})
+            if not isinstance(inventory, dict):
+                continue
+            pn_matches = getattr(listener, "_collector_pn_matches", None)
+            if not callable(pn_matches):
+                continue
+            for session in inventory.values():
+                observed_pn = str(getattr(session, "collector_pn", "") or "").strip()
+                if not observed_pn or not pn_matches(collector_pn, observed_pn):
+                    continue
+                protocol = collector_session_protocol_from_inventory_state(
+                    state=getattr(session, "state", ""),
+                    protocol_shape=getattr(session, "protocol_shape", ""),
+                )
+                if protocol:
+                    protocols.add(protocol)
+        if len(protocols) == 1:
+            return next(iter(protocols))
+        return ""
 
     def _session_inventory_diagnostics(self) -> dict[str, object]:
         """Return passive callback-session inventory diagnostics."""

@@ -73,6 +73,55 @@ COLLECTOR_OPERATION_MODES = {
 	COLLECTOR_OPERATION_HA_ONLY,
 }
 
+# --- Collector connection architecture axes -----------------------------------
+# Three independent, explicit per-entry axes replace the old habit of inferring
+# transport ownership and endpoint control from operation mode, endpoint
+# hostname, peer IP, or collector type. See
+# ``connection/connection_policy.py`` for the single source of truth and the
+# migration mapping from the legacy fields.
+
+# 1) connection_strategy: how Home Assistant obtains the collector TCP session.
+CONF_CONNECTION_STRATEGY = "connection_strategy"
+# The collector already dials Home Assistant by itself; runtime only claims or
+# waits for the inbound session. It must never send a UDP callback probe, ask
+# the collector to reconnect, or rewrite the endpoint for connection recovery.
+CONNECTION_STRATEGY_INBOUND = "inbound"
+# Home Assistant must ask the collector to dial back (UDP callback trigger) per
+# explicit connection attempt, then claim the resulting inbound session.
+CONNECTION_STRATEGY_CALLBACK_ON_DEMAND = "callback_on_demand"
+CONNECTION_STRATEGIES = {
+	CONNECTION_STRATEGY_INBOUND,
+	CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+}
+# Safe default: assume the collector is already connected and do not touch the
+# wire on its behalf. Migration promotes cloud-primary entries to callback.
+DEFAULT_CONNECTION_STRATEGY = CONNECTION_STRATEGY_INBOUND
+
+# 2) endpoint_control_policy: whether the integration may manage the endpoint.
+CONF_ENDPOINT_CONTROL_POLICY = "endpoint_control_policy"
+# The integration does not control the endpoint: it may read/display it and use
+# inbound sessions, but must never silently write, restore, or auto-heal it.
+ENDPOINT_CONTROL_EXTERNAL = "external"
+# The integration previously wrote the endpoint through an explicit user action
+# and may keep it aligned / restore it through further explicit actions.
+ENDPOINT_CONTROL_INTEGRATION_MANAGED = "integration_managed"
+ENDPOINT_CONTROL_POLICIES = {
+	ENDPOINT_CONTROL_EXTERNAL,
+	ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+}
+# Safe default: never touch an endpoint the integration did not write.
+DEFAULT_ENDPOINT_CONTROL_POLICY = ENDPOINT_CONTROL_EXTERNAL
+
+# 3) proxy_enabled: whether an accepted inbound session should be proxied.
+CONF_PROXY_ENABLED = "proxy_enabled"
+DEFAULT_PROXY_ENABLED = False
+
+# Endpoint provenance for integration-managed control. The opaque "previous"
+# endpoint is the existing CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT; these two
+# record what the integration itself last wrote and when.
+CONF_ENDPOINT_WRITTEN_VALUE = "endpoint_written_value"
+CONF_ENDPOINT_WRITTEN_AT = "endpoint_written_at"
+
 DEFAULT_COLLECTOR_ADDR = 0xFF
 DEFAULT_MODBUS_DEVICE_ADDR = 1
 DEFAULT_REQUEST_TIMEOUT = 5.0

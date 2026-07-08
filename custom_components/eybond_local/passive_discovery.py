@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
+from .connection.session_registry import CallbackSessionRegistry
 from .collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     LEGACY_BINARY_COLLECTOR_SERVER_PORT,
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DATA_KEY = "passive_callback_discovery"
+_REGISTRY_DATA_KEY = "callback_session_registry"
 _LISTENER_HOST = "0.0.0.0"
 _POLL_INTERVAL_SECONDS = 2.0
 _WEAK_IDENTITY_SETTLE_SECONDS = 6.0
@@ -89,31 +91,6 @@ def _session_is_more_complete_same_identity(previous_pn: str, current_pn: str) -
     )
 
 
-def _sessions_are_weak_strong_versions_of_same_identity(
-    left: dict[str, object],
-    right: dict[str, object],
-) -> bool:
-    """Return whether discovery should collapse a weak PN into a strong PN.
-
-    Prefix matching is deliberately limited to one place: transient passive
-    discovery de-duplication.  A short PN observed from a weak source can be a
-    prefix of the full PN later read via AT+DTUPN, but that does not make prefix
-    matching safe for durable identity, configured entries, or registries.
-    """
-
-    left_strong = _session_has_strong_identity(left)
-    right_strong = _session_has_strong_identity(right)
-    if left_strong == right_strong:
-        return False
-    left_pn = str(left.get("collector_pn") or "").strip()
-    right_pn = str(right.get("collector_pn") or "").strip()
-    if not _collector_prefix_matches(left_pn, right_pn):
-        return False
-    left_peer = str(left.get("peer_ip") or "").strip()
-    right_peer = str(right.get("peer_ip") or "").strip()
-    return bool(left_peer and right_peer and left_peer == right_peer)
-
-
 class PassiveCallbackDiscovery:
     """Keep shared listeners open and publish unclaimed callback sessions to HA."""
 
@@ -124,6 +101,18 @@ class PassiveCallbackDiscovery:
         self._notified: set[str] = set()
         self._weak_identity_first_seen: dict[str, float] = {}
         self._logged_session_signatures: set[str] = set()
+        # The single ownership + short/full PN reconciliation authority. Passive
+        # discovery reads coalesced, unclaimed candidates from it; the listener
+        # inventory is only its raw source.
+        self._registry = CallbackSessionRegistry(
+            sessions_source=self.iter_observed_sessions,
+        )
+
+    @property
+    def registry(self) -> CallbackSessionRegistry:
+        """Return the callback session ownership registry backing discovery."""
+
+        return self._registry
 
     async def async_start(self) -> None:
         """Start passive discovery on known collector callback ports."""
@@ -171,6 +160,38 @@ class PassiveCallbackDiscovery:
                 )
         else:
             self._task = self._hass.async_create_task(self._async_run())
+
+    def iter_observed_sessions(self) -> tuple[dict[str, object], ...]:
+        """Return raw inbound sessions across all passive listeners.
+
+        Each session dict is the shared listener's ``discovered_collector_sessions``
+        shape, augmented with the listener port and the confirmed session
+        protocol. This is the source the callback session registry reads.
+        """
+
+        sessions: list[dict[str, object]] = []
+        for port, listener in tuple(self._listeners.items()):
+            inventory_provider = getattr(listener, "discovered_collector_sessions", None)
+            if not callable(inventory_provider):
+                continue
+            try:
+                observed = inventory_provider() or ()
+            except Exception:
+                continue
+            for session in observed:
+                if not isinstance(session, dict):
+                    continue
+                enriched = dict(session)
+                enriched.setdefault("listener_port", int(port))
+                enriched.setdefault(
+                    "session_protocol",
+                    collector_session_protocol_from_inventory_state(
+                        state=session.get("state"),
+                        protocol_shape=session.get("protocol_shape"),
+                    ),
+                )
+                sessions.append(enriched)
+        return tuple(sessions)
 
     async def async_stop(self) -> None:
         """Stop passive discovery and release listener references."""
@@ -230,71 +251,88 @@ class PassiveCallbackDiscovery:
         if not callable(async_init):
             return
 
-        for port, listener in tuple(self._listeners.items()):
-            inventory_provider = getattr(listener, "discovered_collector_sessions", None)
-            if not callable(inventory_provider):
+        # The registry is the single coalescing + ownership authority: it reads
+        # the listener inventory (via ``iter_observed_sessions``), collapses
+        # short/full PN duplicates, and marks sessions owned by a config entry.
+        observed = self._registry.observed_sessions()
+
+        # 1) Repair/upgrade existing entries from their currently-live session.
+        for candidate in observed:
+            session = dict(candidate.raw)
+            collector_pn = str(session.get("collector_pn") or "").strip()
+            peer_ip = str(session.get("peer_ip") or "").strip()
+            if not collector_pn or not peer_ip:
                 continue
-            for session in self._coalesced_sessions(inventory_provider()):
-                collector_pn = str(session.get("collector_pn") or "").strip()
-                peer_ip = str(session.get("peer_ip") or "").strip()
-                if not collector_pn or not peer_ip:
-                    continue
-                self._log_session_once(port, session)
-                if self._weak_identity_is_still_settling(port, session):
-                    continue
-                session_protocol = collector_session_protocol_from_inventory_state(
-                    state=session.get("state"),
-                    protocol_shape=session.get("protocol_shape"),
-                )
-                await self._async_abort_stale_prefix_discovery_flows(
+            port = int(session.get("listener_port") or 0)
+            self._log_session_once(port, session)
+            existing_entry = self._entry_for_collector_pn(collector_pn)
+            if existing_entry is not None:
+                self._maybe_upgrade_existing_entry_from_session(
+                    existing_entry,
                     port=port,
                     session=session,
                 )
-                if self._active_discovery_flow_exists(port=port, session=session):
-                    logger.debug(
-                        "Passive callback discovery flow already active port=%s pn=%s peer=%s",
-                        port,
-                        collector_pn,
-                        peer_ip,
-                    )
-                    continue
-                existing_entry = self._entry_for_collector_pn(collector_pn)
-                if existing_entry is not None:
-                    self._maybe_upgrade_existing_entry_from_session(
-                        existing_entry,
-                        port=port,
-                        session=session,
-                    )
-                    continue
-                logger.info(
-                    "Publishing passive EyeBond callback discovery port=%s pn=%s peer=%s source=%s state=%s",
+
+        # 2) Publish unclaimed candidates -- collectors that already dial Home
+        # Assistant but no entry owns yet. list_unclaimed_sessions() already
+        # excludes registry-claimed identities.
+        for candidate in self._registry.list_unclaimed_sessions():
+            session = dict(candidate.raw)
+            collector_pn = str(session.get("collector_pn") or "").strip()
+            peer_ip = str(session.get("peer_ip") or "").strip()
+            if not collector_pn or not peer_ip:
+                continue
+            if self._entry_for_collector_pn(collector_pn) is not None:
+                # Handled by the upgrade pass above.
+                continue
+            port = int(session.get("listener_port") or 0)
+            if self._weak_identity_is_still_settling(port, session):
+                continue
+            session_protocol = collector_session_protocol_from_inventory_state(
+                state=session.get("state"),
+                protocol_shape=session.get("protocol_shape"),
+            )
+            await self._async_abort_stale_prefix_discovery_flows(
+                port=port,
+                session=session,
+            )
+            if self._active_discovery_flow_exists(port=port, session=session):
+                logger.debug(
+                    "Passive callback discovery flow already active port=%s pn=%s peer=%s",
                     port,
                     collector_pn,
                     peer_ip,
-                    session.get("collector_identity_source"),
-                    session.get("state"),
                 )
-                await async_init(
-                    DOMAIN,
-                    context={
-                        "source": "integration_discovery",
-                        "title_placeholders": {
-                            "name": _discovery_title(collector_pn, peer_ip)
-                        },
+                continue
+            logger.info(
+                "Publishing passive EyeBond callback discovery port=%s pn=%s peer=%s source=%s state=%s",
+                port,
+                collector_pn,
+                peer_ip,
+                session.get("collector_identity_source"),
+                session.get("state"),
+            )
+            await async_init(
+                DOMAIN,
+                context={
+                    "source": "integration_discovery",
+                    "title_placeholders": {
+                        "name": _discovery_title(collector_pn, peer_ip)
                     },
-                    data={
-                        CONF_CONNECTION_TYPE: CONNECTION_TYPE_EYBOND,
-                        CONF_TCP_PORT: port,
-                        CONF_COLLECTOR_PN: collector_pn,
-                        "peer_ip": peer_ip,
-                        "session_id": str(session.get("session_id") or ""),
-                        "protocol_shape": str(session.get("protocol_shape") or ""),
-                        "collector_session_protocol": session_protocol,
-                        "collector_identity_source": str(
-                            session.get("collector_identity_source") or ""
-                        ),
-                    },
-                )
+                },
+                data={
+                    CONF_CONNECTION_TYPE: CONNECTION_TYPE_EYBOND,
+                    CONF_TCP_PORT: port,
+                    CONF_COLLECTOR_PN: collector_pn,
+                    "peer_ip": peer_ip,
+                    "session_id": str(session.get("session_id") or ""),
+                    "protocol_shape": str(session.get("protocol_shape") or ""),
+                    "collector_session_protocol": session_protocol,
+                    "collector_identity_source": str(
+                        session.get("collector_identity_source") or ""
+                    ),
+                },
+            )
 
     def _log_session_once(self, port: int, session: dict[str, object]) -> None:
         collector_pn = str(session.get("collector_pn") or "").strip()
@@ -617,54 +655,32 @@ class PassiveCallbackDiscovery:
             if first_seen >= cutoff
         }
 
-    @staticmethod
-    def _coalesced_sessions(sessions: Any) -> tuple[dict[str, object], ...]:
-        coalesced: list[dict[str, object]] = []
-        for raw in sessions:
-            if not isinstance(raw, dict):
-                continue
-            collector_pn = str(raw.get("collector_pn") or "").strip()
-            if not collector_pn:
-                coalesced.append(dict(raw))
-                continue
-            for index, existing in enumerate(coalesced):
-                existing_pn = str(existing.get("collector_pn") or "").strip()
-                if not (
-                    _collector_identity_matches(existing_pn, collector_pn)
-                    or _sessions_are_weak_strong_versions_of_same_identity(
-                        existing,
-                        raw,
-                    )
-                ):
-                    continue
-                if _session_has_strong_identity(raw) and not _session_has_strong_identity(
-                    existing
-                ):
-                    coalesced[index] = dict(raw)
-                elif (
-                    _session_has_strong_identity(raw)
-                    == _session_has_strong_identity(existing)
-                    and len(collector_pn) > len(existing_pn)
-                ):
-                    coalesced[index] = dict(raw)
-                break
-            else:
-                coalesced.append(dict(raw))
-        return tuple(coalesced)
-
     def _entry_for_collector_pn(self, collector_pn: str):
         config_entries = getattr(self._hass, "config_entries", None)
         async_entries = getattr(config_entries, "async_entries", None)
         if not callable(async_entries):
             return None
         for entry in async_entries(DOMAIN):
-            entry_pn = str((getattr(entry, "data", {}) or {}).get(CONF_COLLECTOR_PN) or "")
+            entry_data = getattr(entry, "data", {}) or {}
+            entry_pn = str(entry_data.get(CONF_COLLECTOR_PN) or "")
             if _collector_identity_matches(entry_pn, collector_pn):
+                return entry
+            is_callback_listener = (
+                str(entry_data.get(CONF_CONNECTION_MODE) or "").strip()
+                == "callback_listener"
+            )
+            if is_callback_listener and _collector_prefix_matches(entry_pn, collector_pn):
                 return entry
             unique_id = str(getattr(entry, "unique_id", "") or "")
             if unique_id.startswith("collector:") and _collector_identity_matches(
                 unique_id.split(":", 1)[1],
                 collector_pn,
+            ):
+                return entry
+            if (
+                is_callback_listener
+                and unique_id.startswith("collector:")
+                and _collector_prefix_matches(unique_id.split(":", 1)[1], collector_pn)
             ):
                 return entry
         return None
@@ -697,6 +713,18 @@ class PassiveCallbackDiscovery:
         current_pn = str(current_data.get(CONF_COLLECTOR_PN) or "").strip()
         data = dict(current_data)
         changed = False
+
+        if (
+            collector_pn
+            and collector_pn != current_pn
+            and (
+                not current_pn
+                or _collector_identity_matches(current_pn, collector_pn)
+                or _collector_prefix_matches(current_pn, collector_pn)
+            )
+        ):
+            data[CONF_COLLECTOR_PN] = collector_pn
+            changed = True
 
         if int(data.get(CONF_TCP_PORT) or 0) != int(port):
             data[CONF_TCP_PORT] = int(port)
@@ -746,6 +774,19 @@ def _discovery_title(collector_pn: str, peer_ip: str) -> str:
     return "EyeBond collector"
 
 
+def get_callback_session_registry(hass: HomeAssistant) -> CallbackSessionRegistry | None:
+    """Return the domain-level callback session ownership registry, if started."""
+
+    data = getattr(hass, "data", None)
+    if not isinstance(data, dict):
+        return None
+    domain_data = data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return None
+    registry = domain_data.get(_REGISTRY_DATA_KEY)
+    return registry if isinstance(registry, CallbackSessionRegistry) else None
+
+
 async def async_start_passive_callback_discovery(hass: HomeAssistant) -> None:
     """Start the domain-level passive callback discovery service."""
 
@@ -755,6 +796,9 @@ async def async_start_passive_callback_discovery(hass: HomeAssistant) -> None:
         return
     service = PassiveCallbackDiscovery(hass)
     data[_DATA_KEY] = service
+    # Expose the service's own registry so config entries claim/release against
+    # the same ownership authority passive discovery publishes from.
+    data[_REGISTRY_DATA_KEY] = service.registry
     await service.async_start()
 
     async def _async_stop_passive_discovery(_event) -> None:

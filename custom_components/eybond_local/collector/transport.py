@@ -1243,7 +1243,12 @@ class _CollectorAtConnection:
         self._raw_passthrough_bootstrapped = False
         self._connected.set()
 
-        logger.info("Collector AT connection from %s:%s", self._collector.remote_ip, self._collector.remote_port)
+        logger.info(
+            "Collector AT connection from %s:%s session=%s",
+            self._collector.remote_ip,
+            self._collector.remote_port,
+            self._session_id or "unknown",
+        )
 
         current_task = asyncio.current_task()
         prefixed_reader = _PrefixedAsyncReader(reader, initial_bytes)

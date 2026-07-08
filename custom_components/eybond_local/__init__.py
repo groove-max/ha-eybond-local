@@ -139,6 +139,52 @@ def _register_entry_stop_shutdown(hass: HomeAssistant, entry: ConfigEntry, coord
     )
 
 
+def _register_entry_callback_session_claim(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Claim this entry's collector identity in the callback session registry.
+
+    Ownership is durable-PN based (peer IP is never used). The claim makes the
+    registry the single authority for "which entry owns which inbound session",
+    so passive discovery does not re-publish a collector an entry already owns.
+    Claiming is best-effort: a conflicting stale claim must never break setup.
+    """
+
+    from .passive_discovery import get_callback_session_registry
+
+    registry = get_callback_session_registry(hass)
+    if registry is None:
+        return
+    collector_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
+    if not collector_pn:
+        return
+    session_protocol = str(
+        entry.options.get(
+            "collector_session_protocol",
+            entry.data.get("collector_session_protocol", ""),
+        )
+        or ""
+    ).strip()
+    try:
+        registry.claim(
+            entry.entry_id,
+            collector_pn=collector_pn,
+            session_protocol=session_protocol,
+        )
+    except ValueError as exc:
+        logger.debug(
+            "Could not claim callback session for entry %s (%s): %s",
+            entry.entry_id,
+            collector_pn,
+            exc,
+        )
+
+    def _release_callback_session() -> None:
+        released_registry = get_callback_session_registry(hass)
+        if released_registry is not None:
+            released_registry.release(entry.entry_id)
+
+    entry.async_on_unload(_release_callback_session)
+
+
 def _register_entry_network_reconcile(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Ask the runtime to re-check listener network state after HA/network events."""
 
@@ -1291,6 +1337,54 @@ def _cleanup_obsolete_entities_allowed(coordinator) -> tuple[bool, str]:
     return True, "snapshot_metadata_consistent"
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate a config entry to the explicit connection architecture axes.
+
+    Version 2 adds ``connection_strategy`` / ``endpoint_control_policy`` /
+    ``proxy_enabled`` as explicit, opaque, hostname-free entry state. The
+    migration derives them deterministically from the legacy operation-mode /
+    connection-mode / endpoint-provenance fields (see
+    :mod:`connection.connection_policy`). Only missing axis fields are filled;
+    the legacy fields are left untouched for backward compatibility.
+    """
+
+    from .connection.connection_policy import migrate_entry_axes
+
+    version = int(getattr(entry, "version", 1) or 1)
+    if version > 2:
+        # A newer schema than this code understands: refuse rather than corrupt.
+        return False
+
+    if version < 2:
+        data = dict(entry.data)
+        axes = migrate_entry_axes(data, dict(entry.options))
+        changed = False
+        for key, value in axes.items():
+            if data.get(key) != value:
+                data[key] = value
+                changed = True
+        update_kwargs: dict[str, Any] = {"version": 2}
+        if changed:
+            update_kwargs["data"] = data
+        try:
+            hass.config_entries.async_update_entry(entry, **update_kwargs)
+        except TypeError:
+            # Older cores do not accept ``version=`` on async_update_entry.
+            if changed:
+                hass.config_entries.async_update_entry(entry, data=data)
+            try:
+                entry.version = 2  # type: ignore[misc]
+            except Exception:
+                pass
+        logger.info(
+            "Migrated EyeBond entry %s to connection axes %s",
+            entry.entry_id,
+            {k: axes[k] for k in axes},
+        )
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EyeBond Local from a config entry."""
 
@@ -1313,6 +1407,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.runtime_data = coordinator
         _register_entry_stop_shutdown(hass, entry, coordinator)
         _register_entry_network_reconcile(hass, entry, coordinator)
+        _register_entry_callback_session_claim(hass, entry)
         await _async_initial_refresh_for_setup(hass, entry, coordinator)
         await _async_self_heal_enabled_defaults(hass, entry, coordinator)
         await _async_cleanup_obsolete_entities(hass, entry, coordinator)
