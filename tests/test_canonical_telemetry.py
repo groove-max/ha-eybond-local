@@ -394,6 +394,27 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_power"], -102.4)
         self.assertEqual(values["battery_to_home_power"], 102.4)
 
+    def test_apply_canonical_measurements_keeps_eybond_g_ascii_line_flow_available(self) -> None:
+        for mode_code in ("L", "4", "LINE", "UTILITY", "MAINS"):
+            with self.subTest(mode_code=mode_code):
+                values = {
+                    "eybond_g_ascii_operating_mode_code": mode_code,
+                    "grid_voltage": 228.9,
+                    "output_active_power": 0.0,
+                    "battery_voltage": 26.4,
+                    "battery_current": 0.6,
+                    "pv_power": 0.0,
+                }
+
+                apply_canonical_measurements("eybond_g_ascii", values)
+
+                self.assertEqual(values["battery_power"], 15.84)
+                self.assertEqual(values["pv_to_home_power"], 0.0)
+                self.assertEqual(values["pv_to_battery_power"], 0.0)
+                self.assertEqual(values["battery_to_home_power"], 0.0)
+                self.assertEqual(values["grid_to_home_power"], 0.0)
+                self.assertEqual(values["grid_to_battery_power"], 15.84)
+
     def test_apply_canonical_measurements_does_not_guess_eybond_g_ascii_battery_sign(self) -> None:
         values = {
             "eybond_g_ascii_operating_mode_code": "X",

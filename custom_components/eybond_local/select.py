@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -18,6 +19,8 @@ from .runtime.coordinator import EybondLocalCoordinator
 from .models import WriteCapability
 from .platform_context import entity_setup_context
 from .schema import serialize_capability
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +98,38 @@ async def async_setup_entry(
             and collector_capabilities.ha_only_required
         )
     )
+    exposable_capabilities = tuple(
+        capability
+        for capability in capabilities
+        if capability.value_kind == "enum" and capability.enum_value_map
+        if coordinator.can_expose_capability(capability)
+    )
+    if has_inverter_identity and not exposable_capabilities:
+        enum_capabilities = tuple(
+            capability
+            for capability in capabilities
+            if capability.value_kind == "enum" and capability.enum_value_map
+        )
+        exposure_context = {}
+        context_getter = getattr(coordinator, "_write_exposure_context", None)
+        if callable(context_getter):
+            try:
+                exposure_context = context_getter()
+            except Exception as exc:  # pragma: no cover - diagnostic only
+                exposure_context = {"error": f"{type(exc).__name__}:{exc}"}
+        _LOGGER.debug(
+            "EyeBond select setup has inverter identity but no enum controls: entry=%s driver=%s inverter=%s capabilities=%d enum_capabilities=%d controls_enabled=%s reason=%s context=%s first_enum=%s first_enum_allowed=%s",
+            entry.entry_id,
+            getattr(driver, "key", None),
+            getattr(inverter, "model_name", None),
+            len(tuple(capabilities or ())),
+            len(enum_capabilities),
+            getattr(coordinator, "controls_enabled", None),
+            getattr(coordinator, "controls_reason", None),
+            exposure_context,
+            getattr(enum_capabilities[0], "key", None) if enum_capabilities else None,
+            coordinator.can_expose_capability(enum_capabilities[0]) if enum_capabilities else None,
+        )
     async_add_entities(
         [
             *[
@@ -103,9 +138,7 @@ async def async_setup_entry(
             ],
             *[
                 EybondCapabilitySelect(coordinator, capability)
-                for capability in capabilities
-                if capability.value_kind == "enum" and capability.enum_value_map
-                if coordinator.can_expose_capability(capability)
+                for capability in exposable_capabilities
             ],
         ]
     )

@@ -2,8 +2,8 @@
 
 Every unanswered command costs a full request timeout, and retrying the whole
 set each poll cycle turns a ~2-second poll into a ~60-second poll on devices
-that lack the optional/energy command set. A command that fails twice in a
-row is marked unsupported for this device and stays that way: the coordinator
+that lack the optional/energy command set. A command that fails several times
+in a row is marked unsupported for this device and stays that way: the coordinator
 persists the set into the config entry, and re-probing happens only when the
 user explicitly asks for it (the "Re-check supported commands" diagnostic
 button) — not on a timer.
@@ -17,7 +17,7 @@ from typing import Any
 
 UNSUPPORTED_COMMANDS_STATE_KEY = "driver_unsupported_commands"
 UNSUPPORTED_COMMANDS_VALUE_KEY = "driver_unsupported_commands"
-UNSUPPORTED_COMMAND_STRIKES = 2
+UNSUPPORTED_COMMAND_STRIKES = 4
 _PENDING_FAILURES_KEY = "driver_unsupported_pending_failures"
 _CYCLE_SUCCESS_KEY = "driver_cycle_had_success"
 

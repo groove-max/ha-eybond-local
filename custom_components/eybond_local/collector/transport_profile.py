@@ -27,6 +27,10 @@ from ..metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_session_protocol,
 )
 from .cloud_family import collector_cloud_family_observation_from_endpoint
+from .capabilities import (
+    COLLECTOR_KIND_ENTRY_KEY,
+    COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
+)
 
 
 EYBOND_FRAMED_RUNTIME_OWNER_KEYS: frozenset[str] = frozenset(
@@ -34,6 +38,9 @@ EYBOND_FRAMED_RUNTIME_OWNER_KEYS: frozenset[str] = frozenset(
         "modbus_smg",
         "must_pv_ph18",
     }
+)
+CONFIRMED_COLLECTOR_SESSION_PROTOCOLS: frozenset[str] = frozenset(
+    {"at_text", "eybond_framed"}
 )
 
 
@@ -59,6 +66,36 @@ def known_collector_cloud_family(value: object) -> str:
     if family in load_collector_cloud_profile_catalog().profiles:
         return family
     return ""
+
+
+def normalize_collector_session_protocol(value: object) -> str:
+    """Return a confirmed collector callback protocol or an empty string.
+
+    Listener byte-shape diagnostics may temporarily report broader values such
+    as ``eybond_framed_or_binary`` before routing/ownership is known. Those
+    values are useful diagnostics, but they are not safe to persist as runtime
+    protocol decisions.
+    """
+
+    protocol = str(value or "").strip().lower()
+    if protocol in CONFIRMED_COLLECTOR_SESSION_PROTOCOLS:
+        return protocol
+    return ""
+
+
+def collector_session_protocol_from_inventory_state(
+    *,
+    state: object,
+    protocol_shape: object,
+) -> str:
+    """Return the best confirmed protocol from a passive listener session."""
+
+    normalized_state = str(state or "").strip().lower()
+    if normalized_state == "routed_at_text":
+        return "at_text"
+    if normalized_state == "routed_framed":
+        return "eybond_framed"
+    return normalize_collector_session_protocol(protocol_shape)
 
 
 def runtime_owner_key_from_entry_context(
@@ -126,19 +163,13 @@ def resolve_collector_transport_profile(
 ) -> CollectorTransportProfile:
     """Resolve callback session protocol and identity strategy.
 
-    ``virtual_bridge`` is THE single home of the "esp bridge speaks framed
-    FC" rule: the bridge answers SmartESS-style metadata (so its cloud-family
-    observation can read smartess_at), but deriving an at_text session from
-    that would hand the runtime the AT transport and kill every driver
-    probe. Callers must pass their best bridge verdict here instead of
-    re-implementing the branch.
+    ``virtual_bridge`` means the collector is community firmware.  It does not,
+    by itself, define the inverter payload session: a bridge may carry the
+    framed EyeBond tunnel for Modbus-like runtimes, or the SmartESS AT text
+    session for PI30/G-ASCII-like runtimes.  Runtime ownership wins first; the
+    cloud family is the fallback when ownership is not yet known.
     """
 
-    if virtual_bridge:
-        return framed_collector_transport_profile(
-            cloud_family=cloud_family,
-            runtime_owner_key=runtime_owner_key,
-        )
     normalized_family = known_collector_cloud_family(cloud_family)
     normalized_owner = str(runtime_owner_key or "").strip().lower()
     if normalized_owner in EYBOND_FRAMED_RUNTIME_OWNER_KEYS:
@@ -150,6 +181,11 @@ def resolve_collector_transport_profile(
             raw_passthrough_bootstrap="",
             raw_passthrough_frame_format="",
             raw_passthrough_min_interval_ms=0,
+        )
+    if virtual_bridge and not normalized_family:
+        return framed_collector_transport_profile(
+            cloud_family=cloud_family,
+            runtime_owner_key=runtime_owner_key,
         )
 
     return CollectorTransportProfile(
@@ -192,6 +228,9 @@ def entry_context_is_virtual_bridge(
     options: Mapping[str, object],
 ) -> bool:
     for source in (options, data):
+        collector_kind = str(source.get(COLLECTOR_KIND_ENTRY_KEY, "") or "").strip()
+        if collector_kind == COLLECTOR_KIND_ESP_EYBOND_BRIDGE:
+            return True
         if bool(source.get("collector_virtual_bridge")):
             return True
         bridge_kind = str(source.get("collector_bridge_kind", "") or "").strip().lower()

@@ -66,7 +66,7 @@ def _install_coordinator_stubs() -> None:
             return cls
 
         def __init__(self, *args, **kwargs):
-            del args, kwargs
+            self.hass = args[0] if args else kwargs.get("hass")
 
     config_entries.ConfigEntry = ConfigEntry
     device_registry.DeviceInfo = DeviceInfo
@@ -249,6 +249,42 @@ def _install_coordinator_stubs() -> None:
     class WriteCapability:
         pass
 
+    class ProbeTarget:
+        def __init__(self, devcode=0, collector_addr=0, device_addr=0):
+            self.devcode = devcode
+            self.collector_addr = collector_addr
+            self.device_addr = device_addr
+
+    class DetectedInverter:
+        def __init__(
+            self,
+            *,
+            driver_key,
+            protocol_family,
+            model_name,
+            serial_number,
+            probe_target,
+            variant_key="default",
+            details=None,
+            profile_name="",
+            register_schema_name="",
+            capability_groups=(),
+            capabilities=(),
+            capability_presets=(),
+        ):
+            self.driver_key = driver_key
+            self.protocol_family = protocol_family
+            self.model_name = model_name
+            self.serial_number = serial_number
+            self.probe_target = probe_target
+            self.variant_key = variant_key
+            self.details = details or {}
+            self.profile_name = profile_name
+            self.register_schema_name = register_schema_name
+            self.capability_groups = capability_groups
+            self.capabilities = capabilities
+            self.capability_presets = capability_presets
+
     class RuntimeSnapshot:
         def __init__(self, values=None, inverter=None, collector=None, connected=True):
             self.values = values or {}
@@ -263,7 +299,9 @@ def _install_coordinator_stubs() -> None:
     models.CapabilityPresetItem = CapabilityPresetItem
     models.CapabilityRecommendation = CapabilityRecommendation
     models.BinarySensorDescription = BinarySensorDescription
+    models.DetectedInverter = DetectedInverter
     models.MeasurementDescription = MeasurementDescription
+    models.ProbeTarget = ProbeTarget
     models.RegisterValueSpec = RegisterValueSpec
     models.RuntimeSnapshot = RuntimeSnapshot
     models.WriteCapability = WriteCapability
@@ -660,7 +698,34 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertFalse(coordinator.smartess_cloud_export_available)
         self.assertEqual(coordinator.cloud_evidence_provider, "valuecloud")
-        self.assertTrue(coordinator.cloud_evidence_export_available)
+
+    def test_init_discards_stale_unsupported_cache_without_reload_suppression(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={},
+            options={
+                "driver_unsupported_commands": ["GLINE"],
+                "driver_unsupported_commands_version": 1,
+            },
+        )
+        updates: list[dict[str, object]] = []
+
+        def _async_update_entry(config_entry, **kwargs) -> bool:
+            updates.append(dict(kwargs))
+            if "options" in kwargs:
+                config_entry.options = dict(kwargs["options"])
+            return True
+
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry),
+        )
+
+        coordinator = self.coordinator_module.EybondLocalCoordinator(hass, entry)
+
+        self.assertEqual(updates, [{"options": {}}])
+        self.assertEqual(entry.options, {})
+        self.assertEqual(coordinator._suppress_entry_reload_count, 0)
+        self.assertFalse(coordinator.consume_entry_reload_suppression())
 
     def test_smartess_cloud_export_available_keeps_smartess_profiles(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -2070,6 +2135,36 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertTrue(data["collector_virtual_bridge"])
         self.assertTrue(options["collector_virtual_bridge"])
 
+    def test_runtime_bridge_sync_requests_reload_after_platform_setup(self) -> None:
+        updates: list[dict[str, object]] = []
+        reloads: list[str] = []
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+        )
+        coordinator.hass = types.SimpleNamespace(
+            async_create_task=lambda coroutine: reloads.append("scheduled"),
+            config_entries=types.SimpleNamespace(
+                async_reload=lambda entry_id: entry_id,
+            ),
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={},
+            collector=types.SimpleNamespace(collector_virtual_bridge=True),
+        )
+        coordinator._entity_platforms_initialized = True
+        coordinator._entity_platform_reload_requested = False
+        coordinator._async_update_entry_without_reload = lambda **kwargs: updates.append(kwargs)
+
+        coordinator._sync_forced_collector_operation_mode()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(reloads, ["scheduled"])
+        self.assertTrue(coordinator._entity_platform_reload_requested)
+
     def test_configure_reverse_discovery_stays_on_for_ha_only_bridge(self) -> None:
         # Item 1: a detected bridge refuses the param-21 endpoint write and does
         # not persist the endpoint, so it relearns the HA server only from UDP
@@ -2478,6 +2573,41 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(info["serial_number"], "E50000200000000001")
 
+    def test_collector_device_info_uses_persisted_bridge_profile(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-bridge",
+            data={
+                "collector_pn": "V00040509794677058",
+                "collector_ip": "195.138.86.175",
+                "collector_kind": "esp_eybond_bridge",
+                "collector_hardware_version": "esp-collector/0.1.8/ESP8266",
+                "collector_bridge_version": "0.1.8",
+            },
+            options={},
+            title="Collector PN V00040509794677058",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"collector_hardware_version": "esp-collector/0.1.8/ESP8266"},
+            collector=types.SimpleNamespace(
+                collector_pn="V00040509794677058",
+                profile_name="",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="",
+                collector_virtual_bridge=False,
+                collector_bridge_kind="",
+                collector_bridge_version="",
+            ),
+        )
+
+        info = coordinator.collector_device_info()
+
+        self.assertEqual(info["manufacturer"], "ESP EyeBond Collector (community)")
+        self.assertEqual(info["model"], "ESP EyeBond Collector")
+        self.assertEqual(info["sw_version"], "0.1.8")
+        self.assertEqual(info["hw_version"], "esp-collector/0.1.8/ESP8266")
+
     def test_remember_runtime_identity_strengthens_pending_entry_metadata(self) -> None:
         updated_entries: list[dict[str, object]] = []
 
@@ -2560,6 +2690,138 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "Collector PN Q0000000000001",
         )
         self.assertEqual(len(updated_entries), 1)
+
+    def test_remember_runtime_identity_does_not_persist_callback_peer_ip(self) -> None:
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                del options
+                if data is not None:
+                    entry.data = dict(data)
+                if title is not None:
+                    entry.title = title
+                updated_entries.append(
+                    {
+                        "title": entry.title,
+                        "data": dict(entry.data),
+                    }
+                )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-callback",
+            data={
+                "connection_mode": "callback_listener",
+                "collector_pn": "V00102046262344022",
+                "detected_model": "",
+                "detected_serial": "",
+                "server_ip": "192.168.1.104",
+            },
+            options={},
+            title="Collector PN V00102046262344022",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 4.2kW",
+                serial_number="55355535553555",
+            ),
+            collector=types.SimpleNamespace(
+                remote_ip="195.138.86.175",
+                collector_pn="V00102046262344022",
+                profile_name="",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="",
+                smartess_protocol_profile_key="smartess_at",
+            ),
+        )
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertNotIn("collector_ip", coordinator.config_entry.data)
+        self.assertEqual(
+            coordinator.config_entry.data["collector_pn"],
+            "V00102046262344022",
+        )
+        self.assertEqual(len(updated_entries), 1)
+
+    def test_remember_runtime_identity_upgrades_collector_unique_id_to_full_pn(self) -> None:
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(
+                self,
+                entry,
+                *,
+                title=None,
+                data=None,
+                options=None,
+                unique_id=None,
+            ) -> None:
+                del options
+                if data is not None:
+                    entry.data = dict(data)
+                if title is not None:
+                    entry.title = title
+                if unique_id is not None:
+                    entry.unique_id = unique_id
+                updated_entries.append(
+                    {
+                        "title": entry.title,
+                        "data": dict(entry.data),
+                        "unique_id": entry.unique_id,
+                    }
+                )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-callback",
+            unique_id="collector:V0011073728229",
+            data={
+                "connection_mode": "callback_listener",
+                "collector_pn": "V00110737282291016",
+                "detected_model": "",
+                "detected_serial": "",
+                "server_ip": "192.168.1.104",
+            },
+            options={},
+            title="Collector PN V00110737282291016",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            collector=types.SimpleNamespace(
+                remote_ip="192.168.1.1",
+                collector_pn="V00110737282291016",
+                profile_name="",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="",
+                smartess_protocol_profile_key="smartess_at",
+            ),
+        )
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertEqual(
+            coordinator.config_entry.data["collector_pn"],
+            "V00110737282291016",
+        )
+        self.assertEqual(
+            coordinator.config_entry.unique_id,
+            "collector:V00110737282291016",
+        )
+        self.assertEqual(
+            updated_entries[-1]["unique_id"],
+            "collector:V00110737282291016",
+        )
 
     def test_remember_runtime_identity_requests_reload_after_platform_setup(self) -> None:
         updated_entries: list[dict[str, object]] = []
@@ -4435,6 +4697,192 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(values["collector_original_endpoint_source"], "")
         self.assertEqual(values["collector_original_endpoint_observed_at"], "")
 
+    def test_prime_startup_snapshot_publishes_detection_pending_collector_state(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "connection_type": "eybond",
+                "connection_mode": "manual",
+                "collector_operation_mode": "home_assistant_only",
+                "control_mode": "read_only",
+                "detection_confidence": "none",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._connection_spec = types.SimpleNamespace(
+            collector_ip="192.168.1.51",
+            collector_pn="V0000000000001",
+            collector_cloud_family="smartess_at",
+            server_ip="192.168.1.50",
+            tcp_port=18899,
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=18899,
+        )
+
+        primed = coordinator.prime_startup_snapshot()
+
+        self.assertTrue(primed)
+        self.assertTrue(coordinator.data.connected)
+        self.assertEqual(coordinator.data.collector.remote_ip, "192.168.1.51")
+        self.assertEqual(coordinator.data.values["collector_pn"], "V0000000000001")
+        self.assertEqual(coordinator.data.values["runtime_driver_state"], "driver_unbound")
+        self.assertEqual(
+            coordinator.data.values["runtime_detection_status"],
+            "detecting_inverter",
+        )
+        self.assertEqual(coordinator.data.values["collector_poll_context"], "detection")
+        self.assertEqual(coordinator.data.values["last_error"], "startup_detection_pending")
+        collector_info = coordinator.collector_device_info()
+        self.assertEqual(collector_info["model"], "EyeBond Collector")
+
+    def test_prime_startup_snapshot_includes_persisted_inverter_capabilities(self) -> None:
+        capability = types.SimpleNamespace(key="output_source_priority")
+        group = types.SimpleNamespace(key="power_source")
+        profile = types.SimpleNamespace(
+            driver_key="pi30",
+            protocol_family="pi30",
+            groups=(group,),
+            capabilities=(capability,),
+            presets=(),
+        )
+        driver = types.SimpleNamespace(
+            key="pi30",
+            probe_targets=(
+                self.coordinator_module.ProbeTarget(
+                    devcode=0x0994,
+                    collector_addr=0x01,
+                    device_addr=0,
+                ),
+            ),
+        )
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "connection_type": "eybond",
+                "connection_mode": "manual",
+                "collector_operation_mode": "home_assistant_only",
+                "control_mode": "auto",
+                "detection_confidence": "high",
+                "detected_model": "PI30 3500",
+                "detected_serial": "55355535553555",
+                "driver_hint": "pi30",
+            },
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "pi30",
+                    "variant_key": "default",
+                    "profile_name": "pi30_ascii/models/smartess_0925_compat.json",
+                    "register_schema_name": "pi30_ascii/models/smartess_0925_compat.json",
+                    "confidence": "high",
+                }
+            },
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._connection_spec = types.SimpleNamespace(
+            collector_ip="192.168.1.51",
+            collector_pn="V0000000000001",
+            collector_cloud_family="smartess_at",
+            server_ip="192.168.1.50",
+            tcp_port=18899,
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=18899,
+        )
+
+        with (
+            patch.object(self.coordinator_module, "get_driver", return_value=driver),
+            patch.object(
+                self.coordinator_module,
+                "load_driver_profile",
+                return_value=profile,
+            ),
+        ):
+            primed = coordinator.prime_startup_snapshot()
+
+        self.assertTrue(primed)
+        self.assertIsNotNone(coordinator.data.inverter)
+        self.assertEqual(coordinator.data.inverter.driver_key, "pi30")
+        self.assertEqual(coordinator.data.inverter.model_name, "PI30 3500")
+        self.assertEqual(coordinator.data.inverter.serial_number, "55355535553555")
+        self.assertEqual(
+            coordinator.data.inverter.profile_name,
+            "pi30_ascii/models/smartess_0925_compat.json",
+        )
+        self.assertEqual(coordinator.data.inverter.capabilities, (capability,))
+        self.assertEqual(coordinator.data.inverter.capability_groups, (group,))
+
+    def test_prime_startup_snapshot_adds_persisted_inverter_when_values_already_exist(self) -> None:
+        capability = types.SimpleNamespace(key="output_source_priority")
+        profile = types.SimpleNamespace(
+            driver_key="pi30",
+            protocol_family="pi30",
+            groups=(),
+            capabilities=(capability,),
+            presets=(),
+        )
+        driver = types.SimpleNamespace(
+            key="pi30",
+            probe_targets=(
+                self.coordinator_module.ProbeTarget(
+                    devcode=0x0994,
+                    collector_addr=0x01,
+                    device_addr=0,
+                ),
+            ),
+        )
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "connection_type": "eybond",
+                "collector_operation_mode": "home_assistant_only",
+                "control_mode": "auto",
+                "detection_confidence": "high",
+                "detected_model": "PI30 3500",
+                "detected_serial": "55355535553555",
+                "driver_hint": "pi30",
+            },
+            options={
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "pi30",
+                    "variant_key": "default",
+                    "profile_name": "pi30_ascii/models/smartess_0925_compat.json",
+                    "register_schema_name": "pi30_ascii/models/smartess_0925_compat.json",
+                    "confidence": "high",
+                }
+            },
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"proxy_capture_status": "idle"},
+            inverter=None,
+        )
+        coordinator._connection_spec = types.SimpleNamespace(
+            collector_ip="192.168.1.51",
+            collector_pn="V0000000000001",
+            collector_cloud_family="smartess_at",
+            server_ip="192.168.1.50",
+            tcp_port=18899,
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=18899,
+        )
+
+        with (
+            patch.object(self.coordinator_module, "get_driver", return_value=driver),
+            patch.object(
+                self.coordinator_module,
+                "load_driver_profile",
+                return_value=profile,
+            ),
+        ):
+            primed = coordinator.prime_startup_snapshot()
+
+        self.assertTrue(primed)
+        self.assertEqual(coordinator.data.values["proxy_capture_status"], "idle")
+        self.assertIsNotNone(coordinator.data.inverter)
+        self.assertEqual(coordinator.data.inverter.capabilities, (capability,))
+
     def test_collector_onboarding_values_include_transport_profile_mismatch(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
@@ -4469,6 +4917,35 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(values["collector_connection_identity_strategy"], "at_dtupn")
         self.assertEqual(values["collector_runtime_link_session_protocol"], "")
         self.assertEqual(values["collector_runtime_link_identity_strategy"], "")
+
+    def test_pi30_virtual_bridge_ignores_stale_framed_session_protocol(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "collector_cloud_family": "smartess_at",
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+                "collector_session_protocol": "eybond_framed",
+                "driver_hint": "pi30",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._runtime = types.SimpleNamespace(
+            listener_diagnostics=lambda: {
+                "collector_callback_session_protocol": "eybond_framed",
+                "collector_callback_identity_strategy": "framed_heartbeat_then_fc2_pn",
+            },
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+
+        profile = coordinator.collector_transport_profile
+
+        self.assertEqual(profile.cloud_family, "smartess_at")
+        self.assertEqual(profile.runtime_owner_key, "pi30")
+        self.assertEqual(profile.session_protocol, "at_text")
+        self.assertEqual(profile.identity_strategy, "at_dtupn")
 
     def test_update_reconciles_transport_after_runtime_endpoint_discovery(self) -> None:
         async def _run() -> None:
@@ -4709,7 +5186,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(
                 entry_id="entry-1",
-                data={},
+                data={"collector_kind": "factory_eybond"},
                 options={},
             )
             coordinator.data = self.RuntimeSnapshot(
@@ -5407,6 +5884,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._maybe_persist_unsupported_commands(snapshot)
         self.assertEqual(entry.options["driver_unsupported_commands"], ["Q1", "QET", "QPIWS"])
+        self.assertEqual(entry.options["driver_unsupported_commands_version"], 2)
         self.assertEqual(runtime_calls, [("set", ("Q1", "QET", "QPIWS"))])
         self.assertEqual(len(updates), 1)
 
@@ -5426,6 +5904,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
         self.assertNotIn("driver_unsupported_commands", entry.options)
+        self.assertNotIn("driver_unsupported_commands_version", entry.options)
         self.assertIn(("clear", None), runtime_calls)
 
     def test_collector_connection_watcher_refreshes_only_when_not_bound(self) -> None:
@@ -5443,6 +5922,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         coordinator.hass = types.SimpleNamespace(async_create_task=_create_task)
         coordinator.async_request_refresh = _fake_refresh
+        invalidations: list[str] = []
+        coordinator._runtime = types.SimpleNamespace(
+            invalidate_collector_runtime_values=lambda: invalidations.append("invalidate")
+        )
 
         coordinator.data = self.RuntimeSnapshot(
             values={"runtime_driver_state": "driver_unbound"},
@@ -5450,6 +5933,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._on_collector_connection_established("192.168.1.14")
         self.assertEqual(len(scheduled), 1)
+        self.assertEqual(invalidations, ["invalidate"])
 
         coordinator.data = self.RuntimeSnapshot(
             values={"runtime_driver_state": "collector_offline"},
@@ -5457,6 +5941,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._on_collector_connection_established("192.168.1.14")
         self.assertEqual(len(scheduled), 2)
+        self.assertEqual(invalidations, ["invalidate", "invalidate"])
 
         coordinator.data = self.RuntimeSnapshot(
             values={"runtime_driver_state": "driver_bound"},
@@ -5465,6 +5950,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._on_collector_connection_established("192.168.1.14")
         self.assertEqual(len(scheduled), 2)
+        self.assertEqual(invalidations, ["invalidate", "invalidate"])
 
         coordinator._shutdown_complete = True
         coordinator.data = self.RuntimeSnapshot(
@@ -5473,6 +5959,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._on_collector_connection_established("192.168.1.14")
         self.assertEqual(len(scheduled), 2)
+        self.assertEqual(invalidations, ["invalidate", "invalidate"])
 
     def test_is_clean_runtime_poll_cycle_matrix(self) -> None:
         clean = self.coordinator_module._is_clean_runtime_poll_cycle

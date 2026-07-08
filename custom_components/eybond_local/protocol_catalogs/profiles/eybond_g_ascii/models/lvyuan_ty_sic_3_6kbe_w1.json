@@ -10,7 +10,7 @@
     "support_tier": "conditional",
     "enabled_default": true,
     "requires_confirm": true,
-    "support_notes": "Built-in LVYUAN EyeBond G-ASCII control surface for a locally identified 220V/16A/24V/50Hz, SVFW 4.003 device. Verified model controls come from SmartValue shadow-learning evidence; inherited advanced protocol controls are document-backed from JSDSOLAR and remain untested until verified on a specific inverter."
+    "support_notes": "Built-in LVYUAN EyeBond G-ASCII control surface for a locally identified 220V/16A/24V/50Hz, SVFW 4.003 device. Model controls were verified on user hardware with SmartValue shadow-learning and follow-up user validation in July 2026."
   },
   "groups": [
     {
@@ -291,6 +291,138 @@
       "enabled_default": false,
       "requires_confirm": true,
       "change_summary": "Sends the inverter remote turn-on or remote-shutdown command. No local readback command is currently known for this setting."
+    },
+    {
+      "key": "max_charging_current_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "max_utility_charging_current_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "charging_method",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "constant_voltage_charging_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "float_charging_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_charging_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "constant_voltage_charging_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_charging_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_timeout_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_interval_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_discharge_cutoff_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_discharge_alarm_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "low_power_discharge_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_to_grid_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "grid_to_battery_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_overvoltage_protection_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "grid_overvoltage_protection_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "grid_undervoltage_protection_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "constant_current_charging_max_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "bms_low_soc_shutdown_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model; runtime visibility still depends on live BMS telemetry."
+    },
+    {
+      "key": "bms_low_soc_switch_to_grid_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model; runtime visibility still depends on live BMS telemetry."
+    },
+    {
+      "key": "bms_high_soc_switch_to_battery_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model; runtime visibility still depends on live BMS telemetry."
     }
   ],
   "presets": []

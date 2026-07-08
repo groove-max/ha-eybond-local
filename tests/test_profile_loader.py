@@ -531,7 +531,7 @@ class ProfileLoaderTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 47)
+        self.assertEqual(len(profile.capabilities), 52)
         self.assertEqual(len(profile.presets), 0)
 
         self.assertEqual(profile.get_capability("output_mode").register, 600)
@@ -551,6 +551,18 @@ class ProfileLoaderTests(unittest.TestCase):
             profile.get_capability("charge_source_priority").enum_value_map[4],
             "PV Priority With Load Reserve",
         )
+        self.assertEqual(profile.get_capability("op2_overload_alarm_setting").register, 608)
+        self.assertEqual(profile.get_capability("secondary_charging_priority").register, 633)
+        self.assertEqual(
+            profile.get_capability("secondary_charging_priority").enum_value_map[4],
+            "PV Priority With Load Reserve",
+        )
+        self.assertEqual(
+            profile.get_capability("constant_voltage_to_float_wait_time").register,
+            639,
+        )
+        self.assertEqual(profile.get_capability("max_discharge_current_protection").register, 642)
+        self.assertEqual(profile.get_capability("op1_offgrid_soc_protection_value").register, 649)
         self.assertEqual(profile.get_capability("battery_type").register, 630)
         self.assertEqual(profile.get_capability("battery_type").enum_value_map[8], "LiB")
         self.assertEqual(profile.get_capability("turn_on_mode").register, 693)

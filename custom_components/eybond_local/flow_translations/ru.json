@@ -439,7 +439,13 @@
       "scan_line_serial": "серийный {serial_number}",
       "scan_ready_next_select": "Выберите в списке ниже инвертор, который хотите добавить.",
       "scan_pending_next_select": "Выберите устройство ниже, чтобы сохранить его как ожидающее, либо используйте **{refresh_action_label}** или **{manual_action_label}**, чтобы повторить локальное сопоставление.",
-      "scan_results_action_refresh_deep": "Повторить глубокое сканирование"
+      "scan_results_action_refresh_deep": "Повторить глубокое сканирование",
+      "incoming_collector": "подключившийся коллектор",
+      "result_label_incoming_unmatched": "{status_label}: {collector_identity} ({suffix}; соединение от {peer_ip})",
+      "scan_line_connection_from": "соединение от {peer_ip}",
+      "detection_tier_passive_callback_headline": "Коллектор подключён",
+      "detection_tier_passive_callback_details": "Этот коллектор уже подключился к Home Assistant. Мастер добавит его как устройство с входящим подключением; определение инвертора продолжится после создания записи, когда runtime возьмёт эту сессию в работу.\n\nЕсли инвертор подключён, сенсоры и элементы управления могут появиться немного позже, после первого успешного цикла определения.",
+      "onboarding_confirm_inverter_pending_after_add": "**Инвертор**\n\nКоллектор уже подключился к Home Assistant. Модель инвертора и сущности будут определены после создания записи, когда runtime возьмёт входящую сессию в работу."
     }
   }
 }

@@ -30,8 +30,14 @@ def _frame(payload: str) -> bytes:
 
 
 class _FakeTransport:
-    def __init__(self, responses: dict[tuple[int, int, str], str]) -> None:
+    def __init__(
+        self,
+        responses: dict[tuple[int, int, str], str],
+        *,
+        missing_delays: dict[str, float] | None = None,
+    ) -> None:
         self._responses = responses
+        self._missing_delays = missing_delays or {}
         self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
         self.connected = True
         self.commands: list[str] = []
@@ -54,6 +60,9 @@ class _FakeTransport:
         self.commands.append(command)
         key = (devcode, collector_addr, command)
         if key not in self._responses:
+            delay = self._missing_delays.get(command, 0)
+            if delay > 0:
+                await asyncio.sleep(delay)
             raise asyncio.TimeoutError()
         return _frame(self._responses[key])
 
@@ -215,6 +224,48 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["qpiws_bit_count"], 36)
         self.assertNotIn("QMOD", transport.commands)
         self.assertEqual(inverter.variant_key, "pi30_pip_gk")
+
+    async def test_probe_bounds_optional_model_number_timeout(self) -> None:
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPI"): "PI30",
+                (0x0994, 0x01, "QID"): "55355535553555",
+                (0x0994, 0x01, "QPIRI"): "230.0 18.2 230.0 50.0 18.2 4200 3500 24.0 23.0 22.2 28.4 27.2 2 40 060 1 0 2 2 01 0 0 26.5 0 1",
+                (0x0994, 0x01, "QPIGS"): "209.7 50.0 209.7 50.0 0042 0012 001 430 27.20 001 100 0036 0000 000.0 00.00 00000 00010101 00 00 00000 110",
+                (0x0994, 0x01, "QPIWS"): "00000000000000000000000000000000",
+                (0x0994, 0x01, "QFLAG"): "EbxzDajkuvy",
+            },
+            missing_delays={"QMN": 10.0},
+        )
+
+        inverter = await asyncio.wait_for(
+            driver.async_probe(transport, target),
+            timeout=4.0,
+        )
+
+        assert inverter is not None
+        self.assertEqual(inverter.driver_key, "pi30")
+        self.assertEqual(inverter.serial_number, "55355535553555")
+        self.assertIn("QMN", transport.commands)
+        self.assertLess(transport.commands.index("QID"), transport.commands.index("QPIGS"))
+        self.assertLess(transport.commands.index("QID"), transport.commands.index("QMN"))
+        timings = inverter.details["catalog_detection"]["probe_actions"]["timings"]
+        self.assertTrue(timings)
+        timing_by_command = {
+            item.get("command"): item
+            for item in timings
+            if item.get("command")
+        }
+        self.assertEqual(timing_by_command["QID"]["outcome"], "executed")
+        self.assertEqual(timing_by_command["QID"]["timeout_ms"], 4000)
+        self.assertEqual(timing_by_command["QMN"]["outcome"], "failed")
+        self.assertIn(timing_by_command["QMN"].get("error"), {"timeout", "Pi30Error"})
+        self.assertEqual(
+            inverter.details["catalog_detection"]["probe_actions"]["failed"],
+            ["pi30.qmn"],
+        )
 
     async def test_read_values_decodes_live_metrics(self) -> None:
         driver = Pi30Driver()
@@ -433,23 +484,20 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         )
         runtime_state: dict[str, object] = {}
 
-        # Two full cycles collect the failure strikes.
-        await driver.async_read_values(
-            transport, inverter, runtime_state=runtime_state,
-            poll_interval=10.0, now_monotonic=100.0,
-        )
-        await driver.async_read_values(
-            transport, inverter, runtime_state=runtime_state,
-            poll_interval=10.0, now_monotonic=200.0,
-        )
+        # Four full cycles collect the failure strikes.
+        for index in range(4):
+            await driver.async_read_values(
+                transport, inverter, runtime_state=runtime_state,
+                poll_interval=10.0, now_monotonic=100.0 * (index + 1),
+            )
 
         transport.commands.clear()
         values = await driver.async_read_values(
             transport, inverter, runtime_state=runtime_state,
-            poll_interval=10.0, now_monotonic=300.0,
+            poll_interval=10.0, now_monotonic=500.0,
         )
 
-        # Third cycle: only the supported pair goes on the wire.
+        # Fifth cycle: only the supported pair goes on the wire.
         self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
         self.assertEqual(values["driver_unsupported_commands"], "Q1, QET, QPIWS")
 
@@ -458,7 +506,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         transport.commands.clear()
         await driver.async_read_values(
             transport, inverter, runtime_state=runtime_state,
-            poll_interval=10.0, now_monotonic=300.0 + 100_000.0,
+            poll_interval=10.0, now_monotonic=500.0 + 100_000.0,
         )
         self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
 
@@ -470,7 +518,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         transport.commands.clear()
         await driver.async_read_values(
             transport, inverter, runtime_state=runtime_state,
-            poll_interval=10.0, now_monotonic=300.0 + 100_100.0,
+            poll_interval=10.0, now_monotonic=500.0 + 100_100.0,
         )
         self.assertIn("QPIWS", transport.commands)
         self.assertIn("Q1", transport.commands)

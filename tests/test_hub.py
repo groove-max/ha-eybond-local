@@ -451,6 +451,10 @@ class _RuntimeValuesDriver:
         return {"output_power": 420}
 
 
+class _SeedDriver:
+    pass
+
+
 class HubSnapshotTests(unittest.TestCase):
     def test_listener_diagnostics_delegate_to_link_manager(self) -> None:
         hub = EybondHub(
@@ -471,6 +475,42 @@ class HubSnapshotTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["collector_callback_session_protocol"], "at_text")
         self.assertEqual(diagnostics["collector_callback_identity_strategy"], "at_dtupn")
+
+    def test_initial_inverter_binding_seeds_runtime_driver_state(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="",
+                collector_pn="V00102046262344022",
+                tcp_port=18899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+                collector_session_protocol="at_text",
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        driver = _SeedDriver()
+        inverter = DetectedInverter(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="PI30 3500",
+            variant_key="default",
+            serial_number="55355535553555",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
+            profile_name="pi30_ascii/models/smartess_0925_compat.json",
+            register_schema_name="pi30_ascii/models/smartess_0925_compat.json",
+        )
+
+        hub.set_initial_inverter_binding(driver, inverter)  # type: ignore[arg-type]
+        snapshot = hub._build_snapshot()
+
+        self.assertIs(hub._driver, driver)
+        self.assertIs(hub._inverter, inverter)
+        self.assertEqual(snapshot.values["runtime_driver_state"], "driver_bound")
+        self.assertEqual(snapshot.values["driver_key"], "pi30")
 
     def test_build_snapshot_includes_effective_profile_and_schema_names(self) -> None:
         hub = EybondHub(
@@ -552,7 +592,7 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertNotIn("collector_serial_baudrate", snapshot.values)
         self.assertNotIn("smartess_protocol_asset_id", snapshot.values)
 
-    def test_collector_phase_publish_preserves_previous_inverter_values(self) -> None:
+    def test_bound_collector_phase_does_not_publish_stale_inverter_values(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(
                 server_ip="192.168.1.10",
@@ -588,11 +628,49 @@ class HubSnapshotTests(unittest.TestCase):
             status="",
         )
 
+        self.assertEqual(observed, [])
+        self.assertEqual(hub._last_snapshot.values["grid_voltage"], 230.0)
+        self.assertEqual(
+            hub._last_snapshot.values["collector_serial_baudrate"],
+            "2400,8,1,NONE",
+        )
+
+    def test_detection_phase_publish_reports_collector_state(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        hub._last_snapshot = RuntimeSnapshot(
+            connected=True,
+            values={
+                "collector_serial_baudrate": "2400,8,1,NONE",
+            },
+        )
+        observed: list[RuntimeSnapshot] = []
+        hub.set_runtime_snapshot_observer(observed.append)
+
+        hub._publish_intermediate_snapshot(
+            {"collector_serial_baudrate": "9600,8,1,NONE"},
+            status="detecting_inverter",
+        )
+
         self.assertEqual(len(observed), 1)
-        self.assertEqual(observed[0].values["grid_voltage"], 230.0)
         self.assertEqual(
             observed[0].values["collector_serial_baudrate"],
             "9600,8,1,NONE",
+        )
+        self.assertEqual(
+            observed[0].values["runtime_detection_status"],
+            "detecting_inverter",
         )
 
     def test_build_snapshot_adds_canonical_common_values_for_pi30(self) -> None:
@@ -1892,6 +1970,53 @@ class HubWriteBlockerTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_at_text_metadata_bootstrap_reads_bridge_hardware_version(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=18899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+
+            class _AtTextFcBootstrapTransport:
+                connected = True
+
+                def __init__(self) -> None:
+                    self.fc_requests: list[tuple[int, bytes]] = []
+
+                async def async_query_bridge_hardware_version(self):
+                    self.fc_requests.append((2, b"\x06"))
+                    return (None, b"\x00\x06esp-collector/0.1.8/ESP8266")
+
+                async def async_query(self, command: str):
+                    raise asyncio.TimeoutError()
+
+            at_transport = _AtTextFcBootstrapTransport()
+            link = _FakeLinkManager()
+            link.transport = object()
+            link.collector_at_transport = at_transport
+            hub._link_manager = link
+
+            values = await hub._async_read_collector_runtime_values(poll_interval=10.0)
+
+            self.assertEqual(at_transport.fc_requests, [(2, b"\x06")])
+            self.assertEqual(
+                values["collector_hardware_version"],
+                "esp-collector/0.1.8/ESP8266",
+            )
+            snapshot = hub._build_snapshot(extra_values=values)
+            self.assertTrue(snapshot.collector.collector_virtual_bridge)
+            self.assertEqual(snapshot.collector.collector_bridge_version, "0.1.8")
+
+        asyncio.run(_run())
+
     def test_dead_at_metadata_channel_is_learned_and_skipped(self) -> None:
         async def _run() -> None:
             hub = EybondHub(
@@ -1930,7 +2055,7 @@ class HubWriteBlockerTests(unittest.TestCase):
             )
             hub._link_manager = link
 
-            for _ in range(2):
+            for _ in range(4):
                 # Force each attempt through the cadence gate, emulate a
                 # cycle where the framed side answered, and commit.
                 hub._collector_at_runtime_last_attempt_monotonic = -1000.0
@@ -1940,9 +2065,9 @@ class HubWriteBlockerTests(unittest.TestCase):
                 commit_cycle_failures(hub._runtime_read_state)
 
             learned_queries = at_transport.queries
-            self.assertGreaterEqual(learned_queries, 2)
+            self.assertGreaterEqual(learned_queries, 4)
 
-            # Third attempt: the channel verdict blocks the sweep entirely,
+            # Next attempt: the channel verdict blocks the sweep entirely,
             # even with the cadence forced open.
             hub._collector_at_runtime_last_attempt_monotonic = -1000.0
             hub._collector_runtime_last_refresh_monotonic = -1000.0

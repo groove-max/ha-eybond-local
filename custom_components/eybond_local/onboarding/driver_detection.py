@@ -46,6 +46,40 @@ class DriverCandidateScan:
     probe_log: tuple[dict[str, object], ...] = field(default_factory=tuple)
 
 
+@dataclass(slots=True)
+class DriverDetectionDeadline:
+    """Shared deadline for driver ordering and probing.
+
+    Per-driver signature/probe timeouts are still authoritative upper bounds;
+    this object clamps them to the caller's remaining detection budget so a
+    newly added protocol cannot silently add another full timeout chain to one
+    target scan.
+    """
+
+    remaining_seconds: Callable[[], float | None] | None = None
+
+    def remaining(self) -> float | None:
+        if self.remaining_seconds is None:
+            return None
+        value = self.remaining_seconds()
+        if value is None:
+            return None
+        return max(0.0, float(value))
+
+    def expired(self) -> bool:
+        remaining = self.remaining()
+        return remaining is not None and remaining <= 0
+
+    def timeout(self, configured: float | None) -> float | None:
+        base = float(configured or 0.0)
+        remaining = self.remaining()
+        if remaining is None:
+            return base if base > 0 else None
+        if base <= 0:
+            return remaining
+        return min(base, remaining)
+
+
 def driver_keys_for_profile_prefixes(profile_names: Any) -> tuple[str, ...]:
     """Map catalog profile paths to registered driver keys, order-preserving.
 
@@ -78,6 +112,7 @@ async def _ordered_driver_targets(
     driver_hint: str,
     preferred_driver_keys: tuple[str, ...] = (),
     allowed_driver_keys: tuple[str, ...] = (),
+    deadline: DriverDetectionDeadline | None = None,
 ) -> tuple[tuple[InverterDriver, tuple[ProbeTarget, ...]], ...]:
     """Return the probe order, seeded by collector metadata when available.
 
@@ -105,7 +140,11 @@ async def _ordered_driver_targets(
                 key=lambda item: 0 if item[0].key in preferred else 1,
             )
         )
-    return await _ordered_driver_targets_by_signature(driver_targets, transport)
+    return await _ordered_driver_targets_by_signature(
+        driver_targets,
+        transport,
+        deadline=deadline,
+    )
 
 
 class DriverSweepNoMatch(RuntimeError):
@@ -137,30 +176,51 @@ async def async_detect_inverter(
     driver_hint: str,
     depth: str = "fast",
     preferred_driver_keys: tuple[str, ...] = (),
+    remaining_seconds: Callable[[], float | None] | None = None,
 ) -> DetectedDriverContext:
     """Probe all drivers against one active transport and return the first match."""
 
     errors: list[str] = []
+    probe_log: list[dict[str, object]] = []
     inverter_link_down = False
+    deadline = DriverDetectionDeadline(remaining_seconds)
     logger.debug("Starting inverter driver detection depth=%s hint=%s", depth, driver_hint)
     driver_targets = await _ordered_driver_targets(
         transport,
         driver_hint=driver_hint,
         preferred_driver_keys=preferred_driver_keys,
+        deadline=deadline,
     )
 
+    loop = asyncio.get_running_loop()
     saw_any_response = False
-    for driver, targets in driver_targets:
+    for index, (driver, targets) in enumerate(driver_targets):
+        if deadline.expired():
+            probe_log.extend(
+                {"driver": pending.key, "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"}
+                for pending, _ in driver_targets[index:]
+            )
+            break
+        probe_started = loop.time()
         tracked = _ResponseTrackingTransport(transport)
         try:
             inverter = await _async_probe_driver_with_budget(
                 driver,
                 tracked,
                 targets,
+                deadline=deadline,
             )
         except asyncio.TimeoutError:
             saw_any_response = saw_any_response or tracked.saw_response
             errors.append(f"{driver.key}:probe_timeout")
+            _append_probe_log(
+                probe_log,
+                driver=driver,
+                started=probe_started,
+                outcome="probe_timeout",
+                saw_response=tracked.saw_response,
+                loop=loop,
+            )
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
             continue
         except InverterIdentityNoDataError:
@@ -170,27 +230,67 @@ async def async_detect_inverter(
             # the misleading "no supported driver" verdict.
             errors.append(f"{driver.key}:{ERROR_INVERTER_LINK_DOWN}")
             inverter_link_down = True
+            _append_probe_log(
+                probe_log,
+                driver=driver,
+                started=probe_started,
+                outcome=ERROR_INVERTER_LINK_DOWN,
+                saw_response=False,
+                loop=loop,
+            )
             logger.debug("Identity region read as zeros driver=%s", driver.key)
             continue
         except Exception as exc:
             saw_any_response = saw_any_response or tracked.saw_response
             errors.append(f"{driver.key}:{exc}")
+            _append_probe_log(
+                probe_log,
+                driver=driver,
+                started=probe_started,
+                outcome=f"error:{str(exc)[:80]}",
+                saw_response=tracked.saw_response,
+                loop=loop,
+            )
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
             continue
 
         saw_any_response = saw_any_response or tracked.saw_response
         if inverter is not None:
+            elapsed_ms = _append_probe_log(
+                probe_log,
+                driver=driver,
+                started=probe_started,
+                outcome="matched",
+                saw_response=True,
+                loop=loop,
+            )
+            inverter.details["probe_elapsed_ms"] = elapsed_ms
+            inverter.details["probe_log"] = list(probe_log)
             return DetectedDriverContext(
                 driver=driver,
                 inverter=inverter,
                 match=_build_driver_match(driver, inverter),
             )
+        _append_probe_log(
+            probe_log,
+            driver=driver,
+            started=probe_started,
+            outcome="no_match",
+            saw_response=tracked.saw_response,
+            loop=loop,
+        )
 
     silent = not saw_any_response
     if inverter_link_down:
-        raise DriverSweepNoMatch(ERROR_INVERTER_LINK_DOWN, silent=silent)
+        raise DriverSweepNoMatch(
+            ERROR_INVERTER_LINK_DOWN,
+            silent=silent,
+            probe_log=tuple(probe_log),
+        )
     raise DriverSweepNoMatch(
-        errors[-1] if errors else "no_supported_driver_matched", silent=silent
+        errors[-1] if errors else "no_supported_driver_matched",
+        silent=silent,
+        probe_log=tuple(probe_log),
     )
 
 
@@ -215,6 +315,7 @@ async def async_detect_inverter_candidates(
     probe_log: list[dict[str, object]] = []
     inverter_link_down = False
     budget_exhausted = False
+    deadline = DriverDetectionDeadline(remaining_seconds)
     logger.debug("Starting multi-candidate inverter detection depth=%s hint=%s", depth, driver_hint)
     # Restricted re-sweeps (the link baud walk) probe only the drivers whose
     # protocol family is expected at the current link speed; the restriction
@@ -224,12 +325,10 @@ async def async_detect_inverter_candidates(
         driver_hint=driver_hint,
         preferred_driver_keys=preferred_driver_keys,
         allowed_driver_keys=allowed_driver_keys,
+        deadline=deadline,
     )
 
     loop = asyncio.get_running_loop()
-
-    def _remaining() -> float | None:
-        return remaining_seconds() if remaining_seconds is not None else None
 
     def _log_probe(
         driver: InverterDriver,
@@ -250,7 +349,7 @@ async def async_detect_inverter_candidates(
         return elapsed_ms
 
     for index, (driver, targets) in enumerate(driver_targets):
-        remaining = _remaining()
+        remaining = deadline.remaining()
         if remaining is not None and remaining <= 0:
             budget_exhausted = True
             logger.debug("Deep detection budget exhausted before driver=%s", driver.key)
@@ -266,6 +365,7 @@ async def async_detect_inverter_candidates(
                 driver,
                 tracked,
                 targets,
+                deadline=deadline,
             )
             if remaining is not None:
                 inverter = await asyncio.wait_for(probe, timeout=remaining)
@@ -334,30 +434,50 @@ async def async_detect_inverter_candidates(
 async def _ordered_driver_targets_by_signature(
     driver_targets: tuple[tuple[InverterDriver, tuple[ProbeTarget, ...]], ...],
     transport: Any,
+    *,
+    deadline: DriverDetectionDeadline | None = None,
 ) -> tuple[tuple[InverterDriver, tuple[ProbeTarget, ...]], ...]:
-    signed: list[tuple[InverterDriver, tuple[ProbeTarget, ...]]] = []
     unsigned: list[tuple[InverterDriver, tuple[ProbeTarget, ...]]] = []
 
-    for driver, targets in driver_targets:
+    for index, (driver, targets) in enumerate(driver_targets):
+        signature_timeout = getattr(driver, "signature_timeout", None)
+        if signature_timeout is None or signature_timeout <= 0:
+            unsigned.append((driver, targets))
+            continue
+        if deadline is not None and deadline.expired():
+            return tuple((*unsigned, *driver_targets[index:]))
         try:
-            matched = await _async_probe_driver_signature(driver, transport, targets)
+            matched = await _async_probe_driver_signature(
+                driver,
+                transport,
+                targets,
+                deadline=deadline,
+            )
         except Exception as exc:
             logger.debug("Signature probe failed driver=%s error=%s", driver.key, exc)
             matched = False
         if matched:
-            signed.append((driver, targets))
-        else:
-            unsigned.append((driver, targets))
+            remaining = driver_targets[index + 1 :]
+            logger.debug("Driver signature matched driver=%s; prioritizing without probing remaining signatures", driver.key)
+            return tuple(((driver, targets), *unsigned, *remaining))
+        unsigned.append((driver, targets))
 
-    return tuple((*signed, *unsigned))
+    return tuple(unsigned)
 
 
 async def _async_probe_driver_signature(
     driver: InverterDriver,
     transport: Any,
     targets: tuple[ProbeTarget, ...],
+    *,
+    deadline: DriverDetectionDeadline | None = None,
 ) -> bool:
-    timeout = getattr(driver, "signature_timeout", None)
+    configured_timeout = getattr(driver, "signature_timeout", None)
+    timeout = (
+        deadline.timeout(configured_timeout)
+        if deadline is not None
+        else configured_timeout
+    )
     if timeout is None or timeout <= 0:
         return False
     try:
@@ -423,8 +543,15 @@ async def _async_probe_driver_with_budget(
     driver: InverterDriver,
     transport: Any,
     targets: tuple[ProbeTarget, ...],
+    *,
+    deadline: DriverDetectionDeadline | None = None,
 ) -> DetectedInverter | None:
-    timeout = getattr(driver, "probe_timeout", None)
+    configured_timeout = getattr(driver, "probe_timeout", None)
+    timeout = (
+        deadline.timeout(configured_timeout)
+        if deadline is not None
+        else configured_timeout
+    )
     if timeout is None or timeout <= 0:
         return await _async_probe_driver_targets(driver, transport, targets)
     return await asyncio.wait_for(
@@ -479,6 +606,27 @@ def _ordered_probe_targets(driver: InverterDriver, transport: Any) -> tuple[Prob
         return (devcode_rank, original_index, original_index)
 
     return tuple(sorted(probe_targets, key=_sort_key))
+
+
+def _append_probe_log(
+    probe_log: list[dict[str, object]],
+    *,
+    driver: InverterDriver,
+    started: float,
+    outcome: str,
+    saw_response: bool,
+    loop,
+) -> int:
+    elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
+    probe_log.append(
+        {
+            "driver": driver.key,
+            "elapsed_ms": elapsed_ms,
+            "outcome": outcome,
+            "saw_response": bool(saw_response),
+        }
+    )
+    return elapsed_ms
 
 
 def _build_driver_match(driver: InverterDriver, inverter: DetectedInverter) -> DriverMatch:

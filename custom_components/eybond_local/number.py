@@ -11,6 +11,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .collector.capabilities import collector_capability_profile_from_runtime
 from .const import (
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
@@ -34,11 +35,25 @@ class _RuntimeNumberSpec:
     enabled_default: bool = True
 
 
+def _collector_proxy_capture_allowed(coordinator: EybondLocalCoordinator) -> bool:
+    explicit_capabilities = getattr(coordinator, "collector_capabilities", None)
+    if getattr(explicit_capabilities, "proxy_capture", True) is False:
+        return False
+    snapshot = getattr(coordinator, "data", None)
+    values = getattr(snapshot, "values", None)
+    entry = getattr(coordinator, "config_entry", None)
+    return collector_capability_profile_from_runtime(
+        collector=getattr(snapshot, "collector", None),
+        values=values if isinstance(values, dict) else {},
+        data=dict(getattr(entry, "data", {}) or {}),
+        options=dict(getattr(entry, "options", {}) or {}),
+    ).proxy_capture
+
+
 def _runtime_number_specs(coordinator: EybondLocalCoordinator) -> tuple[_RuntimeNumberSpec, ...]:
     if not hasattr(coordinator, "async_set_proxy_capture_duration_minutes"):
         return ()
-    collector_capabilities = getattr(coordinator, "collector_capabilities", None)
-    if not bool(getattr(collector_capabilities, "proxy_capture", True)):
+    if not _collector_proxy_capture_allowed(coordinator):
         return ()
     return (
         _RuntimeNumberSpec(

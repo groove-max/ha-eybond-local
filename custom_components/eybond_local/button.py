@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .collector_endpoint import normalize_collector_server_endpoint
+from .collector.capabilities import collector_capability_profile_from_runtime
 from .collector.entity_scope import is_collector_tooling_key
 from .metadata.collector_cloud_profile_catalog_loader import load_collector_cloud_profile_catalog
 from .runtime.coordinator import EybondLocalCoordinator
@@ -20,6 +21,23 @@ from .models import CapabilityPreset, WriteCapability
 from .platform_context import entity_setup_context
 from .schema import serialize_capability, serialize_preset
 from .tooling import supports_clock_sync, tooling_button_keys_for_runtime
+
+
+def _collector_proxy_capture_allowed(
+    coordinator: EybondLocalCoordinator,
+    entry: ConfigEntry,
+) -> bool:
+    explicit_capabilities = getattr(coordinator, "collector_capabilities", None)
+    if getattr(explicit_capabilities, "proxy_capture", True) is False:
+        return False
+    snapshot = getattr(coordinator, "data", None)
+    values = getattr(snapshot, "values", None)
+    return collector_capability_profile_from_runtime(
+        collector=getattr(snapshot, "collector", None),
+        values=values if isinstance(values, dict) else {},
+        data=dict(getattr(entry, "data", {}) or {}),
+        options=dict(getattr(entry, "options", {}) or {}),
+    ).proxy_capture
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,10 +81,7 @@ async def async_setup_entry(
         if has_inverter_identity
         else ()
     )
-    collector_capabilities = getattr(coordinator, "collector_capabilities", None)
-    collector_proxy_capture_allowed = bool(
-        getattr(collector_capabilities, "proxy_capture", True)
-    )
+    collector_proxy_capture_allowed = _collector_proxy_capture_allowed(coordinator, entry)
     async_add_entities(
         [
             *[

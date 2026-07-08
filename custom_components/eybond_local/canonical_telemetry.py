@@ -672,6 +672,7 @@ def _compute_eybond_g_ascii_battery_power(
     from GMOD/DCDC mode when it is known:
 
     * ``B`` = charging, positive power.
+    * ``L`` = line/utility mode, positive battery current means charging.
     * ``0`` = discharging soft start, negative power.
 
     Some devices may eventually expose a signed current directly; preserve that
@@ -698,6 +699,8 @@ def _compute_eybond_g_ascii_battery_power(
         return round(voltage_value * current_value, 4)
 
     if mode_code.startswith("B"):
+        return round(voltage_value * current_value, 4)
+    if mode_code in {"L", "4", "LINE", "UTILITY", "MAINS"}:
         return round(voltage_value * current_value, 4)
     if mode_code.startswith("0"):
         return round(-(voltage_value * current_value), 4)

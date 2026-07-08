@@ -29,6 +29,10 @@ from ..collector.transport import (
     _acquire_shared_listener,
     _release_shared_listener,
 )
+from ..collector.transport_profile import (
+    collector_session_protocol_from_inventory_state,
+    normalize_collector_session_protocol,
+)
 from ..connection.models import EybondConnectionSpec
 from ..const import (
     CONNECTION_TYPE_EYBOND,
@@ -173,6 +177,8 @@ class DiscoveryTarget:
 
     ip: str
     source: str
+    collector_pn: str = ""
+    collector_session_protocol: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,6 +417,58 @@ class OnboardingDetector:
             request_timeout=request_timeout,
         )
         self._driver_hint = driver_hint
+
+    async def async_passive_detect(
+        self,
+        *,
+        depth: str = DETECTION_DEPTH_FAST,
+        collector_ip: str = "",
+        discovery_target: str = "",
+        discovery_targets: Sequence[DiscoveryTarget] | None = None,
+        settle_timeout: float = 0.1,
+    ) -> tuple[OnboardingResult, ...]:
+        """Materialize already-connected callback sessions without active probing."""
+
+        targets = tuple(
+            discovery_targets
+            if discovery_targets is not None
+            else build_default_discovery_targets(
+                collector_ip=collector_ip,
+                discovery_target=discovery_target,
+            )
+        )
+        if not targets:
+            targets = (
+                DiscoveryTarget(
+                    ip=discovery_target or collector_ip or DEFAULT_DISCOVERY_TARGET,
+                    source="callback_listener",
+                ),
+            )
+        listener = None
+        try:
+            listener = await _acquire_shared_listener(
+                _LISTENER_BIND_HOST,
+                self._connection.tcp_port,
+            )
+            if settle_timeout > 0:
+                await asyncio.sleep(min(float(settle_timeout), 1.0))
+            return self._session_inventory_results(
+                listener=listener,
+                discovery_targets=targets,
+                results=(),
+                depth=depth,
+                passive_only=True,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Passive callback discovery unavailable port=%s error=%s",
+                self._connection.tcp_port,
+                exc,
+            )
+            return ()
+        finally:
+            if listener is not None:
+                await _release_shared_listener(listener)
 
     async def async_detect_targets(
         self,
@@ -695,6 +753,8 @@ class OnboardingDetector:
         self,
         *,
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
@@ -709,13 +769,29 @@ class OnboardingDetector:
         just received Wi-Fi credentials and does not reopen broadcast discovery.
         """
 
-        if not str(collector_ip or "").strip():
+        collector_ip = str(collector_ip or "").strip()
+        collector_pn = str(collector_pn or "").strip()
+        collector_session_protocol = str(
+            normalize_collector_session_protocol(collector_session_protocol)
+        )
+
+        if not collector_ip:
             raise ValueError("collector_ip_required")
 
-        targets = build_default_discovery_targets(
-            collector_ip=collector_ip,
-            discovery_target="",
-        )
+        if collector_pn or collector_session_protocol:
+            targets = (
+                DiscoveryTarget(
+                    ip=collector_ip,
+                    source="known_ip",
+                    collector_pn=collector_pn,
+                    collector_session_protocol=collector_session_protocol,
+                ),
+            )
+        else:
+            targets = build_default_discovery_targets(
+                collector_ip=collector_ip,
+                discovery_target="",
+            )
         aggregated: list[OnboardingResult] = []
 
         for attempt_index in range(max(1, attempts)):
@@ -872,13 +948,18 @@ class OnboardingDetector:
         detection_state: _TargetDetectionState | None = None,
         deadline: OnboardingDeadline | None = None,
     ) -> OnboardingResult:
-        transport = SharedEybondTransport(
-            host=_LISTENER_BIND_HOST,
-            port=self._connection.tcp_port,
-            request_timeout=self._connection.request_timeout,
-            heartbeat_interval=float(self._connection.heartbeat_interval),
-            collector_ip=target.ip,
-        )
+        transport_kwargs: dict[str, Any] = {
+            "host": _LISTENER_BIND_HOST,
+            "port": self._connection.tcp_port,
+            "request_timeout": self._connection.request_timeout,
+            "heartbeat_interval": float(self._connection.heartbeat_interval),
+            "collector_ip": target.ip,
+        }
+        if target.collector_pn:
+            transport_kwargs["collector_pn"] = target.collector_pn
+        if target.collector_session_protocol:
+            transport_kwargs["collector_session_protocol"] = target.collector_session_protocol
+        transport = SharedEybondTransport(**transport_kwargs)
         candidate = CollectorCandidate(
             target_ip=target.ip,
             source=target.source,
@@ -1191,8 +1272,16 @@ class OnboardingDetector:
                     driver_hint=self._driver_hint,
                     depth=depth,
                     preferred_driver_keys=preferred_driver_keys,
+                    remaining_seconds=(
+                        deadline.remaining_seconds if deadline is not None else None
+                    ),
                 )
-                return DriverCandidateScan(candidates=(context,))
+                probe_log = tuple(
+                    entry
+                    for entry in context.inverter.details.get("probe_log", ())
+                    if isinstance(entry, dict)
+                )
+                return DriverCandidateScan(candidates=(context,), probe_log=probe_log)
             except RuntimeError as exc:
                 last_error = exc
                 if attempt >= attempts - 1 or not _is_retryable_detection_error(str(exc)):
@@ -1697,6 +1786,7 @@ class OnboardingDetector:
         discovery_targets: Sequence[DiscoveryTarget],
         results: Sequence[OnboardingResult],
         depth: str = DETECTION_DEPTH_FAST,
+        passive_only: bool = False,
     ) -> tuple[OnboardingResult, ...]:
         if listener is None:
             return ()
@@ -1705,12 +1795,17 @@ class OnboardingDetector:
         if not callable(inventory_provider):
             return ()
 
-        broadcast_target = next(
+        source_target = next(
             (target for target in discovery_targets if target.source == "broadcast"),
             None,
         )
-        if broadcast_target is None:
-            return ()
+        if source_target is None and discovery_targets:
+            source_target = discovery_targets[0]
+        if source_target is None:
+            source_target = DiscoveryTarget(
+                ip=DEFAULT_DISCOVERY_TARGET,
+                source="callback_listener",
+            )
 
         known_pns: set[str] = set()
         for result in results:
@@ -1748,13 +1843,20 @@ class OnboardingDetector:
 
             peer_port_raw = session.get("peer_port")
             peer_port = peer_port_raw if isinstance(peer_port_raw, int) else None
+            protocol_shape = str(session.get("protocol_shape") or "").strip().lower()
+            collector_session_protocol = collector_session_protocol_from_inventory_state(
+                state=state,
+                protocol_shape=protocol_shape,
+            )
+            source = "callback_listener" if passive_only else source_target.source
             materialized.append(
                 _with_detection_evidence(
                     OnboardingResult(
                         collector=CollectorCandidate(
-                            target_ip=broadcast_target.ip,
-                            source=broadcast_target.source,
+                            target_ip=source_target.ip,
+                            source=source,
                             ip=peer_ip,
+                            session_protocol=collector_session_protocol,
                             connected=state in {"claimed", "routed_framed", "routed_at_text"},
                             collector=CollectorInfo(
                                 remote_ip=peer_ip,
@@ -1763,14 +1865,18 @@ class OnboardingDetector:
                             ),
                         ),
                         connection_type=CONNECTION_TYPE_EYBOND,
-                        connection_mode=broadcast_target.source,
+                        connection_mode=source,
                         next_action="manual_driver_selection",
                         last_error="collector_detected_without_driver",
                     ),
                     depth=depth,
                     status="collector_only",
                     reason="callback_session_inventory",
-                    details={"session_state": state},
+                    details={
+                        "session_state": state,
+                        "collector_session_protocol": collector_session_protocol,
+                        "collector_session_protocol_shape": protocol_shape,
+                    },
                 )
             )
             known_pns.add(collector_pn)

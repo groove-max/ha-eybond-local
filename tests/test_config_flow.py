@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import subprocess
@@ -2679,6 +2679,107 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Battery Connection", placeholders["inverter_confirm_table"])
         self.assertNotIn("Battery Percent", placeholders["inverter_confirm_table"])
 
+    async def test_confirm_step_passive_callback_without_match_defers_inverter_table(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00102046262344022"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+
+        result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        placeholders = result["description_placeholders"]
+        self.assertIn("**Колектор**", placeholders["collector_confirm_table"])
+        self.assertIn("**Інвертор**", placeholders["inverter_confirm_table"])
+        self.assertIn("після створення запису", placeholders["inverter_confirm_table"])
+        self.assertNotIn("| Модель |", placeholders["inverter_confirm_table"])
+        self.assertNotIn("Непідтверджений інвертор", placeholders["inverter_confirm_table"])
+        self.assertEqual(placeholders["control_summary"], "")
+
+    async def test_confirm_step_passive_callback_does_not_probe_collector_capabilities(self) -> None:
+        flow = self._make_flow()
+        selected = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00102046262344022"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+        flow._autodetect_results = {"0": selected}
+        flow._selected_result = selected
+
+        with (
+            patch(
+                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                side_effect=AssertionError("passive confirm must not start payload transport"),
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                side_effect=AssertionError("passive confirm must not start AT transport"),
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_values",
+                new=AsyncMock(
+                    side_effect=AssertionError("passive confirm must not query FC values")
+                ),
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                new=AsyncMock(
+                    side_effect=AssertionError("passive confirm must not query AT values")
+                ),
+            ),
+        ):
+            result = await flow.async_step_confirm()
+
+        self.assertEqual(result["type"], "form")
+        self.assertFalse(flow._selected_result_collector_capabilities_attempted)
+
+    async def test_confirm_step_passive_callback_submit_creates_ha_only_entry_without_binding(self) -> None:
+        flow = self._make_flow()
+        selected = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00102046262344022"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+        flow._selected_result = selected
+        bind = AsyncMock()
+        flow._async_bind_selected_collector_to_home_assistant = bind
+
+        result = await flow.async_step_confirm({"poll_mode": "auto"})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["connection_mode"], "callback_listener")
+        self.assertNotIn("collector_ip", result["data"])
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+        self.assertEqual(
+            result["options"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+        bind.assert_not_awaited()
+
     async def test_confirm_step_placeholders_keep_rated_power_missing_visible(self) -> None:
         flow = self._make_flow()
         flow._selected_result = OnboardingResult(
@@ -3074,6 +3175,50 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Add controls", placeholders["tier_details"])
         self.assertNotIn("device learning", placeholders["tier_details"])
 
+    async def test_detection_summary_passive_callback_defers_inverter_detection(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="0.0.0.0",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00102046262344022"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+
+        result = await flow.async_step_detection_summary()
+
+        placeholders = result["description_placeholders"]
+        self.assertIn("Collector connected", placeholders["tier_headline"])
+        self.assertIn("runtime owns this session", placeholders["tier_details"])
+        self.assertNotIn("no inverter was detected", placeholders["tier_details"])
+        self.assertNotIn("Device not recognized", placeholders["tier_headline"])
+
+    async def test_detection_summary_passive_callback_uses_localized_text(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="0.0.0.0",
+                source="callback_listener",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V0011073728229"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+
+        result = await flow.async_step_detection_summary()
+
+        placeholders = result["description_placeholders"]
+        self.assertIn("Колектор підключений", placeholders["tier_headline"])
+        self.assertIn("вхідним підключенням", placeholders["tier_details"])
+        self.assertNotIn("Collector connected", placeholders["tier_headline"])
+
     async def test_detection_summary_without_catalog_details_uses_driver_text(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._result_with_catalog_details(None)
@@ -3438,6 +3583,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_confirm({"poll_mode": "auto"})
 
         self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["connection_mode"], "callback_listener")
         self.assertEqual(
             result["data"][CONF_COLLECTOR_OPERATION_MODE],
             COLLECTOR_OPERATION_HA_ONLY,
@@ -3447,6 +3593,46 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             COLLECTOR_OPERATION_HA_ONLY,
         )
         self.assertTrue(result["data"]["collector_virtual_bridge"])
+
+    async def test_confirm_step_does_not_persist_original_endpoint_for_bridge(self) -> None:
+        flow = self._make_flow()
+        flow._selected_result = self._collector_only_bridge_result()
+        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
+        flow._collector_endpoint_bind_applied = True
+        flow._collector_original_server_endpoint = "ess.eybond.com"
+        flow._collector_target_server_endpoint = "192.168.1.50,8899,TCP"
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            flow.hass.config.config_dir = tempdir
+
+            result = await flow.async_step_confirm({"poll_mode": "auto"})
+
+            self.assertEqual(result["type"], "create_entry")
+            self.assertNotIn(
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+                result["options"],
+            )
+            self.assertFalse(
+                (Path(tempdir) / ".storage" / "eybond_local.collectors").exists()
+            )
+
+    async def test_confirm_step_does_not_rewrite_endpoint_for_passive_callback_bridge(self) -> None:
+        flow = self._make_flow()
+        selected = self._collector_only_bridge_result()
+        selected.collector.source = "callback_listener"
+        selected = replace(selected, connection_mode="callback_listener")
+        flow._selected_result = selected
+        bind = AsyncMock()
+        flow._async_bind_selected_collector_to_home_assistant = bind
+
+        result = await flow.async_step_confirm({"poll_mode": "auto"})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+        bind.assert_not_awaited()
 
     async def test_confirm_step_hides_operation_mode_selector_for_factory_collector(self) -> None:
         flow = self._make_flow()
@@ -3720,6 +3906,187 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured_kwargs["attempts"], 1)
         self.assertFalse(captured_kwargs["enrich_runtime_details"])
 
+    async def test_do_scan_uses_addable_passive_callback_without_active_udp_probe(self) -> None:
+        flow = self._make_flow()
+        passive_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00040509794677058"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+
+        class _FakeDetector:
+            def __init__(self) -> None:
+                self.auto_called = False
+
+            async def async_passive_detect(self, **kwargs):
+                return (passive_result,)
+
+            async def async_auto_detect(self, **kwargs):
+                self.auto_called = True
+                return ()
+
+        detector = _FakeDetector()
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=detector,
+        ):
+            await flow._async_do_scan()
+
+        self.assertFalse(detector.auto_called)
+        self.assertEqual(len(flow._autodetect_results), 1)
+        result = next(iter(flow._autodetect_results.values()))
+        self.assertEqual(result.connection_mode, "callback_listener")
+        self.assertEqual(result.collector.collector.collector_pn, "V00040509794677058")
+
+    async def test_do_scan_merges_passive_callback_with_active_results_when_passive_is_existing(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
+        existing.data.update({"collector_pn": "V00040509794677058"})
+        existing.unique_id = "collector:V00040509794677058"
+        flow = self._make_flow(entries=[existing])
+        passive_existing = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00040509794677058"),
+            ),
+            connection_mode="callback_listener",
+        )
+        active_new = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.255.255",
+                source="broadcast",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00040509794677059"),
+            ),
+            connection_mode="broadcast",
+            next_action="manual_driver_selection",
+        )
+
+        class _FakeDetector:
+            async def async_passive_detect(self, **kwargs):
+                return (passive_existing,)
+
+            async def async_auto_detect(self, **kwargs):
+                return (active_new,)
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(
+            {
+                result.collector.collector.collector_pn
+                for result in flow._autodetect_results.values()
+                if result.collector is not None and result.collector.collector is not None
+            },
+            {"V00040509794677058", "V00040509794677059"},
+        )
+        self.assertEqual(
+            {
+                result.collector.collector.collector_pn
+                for result in flow._available_autodetect_results().values()
+                if result.collector is not None and result.collector.collector is not None
+            },
+            {"V00040509794677059"},
+        )
+
+    async def test_integration_discovery_selects_passive_callback_candidate(self) -> None:
+        flow = self._make_flow()
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            side_effect=AssertionError(
+                "integration_discovery must use the concrete discovery_info session"
+            ),
+        ):
+            result = await flow.async_step_integration_discovery(
+                {
+                    "tcp_port": 18899,
+                    "collector_pn": "V00040509794677058",
+                    "peer_ip": "195.138.86.175",
+                }
+            )
+
+        self.assertEqual(flow._test_unique_id, "collector:V00040509794677058")
+        self.assertEqual(
+            flow.context["title_placeholders"],
+            {"name": "Collector PN V00040509794677058"},
+        )
+        assert flow._selected_result is not None
+        assert flow._selected_result.collector is not None
+        self.assertIsNone(flow._selected_result.match)
+        self.assertEqual(flow._selected_result.connection_mode, "callback_listener")
+        self.assertEqual(flow._selected_result.collector.source, "callback_listener")
+        self.assertEqual(flow._selected_result.collector.ip, "195.138.86.175")
+        self.assertEqual(
+            flow._selected_result.collector.collector.collector_pn,
+            "V00040509794677058",
+        )
+        self.assertIn(result["type"], {"form", "menu"})
+
+    async def test_integration_discovery_does_not_runtime_enrich_passive_callback_candidate(self) -> None:
+        flow = self._make_flow()
+        factory_specs: list[object] = []
+
+        def _fake_create_onboarding_manager(spec, **kwargs):
+            factory_specs.append(spec)
+            raise AssertionError("passive discovery preview must not create a detector")
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            side_effect=_fake_create_onboarding_manager,
+        ):
+            await flow.async_step_integration_discovery(
+                {
+                    "tcp_port": 18899,
+                    "collector_pn": "V00102046262344022",
+                    "peer_ip": "195.138.86.175",
+                    "collector_session_protocol": "at_text",
+                }
+            )
+
+        self.assertEqual(factory_specs, [])
+        assert flow._selected_result is not None
+        self.assertIsNone(flow._selected_result.match)
+        self.assertEqual(flow._selected_result.connection_mode, "callback_listener")
+        assert flow._selected_result.collector is not None
+        self.assertEqual(flow._selected_result.collector.source, "callback_listener")
+        self.assertEqual(flow._selected_result.collector.session_protocol, "at_text")
+
+    async def test_integration_discovery_aborts_existing_passive_collector(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
+        existing.data.update({"collector_pn": "V00040509794677058"})
+        existing.unique_id = "collector:V00040509794677058"
+        flow = self._make_flow(entries=[existing])
+
+        class _FakeDetector:
+            async def async_passive_detect(self, **kwargs):
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            result = await flow.async_step_integration_discovery(
+                {
+                    "tcp_port": 18899,
+                    "collector_pn": "V00040509794677058",
+                    "peer_ip": "195.138.86.175",
+                }
+            )
+
+        self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
+
     async def test_do_scan_keeps_runtime_enrichment_for_deep_scan(self) -> None:
         flow = self._make_flow()
         flow._set_scan_mode(SETUP_MODE_DEEP_SCAN)
@@ -3869,6 +4236,53 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(flow._existing_entry_for_result(result))
 
+    async def test_existing_entry_with_pn_does_not_claim_unknown_candidate_on_same_nat_ip(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
+        existing.data.update(
+            {
+                "collector_ip": "195.138.86.175",
+                "collector_pn": "V00040509794677058",
+            }
+        )
+        existing.unique_id = "manual:195.138.86.175"
+        flow = self._make_flow(entries=[existing])
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="195.138.86.175",
+                source="manual",
+                ip="195.138.86.175",
+                connected=True,
+            ),
+            connection_mode="manual",
+            next_action="create_pending_entry",
+        )
+
+        self.assertIsNone(flow._existing_entry_for_result(result))
+
+    async def test_existing_pending_entry_claims_unknown_candidate_on_same_nat_ip(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
+        existing.data.update(
+            {
+                "collector_ip": "195.138.86.175",
+                "collector_pn": "",
+                "detected_serial": "",
+            }
+        )
+        existing.unique_id = "manual_pending:192.168.1.50:18899:195.138.86.175"
+        flow = self._make_flow(entries=[existing])
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="195.138.86.175",
+                source="manual",
+                ip="195.138.86.175",
+                connected=True,
+            ),
+            connection_mode="manual",
+            next_action="create_pending_entry",
+        )
+
+        self.assertIs(flow._existing_entry_for_result(result), existing)
+
     async def test_existing_entry_matches_prefix_and_full_collector_pn(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
         existing.data.update({"collector_pn": "Q00000000000010001"})
@@ -4004,6 +4418,104 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured_kwargs["collector_ip"], "192.168.1.14")
         self.assertEqual(captured_kwargs["discovery_target"], "")
+
+    async def test_probe_manual_target_uses_single_passive_callback_candidate_before_active_probe(self) -> None:
+        flow = self._make_flow()
+        user_input = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "collector_ip": "195.138.86.175",
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+        passive_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V00040509794677058"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+
+        class _FakeDetector:
+            def __init__(self) -> None:
+                self.auto_called = False
+
+            async def async_passive_detect(self, **kwargs):
+                return (passive_result,)
+
+            async def async_auto_detect(self, **kwargs):
+                self.auto_called = True
+                return ()
+
+        detector = _FakeDetector()
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=detector,
+        ):
+            result = await flow._async_probe_manual_target(user_input)
+
+        self.assertIs(result, passive_result)
+        self.assertFalse(detector.auto_called)
+
+    async def test_probe_manual_target_ignores_ambiguous_passive_callback_candidates(self) -> None:
+        flow = self._make_flow()
+        user_input = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "collector_ip": "195.138.86.175",
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+        passive_results = (
+            OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.50",
+                    source="callback_listener",
+                    ip="195.138.86.175",
+                    connected=True,
+                    collector=CollectorInfo(collector_pn="V00040509794677058"),
+                ),
+                connection_mode="callback_listener",
+                next_action="manual_driver_selection",
+            ),
+            OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.50",
+                    source="callback_listener",
+                    ip="195.138.86.175",
+                    connected=True,
+                    collector=CollectorInfo(collector_pn="V00040509794677059"),
+                ),
+                connection_mode="callback_listener",
+                next_action="manual_driver_selection",
+            ),
+        )
+        active_result = OnboardingResult(connection_mode="manual", next_action="create_pending_entry")
+
+        class _FakeDetector:
+            async def async_passive_detect(self, **kwargs):
+                return passive_results
+
+            async def async_auto_detect(self, **kwargs):
+                return (active_result,)
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            result = await flow._async_probe_manual_target(user_input)
+
+        self.assertIs(result, active_result)
 
     async def test_probe_manual_target_timeout_returns_pending_result(self) -> None:
         flow = self._make_flow()
@@ -4259,6 +4771,136 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["title"], "EyeBond Setup Pending")
         self.assertEqual(result["data"]["collector_ip"], "192.168.1.55")
+
+    async def test_manual_create_pending_resolves_bridge_profile_before_entry_creation(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "195.138.86.175",
+            "driver_hint": "auto",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(
+            connection_mode="manual",
+            next_action="create_pending_entry",
+            last_error="manual_probe_timeout",
+        )
+
+        class _BridgeProfileTransport:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                return None
+
+            async def async_query_bridge_hardware_version(self):
+                return (None, b"\x00\x06esp-collector/0.1.8/ESP8266")
+
+        with patch(
+            "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+            _BridgeProfileTransport,
+        ):
+            result = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["collector_ip"], "195.138.86.175")
+        self.assertEqual(result["data"]["collector_kind"], "esp_eybond_bridge")
+        self.assertTrue(result["data"]["collector_virtual_bridge"])
+        self.assertEqual(result["data"]["collector_bridge_kind"], "esp-collector")
+        self.assertEqual(result["data"]["collector_bridge_version"], "0.1.8")
+        self.assertEqual(
+            result["data"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+        self.assertEqual(result["options"]["collector_kind"], "esp_eybond_bridge")
+        self.assertEqual(
+            result["options"][CONF_COLLECTOR_OPERATION_MODE],
+            COLLECTOR_OPERATION_HA_ONLY,
+        )
+
+    async def test_manual_create_pending_allows_same_nat_ip_when_existing_entry_has_pn(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
+        existing.data.update(
+            {
+                "collector_ip": "195.138.86.175",
+                "collector_pn": "V00040509794677058",
+                "detected_serial": "",
+            }
+        )
+        existing.unique_id = "manual:195.138.86.175"
+        flow = self._make_flow(entries=[existing])
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "195.138.86.175",
+            "driver_hint": "auto",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(
+            connection_mode="manual",
+            next_action="create_pending_entry",
+            last_error="manual_probe_timeout",
+        )
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            new=AsyncMock(return_value=flow._manual_result),
+        ):
+            result = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["collector_ip"], "195.138.86.175")
+        self.assertEqual(
+            flow._test_unique_id,
+            "manual_pending:192.168.1.50:18899:195.138.86.175",
+        )
+
+    async def test_manual_create_pending_blocks_same_nat_ip_when_existing_entry_is_still_pending(self) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
+        existing.data.update(
+            {
+                "collector_ip": "195.138.86.175",
+                "collector_pn": "",
+                "detected_serial": "",
+            }
+        )
+        existing.unique_id = "manual_pending:192.168.1.50:18899:195.138.86.175"
+        flow = self._make_flow(entries=[existing])
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "195.138.86.175",
+            "driver_hint": "auto",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(
+            connection_mode="manual",
+            next_action="create_pending_entry",
+            last_error="manual_probe_timeout",
+        )
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            new=AsyncMock(return_value=flow._manual_result),
+        ):
+            result = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
 
     async def test_manual_create_pending_drops_default_broadcast_collector_ip(self) -> None:
         flow = self._make_flow()
@@ -4621,6 +5263,32 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("локальное сопоставление инвертора пока не подтверждено", placeholders["scan_summary"])
         self.assertIn("сохранить его как ожидающее", placeholders["scan_next_hint"])
         self.assertIn("Есть признаки SmartESS", result_label)
+
+    async def test_scan_result_labels_name_passive_callback_peer_address_explicitly(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V0011073728229"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+        flow._autodetect_results = {"0": result}
+
+        await flow._async_ensure_translation_bundle()
+
+        result_label = flow._result_label(result)
+        scan_line = flow._scan_result_line(1, result)
+
+        self.assertIn("PN V0011073728229", result_label)
+        self.assertIn("з’єднання від 192.168.1.1", result_label)
+        self.assertIn("з’єднання від 192.168.1.1", scan_line)
+        self.assertNotIn("колектор 192.168.1.1", scan_line)
 
     async def test_options_runtime_step_renders_branch_aware_connection_section(self) -> None:
         options = self._make_options_flow()

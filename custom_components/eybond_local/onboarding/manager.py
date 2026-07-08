@@ -10,6 +10,17 @@ from ..models import OnboardingResult
 class OnboardingManager(Protocol):
     """Onboarding detection contract shared by all future connection branches."""
 
+    async def async_passive_detect(
+        self,
+        *,
+        depth: str = "fast",
+        collector_ip: str = "",
+        discovery_target: str = "",
+        discovery_targets: Sequence[Any] | None = None,
+        settle_timeout: float = 0.1,
+    ) -> tuple[OnboardingResult, ...]:
+        ...
+
     async def async_auto_detect(
         self,
         *,
@@ -26,6 +37,22 @@ class OnboardingManager(Protocol):
         enrich_runtime_details: bool = True,
         total_timeout: float | None = None,
     ) -> tuple[OnboardingResult, ...]:
+        ...
+
+    async def async_handoff_detect(
+        self,
+        *,
+        collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
+        discovery_timeout: float = 1.5,
+        connect_timeout: float = 5.0,
+        heartbeat_timeout: float = 2.0,
+        attempts: int = 3,
+        attempt_delay: float = 0.75,
+        enrich_runtime_details: bool = True,
+        cleanup_new_shared_connection: bool = False,
+    ) -> OnboardingResult | None:
         ...
 
     async def async_deep_detect(

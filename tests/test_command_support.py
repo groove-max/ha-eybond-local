@@ -32,9 +32,9 @@ class CommandSupportCacheTests(unittest.TestCase):
         commit_cycle_failures(state)
         self.assertEqual(unsupported_commands(state), ())
 
-        # Two mixed cycles: the device answers something, so the failing
+        # Four mixed cycles: the device answers something, so the failing
         # commands are genuinely unsupported.
-        for _ in range(2):
+        for _ in range(4):
             record_command_success(state, "QPIGS")
             record_command_failure(state, "QPIWS")
             record_command_failure(state, "Q1")

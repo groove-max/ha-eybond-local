@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 import asyncio
+from time import monotonic
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import (
@@ -27,6 +28,54 @@ Parser = Callable[[str], dict[str, Any]]
 EvidenceProvider = Callable[[CompiledProbeAction], Awaitable[object]]
 
 
+@dataclass(slots=True)
+class ProbeDeadline:
+    """One shared deadline for a catalog probe.
+
+    The catalog stores per-action timeouts, but one probe also needs a shared
+    budget so optional enrichment cannot consume the whole detection window.
+    """
+
+    timeout: float
+    _started: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.timeout = max(0.0, float(self.timeout or 0.0))
+        self._started = monotonic()
+
+    @property
+    def active(self) -> bool:
+        return self.timeout > 0
+
+    def elapsed(self) -> float:
+        return max(0.0, monotonic() - self._started)
+
+    def remaining(self) -> float | None:
+        if not self.active:
+            return None
+        return max(0.0, self.timeout - self.elapsed())
+
+    def action_timeout(self, configured_timeout: float) -> float:
+        base = max(0.0, float(configured_timeout or 0.0))
+        remaining = self.remaining()
+        if remaining is None:
+            return base
+        if base <= 0:
+            return remaining
+        return min(base, remaining)
+
+    def has_optional_budget(self, configured_timeout: float) -> bool:
+        remaining = self.remaining()
+        if remaining is None:
+            return True
+        required = max(0.0, float(configured_timeout or 0.0))
+        # Optional actions are enrichment only. If the remaining shared budget
+        # cannot cover their configured timeout, skip them instead of launching
+        # a command that will be cancelled mid-flight and may produce a stale
+        # late response on the transport.
+        return required <= 0 or remaining >= required
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogAsciiProbe:
     """Collected values, evidence audit, and catalog resolution."""
@@ -37,6 +86,7 @@ class CatalogAsciiProbe:
     executed_actions: tuple[str, ...]
     failed_actions: tuple[str, ...]
     unsupported_actions: tuple[str, ...] = ()
+    action_timings: tuple[dict[str, object], ...] = ()
 
     def as_details(self) -> dict[str, object]:
         """Return a stable support/persistence payload."""
@@ -66,6 +116,7 @@ class CatalogAsciiProbe:
                 "executed": list(self.executed_actions),
                 "failed": list(self.failed_actions),
                 "unsupported": list(self.unsupported_actions),
+                "timings": list(self.action_timings),
             },
         }
 
@@ -125,6 +176,35 @@ async def async_walk_detection_dag(
         if action is None or action.kind not in supported_kinds:
             unsupported_evidence.add(evaluation.missing_anchor_key or "")
             continue
+        if action.optional:
+            required_action = _next_unexecuted_required_action(
+                protocol,
+                excluded_action_keys=frozenset((*executed, *failed, *unsupported)),
+                supported_kinds=supported_kinds,
+            )
+            if required_action is not None:
+                outcome = await execute_action(required_action)
+                if outcome == "executed":
+                    executed.append(required_action.key)
+                elif outcome == "unsupported":
+                    unsupported.append(required_action.key)
+                    unsupported_evidence.update(
+                        field.key for field in required_action.evidence_fields
+                    )
+                    if raise_on_required_failure:
+                        raise RuntimeError(
+                            f"required_catalog_action_unsupported:{required_action.key}"
+                        )
+                else:
+                    failed.append(required_action.key)
+                    failed_evidence.update(
+                        field.key for field in required_action.evidence_fields
+                    )
+                    if raise_on_required_failure:
+                        raise RuntimeError(
+                            f"required_catalog_action_failed:{required_action.key}"
+                        )
+                continue
         outcome = await execute_action(action)
         if outcome == "executed":
             executed.append(action.key)
@@ -147,6 +227,30 @@ async def async_walk_detection_dag(
     )
 
 
+def _next_unexecuted_required_action(
+    protocol: CompiledProtocolDescriptor,
+    *,
+    excluded_action_keys: frozenset[str],
+    supported_kinds: frozenset[str],
+) -> CompiledProbeAction | None:
+    """Return the next required action that should run before optional probes.
+
+    A detection tree may ask for optional evidence to refine a variant. That
+    optional evidence must not consume the probe budget before driver-required
+    identity reads have had a chance to complete.
+    """
+
+    for candidate in protocol.probe_actions:
+        if candidate.optional:
+            continue
+        if candidate.key in excluded_action_keys:
+            continue
+        if candidate.kind not in supported_kinds:
+            continue
+        return candidate
+    return None
+
+
 async def async_probe_ascii_catalog(
     *,
     protocol_key: str,
@@ -162,6 +266,8 @@ async def async_probe_ascii_catalog(
     tree = catalog.decision_trees[protocol_key]
     values: dict[str, Any] = {}
     evidence: dict[str, object] = {}
+    action_timings: list[dict[str, object]] = []
+    deadline = ProbeDeadline(protocol.probe_timeout)
 
     metadata_executed: list[str] = []
     for action in protocol.probe_actions:
@@ -177,6 +283,8 @@ async def async_probe_ascii_catalog(
             values=values,
             evidence=evidence,
             evidence_providers=evidence_providers or {},
+            deadline=deadline,
+            action_timings=action_timings,
         )
 
     walk = await async_walk_detection_dag(
@@ -207,6 +315,8 @@ async def async_probe_ascii_catalog(
             values=values,
             evidence=evidence,
             evidence_providers=evidence_providers or {},
+            deadline=deadline,
+            action_timings=action_timings,
         )
         if outcome == "executed":
             executed.append(action.key)
@@ -248,6 +358,7 @@ async def async_probe_ascii_catalog(
         executed_actions=tuple(executed),
         failed_actions=tuple(failed),
         unsupported_actions=tuple(unsupported),
+        action_timings=tuple(action_timings),
     )
 
 
@@ -275,6 +386,8 @@ async def async_probe_ascii_catalog_signature(
         values=values,
         evidence=evidence,
         evidence_providers={},
+        deadline=ProbeDeadline(protocol.signature_timeout),
+        action_timings=[],
     )
     if outcome != "executed":
         return False
@@ -340,38 +453,97 @@ async def _execute_probe_action(
     values: dict[str, Any],
     evidence: dict[str, object],
     evidence_providers: Mapping[str, EvidenceProvider],
+    deadline: ProbeDeadline,
+    action_timings: list[dict[str, object]],
 ) -> str:
+    if action.optional and not deadline.has_optional_budget(action.timeout):
+        _record_action_timing(
+            action_timings,
+            action=action,
+            elapsed=0.0,
+            outcome="skipped_budget",
+            timeout=action.timeout,
+            attempt_count=0,
+        )
+        return "failed"
     if action.kind == PROBE_ACTION_SMARTESS_QUERY:
         return await _execute_evidence_provider(
             action,
             provider=evidence_providers.get(action.parser_key),
             values=values,
             evidence=evidence,
+            deadline=deadline,
+            action_timings=action_timings,
         )
     if action.kind != PROBE_ACTION_ASCII_COMMAND:
+        _record_action_timing(
+            action_timings,
+            action=action,
+            elapsed=0.0,
+            outcome="unsupported",
+            timeout=0.0,
+            attempt_count=0,
+        )
         return "unsupported"
     parser = parsers.get(action.parser_key)
     if parser is None:
+        _record_action_timing(
+            action_timings,
+            action=action,
+            elapsed=0.0,
+            outcome="unsupported",
+            timeout=0.0,
+            attempt_count=0,
+        )
         return "unsupported"
     parsed = None
-    for _attempt in range(action.retries + 1):
+    started = monotonic()
+    attempt_count = 0
+    last_error = ""
+    for attempt in range(action.retries + 1):
+        attempt_count = attempt + 1
         try:
+            timeout = deadline.action_timeout(action.timeout)
+            if deadline.active and timeout <= 0:
+                last_error = "probe_budget_exhausted"
+                break
             request = session.request(action.command)
             payload = (
-                await asyncio.wait_for(request, timeout=action.timeout)
-                if action.timeout > 0
+                await asyncio.wait_for(request, timeout=timeout)
+                if timeout > 0
                 else await request
             )
             parsed = parser(payload)
             break
-        except Exception:
+        except asyncio.TimeoutError:
+            last_error = "timeout"
+            continue
+        except Exception as exc:
+            last_error = type(exc).__name__ or str(exc)
             continue
     if parsed is None:
+        _record_action_timing(
+            action_timings,
+            action=action,
+            elapsed=monotonic() - started,
+            outcome="failed",
+            timeout=action.timeout,
+            attempt_count=attempt_count,
+            error=last_error,
+        )
         return "failed"
     values.update(parsed)
     for field in action.evidence_fields:
         if field.source_key in parsed:
             evidence[field.key] = parsed[field.source_key]
+    _record_action_timing(
+        action_timings,
+        action=action,
+        elapsed=monotonic() - started,
+        outcome="executed",
+        timeout=action.timeout,
+        attempt_count=attempt_count,
+    )
     return "executed"
 
 
@@ -381,22 +553,53 @@ async def _execute_evidence_provider(
     provider: EvidenceProvider | None,
     values: dict[str, Any],
     evidence: dict[str, object],
+    deadline: ProbeDeadline,
+    action_timings: list[dict[str, object]],
 ) -> str:
     if provider is None:
+        _record_action_timing(
+            action_timings,
+            action=action,
+            elapsed=0.0,
+            outcome="unsupported",
+            timeout=0.0,
+            attempt_count=0,
+        )
         return "unsupported"
     result: object | None = None
-    for _attempt in range(action.retries + 1):
+    started = monotonic()
+    attempt_count = 0
+    last_error = ""
+    for attempt in range(action.retries + 1):
+        attempt_count = attempt + 1
         try:
+            timeout = deadline.action_timeout(action.timeout)
+            if deadline.active and timeout <= 0:
+                last_error = "probe_budget_exhausted"
+                break
             request = provider(action)
             result = (
-                await asyncio.wait_for(request, timeout=action.timeout)
-                if action.timeout > 0
+                await asyncio.wait_for(request, timeout=timeout)
+                if timeout > 0
                 else await request
             )
             break
-        except Exception:
+        except asyncio.TimeoutError:
+            last_error = "timeout"
+            continue
+        except Exception as exc:
+            last_error = type(exc).__name__ or str(exc)
             continue
     if result is None:
+        _record_action_timing(
+            action_timings,
+            action=action,
+            elapsed=monotonic() - started,
+            outcome="failed",
+            timeout=action.timeout,
+            attempt_count=attempt_count,
+            error=last_error,
+        )
         return "failed"
     payload = result if isinstance(result, Mapping) else {}
     for field in action.evidence_fields:
@@ -407,7 +610,41 @@ async def _execute_evidence_provider(
             continue
         values[field.source_key] = value
         evidence[field.key] = value
+    _record_action_timing(
+        action_timings,
+        action=action,
+        elapsed=monotonic() - started,
+        outcome="executed",
+        timeout=action.timeout,
+        attempt_count=attempt_count,
+    )
     return "executed"
+
+
+def _record_action_timing(
+    action_timings: list[dict[str, object]],
+    *,
+    action: CompiledProbeAction,
+    elapsed: float,
+    outcome: str,
+    timeout: float,
+    attempt_count: int,
+    error: str = "",
+) -> None:
+    payload: dict[str, object] = {
+        "key": action.key,
+        "kind": action.kind,
+        "optional": bool(action.optional),
+        "outcome": outcome,
+        "duration_ms": int(round(max(0.0, elapsed) * 1000.0)),
+        "timeout_ms": int(round(max(0.0, float(timeout or 0.0)) * 1000.0)),
+        "attempts": int(max(0, attempt_count)),
+    }
+    if action.command:
+        payload["command"] = action.command
+    if error:
+        payload["error"] = error[:80]
+    action_timings.append(payload)
 
 
 def evidence_providers_from_transport(

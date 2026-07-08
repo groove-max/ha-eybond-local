@@ -106,10 +106,33 @@ class WriteExposurePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_verified_writes_require_confirmed_local_metadata_proof(self) -> None:
-        capability = self.smg_profile.get_capability("charge_source_priority")
+    def test_cloud_hint_capability_stays_blocked_under_external_profile_scope(self) -> None:
+        cloud_hint_capability = WriteCapability(
+            key="smartess_cloud_hint_only",
+            register=699,
+            value_kind="u16",
+            note="cloud hint",
+            tested=True,
+            provenance="cloud_hint",
+        )
 
         self.assertFalse(
+            capability_write_exposure_allowed(
+                cloud_hint_capability,
+                control_mode="full",
+                detection_confidence="high",
+                variant_key="default",
+                profile_source_scope="external",
+                schema_source_scope="external",
+                profile_name="learned/shadow_learning/example/profile.json",
+                device_scoped_overlay_active=False,
+            )
+        )
+
+    def test_verified_writes_accept_external_local_metadata_proof(self) -> None:
+        capability = self.smg_profile.get_capability("charge_source_priority")
+
+        self.assertTrue(
             capability_write_exposure_allowed(
                 capability,
                 control_mode="full",
@@ -141,8 +164,9 @@ class WriteExposurePolicyTests(unittest.TestCase):
                 device_scoped_overlay_active=True,
             )
         )
-        # Without an active overlay, external metadata still requires the built-in proof.
-        self.assertFalse(
+        # External local metadata is still local proof; cloud-hint capabilities
+        # remain blocked separately by their provenance.
+        self.assertTrue(
             capability_write_exposure_allowed(
                 capability,
                 control_mode="auto",
@@ -155,13 +179,13 @@ class WriteExposurePolicyTests(unittest.TestCase):
             )
         )
 
-    def test_verified_presets_require_confirmed_local_metadata_proof(self) -> None:
+    def test_verified_presets_accept_external_local_metadata_proof(self) -> None:
         capabilities_by_key = {cap.key: cap for cap in self.smg_profile.capabilities}
         preset = next(
             item for item in self.smg_profile.presets if item.key == "off_grid_self_consumption"
         )
 
-        self.assertFalse(
+        self.assertTrue(
             preset_write_exposure_allowed(
                 preset,
                 capabilities_by_key=capabilities_by_key,

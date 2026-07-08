@@ -270,8 +270,8 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         transport._handle_read_holding = _counting
         runtime_state: dict[str, object] = {}
 
-        # Two cycles collect the failure strikes for the rejected bulk reads.
-        for now in (100.0, 200.0):
+        # Four cycles collect the failure strikes for the rejected bulk reads.
+        for now in (100.0, 200.0, 300.0, 400.0):
             await self.driver.async_read_values(
                 transport,
                 self._inverter(),
@@ -287,7 +287,7 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
             self._inverter(),
             runtime_state=runtime_state,
             poll_interval=10.0,
-            now_monotonic=300.0,
+            now_monotonic=500.0,
         )
 
         # No further bulk attempts for the rejected blocks.

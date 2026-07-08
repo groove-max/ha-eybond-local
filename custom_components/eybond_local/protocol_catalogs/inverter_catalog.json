@@ -127,6 +127,7 @@
      "parser_key": "pi30.protocol_id",
      "cost": 1,
      "optional": false,
+     "timeout": 2.0,
      "evidence_fields": [
       {
        "key": "protocol.protocol_id",
@@ -141,6 +142,7 @@
      "parser_key": "pi30.serial_number",
      "cost": 1,
      "optional": false,
+     "timeout": 4.0,
      "evidence_fields": [
       {
        "key": "identity.serial_number",
@@ -155,6 +157,7 @@
      "parser_key": "pi30.qpiri",
      "cost": 2,
      "optional": false,
+     "timeout": 3.0,
      "evidence_fields": [
       {
        "key": "identity.rated_power",
@@ -173,6 +176,7 @@
      "parser_key": "pi30.model_number",
      "cost": 1,
      "optional": true,
+     "timeout": 2.0,
      "evidence_fields": [
       {
        "key": "identity.model_number",
@@ -187,6 +191,7 @@
      "parser_key": "pi30.qflag",
      "cost": 1,
      "optional": true,
+     "timeout": 2.0,
      "evidence_fields": [
       {
        "key": "shape.capability_flags",
@@ -201,6 +206,7 @@
      "parser_key": "pi30.qmod",
      "cost": 1,
      "optional": true,
+     "timeout": 2.0,
      "evidence_fields": [
       {
        "key": "runtime.operating_mode_code",
@@ -215,6 +221,7 @@
      "parser_key": "pi30.qpiws",
      "cost": 1,
      "optional": true,
+     "timeout": 2.5,
      "evidence_fields": [
       {
        "key": "shape.qpiws_bit_count",
@@ -229,6 +236,7 @@
      "parser_key": "pi30.qpigs",
      "cost": 2,
      "optional": true,
+     "timeout": 2.5,
      "evidence_fields": [
       {
        "key": "shape.qpigs_field_count",
@@ -243,6 +251,7 @@
      "parser_key": "pi30.main_firmware",
      "cost": 1,
      "optional": true,
+     "timeout": 2.0,
      "evidence_fields": []
     },
     {
@@ -252,6 +261,7 @@
      "parser_key": "pi30.secondary_firmware",
      "cost": 1,
      "optional": true,
+     "timeout": 2.0,
      "evidence_fields": []
     },
     {
@@ -261,6 +271,7 @@
      "parser_key": "pi30.tertiary_firmware",
      "cost": 1,
      "optional": true,
+     "timeout": 2.0,
      "evidence_fields": []
     },
     {

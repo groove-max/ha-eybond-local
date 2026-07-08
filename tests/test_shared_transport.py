@@ -376,6 +376,85 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(transport.connected)
         self.assertEqual(transport.collector_info.collector_pn, "PN-TWO")
 
+    async def test_transport_prefers_collector_pn_over_same_nat_ip_index(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        first = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        first._writer = _OpenWriter()  # type: ignore[assignment]
+        first._collector.remote_ip = "203.0.113.10"
+        first._collector.collector_pn = "PN-ONE"
+
+        second = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        second._writer = _OpenWriter()  # type: ignore[assignment]
+        second._collector.remote_ip = "203.0.113.10"
+        second._collector.collector_pn = "PN-TWO"
+
+        listener._connections["203.0.113.10"] = first
+        listener._connections["203.0.113.10:second"] = second
+        listener._connections_by_pn["PN-ONE"] = first
+        listener._connections_by_pn["PN-TWO"] = second
+
+        transport = SharedEybondTransport(
+            host="127.0.0.1",
+            port=listener._port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="203.0.113.10",
+            collector_pn="PN-TWO",
+        )
+        transport._listener = listener
+
+        self.assertTrue(transport.connected)
+        self.assertEqual(transport.collector_info.collector_pn, "PN-TWO")
+
+    async def test_at_transport_prefers_collector_pn_over_same_nat_ip_index(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        first = _CollectorAtConnection(remote_ip_hint="203.0.113.10", write_timeout=0.5)
+        first._writer = _OpenWriter()  # type: ignore[assignment]
+        first._collector.remote_ip = "203.0.113.10"
+        first._collector.collector_pn = "PN-ONE"
+
+        second = _CollectorAtConnection(remote_ip_hint="203.0.113.10", write_timeout=0.5)
+        second._writer = _OpenWriter()  # type: ignore[assignment]
+        second._collector.remote_ip = "203.0.113.10"
+        second._collector.collector_pn = "PN-TWO"
+
+        listener._at_connections["203.0.113.10"] = first
+        listener._at_connections["203.0.113.10:second"] = second
+        listener._at_connections_by_pn["PN-ONE"] = first
+        listener._at_connections_by_pn["PN-TWO"] = second
+
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=listener._port,
+            request_timeout=1.0,
+            collector_ip="203.0.113.10",
+            collector_pn="PN-TWO",
+            collector_session_protocol="at_text",
+            collector_identity_strategy="at_dtupn",
+        )
+        transport._listener = listener
+
+        self.assertTrue(transport.connected)
+        self.assertEqual(transport.collector_info.collector_pn, "PN-TWO")
+
     async def test_transport_prefers_pn_session_over_configured_ip_placeholder(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
 
@@ -1548,6 +1627,107 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(listener.current_at_connection(write_timeout=0.5))
 
+    async def test_listener_current_connection_sees_collector_pn_only_connection(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = listener.ensure_connection(
+            "",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+            collector_pn="V00102046262344022",
+        )
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        connection._writer = _OpenWriter()  # type: ignore[assignment]
+
+        self.assertIs(
+            listener.current_connection(heartbeat_interval=60.0, write_timeout=0.5),
+            connection,
+        )
+
+    async def test_listener_current_at_connection_sees_collector_pn_only_connection(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = listener.ensure_at_connection(
+            "",
+            write_timeout=0.5,
+            collector_pn="V00102046262344022",
+        )
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        connection._writer = _OpenWriter()  # type: ignore[assignment]
+
+        self.assertIs(listener.current_at_connection(write_timeout=0.5), connection)
+
+    async def test_listener_collector_pn_lookup_prefers_connected_short_alias_over_disconnected_exact_placeholder(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        full_pn = "V00102046262344022"
+        short_pn = "V0010204626234"
+        placeholder = listener.ensure_at_connection(
+            "",
+            write_timeout=0.5,
+            collector_pn=full_pn,
+        )
+        active = _CollectorAtConnection(
+            remote_ip_hint="195.138.86.175",
+            write_timeout=0.5,
+        )
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        active._writer = _OpenWriter()  # type: ignore[assignment]
+        listener._at_connections_by_pn[short_pn] = active
+
+        self.assertIsNot(placeholder, active)
+        self.assertIs(
+            listener.ensure_at_connection(
+                "",
+                write_timeout=0.5,
+                collector_pn=full_pn,
+            ),
+            active,
+        )
+
+    async def test_listener_payload_pn_lookup_prefers_connected_short_alias_over_disconnected_exact_placeholder(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        full_pn = "V00102046262344022"
+        short_pn = "V0010204626234"
+        placeholder = listener.ensure_connection(
+            "",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+            collector_pn=full_pn,
+        )
+        active = _CollectorConnection(
+            remote_ip_hint="195.138.86.175",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+
+        class _OpenWriter:
+            def is_closing(self) -> bool:
+                return False
+
+        active._writer = _OpenWriter()  # type: ignore[assignment]
+        listener._connections_by_pn[short_pn] = active
+
+        self.assertIsNot(placeholder, active)
+        self.assertIs(
+            listener.ensure_connection(
+                "",
+                heartbeat_interval=60.0,
+                write_timeout=0.5,
+                collector_pn=full_pn,
+            ),
+            active,
+        )
+
     async def test_listener_pop_pending_socket_without_collector_ip_returns_none_when_multiple_pending_exist(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener._pending_sockets["127.0.0.1"] = _PendingCollectorSocket(
@@ -2030,6 +2210,57 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.command, "VDTU")
             self.assertTrue(response.value.startswith("esp-collector,0.1.2"))
             self.assertEqual(connection.collector_info.heartbeat_devcode, 0)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_connection_can_query_framed_collector_metadata(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_framed_metadata",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            query_task = asyncio.create_task(
+                connection.async_send_bridge_identity_probe(
+                    fcode=2,
+                    payload=b"\x06",
+                    request_timeout=1.0,
+                )
+            )
+            deadline = monotonic() + 1.0
+            while len(writer.buffer) < HEADER_SIZE + 1:
+                if monotonic() >= deadline:
+                    self.fail(f"timed out waiting for framed request, got {writer.buffer!r}")
+                await asyncio.sleep(0)
+            request = bytes(writer.buffer)
+            self.assertGreaterEqual(len(request), HEADER_SIZE)
+            request_header = decode_header(request[:HEADER_SIZE])
+            self.assertEqual(request_header.fcode, 2)
+            self.assertEqual(request[HEADER_SIZE:], b"\x06")
+
+            response_payload = b"\x00\x06esp-collector/0.1.8/ESP8266"
+            reader.feed_data(
+                build_collector_request(
+                    request_header.tid,
+                    response_payload,
+                    devcode=0,
+                    collector_addr=1,
+                    fcode=2,
+                )
+            )
+
+            header, payload = await query_task
+
+            self.assertEqual(header.tid, request_header.tid)
+            self.assertEqual(header.fcode, 2)
+            self.assertEqual(payload, response_payload)
         finally:
             await connection.disconnect()
             run_task.cancel()
@@ -2620,6 +2851,60 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         )
         listener._pending_sockets[session_id] = pending
         return pending
+
+    async def test_activate_pending_payload_reuses_collector_pn_placeholder(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "V00102046262344022"
+        public_ip = "195.138.86.175"
+        placeholder = listener.ensure_connection(
+            "",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+            collector_pn=collector_pn,
+        )
+        pending = self._pending(listener, session_id="s1", remote_ip=public_ip)
+
+        with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
+            connection = await listener.activate_pending_connection(
+                pending,
+                collector_ip="",
+                collector_pn=collector_pn,
+                heartbeat_interval=60.0,
+                write_timeout=0.5,
+            )
+            await asyncio.sleep(0)
+
+        self.assertIs(connection, placeholder)
+        self.assertIs(listener._connections_by_pn[collector_pn], placeholder)
+        self.assertNotIn(public_ip, listener._connections)
+        self.assertIs(listener._session_payload_connections["s1"], placeholder)
+        run_mock.assert_awaited_once()
+
+    async def test_activate_pending_at_reuses_collector_pn_placeholder(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "V00102046262344022"
+        public_ip = "195.138.86.175"
+        placeholder = listener.ensure_at_connection(
+            "",
+            write_timeout=0.5,
+            collector_pn=collector_pn,
+        )
+        pending = self._pending(listener, session_id="s1", remote_ip=public_ip)
+
+        with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
+            connection = await listener.activate_pending_at_connection(
+                pending,
+                collector_ip="",
+                collector_pn=collector_pn,
+                write_timeout=0.5,
+            )
+            await asyncio.sleep(0)
+
+        self.assertIs(connection, placeholder)
+        self.assertIs(listener._at_connections_by_pn[collector_pn], placeholder)
+        self.assertNotIn(public_ip, listener._at_connections)
+        self.assertIs(listener._session_at_connections["s1"], placeholder)
+        run_mock.assert_awaited_once()
 
     async def test_unclaimed_callback_is_parked_instead_of_closed(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())

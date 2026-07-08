@@ -28,6 +28,7 @@ except ModuleNotFoundError:  # Local tooling imports the package without Home As
         """Fallback used by local tooling when Home Assistant is unavailable."""
 
 from .naming import installation_title, legacy_installation_titles
+from .collector.capabilities import collector_capability_profile_from_runtime
 from .collector.signal import is_legacy_disabled_signal_entity_key
 from .collector.transport import CollectorListenerBindError
 from .device_scoped_overlay import filter_learned_read_measurements_for_activation
@@ -228,6 +229,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 
     from .services import async_setup_services
     from .support.download import async_register_support_package_download_view
+    from .passive_discovery import async_start_passive_callback_discovery
 
     try:
         _configure_local_metadata_roots(hass)
@@ -236,6 +238,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
         )
         await async_setup_services(hass)
         async_register_support_package_download_view(hass)
+        await async_start_passive_callback_discovery(hass)
     except Exception:
         logger.exception("Failed to initialize EyeBond Local integration bootstrap")
         raise
@@ -249,7 +252,27 @@ async def _async_initial_refresh_for_setup(
 ) -> None:
     """Run the first coordinator refresh without letting startup hang forever."""
 
+    primed = False
+    prime = getattr(coordinator, "prime_startup_snapshot", None)
+    if callable(prime):
+        try:
+            primed = bool(prime())
+        except Exception:
+            logger.debug(
+                "Failed to prime EyeBond startup snapshot for entry %s",
+                entry.entry_id,
+                exc_info=True,
+            )
+
     refresh_task = hass.async_create_task(coordinator.async_refresh())
+    _register_background_refresh_task(hass, entry, refresh_task)
+    if primed:
+        logger.info(
+            "Primed EyeBond startup snapshot for entry %s; live refresh continues in background",
+            entry.entry_id,
+        )
+        return
+
     try:
         await asyncio.wait_for(
             asyncio.shield(refresh_task),
@@ -263,19 +286,28 @@ async def _async_initial_refresh_for_setup(
             entry.entry_id,
         )
 
-        def _log_background_refresh_result(task: asyncio.Task) -> None:
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                return
-            except Exception:
-                logger.exception(
-                    "Background EyeBond refresh failed during setup for entry %s",
-                    entry.entry_id,
-                )
 
-        refresh_task.add_done_callback(_log_background_refresh_result)
-        entry.async_on_unload(partial(_cancel_task_callback, refresh_task))
+
+def _register_background_refresh_task(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    refresh_task: asyncio.Task,
+) -> None:
+    """Track one setup background refresh and log late failures."""
+
+    def _log_background_refresh_result(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception(
+                "Background EyeBond refresh failed during setup for entry %s",
+                entry.entry_id,
+            )
+
+    refresh_task.add_done_callback(_log_background_refresh_result)
+    entry.async_on_unload(partial(_cancel_task_callback, refresh_task))
 
 
 def _entry_has_startup_entity_fallback(entry: ConfigEntry) -> bool:
@@ -696,8 +728,22 @@ def _default_enabled_unique_ids(entry_id: str) -> set[str]:
 
 
 def _coordinator_proxy_capture_allowed(coordinator: object) -> bool:
-    capabilities = getattr(coordinator, "collector_capabilities", None)
-    return bool(getattr(capabilities, "proxy_capture", True))
+    explicit_capabilities = getattr(coordinator, "collector_capabilities", None)
+    if getattr(explicit_capabilities, "proxy_capture", True) is False:
+        return False
+    config_entry = getattr(coordinator, "config_entry", None)
+    snapshot = getattr(coordinator, "data", None)
+    if explicit_capabilities is None and config_entry is None and snapshot is None:
+        return True
+    values = getattr(snapshot, "values", None)
+    collector = getattr(snapshot, "collector", None)
+    profile = collector_capability_profile_from_runtime(
+        collector=collector,
+        values=values if isinstance(values, dict) else {},
+        data=dict(getattr(config_entry, "data", {}) or {}),
+        options=dict(getattr(config_entry, "options", {}) or {}),
+    )
+    return profile.proxy_capture
 
 
 def _default_enabled_unique_ids_for_current_runtime(
@@ -1037,6 +1083,30 @@ async def _async_cleanup_obsolete_entities(
     coordinator,
 ) -> None:
     """Remove entity-registry entries that no longer belong to this entry's driver."""
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    collector_proxy_capture_allowed = _coordinator_proxy_capture_allowed(coordinator)
+    if not collector_proxy_capture_allowed:
+        capability_scoped_unique_ids = {
+            _entity_unique_id(
+                entry.entry_id,
+                "number",
+                CONF_PROXY_CAPTURE_DURATION_MINUTES,
+            ),
+            _tool_unique_id(entry.entry_id, "start_proxy_capture"),
+            _tool_unique_id(entry.entry_id, "stop_proxy_capture"),
+        }
+        for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if entity_entry.unique_id not in capability_scoped_unique_ids:
+                continue
+            logger.warning(
+                "Removing collector capability entity %s for entry %s because proxy capture is not supported by this collector",
+                entity_entry.entity_id,
+                entry.entry_id,
+            )
+            registry.async_remove(entity_entry.entity_id)
+
     cleanup_allowed, cleanup_reason = _cleanup_obsolete_entities_allowed(coordinator)
     if not cleanup_allowed:
         logger.debug(
@@ -1045,8 +1115,6 @@ async def _async_cleanup_obsolete_entities(
             cleanup_reason,
         )
         return
-
-    from homeassistant.helpers import entity_registry as er
 
     from .button import _tooling_button_specs
     from .derived_energy import (
@@ -1060,7 +1128,6 @@ async def _async_cleanup_obsolete_entities(
     from .text import collector_text_keys_for_runtime
     from .tooling import tooling_button_keys_for_runtime
 
-    registry = er.async_get(hass)
     driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
     driver_key = driver.key if driver is not None else None
     register_schema_name = getattr(inverter, "register_schema_name", "") if inverter is not None else ""
@@ -1094,7 +1161,6 @@ async def _async_cleanup_obsolete_entities(
         register_schema_name=register_schema_name,
         include_all_drivers_when_unknown=False,
     )
-    collector_proxy_capture_allowed = _coordinator_proxy_capture_allowed(coordinator)
     measurement_keys = {description.key for description in measurement_descriptions}
     runtime_keys = measurement_keys | {
         description.key for description in binary_sensor_descriptions

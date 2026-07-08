@@ -105,6 +105,22 @@
       "register": 607
     },
     {
+      "key": "op2_overload_alarm_setting",
+      "register": 608,
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 200,
+      "title": "OP2 Overload Alarm Setting",
+      "group": "output",
+      "order": 135,
+      "unit": "%",
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the secondary output overload alarm threshold.",
+      "note": "Write register 608 with the OP2 overload alarm percentage. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+    },
+    {
       "key": "force_eq_charge",
       "register": 656,
       "value_kind": "action",
@@ -615,6 +631,67 @@
       ]
     },
     {
+      "key": "secondary_charging_priority",
+      "register": 633,
+      "value_kind": "enum",
+      "title": "Secondary Charging Priority",
+      "group": "charging",
+      "order": 242,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the secondary charging priority used by the inverter.",
+      "note": "Secondary charging priority at register 633. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Off",
+          "order": 0,
+          "description": "Disable secondary charging priority."
+        },
+        {
+          "value": 1,
+          "label": "PV Priority",
+          "order": 1,
+          "description": "Prefer PV charging when solar power is available."
+        },
+        {
+          "value": 2,
+          "label": "PV and Utility",
+          "order": 2,
+          "description": "Allow both PV and utility charging."
+        },
+        {
+          "value": 3,
+          "label": "PV Only",
+          "order": 3,
+          "description": "Restrict charging to PV only."
+        },
+        {
+          "value": 4,
+          "label": "PV Priority With Load Reserve",
+          "order": 4,
+          "description": "Prefer PV charging while reserving PV for the load when needed."
+        }
+      ]
+    },
+    {
+      "key": "constant_voltage_to_float_wait_time",
+      "register": 639,
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 900,
+      "title": "Constant Voltage To Float Wait Time",
+      "group": "battery",
+      "order": 215,
+      "unit": "min",
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the wait time before switching from constant-voltage charging to float charging.",
+      "note": "Constant-voltage to float wait time at register 639. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+    },
+    {
       "key": "max_charge_current",
       "template": "max_charge_current",
       "register": 640
@@ -623,6 +700,39 @@
       "key": "max_ac_charge_current",
       "template": "max_ac_charge_current",
       "register": 641
+    },
+    {
+      "key": "max_discharge_current_protection",
+      "register": 642,
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 1000,
+      "title": "Maximum Discharge Current Protection",
+      "group": "battery",
+      "order": 245,
+      "unit": "A",
+      "device_class": "current",
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the maximum discharge current protection threshold.",
+      "note": "Maximum discharge current protection at register 642. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+    },
+    {
+      "key": "op1_offgrid_soc_protection_value",
+      "register": 649,
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "OP1 Off-Grid SOC Protection",
+      "group": "battery",
+      "order": 248,
+      "unit": "%",
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the OP1 SOC protection threshold used in off-grid mode.",
+      "note": "OP1 off-grid SOC protection value at register 649. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
     },
     {
       "key": "battery_equalization_voltage",

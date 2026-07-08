@@ -1017,16 +1017,16 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(charging_current, 20)
         self.assertEqual(bulk_voltage, 28.3)
 
-    def test_document_backed_g_ascii_capabilities_are_full_control_only(self) -> None:
+    def test_lvyuan_document_backed_g_ascii_capabilities_are_model_verified(self) -> None:
         profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")
         capability = profile.get_capability("max_charging_current_setting")
 
-        self.assertFalse(capability.tested)
-        self.assertEqual(capability.provenance, "doc_backed")
+        self.assertTrue(capability.tested)
+        self.assertEqual(capability.provenance, "verified")
         self.assertTrue(capability.enabled_default)
         self.assertTrue(capability.advanced)
 
-    def test_document_backed_g_ascii_capabilities_live_in_base_profile(self) -> None:
+    def test_document_backed_g_ascii_capabilities_are_verified_by_lvyuan_overlay(self) -> None:
         base_raw = json.loads(
             (
                 REPO_ROOT
@@ -1045,10 +1045,25 @@ class EybondGAsciiDriverTests(unittest.TestCase):
 
         self.assertIn("max_charging_current_setting", base_keys)
         self.assertIn("bms_low_soc_shutdown_setting", base_keys)
-        self.assertNotIn("max_charging_current_setting", model_keys)
-        self.assertNotIn("bms_low_soc_shutdown_setting", model_keys)
+        self.assertIn("max_charging_current_setting", model_keys)
+        self.assertIn("bms_low_soc_shutdown_setting", model_keys)
         self.assertIn("output_priority", model_keys)
         self.assertIn("remote_inverter_switch", model_keys)
+
+        base_max_charge = next(
+            item
+            for item in base_raw["capabilities"]
+            if item["key"] == "max_charging_current_setting"
+        )
+        model_max_charge = next(
+            item
+            for item in model_raw["capabilities"]
+            if item["key"] == "max_charging_current_setting"
+        )
+        self.assertFalse(base_max_charge["tested"])
+        self.assertEqual(base_max_charge["provenance"], "doc_backed")
+        self.assertTrue(model_max_charge["tested"])
+        self.assertEqual(model_max_charge["provenance"], "verified")
 
     def test_bms_soc_controls_are_hidden_without_live_bms(self) -> None:
         profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")

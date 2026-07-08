@@ -1032,6 +1032,67 @@ class InitModuleTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_cleanup_removes_proxy_entities_when_collector_profile_disallows_proxy(self) -> None:
+        async def _run() -> None:
+            proxy_number = types.SimpleNamespace(
+                unique_id="entry123_number_proxy_capture_duration_minutes",
+                entity_id="number.bridge_proxy_mode_duration",
+            )
+            proxy_start = types.SimpleNamespace(
+                unique_id="entry123_tool_start_proxy_capture",
+                entity_id="button.bridge_start_proxy_capture",
+            )
+            proxy_stop = types.SimpleNamespace(
+                unique_id="entry123_tool_stop_proxy_capture",
+                entity_id="button.bridge_stop_proxy_capture",
+            )
+            unrelated = types.SimpleNamespace(
+                unique_id="entry123_pv2_power",
+                entity_id="sensor.bridge_pv2_power",
+            )
+
+            class _Registry:
+                def __init__(self) -> None:
+                    self.removed: list[str] = []
+
+                def async_remove(self, entity_id: str) -> None:
+                    self.removed.append(entity_id)
+
+            registry = _Registry()
+            coordinator = types.SimpleNamespace(
+                collector_capabilities=types.SimpleNamespace(proxy_capture=False),
+                identified_inverter=None,
+                effective_metadata_snapshot=types.SimpleNamespace(is_valid=False),
+                effective_metadata=None,
+                current_driver=None,
+                data=types.SimpleNamespace(inverter=None),
+                can_expose_capability=lambda _capability: True,
+                can_expose_preset=lambda _preset: True,
+            )
+            hass = types.SimpleNamespace()
+            entry = types.SimpleNamespace(entry_id="entry123")
+
+            with (
+                patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=[proxy_number, proxy_start, proxy_stop, unrelated],
+                ),
+                self.assertLogs("custom_components.eybond_local", level="DEBUG"),
+            ):
+                await _async_cleanup_obsolete_entities(hass, entry, coordinator)
+
+            self.assertEqual(
+                registry.removed,
+                [
+                    "number.bridge_proxy_mode_duration",
+                    "button.bridge_start_proxy_capture",
+                    "button.bridge_stop_proxy_capture",
+                ],
+            )
+
+        asyncio.run(_run())
+
     def test_cleanup_skips_when_snapshot_falls_back_to_different_profile(self) -> None:
         async def _run() -> None:
             entity_entry = types.SimpleNamespace(
@@ -1294,6 +1355,49 @@ class InitModuleTests(unittest.TestCase):
             await refresh_started.wait()
             self.assertEqual(len(created_tasks), 1)
             self.assertEqual(len(unload_callbacks), 1)
+            self.assertFalse(created_tasks[0].done())
+
+            unload_callbacks[0]()
+            with self.assertRaises(asyncio.CancelledError):
+                await created_tasks[0]
+
+        asyncio.run(_run())
+
+    def test_initial_refresh_for_setup_returns_immediately_when_primed(self) -> None:
+        async def _run() -> None:
+            refresh_started = asyncio.Event()
+            release_refresh = asyncio.Event()
+            created_tasks: list[asyncio.Task] = []
+            unload_callbacks: list[object] = []
+
+            def async_create_task(coro):
+                task = asyncio.create_task(coro)
+                created_tasks.append(task)
+                return task
+
+            class _Coordinator:
+                def prime_startup_snapshot(self) -> bool:
+                    return True
+
+                async def async_refresh(self) -> None:
+                    refresh_started.set()
+                    await release_refresh.wait()
+
+            hass = types.SimpleNamespace(async_create_task=async_create_task)
+            entry = types.SimpleNamespace(
+                entry_id="entry123",
+                async_on_unload=unload_callbacks.append,
+            )
+
+            with patch("custom_components.eybond_local._SETUP_INITIAL_REFRESH_TIMEOUT", 60.0):
+                await asyncio.wait_for(
+                    _async_initial_refresh_for_setup(hass, entry, _Coordinator()),
+                    timeout=0.5,
+                )
+
+            self.assertEqual(len(created_tasks), 1)
+            self.assertEqual(len(unload_callbacks), 1)
+            await refresh_started.wait()
             self.assertFalse(created_tasks[0].done())
 
             unload_callbacks[0]()

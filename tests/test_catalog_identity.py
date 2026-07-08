@@ -301,6 +301,37 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 await async_detect_inverter(object(), driver_hint="auto")
         self.assertEqual(str(ctx.exception), ERROR_INVERTER_LINK_DOWN)
 
+    async def test_fast_detection_budget_exhaustion_skips_driver_with_probe_log(self) -> None:
+        class _NeverProbedDriver:
+            key = "pi30"
+            protocol_family = "pi30"
+            probe_targets = (ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=1),)
+            probe_timeout = 10
+            signature_timeout = 0
+
+            async def async_probe(self, transport, target):
+                raise AssertionError("must not probe with exhausted budget")
+
+            async def async_probe_signature(self, transport, target):
+                return False
+
+        with patch(
+            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            return_value=(_NeverProbedDriver(),),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                await async_detect_inverter(
+                    object(),
+                    driver_hint="auto",
+                    remaining_seconds=lambda: 0.0,
+                )
+
+        self.assertEqual(str(ctx.exception), "no_supported_driver_matched")
+        self.assertEqual(
+            [(entry["driver"], entry["outcome"]) for entry in ctx.exception.probe_log],
+            [("pi30", "skipped_budget_exhausted")],
+        )
+
     async def test_link_down_does_not_mask_a_real_match_by_another_driver(self) -> None:
         sentinel = object()
 
@@ -483,6 +514,50 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
             [context.driver.key for context in scan.candidates],
             ["pi30", "modbus_smg"],
         )
+
+    async def test_signature_pre_pass_stops_after_first_match(self) -> None:
+        signature_calls: list[str] = []
+
+        class _Driver:
+            probe_timeout = 0
+            signature_timeout = 4.0
+
+            def __init__(self, key: str, signature_match: bool) -> None:
+                self.key = key
+                self.protocol_family = key
+                self.signature_match = signature_match
+                self.probe_targets = (
+                    ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=1),
+                )
+
+            async def async_probe(self, transport, target):
+                from custom_components.eybond_local.models import DetectedInverter
+
+                return DetectedInverter(
+                    driver_key=self.key,
+                    protocol_family=self.protocol_family,
+                    model_name=f"{self.key} Unit",
+                    serial_number="X1",
+                    probe_target=target,
+                )
+
+            async def async_probe_signature(self, transport, target):
+                signature_calls.append(self.key)
+                return self.signature_match
+
+        with patch(
+            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            return_value=(
+                _Driver("modbus_smg", False),
+                _Driver("pi30", True),
+                _Driver("eybond_g_ascii", True),
+                _Driver("smartess_local", True),
+            ),
+        ):
+            context = await async_detect_inverter(object(), driver_hint="auto")
+
+        self.assertEqual(signature_calls, ["modbus_smg", "pi30"])
+        self.assertEqual(context.driver.key, "pi30")
 
     async def test_allowed_driver_keys_restrict_before_signature_pre_pass(self) -> None:
         signature_calls: list[str] = []

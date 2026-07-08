@@ -17,7 +17,7 @@ import re
 import socket
 import subprocess
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import voluptuous as vol
@@ -46,6 +46,10 @@ from .collector_endpoint import (
     inspect_collector_server_endpoint,
     resolve_collector_server_endpoint,
     home_assistant_callback_endpoint,
+)
+from .collector.transport_profile import (
+    collector_session_protocol_from_inventory_state,
+    normalize_collector_session_protocol,
 )
 from .connection.branch_registry import get_connection_branch, supported_connection_types
 from .connection.entry import (
@@ -133,6 +137,7 @@ from .collector.smartess_local import (
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
     SmartEssLocalSession,
+    parse_query_collector_response,
 )
 from .collector.smartess_ble import (
     BleakSmartEssBleScanner,
@@ -149,7 +154,10 @@ from .collector.smartess_ble import (
     parse_wifi_scan_response,
 )
 from .collector.at_runtime import query_runtime_collector_at_values
-from .collector.capabilities import parse_esp_collector_hardware_token
+from .collector.capabilities import (
+    collector_profile_entry_fields,
+    parse_esp_collector_hardware_token,
+)
 from .collector.parameter_registry import (
     COLLECTOR_PARAMETER_DEFINITION_BY_ID,
     query_runtime_collector_values,
@@ -166,7 +174,7 @@ from .metadata.local_metadata import (
 from .naming import installation_title
 from .metadata.profile_loader import load_driver_profile
 from .metadata.smartess_draft import resolve_smartess_known_family_draft_plan
-from .models import OnboardingResult
+from .models import CollectorCandidate, CollectorInfo, OnboardingResult
 from .onboarding.detection import DiscoveryTarget
 from .onboarding.factory import create_onboarding_manager
 from .onboarding.presentation import (
@@ -549,6 +557,38 @@ def _apply_device_catalog_metadata(
     data[CONF_DEVICE_CATALOG_ENTRY] = str(catalog.get("entry_key") or "")
 
 
+def _apply_collector_profile_metadata(
+    target: dict[str, Any],
+    result: OnboardingResult | None,
+) -> None:
+    """Persist normalized collector profile metadata into one entry payload."""
+
+    profile = _result_collector_capabilities(result)
+    hardware_version = ""
+    collector = getattr(result, "collector", None) if result is not None else None
+    collector_info = getattr(collector, "collector", None)
+    if collector_info is not None:
+        hardware_version = str(
+            getattr(collector_info, "collector_hardware_version", "") or ""
+        ).strip()
+    match = getattr(result, "match", None) if result is not None else None
+    details = getattr(match, "details", None)
+    if not hardware_version and isinstance(details, dict):
+        hardware_version = str(details.get("collector_hardware_version") or "").strip()
+    target.update(
+        collector_profile_entry_fields(
+            profile,
+            hardware_version=hardware_version,
+        )
+    )
+    if profile.virtual_bridge and collector_info is not None:
+        bridge_version = str(
+            getattr(collector_info, "collector_bridge_version", "") or ""
+        ).strip()
+        if bridge_version and not target.get("collector_bridge_version"):
+            target["collector_bridge_version"] = bridge_version
+
+
 def _result_is_virtual_bridge(result: OnboardingResult | None) -> bool:
     """Return True when an onboarding result positively identified an ESP bridge."""
 
@@ -566,7 +606,11 @@ def _result_collector_capabilities(
     collector_info = getattr(collector, "collector", None)
     match = getattr(result, "match", None)
     details = getattr(match, "details", None)
-    values = details if isinstance(details, dict) else {}
+    values = dict(details) if isinstance(details, dict) else {}
+    if match is not None:
+        values.setdefault("driver_key", getattr(match, "driver_key", ""))
+        values.setdefault("model_name", getattr(match, "model_name", ""))
+        values.setdefault("serial_number", getattr(match, "serial_number", ""))
     return collector_capability_profile_from_runtime(
         collector=collector_info,
         values=values,
@@ -1630,6 +1674,86 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             description_placeholders=self._welcome_description_placeholders(),
         )
 
+    @_with_translation_bundle
+    async def async_step_integration_discovery(
+        self,
+        discovery_info: dict[str, Any],
+    ) -> ConfigFlowResult:
+        """Handle a collector that dialed into the passive callback listener."""
+
+        await self._async_refresh_force_unsupported_override()
+        await self._async_ensure_network_defaults()
+
+        collector_pn = str(discovery_info.get(CONF_COLLECTOR_PN) or "").strip()
+        peer_ip = str(discovery_info.get("peer_ip") or "").strip()
+        tcp_port = int(discovery_info.get(CONF_TCP_PORT) or DEFAULT_TCP_PORT)
+        discovery_title = (
+            f"Collector PN {collector_pn}"
+            if collector_pn
+            else f"Collector {peer_ip}" if peer_ip else "EyeBond collector"
+        )
+        self.context["title_placeholders"] = {"name": discovery_title}
+        if collector_pn:
+            await self.async_set_unique_id(f"collector:{collector_pn}")
+            abort = self._abort_if_unique_id_configured()
+            if abort is not None:
+                return abort
+        self._auto_config = {
+            **self._auto_connection_defaults(),
+            CONF_CONNECTION_TYPE: CONNECTION_TYPE_EYBOND,
+            CONF_SERVER_IP: self._local_ip,
+            CONF_TCP_PORT: tcp_port,
+        }
+
+        if not collector_pn or not peer_ip:
+            return self.async_abort(reason="already_configured")
+
+        protocol_shape = str(discovery_info.get("protocol_shape") or "").strip().lower()
+        collector_session_protocol = normalize_collector_session_protocol(
+            discovery_info.get("collector_session_protocol")
+        ) or collector_session_protocol_from_inventory_state(
+            state=discovery_info.get("session_state"),
+            protocol_shape=protocol_shape,
+        )
+        candidates = [
+            OnboardingResult(
+                connection_type=CONNECTION_TYPE_EYBOND,
+                connection_mode="callback_listener",
+                collector=CollectorCandidate(
+                    target_ip=self._local_ip,
+                    source="callback_listener",
+                    ip=peer_ip,
+                    session_protocol=collector_session_protocol,
+                    connected=True,
+                    collector=CollectorInfo(collector_pn=collector_pn),
+                ),
+                next_action="manual_driver_selection",
+                last_error="collector_detected_without_driver",
+            )
+        ]
+
+        candidates = [
+            result
+            for result in self._collapse_scan_results(candidates)
+            if self._is_addable_scan_result(result)
+            if self._existing_entry_for_result(result) is None
+        ]
+        if not candidates:
+            return self.async_abort(reason="already_configured")
+
+        self._autodetect_results = {
+            str(index): result
+            for index, result in enumerate(self._sort_scan_results(candidates))
+        }
+        if len(self._autodetect_results) > 1:
+            return await self.async_step_scan_results()
+
+        self._set_selected_result(next(iter(self._autodetect_results.values())))
+        self._detection_summary_context = "auto"
+        if self._selected_result_needs_driver_choice():
+            return await self.async_step_driver_choice()
+        return await self.async_step_detection_summary()
+
     # ---- step: collector_network ----
 
     @_with_translation_bundle
@@ -1968,6 +2092,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
             driver_hint=DRIVER_HINT_AUTO,
         )
+        passive_results = await self._async_passive_scan_results(
+            detector,
+            discovery_targets=discovery_targets,
+        )
+        if any(
+            self._is_addable_scan_result(result)
+            and self._existing_entry_for_result(result) is None
+            for result in passive_results
+        ):
+            self._scan_progress_stage = "finalizing"
+            self._autodetect_results = {
+                str(index): result
+                for index, result in enumerate(self._sort_scan_results(passive_results))
+            }
+            self.async_update_progress(1.0)
+            return
+
         skip_probe_ips = self._configured_collector_probe_skip_ips()
         try:
             async with _async_timeout(scan_timeout):
@@ -2008,7 +2149,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         await asyncio.sleep(0.08)
         visible_results = self._collapse_scan_results(
             result
-            for result in results
+            for result in (*passive_results, *results)
             if self._is_visible_scan_result(result)
         )
 
@@ -2038,6 +2179,29 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._manual_defaults = self._build_manual_defaults(effective_input, best_result)
         self.async_update_progress(1.0)
         await asyncio.sleep(0.12)
+
+    async def _async_passive_scan_results(
+        self,
+        detector: Any,
+        *,
+        discovery_targets: Sequence[Any],
+    ) -> list[OnboardingResult]:
+        passive_detect = getattr(detector, "async_passive_detect", None)
+        if not callable(passive_detect):
+            return []
+        try:
+            results = await passive_detect(
+                discovery_targets=discovery_targets,
+                settle_timeout=0.05,
+            )
+        except Exception as exc:
+            logger.debug("Passive callback scan failed: %s", exc)
+            return []
+        return self._collapse_scan_results(
+            result
+            for result in results
+            if self._is_visible_scan_result(result)
+        )
 
     # ---- step: scan_results ----
 
@@ -2374,6 +2538,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "The device was identified by its protocol driver. The standard "
                 "sensor set for this driver will be added.",
             )
+        elif self._result_is_passive_callback(result):
+            headline = self._tr(
+                "common.dynamic.detection_tier_passive_callback_headline",
+                "Collector connected",
+            )
+            details = self._tr(
+                "common.dynamic.detection_tier_passive_callback_details",
+                "This collector is already connecting to Home Assistant. The setup "
+                "wizard will add it as a callback-connected device; inverter "
+                "detection will continue after the entry is created and the "
+                "runtime owns this session.\n\n"
+                "If an inverter is connected, sensors and controls may appear a "
+                "little later after the first successful runtime detection cycle.",
+            )
         else:
             headline = self._tr(
                 "common.dynamic.detection_tier_unidentified_headline",
@@ -2490,7 +2668,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if self._selected_result is None:
             return await self.async_step_auto()
 
-        await self._async_refresh_selected_result_collector_capabilities()
+        if not self._selected_result_is_passive_callback():
+            await self._async_refresh_selected_result_collector_capabilities()
 
         # First add is intentionally not the place to choose Cloud+HA vs HA-only.
         # Discovery evidence can be partial at this point, especially for local
@@ -2512,12 +2691,21 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 self._confirm_poll_interval_pending_input = dict(flat_input)
                 self._confirm_poll_interval_pending_step_id = step_id
                 return await self.async_step_confirm_poll_interval()
-            if is_bridge:
+            if self._selected_result_is_passive_callback():
+                mode = COLLECTOR_OPERATION_HA_ONLY
+            elif is_bridge:
                 mode = COLLECTOR_OPERATION_HA_ONLY
             else:
                 # Ignore any stale/hidden operation-mode value posted by an old
                 # form. The mode can be changed later in the options flow.
                 mode = self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
+            if (
+                mode == COLLECTOR_OPERATION_HA_ONLY
+                and self._selected_result_is_passive_callback()
+            ):
+                self._collector_operation_mode = mode
+                self._collector_endpoint_bind_applied = True
+                return await self._async_create_entry_from_result(flat_input)
             if mode == COLLECTOR_OPERATION_HA_ONLY and not self._collector_endpoint_bind_applied:
                 self._collector_operation_mode = mode
                 self._reset_collector_endpoint_binding_state()
@@ -2756,21 +2944,45 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
 
         connection_type = result.connection_type or self._current_connection_type()
+        collector_capabilities = _result_collector_capabilities(result)
+        result_connection_mode = str(result.connection_mode or "").strip()
+        is_passive_callback = result_connection_mode == "callback_listener"
+        is_callback_listener = bool(
+            is_passive_callback
+            or (
+                self._collector_endpoint_bind_applied
+                and (
+                    collector_capabilities.ha_only_required
+                    or self._collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
+                )
+            )
+        )
+        durable_collector_ip = (
+            ""
+            if is_passive_callback and collector_pn
+            else collector_ip or self._auto_config.get(CONF_COLLECTOR_IP, "")
+        )
+        connection_overrides = dict(self._auto_config)
+        if is_passive_callback and collector_pn:
+            connection_overrides.pop(CONF_COLLECTOR_IP, None)
         connection_settings = with_driver_hint(
             build_detected_entry_settings(
                 connection_type,
                 server_ip=self._auto_config[CONF_SERVER_IP],
-                collector_ip=collector_ip or self._auto_config.get(CONF_COLLECTOR_IP, ""),
+                collector_ip=durable_collector_ip,
                 default_broadcast=_compute_broadcast_24(self._auto_config[CONF_SERVER_IP]),
-                overrides=self._auto_config,
+                overrides=connection_overrides,
             ),
             driver_hint=driver_hint,
         )
-        collector_capabilities = _result_collector_capabilities(result)
+        if is_callback_listener:
+            stored_connection_mode = "callback_listener"
+        else:
+            stored_connection_mode = "known_ip" if collector_ip else result_connection_mode
         data = {
             CONF_CONNECTION_TYPE: connection_type,
             **connection_settings,
-            CONF_CONNECTION_MODE: "known_ip" if collector_ip else result.connection_mode,
+            CONF_CONNECTION_MODE: stored_connection_mode,
             CONF_CONTROL_MODE: DEFAULT_CONTROL_MODE,
             CONF_COLLECTOR_OPERATION_MODE: (
                 COLLECTOR_OPERATION_HA_ONLY
@@ -2782,9 +2994,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             CONF_DETECTED_MODEL: result.match.model_name if result.match is not None else "",
             CONF_DETECTED_SERIAL: result.match.serial_number if result.match is not None else "",
         }
+        if result.collector is not None:
+            collector_session_protocol = normalize_collector_session_protocol(
+                getattr(result.collector, "session_protocol", "") or ""
+            )
+            if collector_session_protocol:
+                data["collector_session_protocol"] = collector_session_protocol
         if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
             data["collector_bridge_kind"] = "esp-collector"
+        _apply_collector_profile_metadata(data, result)
         _apply_smartess_detection_metadata(data, result)
         _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
@@ -2803,6 +3022,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
             ),
         }
+        _apply_collector_profile_metadata(options, result)
         remembered_endpoint = str(self._collector_original_server_endpoint or "").strip()
         target_endpoint = str(self._collector_target_server_endpoint or self._collector_callback_target_endpoint()).strip()
         if (
@@ -2813,13 +3033,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             original_endpoint_options = self._collector_original_endpoint_options(
                 remembered_endpoint
             )
-            options.update(original_endpoint_options)
-            with suppress(Exception):
-                await self._async_remember_collector_original_endpoint_in_registry(
-                    collector_pn=collector_pn,
-                    endpoint=remembered_endpoint,
-                    options=original_endpoint_options,
-                )
+            if not collector_capabilities.virtual_bridge:
+                options.update(original_endpoint_options)
+                with suppress(Exception):
+                    await self._async_remember_collector_original_endpoint_in_registry(
+                        collector_pn=collector_pn,
+                        endpoint=remembered_endpoint,
+                        options=original_endpoint_options,
+                    )
         return self.async_create_entry(
             title=title,
             data=data,
@@ -2832,6 +3053,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         result: OnboardingResult | None = None,
     ) -> ConfigFlowResult:
         result = result or self._manual_result
+        result = await self._async_enrich_manual_pending_collector_profile(
+            user_input,
+            result,
+        )
         if result is not None:
             existing_entry = self._existing_entry_for_result(result)
             if existing_entry is not None:
@@ -2864,13 +3089,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             server_ip=str(user_input.get(CONF_SERVER_IP, "")),
             discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
         )
+        if not (collector_pn or detected_serial) and collector_ip:
+            existing_pending_entry = self._existing_pending_entry_for_collector_ip(
+                collector_ip
+            )
+            if existing_pending_entry is not None:
+                return self.async_abort(reason="already_configured")
 
         unique_id = (
             f"collector:{collector_pn}"
             if collector_pn
             else f"inverter:{detected_serial}"
             if detected_serial
-            else f"manual:{collector_ip}"
+            else self._manual_pending_unique_id(user_input, collector_ip)
             if collector_ip
             else f"listener:{user_input[CONF_SERVER_IP]}:{user_input[CONF_TCP_PORT]}"
         )
@@ -2915,6 +3146,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if collector_capabilities.virtual_bridge:
             data["collector_virtual_bridge"] = True
             data["collector_bridge_kind"] = "esp-collector"
+        _apply_collector_profile_metadata(data, result)
         _apply_smartess_detection_metadata(data, result)
         _apply_collector_cloud_family_metadata(data, result)
         _apply_device_catalog_metadata(data, result)
@@ -2928,7 +3160,111 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 else DEFAULT_COLLECTOR_OPERATION_MODE
             ),
         }
+        _apply_collector_profile_metadata(options, result)
         return self.async_create_entry(title=title, data=data, options=options)
+
+    async def _async_enrich_manual_pending_collector_profile(
+        self,
+        user_input: dict[str, Any],
+        result: OnboardingResult | None,
+    ) -> OnboardingResult | None:
+        """Resolve collector profile before creating a manual/pending entry.
+
+        Manual probing may time out at inverter detection while the collector is
+        still reachable.  Entity platforms are created immediately after entry
+        creation, so collector kind must be resolved here instead of waiting for
+        runtime cleanup.  The only positive bridge signal accepted here is the
+        hardware-version token read via FC=2 parameter 6.
+        """
+
+        if _result_collector_capabilities(result).virtual_bridge:
+            return result
+
+        collector_ip = str(user_input.get(CONF_COLLECTOR_IP, "") or "").strip()
+        if result is not None and result.collector is not None:
+            collector_ip = str(result.collector.ip or collector_ip).strip()
+        collector_ip = _sanitize_pending_collector_ip(
+            collector_ip,
+            server_ip=str(user_input.get(CONF_SERVER_IP, "")),
+            discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
+        )
+        if not collector_ip:
+            return result
+
+        request_timeout = min(
+            float(user_input.get("request_timeout", DEFAULT_REQUEST_TIMEOUT) or DEFAULT_REQUEST_TIMEOUT),
+            4.0,
+        )
+        transport = SharedCollectorAtTransport(
+            host="0.0.0.0",
+            port=int(user_input.get(CONF_TCP_PORT, DEFAULT_TCP_PORT) or DEFAULT_TCP_PORT),
+            request_timeout=request_timeout,
+            collector_ip=collector_ip,
+            collector_pn=self._collector_pn_for_result(result) if result is not None else "",
+        )
+        try:
+            await transport.start()
+            async with _async_timeout(request_timeout + 1.0):
+                _header, payload = await transport.async_query_bridge_hardware_version()
+            response = parse_query_collector_response(payload)
+        except Exception as exc:
+            logger.debug(
+                "Manual pending collector profile probe failed collector_ip=%s error=%s",
+                collector_ip,
+                exc,
+            )
+            return result
+        finally:
+            with suppress(Exception):
+                await transport.stop()
+
+        if response.code != 0 or response.parameter != QUERY_HARDWARE_VERSION:
+            return result
+        hardware_version = str(response.text or "").strip().strip("\x00")
+        token = parse_esp_collector_hardware_token(hardware_version)
+        if not token.is_bridge:
+            return result
+
+        collector_candidate = result.collector if result is not None else None
+        if collector_candidate is None:
+            collector_candidate = CollectorCandidate(
+                target_ip=collector_ip,
+                source="manual_profile_probe",
+                ip=collector_ip,
+                connected=True,
+                collector=CollectorInfo(remote_ip=collector_ip),
+            )
+        collector_info = collector_candidate.collector
+        if collector_info is None:
+            collector_info = CollectorInfo(remote_ip=collector_ip)
+            collector_candidate.collector = collector_info
+        collector_info.collector_virtual_bridge = True
+        collector_info.collector_bridge_kind = "esp-collector"
+        if token.version:
+            collector_info.collector_bridge_version = token.version
+        if not collector_candidate.ip:
+            collector_candidate.ip = collector_ip
+        if not collector_candidate.target_ip:
+            collector_candidate.target_ip = collector_ip
+        collector_candidate.connected = True
+
+        if result is None:
+            result = OnboardingResult(
+                collector=collector_candidate,
+                connection_type=self._current_connection_type(),
+                connection_mode="manual",
+                next_action="create_pending_entry",
+                last_error="manual_collector_profile_resolved",
+            )
+        elif result.collector is None:
+            result = replace(result, collector=collector_candidate)
+
+        logger.info(
+            "Resolved manual pending collector %s as ESP EyeBond bridge via hardware token %s",
+            collector_ip,
+            hardware_version,
+        )
+        return result
 
     # ---- probe ----
 
@@ -2947,6 +3283,26 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         collector_ip = user_input.get(CONF_COLLECTOR_IP, "")
         discovery_target = "" if collector_ip else user_input.get(CONF_DISCOVERY_TARGET, "")
+        passive_detect = getattr(detector, "async_passive_detect", None)
+        if callable(passive_detect):
+            try:
+                passive_results = await passive_detect(
+                    collector_ip=collector_ip,
+                    discovery_target=discovery_target,
+                    settle_timeout=0.05,
+                )
+            except Exception as exc:
+                logger.debug("Manual passive callback detection failed: %s", exc)
+                passive_results = ()
+            passive_candidates = [
+                result
+                for result in self._collapse_scan_results(passive_results)
+                if self._is_addable_scan_result(result)
+                if self._existing_entry_for_result(result) is None
+            ]
+            if len(passive_candidates) == 1:
+                return passive_candidates[0]
+
         try:
             async with _async_timeout(_MANUAL_PROBE_TIMEOUT):
                 results = await detector.async_auto_detect(
@@ -3445,6 +3801,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return ""
         return str(result.collector.ip or result.collector.target_ip or "").strip()
 
+    def _selected_result_is_passive_callback(self) -> bool:
+        result = self._selected_result
+        if result is None:
+            return False
+        return self._result_is_passive_callback(result)
+
+    @staticmethod
+    def _result_is_passive_callback(result: OnboardingResult) -> bool:
+        collector = result.collector
+        return bool(
+            result.connection_mode == "callback_listener"
+            or (collector is not None and collector.source == "callback_listener")
+        )
+
     def _selected_result_needs_runtime_details(self, result: OnboardingResult) -> bool:
         """Return whether the selected auto-detected result is still missing confirm-time details."""
 
@@ -3500,6 +3870,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return
         if selected_result not in self._autodetect_results.values():
             return
+        if self._selected_result_is_passive_callback():
+            return
 
         self._selected_result_runtime_details_attempted = True
         if not self._selected_result_needs_runtime_details(selected_result):
@@ -3553,6 +3925,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         selected_result = self._selected_result
         if selected_result is None or selected_result.collector is None:
+            return
+        if self._selected_result_is_passive_callback():
             return
         if self._selected_result_collector_capabilities_attempted:
             return
@@ -3732,6 +4106,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> None:
         """Persist the original collector endpoint outside the config entry."""
 
+        if self._selected_result_is_virtual_bridge():
+            return
         normalized_pn = str(collector_pn or "").strip()
         normalized_endpoint = str(endpoint or "").strip()
         if not normalized_pn or not normalized_endpoint:
@@ -5380,6 +5756,25 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     {"peer_label": self._peer_label()},
                 )
             )
+            if self._result_is_passive_callback(result):
+                collector_identity = (
+                    f"PN {self._collector_pn_for_result(result)}"
+                    if self._collector_pn_for_result(result)
+                    else self._tr(
+                        "common.dynamic.incoming_collector",
+                        "incoming collector",
+                    )
+                )
+                return self._tr(
+                    "common.dynamic.result_label_incoming_unmatched",
+                    "{status_label}: {collector_identity} ({suffix}; connection from {peer_ip})",
+                    {
+                        "status_label": status_label,
+                        "collector_identity": collector_identity,
+                        "suffix": suffix,
+                        "peer_ip": collector_ip,
+                    },
+                )
             return self._tr(
                 "common.dynamic.result_label_unmatched",
                 "{status_label}: {collector_ip} ({suffix})",
@@ -5521,37 +5916,45 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 ),
             ],
         )
-        inverter_confirm_table = self._onboarding_confirm_table(
-            "common.dynamic.onboarding_confirm_inverter_heading",
-            "**Inverter**",
-            [
-                (
-                    "common.dynamic.onboarding_confirm_model_label",
-                    "Model",
-                    match.model_name if match is not None else self._unconfirmed_inverter_label(),
-                ),
-                (
-                    "common.dynamic.onboarding_confirm_rated_power_label",
-                    "Rated Power",
-                    rated_power,
-                ),
-                (
-                    "common.dynamic.onboarding_confirm_serial_number_label",
-                    "Serial Number",
-                    match.serial_number if match is not None else not_available_yet,
-                ),
-                (
-                    "common.dynamic.onboarding_confirm_detection_confidence_label",
-                    "Detection Confidence",
-                    self._confidence_label(result.confidence),
-                ),
-                (
-                    "common.dynamic.onboarding_confirm_protocol_family_label",
-                    "Protocol Family",
-                    match.protocol_family if match is not None and match.protocol_family else not_available_yet,
-                ),
-            ],
-        )
+        if match is None and self._result_is_passive_callback(result):
+            inverter_confirm_table = self._tr(
+                "common.dynamic.onboarding_confirm_inverter_pending_after_add",
+                "**Inverter**\n\nThe collector is already connected to Home Assistant. "
+                "The inverter model and entities will be detected after this entry "
+                "is created and the runtime takes ownership of the incoming session.",
+            )
+        else:
+            inverter_confirm_table = self._onboarding_confirm_table(
+                "common.dynamic.onboarding_confirm_inverter_heading",
+                "**Inverter**",
+                [
+                    (
+                        "common.dynamic.onboarding_confirm_model_label",
+                        "Model",
+                        match.model_name if match is not None else self._unconfirmed_inverter_label(),
+                    ),
+                    (
+                        "common.dynamic.onboarding_confirm_rated_power_label",
+                        "Rated Power",
+                        rated_power,
+                    ),
+                    (
+                        "common.dynamic.onboarding_confirm_serial_number_label",
+                        "Serial Number",
+                        match.serial_number if match is not None else not_available_yet,
+                    ),
+                    (
+                        "common.dynamic.onboarding_confirm_detection_confidence_label",
+                        "Detection Confidence",
+                        self._confidence_label(result.confidence),
+                    ),
+                    (
+                        "common.dynamic.onboarding_confirm_protocol_family_label",
+                        "Protocol Family",
+                        match.protocol_family if match is not None and match.protocol_family else not_available_yet,
+                    ),
+                ],
+            )
         return {
             "model_name": match.model_name if match is not None else self._unconfirmed_inverter_label(),
             "serial_number": match.serial_number if match is not None else not_available_yet,
@@ -5562,7 +5965,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             "collector_confirm_table": collector_confirm_table,
             "inverter_confirm_table": inverter_confirm_table,
             "smartess_cloud_summary": self._smartess_cloud_summary(result),
-            "control_summary": self._default_control_summary(result.confidence),
+            "control_summary": (
+                self._default_control_summary(result.confidence)
+                if result.confidence == "high"
+                else ""
+            ),
         }
 
     def _confidence_label(self, confidence: str) -> str:
@@ -5598,6 +6005,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else f"listener:{server_ip}:{DEFAULT_TCP_PORT}"
         )
 
+    def _manual_pending_unique_id(
+        self,
+        user_input: dict[str, Any],
+        collector_ip: str,
+    ) -> str:
+        """Return a pending-entry unique id that does not alias NAT peers.
+
+        A manual/pending collector may not have PN/serial yet.  Using only the
+        collector IP as unique_id breaks valid topologies where several
+        collectors dial Home Assistant from behind the same NAT.  The first live
+        refresh persists the real PN when it becomes available; until then the
+        pending id is just an entry placeholder and must be unique per entry,
+        not per remote public IP.
+        """
+
+        server_ip = str(user_input.get(CONF_SERVER_IP, "") or "").strip()
+        tcp_port = str(user_input.get(CONF_TCP_PORT, DEFAULT_TCP_PORT) or DEFAULT_TCP_PORT).strip()
+        base = f"manual_pending:{server_ip}:{tcp_port}:{collector_ip}"
+        existing_ids = {
+            str(getattr(entry, "unique_id", "") or "").strip()
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            if entry.entry_id != self.context.get("entry_id")
+        }
+        if base not in existing_ids:
+            return base
+        index = 2
+        while f"{base}:{index}" in existing_ids:
+            index += 1
+        return f"{base}:{index}"
+
     def _configured_collector_probe_skip_ips(self) -> frozenset[str]:
         """Collector IPs owned by existing entries: scans must not probe them.
 
@@ -5620,20 +6057,59 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collector_ip = collector.ip if collector is not None else ""
         serial_number = result.match.serial_number if result.match is not None else ""
         candidate_unique_id = self._result_unique_id(result)
+        candidate_has_strong_identity = bool(collector_pn or serial_number)
 
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if entry.entry_id == self.context.get("entry_id"):
                 continue
-            if entry.unique_id and entry.unique_id == candidate_unique_id:
-                return entry
             entry_collector_pn = entry.data.get(CONF_COLLECTOR_PN, "")
             entry_serial = entry.data.get(CONF_DETECTED_SERIAL, "")
             entry_collector_ip = entry.data.get(CONF_COLLECTOR_IP, "")
+            entry_has_strong_identity = bool(entry_collector_pn or entry_serial)
+            if entry.unique_id and entry.unique_id == candidate_unique_id:
+                if (
+                    not candidate_has_strong_identity
+                    and entry_has_strong_identity
+                    and (
+                        candidate_unique_id.startswith("collector_ip:")
+                        or candidate_unique_id.startswith("manual:")
+                        or candidate_unique_id.startswith("manual_pending:")
+                    )
+                ):
+                    continue
+                return entry
             if collector_pn and _collector_identity_matches(entry_collector_pn, collector_pn):
                 return entry
             if serial_number and entry_serial == serial_number:
                 return entry
-            if not collector_pn and not serial_number and collector_ip and entry_collector_ip == collector_ip:
+            if (
+                not candidate_has_strong_identity
+                and collector_ip
+                and entry_collector_ip == collector_ip
+                and not entry_has_strong_identity
+            ):
+                return entry
+        return None
+
+    def _existing_pending_entry_for_collector_ip(self, collector_ip: str):
+        """Return a same-IP pending entry only when it has no durable identity.
+
+        Once an existing entry has PN or inverter serial, the shared NAT IP is
+        no longer sufficient to claim a newly added pending collector.
+        """
+
+        collector_ip = str(collector_ip or "").strip()
+        if not collector_ip:
+            return None
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id == self.context.get("entry_id"):
+                continue
+            entry_collector_ip = str(entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
+            if entry_collector_ip != collector_ip:
+                continue
+            entry_collector_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
+            entry_serial = str(entry.data.get(CONF_DETECTED_SERIAL, "") or "").strip()
+            if not (entry_collector_pn or entry_serial):
                 return entry
         return None
 
@@ -5971,6 +6447,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         existing_entry = self._existing_entry_for_result(result)
         collector_pn = self._collector_pn_for_result(result)
         status_label = self._result_status_label(result, existing_entry is not None)
+        is_passive_callback = self._result_is_passive_callback(result)
 
         status_code = scan_result_status_code(result, existing_entry is not None)
         if result.match is not None:
@@ -5979,8 +6456,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             confidence = confidence[:1].lower() + confidence[1:]
             details = [
                 result.match.model_name or self._unconfirmed_inverter_label(),
-                f"{self._peer_label()} {collector_ip}",
             ]
+            if is_passive_callback:
+                details.append(
+                    self._tr(
+                        "common.dynamic.scan_line_connection_from",
+                        "connection from {peer_ip}",
+                        {"peer_ip": collector_ip},
+                    )
+                )
+            else:
+                details.append(f"{self._peer_label()} {collector_ip}")
             if result.match.serial_number:
                 details.append(
                     self._tr(
@@ -5995,9 +6481,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             # The status chip already names the situation (SmartESS hint,
             # collector connected, already added, ...): the details carry only
             # what the chip does not say.
-            details = [f"{self._peer_label()} {collector_ip}"]
+            details = []
             if collector_pn:
                 details.append(f"PN {collector_pn}")
+            if is_passive_callback:
+                details.append(
+                    self._tr(
+                        "common.dynamic.scan_line_connection_from",
+                        "connection from {peer_ip}",
+                        {"peer_ip": collector_ip},
+                    )
+                )
+            else:
+                details.append(f"{self._peer_label()} {collector_ip}")
             if (
                 status_code not in ("smartess_hint", "already_added")
                 and has_smartess_collector_hint(result)

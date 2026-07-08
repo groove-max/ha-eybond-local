@@ -45,6 +45,13 @@
       "3": "PV Only",
       "4": "PV Priority With Load Reserve"
     },
+    "secondary_charging_priority": {
+      "0": "Off",
+      "1": "PV Priority",
+      "2": "PV and Utility",
+      "3": "PV Only",
+      "4": "PV Priority With Load Reserve"
+    },
     "input_mode": {
       "0": "APL",
       "1": "UPS",
@@ -248,6 +255,10 @@
         "decimals": 2
       },
       {
+        "key": "op2_overload_alarm_setting",
+        "register": 608
+      },
+      {
         "key": "battery_type",
         "register": 630,
         "enum_table": "battery_type"
@@ -264,6 +275,11 @@
         "enum_table": "charge_source_priority"
       },
       {
+        "key": "secondary_charging_priority",
+        "register": 633,
+        "enum_table": "secondary_charging_priority"
+      },
+      {
         "key": "battery_bulk_voltage",
         "register": 637,
         "divisor": 10,
@@ -276,6 +292,10 @@
         "decimals": 1
       },
       {
+        "key": "constant_voltage_to_float_wait_time",
+        "register": 639
+      },
+      {
         "key": "max_charge_current",
         "register": 640,
         "divisor": 10,
@@ -286,6 +306,10 @@
         "register": 641,
         "divisor": 10,
         "decimals": 1
+      },
+      {
+        "key": "max_discharge_current_protection",
+        "register": 642
       },
       {
         "key": "battery_redischarge_voltage",
@@ -312,6 +336,10 @@
       {
         "key": "solar_battery_utility_return_soc_threshold",
         "register": 648
+      },
+      {
+        "key": "op1_offgrid_soc_protection_value",
+        "register": 649
       },
       {
         "key": "low_dc_cutoff_soc",

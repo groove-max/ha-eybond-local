@@ -636,7 +636,8 @@ def _has_confirmed_local_metadata_proof(
     profile_source_scope: str,
     schema_source_scope: str,
 ) -> bool:
-    return profile_source_scope == "builtin" and schema_source_scope == "builtin"
+    trusted_scopes = {"builtin", "external"}
+    return profile_source_scope in trusted_scopes and schema_source_scope in trusted_scopes
 
 
 def _is_family_fallback_variant(*, variant_key: str, profile_name: str) -> bool:

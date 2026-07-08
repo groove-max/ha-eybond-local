@@ -93,7 +93,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_anj_11kw` → surface `anenji_anj_11kw_full` (driver modbus_smg, variant anenji_anj_11kw_48v_wifi_p)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 32768, rated —)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json | Schema: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json
-      - Capabilities: 47 (tested 47); support tiers: conditional 37, standard 10 | Telemetry: 122 measurements, 18 binary sensors
+      - Capabilities: 52 (tested 52); support tiers: conditional 42, standard 10 | Telemetry: 122 measurements, 18 binary sensors
 - Known limitations: —
 - Evidence: 3 source(s)
 
@@ -210,7 +210,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `lvyuan_ty_sic_3_6kbe_w1` → surface `eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1` (driver eybond_g_ascii, variant lvyuan_ty_sic_3_6kbe_w1)
       - Protocol: eybond_g_ascii | Detection: anchors (protocol.protocol_id=EYBOND_G_ASCII; rating.output_voltage=220; rating.output_current=16; rating.battery_voltage=24; rating.frequency=50; firmware.software_version=4.003)
       - Tier: full | Read-only: no | Profile: eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json | Schema: eybond_g_ascii/base.json
-      - Capabilities: 34 (tested 12, untested 22); support tiers: conditional 34 | Telemetry: 104 measurements, 3 binary sensors
+      - Capabilities: 34 (tested 34); support tiers: conditional 34 | Telemetry: 104 measurements, 3 binary sensors
 - Known limitations:
   - Control support is partial: the exposed write surface is the cloud-known user settings set, not the full manufacturer/MCU register map.
   - Commercial model name is still user-reported, while runtime binding uses the offline F/SVFW fingerprint.

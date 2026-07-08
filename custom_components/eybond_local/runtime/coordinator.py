@@ -12,6 +12,7 @@ import logging
 import math
 from pathlib import Path
 import socket
+from types import SimpleNamespace
 from typing import Any
 
 from homeassistant.components import persistent_notification
@@ -43,9 +44,13 @@ from ..collector.cloud_family import (
 from ..collector.capabilities import (
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
+    collector_profile_entry_fields,
 )
 from ..collector.transport_profile import (
+    CollectorTransportProfile,
+    EYBOND_FRAMED_RUNTIME_OWNER_KEYS,
     collector_cloud_family_from_entry_context,
+    normalize_collector_session_protocol,
     resolve_collector_transport_profile,
 )
 from ..metadata.collector_cloud_profile_catalog_loader import (
@@ -127,7 +132,7 @@ from ..metadata.local_metadata import (
     create_local_schema_draft,
     rollback_local_metadata_overrides,
 )
-from ..metadata.profile_loader import builtin_base_profile_name
+from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
 from ..metadata.register_schema_loader import builtin_base_schema_name
 from ..naming import collector_display_name
 from ..metadata.smartess_draft import (
@@ -140,7 +145,13 @@ from ..metadata.smartess_smg_bridge import (
     create_smartess_smg_bridge_draft,
     resolve_smartess_smg_bridge_plan,
 )
-from ..models import CapabilityPreset, RuntimeSnapshot, WriteCapability
+from ..models import (
+    CapabilityPreset,
+    DetectedInverter,
+    ProbeTarget,
+    RuntimeSnapshot,
+    WriteCapability,
+)
 from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
@@ -229,6 +240,8 @@ _DEFAULT_PROXY_CAPTURE_PORT = 18899
 _COLLECTOR_HA_PRIMARY_RECONCILE_COOLDOWN_SECONDS = 300.0
 _EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY = "effective_metadata_snapshot"
 _UNSUPPORTED_COMMANDS_OPTION_KEY = "driver_unsupported_commands"
+_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY = "driver_unsupported_commands_version"
+_UNSUPPORTED_COMMANDS_OPTION_VERSION = 2
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
 _POLL_INTERVAL_MIN_SECONDS = 2
 _POLL_INTERVAL_MAX_SECONDS = 3600
@@ -833,12 +846,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if callable(set_connection_watcher):
             set_connection_watcher(self._on_collector_connection_established)
         persisted_unsupported = entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_KEY)
+        persisted_unsupported_version = entry.options.get(
+            _UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY
+        )
         set_unsupported = getattr(
             self._runtime,
             "set_persistent_unsupported_commands",
             None,
         )
-        if callable(set_unsupported) and isinstance(persisted_unsupported, (list, tuple)):
+        if (
+            callable(set_unsupported)
+            and persisted_unsupported_version == _UNSUPPORTED_COMMANDS_OPTION_VERSION
+            and isinstance(persisted_unsupported, (list, tuple))
+        ):
             set_unsupported(tuple(persisted_unsupported))
         super().__init__(
             hass,
@@ -881,6 +901,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._proxy_trace_download_details: tuple[str, str] = ("", "")
         self._proxy_capture_deadline_refresh_handle = None
         self._suppress_entry_reload_count = 0
+        if (
+            persisted_unsupported is not None
+            and persisted_unsupported_version != _UNSUPPORTED_COMMANDS_OPTION_VERSION
+        ):
+            options = dict(self.config_entry.options)
+            options.pop(_UNSUPPORTED_COMMANDS_OPTION_KEY, None)
+            options.pop(_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY, None)
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                options=options,
+            )
+            logger.info(
+                "Discarded stale unsupported inverter command cache for this device; "
+                "commands will be rechecked on the current transport."
+            )
         self._ha_primary_reconcile_last_signature: tuple[str, str] = ("", "")
         self._ha_primary_reconcile_last_attempt_monotonic = 0.0
         self._collector_operation_pending_target_endpoint = ""
@@ -922,6 +957,234 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             policy=poll_policy_for_driver(self._poll_scheduler_driver_key),
             mode=self._configured_poll_mode(),
             manual_interval=self._configured_poll_interval_seconds(),
+        )
+        self._seed_runtime_from_persisted_inverter_metadata()
+
+    def prime_startup_snapshot(self) -> bool:
+        """Seed coordinator data from persisted entry metadata without network I/O.
+
+        Home Assistant setup should not wait for a full inverter detection pass
+        just to create collector/runtime entities. This lightweight snapshot
+        provides stable collector identity and an explicit detection-pending
+        state; the ordinary background refresh will replace it with live data.
+        """
+
+        existing_snapshot = self.data if isinstance(self.data, RuntimeSnapshot) else None
+        inverter = self._prime_startup_inverter_from_persisted_metadata()
+        if (
+            existing_snapshot is not None
+            and existing_snapshot.values
+            and (existing_snapshot.inverter is not None or inverter is None)
+        ):
+            return False
+
+        connection = self._connection_spec
+        persisted_capabilities = collector_capability_profile_from_runtime(
+            data=dict(self.config_entry.data or {}),
+            options=dict(self.config_entry.options or {}),
+        )
+        persisted_bridge_version = str(
+            self.config_entry.options.get(
+                "collector_bridge_version",
+                self.config_entry.data.get("collector_bridge_version", ""),
+            )
+            or ""
+        ).strip()
+        collector = SimpleNamespace(
+            remote_ip=str(getattr(connection, "collector_ip", "") or ""),
+            collector_pn=str(getattr(connection, "collector_pn", "") or ""),
+            profile_name="",
+            smartess_protocol_name="",
+            smartess_protocol_asset_name="",
+            smartess_collector_version="",
+            collector_cloud_family=str(
+                getattr(connection, "collector_cloud_family", "") or ""
+            ),
+            collector_virtual_bridge=persisted_capabilities.virtual_bridge,
+            collector_bridge_kind=(
+                "esp-collector" if persisted_capabilities.virtual_bridge else ""
+            ),
+            collector_bridge_version=persisted_bridge_version,
+        )
+        values: dict[str, object] = dict(getattr(existing_snapshot, "values", {}) or {})
+        values.update({
+            "connection_type": self.config_entry.data.get(
+                CONF_CONNECTION_TYPE,
+                "eybond",
+            ),
+            "collector_operation_mode": self.collector_operation_mode,
+            "control_mode": self.control_mode,
+            "detection_confidence": self.detection_confidence,
+            "runtime_driver_state": _RUNTIME_DRIVER_STATE_DRIVER_UNBOUND,
+            "runtime_detection_status": "detecting_inverter",
+            "collector_poll_context": _COLLECTOR_POLL_CONTEXT_DETECTION,
+            "collector_poll_mode": self._configured_poll_mode(),
+            "collector_poll_current_interval_seconds": self._configured_poll_interval_seconds(),
+            "collector_poll_interval_configured_seconds": self._configured_poll_interval_seconds(),
+            "collector_poll_manual_interval_seconds": self._configured_poll_interval_seconds(),
+            "collector_poll_duration_ms": 0,
+            "collector_poll_utilization_percent": 0,
+            "collector_poll_recommended_min_interval_seconds": self._configured_poll_interval_seconds(),
+            "last_error": "startup_detection_pending",
+        })
+        connection_mode = self.config_entry.data.get(CONF_CONNECTION_MODE, "")
+        if connection_mode:
+            values["connection_mode"] = connection_mode
+        if collector.remote_ip:
+            values["collector_remote_ip"] = collector.remote_ip
+            values["configured_collector_ip"] = collector.remote_ip
+        if collector.collector_pn:
+            values["collector_pn"] = collector.collector_pn
+        if collector.collector_cloud_family:
+            values["collector_cloud_family"] = collector.collector_cloud_family
+        if collector.collector_virtual_bridge:
+            values["collector_virtual_bridge"] = True
+            values["collector_bridge_kind"] = "esp-collector"
+            if collector.collector_bridge_version:
+                values["collector_bridge_version"] = collector.collector_bridge_version
+
+        endpoint = str(
+            self.config_entry.options.get(
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+                self.config_entry.data.get("collector_server_endpoint", ""),
+            )
+            or ""
+        ).strip()
+        if not endpoint and getattr(connection, "server_ip", ""):
+            endpoint = format_runtime_collector_server_endpoint(
+                server_host=getattr(connection, "effective_advertised_server_ip", "")
+                or getattr(connection, "server_ip", ""),
+                server_port=getattr(connection, "effective_advertised_tcp_port", 0)
+                or getattr(connection, "tcp_port", DEFAULT_COLLECTOR_SERVER_PORT),
+                server_protocol=DEFAULT_COLLECTOR_SERVER_PROTOCOL,
+            )
+        if endpoint:
+            values["collector_server_endpoint"] = endpoint
+
+        snapshot = RuntimeSnapshot(
+            connected=True,
+            collector=collector,
+            inverter=inverter,
+            values=values,
+        )
+        try:
+            snapshot.last_error = "startup_detection_pending"
+        except Exception:
+            pass
+        self.data = snapshot
+        self._cached_effective_metadata = None
+        return True
+
+    def _seed_runtime_from_persisted_inverter_metadata(self) -> None:
+        """Pass a confirmed persisted inverter binding into the runtime manager."""
+
+        inverter = self._prime_startup_inverter_from_persisted_metadata()
+        if inverter is None:
+            return
+        driver_key = str(getattr(inverter, "driver_key", "") or "").strip()
+        if not driver_key:
+            return
+        try:
+            driver = get_driver(driver_key)
+        except KeyError:
+            return
+        setter = getattr(self._runtime, "set_initial_inverter_binding", None)
+        if callable(setter):
+            setter(driver, inverter)
+
+    def _prime_startup_inverter_from_persisted_metadata(self) -> DetectedInverter | None:
+        """Build a lightweight inverter identity from persisted metadata, if available.
+
+        Entity platforms are constructed once during setup. When startup uses a
+        collector-only primed snapshot, writable capability entities would be
+        skipped until a later entry reload. If the entry already carries a
+        confirmed inverter identity/effective metadata from an earlier runtime
+        detection, expose that metadata immediately without waiting for network I/O.
+        The live refresh replaces this lightweight object with the real probe
+        result.
+        """
+
+        detected_model = str(
+            self.config_entry.data.get(CONF_DETECTED_MODEL) or ""
+        ).strip()
+        detected_serial = str(
+            self.config_entry.data.get(CONF_DETECTED_SERIAL) or ""
+        ).strip()
+        if not (detected_model or detected_serial):
+            return None
+
+        snapshot = self.effective_metadata_snapshot
+        profile_name = str(getattr(snapshot, "profile_name", "") or "").strip()
+        register_schema_name = str(
+            getattr(snapshot, "register_schema_name", "") or ""
+        ).strip()
+        variant_key = str(getattr(snapshot, "variant_key", "") or "default").strip()
+
+        driver_key = str(
+            self.config_entry.options.get(
+                CONF_DRIVER_HINT,
+                self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+            )
+            or ""
+        ).strip()
+        driver = None
+        if driver_key and driver_key != DRIVER_HINT_AUTO:
+            try:
+                driver = get_driver(driver_key)
+            except KeyError:
+                driver = None
+        if driver is None and profile_name:
+            try:
+                profile = load_driver_profile(profile_name)
+            except Exception:
+                profile = None
+            if profile is not None:
+                driver_key = str(getattr(profile, "driver_key", "") or "").strip()
+                try:
+                    driver = get_driver(driver_key) if driver_key else None
+                except KeyError:
+                    driver = None
+        if driver is None:
+            return None
+
+        if not profile_name:
+            profile_name = str(getattr(driver, "profile_name", "") or "").strip()
+        if not register_schema_name:
+            register_schema_name = str(
+                getattr(driver, "register_schema_name", "") or ""
+            ).strip()
+
+        try:
+            profile = load_driver_profile(profile_name)
+        except Exception:
+            return None
+
+        probe_targets = tuple(getattr(driver, "probe_targets", ()) or ())
+        probe_target = (
+            probe_targets[0]
+            if probe_targets
+            else ProbeTarget(devcode=0, collector_addr=0, device_addr=0)
+        )
+        return DetectedInverter(
+            driver_key=str(getattr(driver, "key", "") or driver_key),
+            protocol_family=str(
+                getattr(profile, "protocol_family", "")
+                or getattr(driver, "key", "")
+                or driver_key
+            ),
+            model_name=detected_model,
+            serial_number=detected_serial,
+            probe_target=probe_target,
+            variant_key=variant_key or "default",
+            details={
+                "runtime_detection_status": "startup_persisted_identity",
+                "detection_confidence": self.detection_confidence,
+            },
+            profile_name=profile_name,
+            register_schema_name=register_schema_name,
+            capability_groups=tuple(getattr(profile, "groups", ()) or ()),
+            capabilities=tuple(getattr(profile, "capabilities", ()) or ()),
+            capability_presets=tuple(getattr(profile, "presets", ()) or ()),
         )
 
     @property
@@ -1050,9 +1313,31 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         async with self._shutdown_lock:
             if self._shutdown_complete:
                 return
+            self._shutdown_complete = True
             await self._async_cancel_diagnostic_run()
             await self._support_package_flight.cancel()
             self._cancel_proxy_capture_deadline_refresh()
+            set_snapshot_observer = getattr(
+                self._runtime,
+                "set_runtime_snapshot_observer",
+                None,
+            )
+            if callable(set_snapshot_observer):
+                set_snapshot_observer(None)
+            set_overlay_applier = getattr(
+                self._runtime,
+                "set_inverter_overlay_applier",
+                None,
+            )
+            if callable(set_overlay_applier):
+                set_overlay_applier(None)
+            set_connection_watcher = getattr(
+                self._runtime,
+                "set_collector_connection_watcher",
+                None,
+            )
+            if callable(set_connection_watcher):
+                set_connection_watcher(None)
             try:
                 await self.async_stop_shadow_learning(
                     reason="shutdown",
@@ -1067,7 +1352,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 )
             await self._async_stop_proxy_capture_process(force=True)
             await self._runtime.async_stop()
-            self._shutdown_complete = True
         # Base-class teardown (debouncer shutdown, unschedule refresh) must
         # run too, or a queued request_refresh can still drive a poll against
         # the stopped link.
@@ -1521,6 +1805,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self.hass.config_entries.async_reload(self.config_entry.entry_id)
         )
 
+    def _request_entry_reload_for_collector_capability_change(self) -> None:
+        """Reload once when collector kind changes after entity platforms loaded."""
+
+        if not getattr(self, "_entity_platforms_initialized", False):
+            return
+        if getattr(self, "_entity_platform_reload_requested", False):
+            return
+        self._entity_platform_reload_requested = True
+        logger.info(
+            "Reloading EyeBond entry %s after collector capability profile changed",
+            self.config_entry.entry_id,
+        )
+        self.hass.async_create_task(
+            self.hass.config_entries.async_reload(self.config_entry.entry_id)
+        )
+
     def _cancel_proxy_capture_deadline_refresh(self) -> None:
         """Cancel one scheduled deadline-triggered refresh if it exists."""
 
@@ -1628,32 +1928,34 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if options.get(CONF_COLLECTOR_OPERATION_MODE) != COLLECTOR_OPERATION_HA_ONLY:
             options[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
             changed = True
-        if capabilities.virtual_bridge and not data.get("collector_virtual_bridge"):
-            data["collector_virtual_bridge"] = True
-            changed = True
-        if capabilities.virtual_bridge and not options.get("collector_virtual_bridge"):
-            options["collector_virtual_bridge"] = True
-            changed = True
-        if capabilities.virtual_bridge and data.get("collector_bridge_kind") != "esp-collector":
-            data["collector_bridge_kind"] = "esp-collector"
-            changed = True
-        if capabilities.virtual_bridge and options.get("collector_bridge_kind") != "esp-collector":
-            options["collector_bridge_kind"] = "esp-collector"
-            changed = True
         if capabilities.virtual_bridge:
+            hardware_version = str(
+                self.data.values.get("collector_hardware_version")
+                or ""
+            ).strip()
+            profile_fields = collector_profile_entry_fields(
+                capabilities,
+                hardware_version=hardware_version,
+            )
             bridge_version = str(
                 getattr(self.data.collector, "collector_bridge_version", "")
                 or self.data.values.get("collector_bridge_version")
+                or profile_fields.get("collector_bridge_version")
                 or ""
             ).strip()
-            if bridge_version and data.get("collector_bridge_version") != bridge_version:
-                data["collector_bridge_version"] = bridge_version
-                changed = True
-            if bridge_version and options.get("collector_bridge_version") != bridge_version:
-                options["collector_bridge_version"] = bridge_version
-                changed = True
+            if bridge_version:
+                profile_fields["collector_bridge_version"] = bridge_version
+            for key, value in profile_fields.items():
+                if data.get(key) != value:
+                    data[key] = value
+                    changed = True
+                if options.get(key) != value:
+                    options[key] = value
+                    changed = True
         if changed:
             self._async_update_entry_without_reload(data=data, options=options)
+            if capabilities.virtual_bridge:
+                self._request_entry_reload_for_collector_capability_change()
 
     def _collector_is_virtual_bridge(self) -> bool:
         """Return True when the running collector is a detected virtual bridge.
@@ -1872,6 +2174,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> None:
         """Restore preserved original endpoint options from the PN registry when absent."""
 
+        if self.collector_capabilities.virtual_bridge:
+            return
         if self._normalized_remembered_collector_server_endpoint():
             return
         collector_pn = self._preferred_collector_pn(snapshot)
@@ -1939,6 +2243,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> None:
         """Persist the original endpoint in the collector PN registry when possible."""
 
+        if self.collector_capabilities.virtual_bridge:
+            return
         collector_pn = self._preferred_collector_pn(snapshot)
         if not collector_pn:
             return
@@ -1994,7 +2300,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         collector = snapshot.collector
         collector_ip = str(getattr(collector, "remote_ip", "") or "").strip()
-        if collector_ip and not str(updated_data.get(CONF_COLLECTOR_IP) or "").strip():
+        connection_mode = str(current_data.get(CONF_CONNECTION_MODE) or "").strip()
+        if (
+            collector_ip
+            and connection_mode != "callback_listener"
+            and not str(updated_data.get(CONF_COLLECTOR_IP) or "").strip()
+        ):
             updated_data[CONF_COLLECTOR_IP] = collector_ip
 
         collector_cloud_family = _known_collector_cloud_family(
@@ -2119,7 +2430,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 ),
             )
 
-        if updated_data == current_data and updated_options == current_options:
+        current_unique_id = str(getattr(self.config_entry, "unique_id", "") or "").strip()
+        updated_unique_id = ""
+        if collector_pn and current_unique_id.startswith("collector:"):
+            current_unique_pn = current_unique_id.split(":", 1)[1]
+            if current_unique_pn != collector_pn:
+                updated_unique_id = f"collector:{collector_pn}"
+
+        if (
+            updated_data == current_data
+            and updated_options == current_options
+            and not updated_unique_id
+        ):
             return
 
         current_title = str(self.config_entry.title or "").strip()
@@ -2147,6 +2469,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             update_kwargs["data"] = updated_data
         if updated_options != current_options:
             update_kwargs["options"] = updated_options
+        if updated_unique_id:
+            update_kwargs["unique_id"] = updated_unique_id
         if (
             updated_title
             and updated_title != current_title
@@ -2301,8 +2625,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 "restoring",
             }:
                 return
-            target_endpoint = self.proxy_capture_upstream_endpoint
+            target_endpoint = self.collector_server_endpoint_rollback_target
             if not target_endpoint:
+                snapshot.values[
+                    "collector_operation_endpoint_sync_status"
+                ] = "original_endpoint_unknown"
                 return
 
         target_parts = self._endpoint_effective_parts(target_endpoint)
@@ -3029,7 +3356,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if command.strip()
         )
         stored = self.config_entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_KEY)
-        if isinstance(stored, (list, tuple)) and sorted(stored) == commands:
+        stored_version = self.config_entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY)
+        if (
+            stored_version == _UNSUPPORTED_COMMANDS_OPTION_VERSION
+            and isinstance(stored, (list, tuple))
+            and sorted(stored) == commands
+        ):
             return
         set_unsupported = getattr(
             self._runtime,
@@ -3040,6 +3372,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             set_unsupported(tuple(commands))
         options = dict(self.config_entry.options)
         options[_UNSUPPORTED_COMMANDS_OPTION_KEY] = commands
+        options[_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY] = (
+            _UNSUPPORTED_COMMANDS_OPTION_VERSION
+        )
         self._async_update_entry_without_reload(options=options)
         logger.info(
             "Persisted unsupported inverter commands for this device: %s",
@@ -3053,7 +3388,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if callable(clear_cache):
             clear_cache()
         options = dict(self.config_entry.options)
-        if options.pop(_UNSUPPORTED_COMMANDS_OPTION_KEY, None) is not None:
+        removed_commands = options.pop(_UNSUPPORTED_COMMANDS_OPTION_KEY, None) is not None
+        removed_version = (
+            options.pop(_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY, None) is not None
+        )
+        if removed_commands or removed_version:
             self._async_update_entry_without_reload(options=options)
         await self.async_request_refresh()
 
@@ -3072,6 +3411,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)
             if snapshot.connected and runtime_driver_state == _RUNTIME_DRIVER_STATE_DRIVER_BOUND:
                 return
+        invalidator = getattr(self._runtime, "invalidate_collector_runtime_values", None)
+        if callable(invalidator):
+            invalidator()
         logger.debug(
             "Collector connection from %s while not bound; requesting immediate refresh",
             remote_ip,
@@ -3081,6 +3423,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _publish_runtime_intermediate_snapshot(self, snapshot: RuntimeSnapshot) -> None:
         """Publish collector state while the runtime is still probing the inverter."""
 
+        if getattr(self, "_shutdown_complete", False):
+            return
         snapshot.values["connection_type"] = self.config_entry.data.get(
             CONF_CONNECTION_TYPE,
             "eybond",
@@ -4360,11 +4704,82 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def collector_transport_profile(self):
         """Return the resolved callback transport profile for this runtime."""
 
-        return resolve_collector_transport_profile(
+        resolved = resolve_collector_transport_profile(
             cloud_family=self.collector_cloud_family,
             runtime_owner_key=self._collector_runtime_owner_key(),
             virtual_bridge=self._collector_is_virtual_bridge(),
         )
+        observed_protocol = self._observed_collector_session_protocol()
+        if not observed_protocol or observed_protocol == resolved.session_protocol:
+            return resolved
+        if resolved.runtime_owner_key in EYBOND_FRAMED_RUNTIME_OWNER_KEYS:
+            return resolved
+        if (
+            resolved.session_protocol == "at_text"
+            and resolved.raw_passthrough_frame_format == "transparent"
+            and observed_protocol == "eybond_framed"
+        ):
+            return resolved
+        if observed_protocol == "at_text":
+            return CollectorTransportProfile(
+                cloud_family=resolved.cloud_family,
+                runtime_owner_key=resolved.runtime_owner_key,
+                session_protocol="at_text",
+                identity_strategy="at_dtupn",
+                raw_passthrough_bootstrap="uart_write_same_value",
+                raw_passthrough_frame_format="transparent",
+                raw_passthrough_min_interval_ms=resolved.raw_passthrough_min_interval_ms,
+            )
+        if observed_protocol == "eybond_framed":
+            return CollectorTransportProfile(
+                cloud_family=resolved.cloud_family,
+                runtime_owner_key=resolved.runtime_owner_key,
+                session_protocol="eybond_framed",
+                identity_strategy="framed_heartbeat_then_fc2_pn",
+                raw_passthrough_bootstrap="",
+                raw_passthrough_frame_format="",
+                raw_passthrough_min_interval_ms=0,
+            )
+        return resolved
+
+    def _observed_collector_session_protocol(self) -> str:
+        """Return a positive callback-session protocol observed from this entry.
+
+        Live callback inventory is stronger than cloud-family/profile fallback:
+        the same ESP bridge can transport either framed FC traffic or raw
+        AT/ASCII passthrough depending on the inverter behind it.
+        """
+
+        runtime = getattr(self, "_runtime", None)
+        link_diagnostics = getattr(runtime, "listener_diagnostics", None)
+        if callable(link_diagnostics):
+            try:
+                diagnostics = link_diagnostics()
+            except Exception:  # pragma: no cover - defensive runtime inspection
+                diagnostics = {}
+            protocol = normalize_collector_session_protocol(
+                diagnostics.get("collector_callback_session_protocol")
+            )
+            if protocol:
+                return protocol
+
+        values = getattr(self.data, "values", {})
+        if isinstance(values, Mapping):
+            for key in (
+                "collector_callback_session_protocol",
+                "collector_runtime_link_session_protocol",
+                "collector_session_protocol",
+            ):
+                protocol = normalize_collector_session_protocol(values.get(key))
+                if protocol:
+                    return protocol
+        for source in (self.config_entry.options, self.config_entry.data):
+            protocol = normalize_collector_session_protocol(
+                source.get("collector_session_protocol")
+            )
+            if protocol:
+                return protocol
+        return ""
 
     def _collector_runtime_owner_key(self) -> str:
         """Return the best known local inverter runtime owner for transport choice."""
@@ -6518,6 +6933,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _publish_tooling_values(self, **values: Any) -> None:
         """Publish in-memory tooling results into coordinator snapshot values."""
 
+        if getattr(self, "_shutdown_complete", False):
+            return
         self._tooling_values.update(values)
         snapshot = self.data
         snapshot.values.update(self._tooling_values)
@@ -6528,6 +6945,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _publish_snapshot_values(self, **values: Any) -> None:
         """Publish transient runtime values into the live coordinator snapshot only."""
 
+        if getattr(self, "_shutdown_complete", False):
+            return
         snapshot = self.data
         for key, value in values.items():
             if value is None:
@@ -7015,7 +7434,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         manufacturer = "OEM / EyeBond"
         configuration_url = ""
-        is_virtual_bridge = bool(getattr(collector, "collector_virtual_bridge", False))
+        profile = collector_capability_profile_from_runtime(
+            collector=collector,
+            values=values if isinstance(values, dict) else {},
+            data=dict(getattr(self.config_entry, "data", {}) or {}),
+            options=dict(getattr(self.config_entry, "options", {}) or {}),
+        )
+        is_virtual_bridge = profile.virtual_bridge
 
         if collector is not None:
             if collector_type:
@@ -7037,7 +7462,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             # talks to the SmartESS cloud, so its parsed semver is authoritative.
             manufacturer = "ESP EyeBond Collector (community)"
             model = "ESP EyeBond Collector"
-            bridge_version = str(getattr(collector, "collector_bridge_version", "") or "").strip()
+            bridge_version = str(
+                getattr(collector, "collector_bridge_version", "")
+                or values.get("collector_bridge_version")
+                or self.config_entry.options.get("collector_bridge_version")
+                or self.config_entry.data.get("collector_bridge_version")
+                or ""
+            ).strip()
             if bridge_version:
                 sw_version = bridge_version
             configuration_url = "https://github.com/groove-max/esp-eybond-collector"

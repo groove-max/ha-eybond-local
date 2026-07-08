@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.collector.capabilities import (  # noqa: E402
     COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
     COLLECTOR_KIND_FACTORY_EYBOND,
+    COLLECTOR_KIND_UNKNOWN,
     EspCollectorHardwareToken,
     collector_capability_profile,
     collector_capability_profile_from_runtime,
@@ -91,7 +92,7 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         self.assertTrue(profile.virtual_bridge)
         self.assertTrue(profile.uart_runtime_speed_change)
 
-    def test_collector_pn_alone_keeps_factory_capabilities(self) -> None:
+    def test_collector_pn_alone_keeps_unknown_capabilities(self) -> None:
         profile = collector_capability_profile_from_runtime(
             collector=types.SimpleNamespace(
                 collector_virtual_bridge=False,
@@ -103,7 +104,29 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         )
 
         self.assertFalse(profile.virtual_bridge)
+        self.assertEqual(profile.collector_kind, COLLECTOR_KIND_UNKNOWN)
+        self.assertFalse(profile.proxy_capture)
+
+    def test_persisted_inverter_identity_keeps_factory_capabilities(self) -> None:
+        profile = collector_capability_profile_from_runtime(
+            data={"detected_model": "SMG 6200"},
+            options={},
+        )
+
+        self.assertFalse(profile.virtual_bridge)
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_FACTORY_EYBOND)
+        self.assertTrue(profile.proxy_capture)
+
+    def test_runtime_driver_key_without_inverter_identity_stays_unknown(self) -> None:
+        profile = collector_capability_profile_from_runtime(
+            values={"driver_key": "auto"},
+            data={},
+            options={},
+        )
+
+        self.assertFalse(profile.virtual_bridge)
+        self.assertEqual(profile.collector_kind, COLLECTOR_KIND_UNKNOWN)
+        self.assertFalse(profile.proxy_capture)
 
 
 if __name__ == "__main__":

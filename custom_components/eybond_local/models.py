@@ -517,6 +517,7 @@ class CollectorCandidate:
     target_ip: str
     source: str
     ip: str = ""
+    session_protocol: str = ""
     udp_reply: str = ""
     udp_reply_from: str = ""
     connected: bool = False

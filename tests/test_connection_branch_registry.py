@@ -37,7 +37,7 @@ if __name__ == "__main__":
     unittest.main()
 
 class VirtualBridgeTransportProfileTests(unittest.TestCase):
-    def test_virtual_bridge_entry_is_always_framed(self) -> None:
+    def test_virtual_bridge_entry_with_smartess_at_family_uses_at_text_until_owner_is_known(self) -> None:
         from custom_components.eybond_local.collector.transport_profile import (
             resolve_collector_transport_profile_from_entry_context,
         )
@@ -51,11 +51,8 @@ class VirtualBridgeTransportProfileTests(unittest.TestCase):
             {},
         )
 
-        # The bridge answers SmartESS-style metadata, but its session is the
-        # framed FC protocol - an at_text profile would route every driver
-        # probe into the AT transport (unsupported_link_route).
-        self.assertEqual(profile.session_protocol, "eybond_framed")
-        self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
+        self.assertEqual(profile.session_protocol, "at_text")
+        self.assertEqual(profile.identity_strategy, "at_dtupn")
 
     def test_factory_smartess_at_family_keeps_at_text_session(self) -> None:
         from custom_components.eybond_local.collector.transport_profile import (
@@ -68,4 +65,3 @@ class VirtualBridgeTransportProfileTests(unittest.TestCase):
         )
 
         self.assertNotEqual(profile.session_protocol, "eybond_framed")
-

@@ -26,12 +26,16 @@ from ..collector_endpoint import (
     inspect_collector_server_endpoint,
     normalize_collector_server_endpoint as normalize_runtime_collector_server_endpoint,
 )
-from ..collector.parameter_registry import query_runtime_collector_values
+from ..collector.parameter_registry import (
+    COLLECTOR_PARAMETER_DEFINITION_BY_ID,
+    query_runtime_collector_values,
+)
 from ..collector.smartess_local import (
     QUERY_REBOOT_REQUIRED,
     SET_REBOOT_OR_APPLY,
     SET_SERVER_ENDPOINT,
     SmartEssLocalSession,
+    parse_query_collector_response,
 )
 from ..drivers.base import InverterDriver
 from ..drivers.command_support import (
@@ -498,6 +502,7 @@ class EybondHub:
         self._persistent_unsupported_commands: tuple[str, ...] = ()
         self._collector_runtime_values: dict[str, object] = {}
         self._collector_runtime_last_refresh_monotonic = 0.0
+        self._collector_fc_bootstrap_last_attempt_monotonic = 0.0
         self._collector_at_runtime_values: dict[str, object] = {}
         self._collector_at_runtime_last_refresh_monotonic = 0.0
         self._collector_at_runtime_last_attempt_monotonic = 0.0
@@ -523,6 +528,9 @@ class EybondHub:
     async def async_stop(self) -> None:
         """Stop discovery and the active runtime link."""
 
+        self._snapshot_observer = None
+        self._inverter_overlay_applier = None
+        self.set_collector_connection_watcher(None)
         await self._link_manager.async_stop()
 
     async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
@@ -560,6 +568,20 @@ class EybondHub:
         if callable(diagnostics):
             return dict(diagnostics())
         return {}
+
+    def set_initial_inverter_binding(
+        self,
+        driver: InverterDriver,
+        inverter: DetectedInverter,
+    ) -> None:
+        """Seed runtime polling from persisted high-confidence inverter metadata."""
+
+        if self._driver is not None or self._inverter is not None:
+            return
+        self._driver = driver
+        self._inverter = inverter
+        self._reset_runtime_read_state()
+        self._write_blockers.clear()
 
     def set_inverter_overlay_applier(
         self, applier: Callable[[DetectedInverter, Any], DetectedInverter] | None
@@ -851,11 +873,12 @@ class EybondHub:
 
         collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
         _mark_refresh_phase("collector_metadata")
-        self._publish_intermediate_snapshot(
-            collector_values,
-            status="detecting_inverter" if self._driver is None or self._inverter is None else "",
-        )
-        _mark_refresh_phase("intermediate_snapshot")
+        if self._driver is None or self._inverter is None:
+            self._publish_intermediate_snapshot(
+                collector_values,
+                status="detecting_inverter",
+            )
+            _mark_refresh_phase("intermediate_snapshot")
 
         if self._driver is None or self._inverter is None:
             detect_error = await self._async_detect_driver()
@@ -1054,6 +1077,49 @@ class EybondHub:
                 round((asyncio.get_running_loop().time() - fc_query_started) * 1000.0)
             )
 
+        at_fc_bootstrap_available = (
+            not fc_transport_available
+            and at_transport is not None
+            and hasattr(at_transport, "async_query_bridge_hardware_version")
+            and (
+                getattr(at_transport, "connected", False)
+                or allow_disconnected_at_query
+            )
+        )
+        fc_bootstrap_due = (
+            now_monotonic - self._collector_fc_bootstrap_last_attempt_monotonic
+            >= refresh_interval
+        )
+        if (
+            at_fc_bootstrap_available
+            and "collector_hardware_version" not in self._collector_runtime_values
+            and (force_refresh or fc_bootstrap_due)
+        ):
+            self._collector_fc_bootstrap_last_attempt_monotonic = now_monotonic
+            fc_query_started = asyncio.get_running_loop().time()
+            try:
+                _header, payload = await at_transport.async_query_bridge_hardware_version()
+                response = parse_query_collector_response(payload)
+                values = {}
+                if response.code == 0 and response.parameter == 6:
+                    decoder = COLLECTOR_PARAMETER_DEFINITION_BY_ID[6].decode
+                    if decoder is not None:
+                        values = decoder(response)
+            except Exception as exc:
+                logger.debug("Collector bridge hardware-version bootstrap query failed: %s", exc)
+            else:
+                if values:
+                    self._collector_runtime_values.update(values)
+                    self._collector_runtime_read_fresh = True
+                    record_command_success(
+                        self._runtime_read_state,
+                        "collector:fc_metadata_bootstrap",
+                    )
+            self._collector_metadata_fc_last_ms = max(
+                self._collector_metadata_fc_last_ms,
+                int(round((asyncio.get_running_loop().time() - fc_query_started) * 1000.0)),
+            )
+
         at_values_stale = (
             not self._collector_at_runtime_values
             or now_monotonic - self._collector_at_runtime_last_refresh_monotonic >= refresh_interval
@@ -1105,6 +1171,7 @@ class EybondHub:
     def _clear_collector_runtime_value_caches(self) -> None:
         self._collector_runtime_values.clear()
         self._collector_runtime_last_refresh_monotonic = 0.0
+        self._collector_fc_bootstrap_last_attempt_monotonic = 0.0
         self._collector_at_runtime_values.clear()
         self._collector_at_runtime_last_refresh_monotonic = 0.0
         self._collector_at_runtime_last_attempt_monotonic = 0.0
@@ -1187,15 +1254,12 @@ class EybondHub:
     ) -> None:
         """Publish known collector state before a potentially slow inverter probe."""
 
+        if not str(status or "").strip():
+            return
         if self._snapshot_observer is None:
             return
         snapshot = self._build_snapshot(
-            extra_values=(
-                {**collector_values, "runtime_detection_status": status}
-                if status
-                else dict(collector_values)
-            ),
-            preserve_inverter_values=not bool(status),
+            extra_values={**collector_values, "runtime_detection_status": status},
         )
         self._last_snapshot = snapshot
         try:

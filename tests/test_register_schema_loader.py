@@ -388,6 +388,26 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
             schema.binary_sensor_descriptions,
         )
 
+    def test_anenji_11kw_schema_exposes_confirmed_shadow_learned_control_values(self) -> None:
+        schema = load_register_schema("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+
+        config_specs = {spec.key: spec for spec in schema.spec_set("config")}
+        self.assertEqual(config_specs["op2_overload_alarm_setting"].register, 608)
+        self.assertEqual(config_specs["secondary_charging_priority"].register, 633)
+        self.assertEqual(
+            config_specs["secondary_charging_priority"].enum_map,
+            {
+                0: "Off",
+                1: "PV Priority",
+                2: "PV and Utility",
+                3: "PV Only",
+                4: "PV Priority With Load Reserve",
+            },
+        )
+        self.assertEqual(config_specs["constant_voltage_to_float_wait_time"].register, 639)
+        self.assertEqual(config_specs["max_discharge_current_protection"].register, 642)
+        self.assertEqual(config_specs["op1_offgrid_soc_protection_value"].register, 649)
+
     def test_pi30_driver_uses_loaded_register_schema(self) -> None:
         schema = load_register_schema("pi30_ascii/models/smartess_0925_compat.json")
         driver = Pi30Driver()
