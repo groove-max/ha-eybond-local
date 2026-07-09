@@ -1140,10 +1140,17 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
     def test_inbound_sends_zero_udp_triggers(self) -> None:
         manager = self._manager(callback_on_demand=False)
         manager._transport = _FakeTransport(connected=False, connect_result=True)  # type: ignore[assignment]
+        # Start from a clean announcer: an inbound connect must not produce a
+        # "Collector UDP Reply From" as a side effect (it never sends UDP).
+        manager._announcer.last_reply = ""
+        manager._announcer.last_reply_from = ""
         ok, probe = self._run_connect(manager)
         self.assertTrue(ok)
         self.assertEqual(probe.await_count, 0)
         self.assertEqual(manager._callback_trigger_count, 0)
+        # No UDP was sent, so no UDP reply is captured or surfaced.
+        self.assertEqual(manager._announcer.last_reply_from, "")
+        self.assertEqual(manager._announcer.last_reply, "")
 
     def test_callback_on_demand_sends_one_trigger_then_times_out(self) -> None:
         manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
