@@ -58,6 +58,40 @@ CALLBACK_STATE_LISTENER_ERROR = "callback_listener_error"
 # polling interval -- exactly one datagram is sent per connect attempt.
 _CALLBACK_TRIGGER_TIMEOUT = 0.75
 
+# Actionable, user-facing explanations for each typed callback outcome. Surfaced
+# in listener diagnostics / support packages so a failed callback is explainable
+# rather than a generic "collector offline". Kept provider/hostname-neutral.
+_CALLBACK_STATE_MESSAGES: dict[str, str] = {
+    CALLBACK_STATE_CONNECTED: "The collector connected to Home Assistant.",
+    CALLBACK_STATE_TIMEOUT: (
+        "Home Assistant asked the collector to connect but it did not call back "
+        "in time. Check the network path, the endpoint the collector points at, "
+        "and any firewall between the collector and Home Assistant."
+    ),
+    CALLBACK_STATE_IDENTITY_MISMATCH: (
+        "A collector connected, but it is a different collector than this entry "
+        "expects. Check that the correct collector is being targeted."
+    ),
+    CALLBACK_STATE_CLAIMED_BY_OTHER: (
+        "This collector is already bound to another Home Assistant entry. Remove "
+        "the duplicate entry so only one owns this collector."
+    ),
+    CALLBACK_STATE_LISTENER_UNAVAILABLE: (
+        "The Home Assistant listener that receives collector connections is not "
+        "ready yet. It usually recovers on its own shortly."
+    ),
+    CALLBACK_STATE_LISTENER_ERROR: (
+        "The Home Assistant listener that receives collector connections failed "
+        "to start. Check the diagnostics for the listener error detail."
+    ),
+}
+
+
+def _callback_state_message(state: str) -> str:
+    """Return an actionable user-facing message for one typed callback state."""
+
+    return _CALLBACK_STATE_MESSAGES.get(str(state or "").strip(), "")
+
 
 @dataclass(frozen=True, slots=True)
 class RouteLease:
@@ -987,6 +1021,9 @@ class EybondRuntimeLinkManager:
             "collector_callback_trigger_count": self._callback_trigger_count,
             "collector_callback_state": self._last_callback_state,
             "collector_callback_state_detail": self._last_callback_detail,
+            "collector_callback_state_message": _callback_state_message(
+                self._last_callback_state
+            ),
         }
 
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:

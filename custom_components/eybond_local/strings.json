@@ -119,12 +119,10 @@
         "title": "Confirm Detection",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
-          "collector_operation_mode": "Collector operating mode",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
@@ -133,12 +131,10 @@
         "title": "Confirm Detection",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
-          "collector_operation_mode": "Collector operating mode",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
@@ -325,13 +321,17 @@
         "data": {
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
+          "connection_strategy": "How the collector connects",
+          "proxy_enabled": "Proxy the collector's cloud traffic",
           "collector_operation_mode": "Collector operation mode",
           "control_mode": "Control mode"
         },
         "data_description": {
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
-          "collector_operation_mode": "SmartESS + HA keeps the collector visible in the SmartESS app while Home Assistant also talks to it locally. Home Assistant only makes that collector reconnect to Home Assistant.",
+          "connection_strategy": "\"Collector connects to Home Assistant on its own\" if the collector already points at Home Assistant — no callback is sent. \"Ask the collector to connect when needed\" sends the collector one connection request per attempt; use this for a collector that normally talks to its cloud.",
+          "proxy_enabled": "Forward the collector's connection to its upstream cloud in addition to Home Assistant. Only available on collectors that support it.",
+          "collector_operation_mode": "Legacy compatibility setting kept for migration. The connection strategy above is the primary choice.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
         },
         "sections": {
@@ -633,7 +633,7 @@
         }
       },
       "rollback_collector_server_endpoint": {
-        "name": "Restore SmartESS access",
+        "name": "Restore previous collector endpoint",
         "state_attributes": {
           "action_summary": {
             "name": "Action summary"

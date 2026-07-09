@@ -29,29 +29,59 @@ After the device is added, you can change the collector Wi-Fi from the collector
 
 If you change the collector network and it receives a new IP address, removing and adding the integration again can be the simplest way to pick up the new address cleanly.
 
-## Collector operation mode
+## How the collector connects
 
-The most important collector setting is **Collector Operation Mode**.
+The main collector setting is **How the collector connects** (the connection
+strategy). It only decides how Home Assistant gets the collector's connection —
+it does not, by itself, change anything on the collector.
 
-### `Cloud + HA`
+### Collector connects to Home Assistant on its own
 
-Choose this when you still want to use the vendor app, such as SmartESS / SmartValue.
+Choose this when the collector already points at Home Assistant (for example an
+ESP bridge, or a collector you have already redirected).
 
-- the collector stays visible to the vendor app
-- Home Assistant still talks to the inverter locally
-- this is the recommended default for most users
+- Home Assistant just waits for the collector to connect
+- Home Assistant sends **no** connection request over the network
 
-### `HA only`
+### Ask the collector to connect when needed
 
-Choose this when you want that collector to talk only to Home Assistant.
+Choose this for a collector that normally talks to its vendor cloud.
 
-- the collector reconnects to Home Assistant only
-- the vendor app will no longer show live data for that collector while this mode is active
-- this is the right choice when you want a fully local day-to-day setup
+- when Home Assistant needs the collector, it sends it **one** connection
+  request per attempt (no constant background traffic)
+- the collector can stay usable in the vendor app
 
-You can change the mode later from **Connection and polling**. Initial setup
-keeps this choice out of the confirm step because collector capabilities and
-cloud endpoint details are safer to read after the device exists.
+### Changing where the collector points (endpoint actions)
+
+Pointing a collector at Home Assistant, or restoring its previous server, are
+**separate, explicit actions**, kept apart from the strategy above:
+
+- **Write Home Assistant endpoint to collector** — tells the collector to
+  connect to this Home Assistant. After a successful write, the collector
+  connects to Home Assistant on its own and Home Assistant remembers the
+  previous server so it can be restored later.
+- **Restore previous collector endpoint** — puts the collector's server back to
+  what it was before, and hands control of that endpoint back to you.
+
+You can change the strategy later from **Connection and polling**. Initial setup
+keeps these choices out of the confirm step because collector capabilities and
+endpoint details are safer to read after the device exists.
+
+> The older **Collector Operation Mode** (Cloud+HA / HA-only) is kept only as a
+> compatibility/migration setting. Use the connection strategy and the endpoint
+> actions above instead.
+
+### When the collector does not call back
+
+If you use *Ask the collector to connect when needed* and the collector never
+appears, the diagnostics report a clear reason:
+
+- **callback timeout** — the collector did not answer in time. Check the network
+  path, the server the collector points at, and any firewall in between.
+- **identity mismatch** — a *different* collector answered. Check you are
+  targeting the right collector.
+- **already bound to another entry** — this collector is already owned by
+  another Home Assistant entry; remove the duplicate.
 
 <p align="center"><img src="images/settings.png" alt="EyeBond Local configuration menu" width="480"></p>
 
@@ -59,9 +89,9 @@ cloud endpoint details are safer to read after the device exists.
 
 ## Control mode is a different setting
 
-Do not confuse **Collector Operation Mode** with **Control Mode**.
+Do not confuse **How the collector connects** with **Control Mode**.
 
-- **Collector Operation Mode** decides whether the collector keeps vendor cloud access or talks only to Home Assistant.
+- **How the collector connects** decides how Home Assistant receives the collector's connection.
 - **Control Mode** decides how much write access Home Assistant gets on the inverter side.
 
 The control modes are:
@@ -70,7 +100,7 @@ The control modes are:
 - **`Auto`** — verified controls appear automatically when detection confidence is high
 - **`Full Control`** — expose available controls manually for advanced users who understand the risk
 
-For most people, `Cloud + HA` plus `Auto` is the safest normal setup.
+For most people, leaving the connection strategy as detected plus `Auto` control mode is the safest normal setup.
 
 ## Everyday collector actions
 

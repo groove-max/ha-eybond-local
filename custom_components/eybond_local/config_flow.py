@@ -58,6 +58,10 @@ from .connection.entry import (
     build_runtime_option_settings,
     with_driver_hint,
 )
+from .connection.connection_policy import (
+    resolve_connection_strategy,
+    resolve_proxy_enabled,
+)
 from .connection.models import build_connection_spec, build_connection_spec_from_values
 from .connection.ui import ConnectionFormField
 from .const import (
@@ -70,9 +74,11 @@ from .const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_PN,
+    CONF_CONNECTION_STRATEGY,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
     CONF_CONTROL_MODE,
+    CONF_PROXY_ENABLED,
     CONF_DETECTED_MODEL,
     CONF_DEVICE_CATALOG_ENTRY,
     CONF_DEVICE_CATALOG_KIND,
@@ -89,6 +95,10 @@ from .const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_MODES,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
+    CONNECTION_STRATEGIES,
+    CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+    CONNECTION_STRATEGY_INBOUND,
+    DEFAULT_CONNECTION_STRATEGY,
     CONNECTION_TYPE_EYBOND,
     DEFAULT_COLLECTOR_OPERATION_MODE,
     DEFAULT_CONTROL_MODE,
@@ -1141,13 +1151,46 @@ def _collector_operation_mode_selector(
     smartess_and_ha_label: str,
     ha_only_label: str,
 ) -> SelectSelector:
-    """Return a selector for choosing the collector callback ownership mode."""
+    """Return a selector for choosing the collector callback ownership mode.
+
+    Legacy/compat only: the primary user choice is now the connection-strategy
+    selector below. This is retained for migration/debug wording.
+    """
 
     return SelectSelector(
         SelectSelectorConfig(
             options=[
                 SelectOptionDict(value=COLLECTOR_OPERATION_SMARTESS_AND_HA, label=smartess_and_ha_label),
                 SelectOptionDict(value=COLLECTOR_OPERATION_HA_ONLY, label=ha_only_label),
+            ],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _connection_strategy_selector(
+    inbound_label: str,
+    callback_on_demand_label: str,
+) -> SelectSelector:
+    """Return the primary connection-strategy selector (how HA gets the session).
+
+    - ``inbound``: the collector dials Home Assistant on its own; HA sends no UDP
+      callback trigger.
+    - ``callback_on_demand``: HA asks the collector to connect (a single UDP
+      trigger per connect attempt).
+
+    This replaces the old "SmartESS cloud + Home Assistant / Home Assistant only"
+    (Cloud+HA / HA-only) wording as the main user-facing choice.
+    """
+
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[
+                SelectOptionDict(value=CONNECTION_STRATEGY_INBOUND, label=inbound_label),
+                SelectOptionDict(
+                    value=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                    label=callback_on_demand_label,
+                ),
             ],
             mode=SelectSelectorMode.DROPDOWN,
         )
@@ -2674,13 +2717,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not self._selected_result_is_passive_callback():
             await self._async_refresh_selected_result_collector_capabilities()
 
-        # First add is intentionally not the place to choose Cloud+HA vs HA-only.
+        # First add is intentionally not the place to choose the collector
+        # connection strategy.
         # Discovery evidence can be partial at this point, especially for local
         # bridges and collector-only candidates. Keep the confirm form stable:
         # only collect the poll interval here. Runtime/options flow owns the
-        # operation-mode UX once the entry has had a chance to read endpoint and
-        # capability metadata. A detected virtual bridge is still forced HA-only
-        # internally because it has no SmartESS cloud side.
+        # runtime UX once the entry has had a chance to read endpoint and
+        # capability metadata. A detected virtual bridge is still forced to the
+        # inbound strategy because it connects to Home Assistant on its own.
         selected_capabilities = _result_collector_capabilities(self._selected_result)
         is_bridge = selected_capabilities.virtual_bridge
 
@@ -6655,16 +6699,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         menu_options = ["runtime", "shadow_learning", "collector_wifi", "diagnostics"]
         bridge_note = ""
         if capabilities.virtual_bridge:
-            # A local bridge has no SmartESS cloud side, so cloud-only control
-            # discovery (shadow learning) is meaningless against it. Wi-Fi,
-            # UART, runtime, and diagnostics stay — the bridge implements them.
+            # A local bridge does not expose vendor-cloud actions, so cloud-only
+            # control discovery (shadow learning) is meaningless against it.
+            # Wi-Fi, UART, runtime, and diagnostics stay — the bridge implements
+            # them.
             menu_options = ["runtime", "collector_wifi", "diagnostics"]
             if capabilities.uart_management:
                 menu_options.insert(2, "collector_uart")
             bridge_note = self._tr(
                 "common.dynamic.collector_virtual_bridge_note",
                 "\n\nThis collector is a local ESP EyeBond Collector bridge with no "
-                "SmartESS cloud side. Cloud-only actions (control discovery / "
+                "vendor-cloud side. Cloud-only actions (control discovery / "
                 "shadow learning) are hidden; Wi-Fi, UART, and runtime settings remain "
                 "available.",
             )
@@ -6857,25 +6902,21 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     ) -> ConfigFlowResult:
         if not self._interface_options:
             self._interface_options = await self.hass.async_add_executor_job(_get_ipv4_interfaces)
-        # A detected bridge is inherently Home Assistant only and the operation-mode
-        # selector is hidden for it, so the submitted form carries no mode value.
-        # Fail-safe: factory collectors / unanswered probes keep today's selector.
+        # A detected bridge inherently dials Home Assistant on its own, so the
+        # connection-strategy selector is hidden for it and the submitted form
+        # carries no strategy value; force inbound.
         capabilities = self._collector_capabilities()
         is_bridge = capabilities.virtual_bridge
         errors: dict[str, str] = {}
         if user_input is not None:
             flat_input = _flatten_sections(user_input)
             if is_bridge:
-                # Force HA-only regardless of any (absent) selector input.
-                flat_input[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
+                flat_input[CONF_CONNECTION_STRATEGY] = CONNECTION_STRATEGY_INBOUND
             flat_input.setdefault(
-                CONF_COLLECTOR_OPERATION_MODE,
-                self._config_entry.options.get(
-                    CONF_COLLECTOR_OPERATION_MODE,
-                    self._config_entry.data.get(
-                        CONF_COLLECTOR_OPERATION_MODE,
-                        DEFAULT_COLLECTOR_OPERATION_MODE,
-                    ),
+                CONF_CONNECTION_STRATEGY,
+                resolve_connection_strategy(
+                    self._config_entry.data,
+                    self._config_entry.options,
                 ),
             )
             flat_input.setdefault(
@@ -6890,8 +6931,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 flat_input,
                 fields=branch.form_layout.runtime_fields,
             ))
-            if flat_input.get(CONF_COLLECTOR_OPERATION_MODE) not in COLLECTOR_OPERATION_MODES:
-                errors[CONF_COLLECTOR_OPERATION_MODE] = "invalid_selection"
+            if flat_input.get(CONF_CONNECTION_STRATEGY) not in CONNECTION_STRATEGIES:
+                errors[CONF_CONNECTION_STRATEGY] = "invalid_selection"
             if not errors:
                 if (
                     flat_input.get(CONF_POLL_MODE) == POLL_MODE_MANUAL
@@ -6919,15 +6960,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             CONF_CONTROL_MODE,
             self._config_entry.data.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE),
         )
-        collector_operation_mode = self._config_entry.options.get(
-            CONF_COLLECTOR_OPERATION_MODE,
-            self._config_entry.data.get(
-                CONF_COLLECTOR_OPERATION_MODE,
-                DEFAULT_COLLECTOR_OPERATION_MODE,
-            ),
+        connection_strategy = resolve_connection_strategy(
+            self._config_entry.data,
+            self._config_entry.options,
         )
-        if collector_operation_mode not in COLLECTOR_OPERATION_MODES:
-            collector_operation_mode = DEFAULT_COLLECTOR_OPERATION_MODE
+        if connection_strategy not in CONNECTION_STRATEGIES:
+            connection_strategy = DEFAULT_CONNECTION_STRATEGY
+        proxy_enabled = resolve_proxy_enabled(
+            self._config_entry.data,
+            self._config_entry.options,
+        )
 
         schema_fields: dict[Any, Any] = {
             vol.Required(CONF_POLL_MODE, default=poll_mode): _poll_mode_selector(
@@ -6942,24 +6984,28 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 _POLL_INTERVAL_SELECTOR
             )
         if not is_bridge:
-            # Only a factory collector / unanswered probe gets the SmartESS+HA vs
-            # HA-only choice. A bridge has no SmartESS cloud side, so the selector
-            # is hidden and an informational note is shown instead.
+            # A local bridge dials Home Assistant on its own (inbound), so the
+            # strategy selector is hidden and an informational note is shown.
             schema_fields[
                 vol.Required(
-                    CONF_COLLECTOR_OPERATION_MODE,
-                    default=collector_operation_mode,
+                    CONF_CONNECTION_STRATEGY,
+                    default=connection_strategy,
                 )
-            ] = _collector_operation_mode_selector(
+            ] = _connection_strategy_selector(
                 self._tr(
-                    "common.dynamic.collector_operation_smartess_and_ha",
-                    "SmartESS cloud + Home Assistant",
+                    "common.dynamic.connection_strategy_inbound",
+                    "Collector connects to Home Assistant on its own",
                 ),
                 self._tr(
-                    "common.dynamic.collector_operation_ha_only",
-                    "Home Assistant only",
+                    "common.dynamic.connection_strategy_callback_on_demand",
+                    "Ask the collector to connect when needed",
                 ),
             )
+        # Proxy is an independent capability, gated by the collector supporting it.
+        if capabilities.proxy_capture:
+            schema_fields[
+                vol.Required(CONF_PROXY_ENABLED, default=bool(proxy_enabled))
+            ] = bool
         schema_fields[vol.Required("connection")] = section(
             vol.Schema(
                 self._build_connection_fields_schema(
@@ -6988,9 +7034,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ),
                 "collector_operation_mode_note": (
                     self._tr(
-                        "common.dynamic.collector_operation_mode_bridge_note",
-                        "Local bridge — always Home Assistant only; it has no "
-                        "SmartESS cloud side.",
+                        "common.dynamic.connection_strategy_bridge_note",
+                        "This is a local bridge — it connects to Home Assistant "
+                        "on its own, so there is nothing to choose here.",
                     )
                     if is_bridge
                     else ""
@@ -7025,9 +7071,45 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
         )
         persisted_options[CONF_CONTROL_MODE] = flat_input[CONF_CONTROL_MODE]
-        persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input[
-            CONF_COLLECTOR_OPERATION_MODE
-        ]
+        # Connection strategy is the primary, authoritative axis (inbound vs
+        # callback_on_demand). It is decoupled from endpoint control -- the
+        # explicit write/restore endpoint actions own endpoint_control_policy.
+        persisted_options[CONF_CONNECTION_STRATEGY] = flat_input.get(
+            CONF_CONNECTION_STRATEGY,
+            resolve_connection_strategy(
+                self._config_entry.data,
+                self._config_entry.options,
+            ),
+        )
+        # Proxy is an independent, capability-gated toggle. If the current
+        # collector/profile does not allow proxying, persist a fail-closed value
+        # instead of carrying a stale True from an older capability snapshot.
+        capabilities = self._collector_capabilities()
+        persisted_options[CONF_PROXY_ENABLED] = (
+            bool(
+                flat_input.get(
+                    CONF_PROXY_ENABLED,
+                    resolve_proxy_enabled(
+                        self._config_entry.data,
+                        self._config_entry.options,
+                    ),
+                )
+            )
+            if capabilities.proxy_capture
+            else False
+        )
+        # Preserve the legacy operation mode as a compatibility layer (it still
+        # drives the endpoint-reconcile target). Never require it from the form.
+        legacy_operation_mode = self._config_entry.options.get(
+            CONF_COLLECTOR_OPERATION_MODE,
+            self._config_entry.data.get(
+                CONF_COLLECTOR_OPERATION_MODE,
+                DEFAULT_COLLECTOR_OPERATION_MODE,
+            ),
+        )
+        persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input.get(
+            CONF_COLLECTOR_OPERATION_MODE, legacy_operation_mode
+        )
         for key in (
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
@@ -10231,11 +10313,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if rollback_paths.paths and "rollback_local_metadata" not in menu_options:
             menu_options.append("rollback_local_metadata")
 
-        # Proxy capture redirects the collector's cloud callback (FC=3 param 21)
-        # to record the SmartESS cloud's control reads. A virtual bridge has no
-        # SmartESS cloud side, so the action has nothing to capture — omit it
-        # for a detected bridge. Fail-safe: factory collectors / unanswered
-        # probes keep proxy capture exactly as before.
+        # Proxy capture redirects the collector callback (FC=3 param 21) to
+        # record provider traffic. A virtual bridge has no upstream provider
+        # side to capture — omit it for a detected bridge. Fail-safe: factory
+        # collectors / unanswered probes keep proxy capture exactly as before.
         if self._collector_capabilities().proxy_capture:
             menu_options.append("proxy_capture")
         return menu_options

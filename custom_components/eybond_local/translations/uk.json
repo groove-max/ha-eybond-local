@@ -119,12 +119,10 @@
         "title": "Підтвердьте виявлення",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
-          "collector_operation_mode": "Режим роботи колектора",
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування"
         },
         "data_description": {
-          "collector_operation_mode": "Хмарний застосунок + Home Assistant залишає поточну адресу сервера колектора без змін. Тільки Home Assistant змінює callback endpoint колектора на цей listener Home Assistant.",
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
         }
@@ -133,12 +131,10 @@
         "title": "Підтвердьте виявлення",
         "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
-          "collector_operation_mode": "Режим роботи колектора",
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування"
         },
         "data_description": {
-          "collector_operation_mode": "Хмарний застосунок + Home Assistant залишає поточну адресу сервера колектора без змін. Тільки Home Assistant змінює callback endpoint колектора на цей listener Home Assistant.",
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
         }
@@ -325,13 +321,17 @@
         "data": {
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування",
+          "connection_strategy": "Як підключається колектор",
+          "proxy_enabled": "Проксувати хмарний трафік колектора",
           "collector_operation_mode": "Режим роботи колектора",
           "control_mode": "Режим керування"
         },
         "data_description": {
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Лише для ручного режиму. Це цільовий інтервал між початками циклів опитування. Якщо пристрою потрібно більше часу на відповідь, EyeBond Local попередить про високе навантаження опитування; використовуйте автоматичний режим, щоб інтеграція сама вибрала безпечний інтервал.",
-          "collector_operation_mode": "Cloud app + HA залишає колектор доступним у вихідному хмарному застосунку, а Home Assistant при цьому теж працює з ним локально. Лише режим Home Assistant переводить колектор у підключення тільки до Home Assistant.",
+          "connection_strategy": "«Колектор сам підключається до Home Assistant» — якщо колектор уже вказує на Home Assistant, запит на підключення не надсилається. «Запитувати підключення за потреби» надсилає колектору один запит на підключення за спробу; використовуйте для колектора, який зазвичай працює зі своєю хмарою.",
+          "proxy_enabled": "Пересилати підключення колектора до його хмари додатково до Home Assistant. Доступно лише на колекторах, що це підтримують.",
+          "collector_operation_mode": "Застаріле налаштування сумісності, залишене для міграції. Основний вибір — стратегія підключення вище.",
           "control_mode": "Авто вмикає перевірені елементи керування, коли впевненість виявлення висока. Лише читання вимикає все керування. Повний режим вмикає все."
         },
         "sections": {
@@ -633,7 +633,7 @@
         }
       },
       "rollback_collector_server_endpoint": {
-        "name": "Відновити хмарний доступ",
+        "name": "Відновити попередню адресу колектора",
         "state_attributes": {
           "action_summary": {
             "name": "Підсумок дії"

@@ -1151,10 +1151,11 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         ok, probe = self._run_connect(manager)
         self.assertFalse(ok)
         self.assertEqual(probe.await_count, 1)  # exactly one UDP trigger
-        self.assertEqual(
-            manager.callback_trigger_diagnostics()["collector_callback_state"],
-            "callback_timeout",
-        )
+        diag = manager.callback_trigger_diagnostics()
+        self.assertEqual(diag["collector_callback_state"], "callback_timeout")
+        # Phase 4: an actionable, user-facing message accompanies the typed state.
+        self.assertIn("did not call back", diag["collector_callback_state_message"])
+        self.assertIn("firewall", diag["collector_callback_state_message"])
 
     def test_callback_on_demand_listener_unavailable(self) -> None:
         manager = self._manager(callback_on_demand=True, collector_pn=self._PN)

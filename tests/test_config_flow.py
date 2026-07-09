@@ -287,6 +287,10 @@ from custom_components.eybond_local.const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+    CONF_CONNECTION_STRATEGY,
+    CONF_PROXY_ENABLED,
+    CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+    CONNECTION_STRATEGY_INBOUND,
     CONF_DRIVER_HINT,
     CONF_SMARTESS_COLLECTOR_VERSION,
     CONF_SMARTESS_DEVICE_ADDRESS,
@@ -5944,8 +5948,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_diagnostics_menu_omits_proxy_capture_for_detected_bridge(self) -> None:
-        # Item 3: a detected bridge has no SmartESS cloud side, so proxy capture
-        # (which has nothing to capture) is omitted from the diagnostics menu.
+        # Item 3: a detected bridge has no upstream provider side, so proxy
+        # capture (which has nothing to capture) is omitted from diagnostics.
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
@@ -6012,8 +6016,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["collector_operation_mode_note"].strip()
         )
 
-    async def test_options_runtime_step_keeps_operation_mode_selector_for_factory(self) -> None:
-        # Item 1 fail-safe: a factory collector keeps the selector and empty note.
+    async def test_options_runtime_step_shows_connection_strategy_selector_for_factory(self) -> None:
+        # Phase 4: the primary user choice is the connection-strategy selector,
+        # not the legacy Cloud+HA / HA-only operation mode.
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
@@ -6025,15 +6030,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_runtime()
 
         self.assertEqual(result["type"], "form")
-        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
+        self.assertIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
+        # The legacy operation-mode selector is no longer the primary choice.
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertEqual(
             result["description_placeholders"]["collector_operation_mode_note"], ""
         )
 
-    async def test_options_runtime_step_forces_ha_only_for_bridge_on_submit(self) -> None:
-        # Item 1: submitting the bridge runtime form (no operation-mode field)
-        # still persists HA-only.
+    async def test_options_runtime_step_forces_inbound_for_bridge_on_submit(self) -> None:
+        # Phase 4: a bridge dials Home Assistant on its own -> inbound. The
+        # strategy selector is hidden for it and inbound is persisted.
         options = self._make_options_flow()
+        options._config_entry.options = {CONF_PROXY_ENABLED: True}
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=True),
@@ -6060,8 +6068,48 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE], COLLECTOR_OPERATION_HA_ONLY
+            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
+        # Capability-gated proxy must fail closed instead of carrying a stale
+        # True from older options/capability snapshots.
+        self.assertFalse(result["data"][CONF_PROXY_ENABLED])
+
+    async def test_options_runtime_step_persists_connection_strategy_and_proxy(self) -> None:
+        # Phase 4: the runtime step persists the connection_strategy + proxy axes.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        result = await options.async_step_runtime(
+            {
+                "poll_interval": 15,
+                "control_mode": "auto",
+                "connection_strategy": CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "connection": {
+                    "server_ip": "192.168.1.50",
+                    "collector_ip": "192.168.1.55",
+                    "tcp_port": 8899,
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 3,
+                    "heartbeat_interval": 60,
+                    "driver_hint": "auto",
+                },
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        # Proxy axis persisted (default off); legacy operation mode preserved.
+        self.assertIn(CONF_PROXY_ENABLED, result["data"])
+        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
 
     async def test_proxy_capture_step_shows_planner_status(self) -> None:
         options = self._make_options_flow()
