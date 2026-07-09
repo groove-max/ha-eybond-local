@@ -218,6 +218,29 @@ def _prefer_more_complete_identity(current: str, candidate: str) -> str:
     return normalized_current
 
 
+def _seed_connection_collector_pn(connection: object, collector_pn: str) -> None:
+    """Seed a PN-owned connection's visible CollectorInfo before first heartbeat.
+
+    PN ownership is already decided by the caller/listener route. This only keeps
+    facade state honest during the short window between claiming the socket and
+    the read-loop parsing the collector's own identity frame.
+    """
+
+    normalized = str(collector_pn or "").strip()
+    if not normalized:
+        return
+    collector = getattr(connection, "_collector", None)
+    if collector is None:
+        return
+    current = str(getattr(collector, "collector_pn", "") or "").strip()
+    seeded = _prefer_more_complete_identity(current, normalized)
+    if not seeded:
+        return
+    collector.collector_pn = seeded
+    collector.collector_pn_prefix = seeded[:1]
+    collector.collector_pn_digits = seeded[1:]
+
+
 _AT_DTUPN_RE = re.compile(rb"AT\+DTUPN\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._-]{5,})")
 
 
@@ -753,7 +776,7 @@ class _CollectorConnection:
 
     def _apply_at_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
-            self._collector.collector_pn = response.value
+            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, response.value)
             self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
@@ -824,7 +847,7 @@ class _CollectorConnection:
                 if header.fcode == FC_HEARTBEAT:
                     pn = parse_heartbeat_pn(payload)
                     if pn:
-                        self._collector.collector_pn = pn
+                        self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
                         self._record_session_identity(pn, "framed_heartbeat")
                     self._collector.heartbeat_devcode = header.devcode
                     self._collector.heartbeat_payload_hex = payload.hex()
@@ -832,7 +855,7 @@ class _CollectorConnection:
                 elif header.fcode == FC_QUERY_COLLECTOR:
                     pn = _parse_fc2_collector_pn(payload)
                     if pn:
-                        self._collector.collector_pn = pn
+                        self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
                         self._record_session_identity(pn, "fc2_parameter_2")
                 future = self._pending.get(header.tid)
                 if future and not future.done():
@@ -1399,7 +1422,7 @@ class _CollectorAtConnection:
                     if header.fcode == FC_HEARTBEAT:
                         pn = parse_heartbeat_pn(payload)
                         if pn:
-                            self._collector.collector_pn = pn
+                            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
                             self._record_session_identity(pn, "framed_heartbeat")
                         self._collector.heartbeat_devcode = header.devcode
                         self._collector.heartbeat_payload_hex = payload.hex()
@@ -1410,7 +1433,7 @@ class _CollectorAtConnection:
                             continue
                         pn = _parse_fc2_collector_pn(payload)
                         if pn:
-                            self._collector.collector_pn = pn
+                            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
                             self._record_session_identity(pn, "fc2_parameter_2")
                     else:
                         logger.debug(
@@ -1533,7 +1556,7 @@ class _CollectorAtConnection:
 
     def _apply_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
-            self._collector.collector_pn = response.value
+            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, response.value)
             self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
@@ -1811,8 +1834,9 @@ class _SharedEybondListener:
         collector_pn: str = "",
     ) -> _CollectorConnection | None:
         if collector_pn:
+            normalized_pn = str(collector_pn or "").strip()
             connection = self._connection_by_collector_pn(
-                collector_pn,
+                normalized_pn,
                 self._connections_by_pn,
             )
             if connection is None:
@@ -1821,10 +1845,11 @@ class _SharedEybondListener:
                     heartbeat_interval=heartbeat_interval,
                     write_timeout=write_timeout,
                 )
-                self._connections_by_pn[str(collector_pn or "").strip()] = connection
+                self._connections_by_pn[normalized_pn] = connection
             else:
                 connection.set_heartbeat_interval(heartbeat_interval)
                 connection.set_write_timeout(write_timeout)
+            _seed_connection_collector_pn(connection, normalized_pn)
             return connection
 
         if collector_ip:
@@ -1871,8 +1896,9 @@ class _SharedEybondListener:
         raw_passthrough_min_interval_ms: int = 0,
     ) -> _CollectorAtConnection | None:
         if collector_pn:
+            normalized_pn = str(collector_pn or "").strip()
             connection = self._connection_by_collector_pn(
-                collector_pn,
+                normalized_pn,
                 self._at_connections_by_pn,
             )
             if connection is None:
@@ -1883,7 +1909,7 @@ class _SharedEybondListener:
                     raw_passthrough_frame_format=raw_passthrough_frame_format,
                     raw_passthrough_min_interval_ms=raw_passthrough_min_interval_ms,
                 )
-                self._at_connections_by_pn[str(collector_pn or "").strip()] = connection
+                self._at_connections_by_pn[normalized_pn] = connection
             else:
                 connection.set_write_timeout(write_timeout)
                 connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
@@ -1891,6 +1917,7 @@ class _SharedEybondListener:
                 connection.set_raw_passthrough_min_interval_ms(
                     raw_passthrough_min_interval_ms
                 )
+            _seed_connection_collector_pn(connection, normalized_pn)
             return connection
 
         if collector_ip:
@@ -2215,8 +2242,29 @@ class _SharedEybondListener:
         collector_ip: str = "",
         collector_pn: str = "",
         session_protocol: str = "",
+        session_id: str = "",
     ) -> _PendingCollectorSocket | None:
+        # Registry-mediated claim: this is the low-level socket-claim primitive,
+        # NOT an independent ownership authority. Ownership ("which session
+        # belongs to which entry/PN") is decided by
+        # connection.session_registry.CallbackSessionRegistry (keyed by full PN,
+        # never peer IP); the runtime passes the registry-chosen ``session_id``
+        # so this claims exactly that socket. When no session_id is given the
+        # durable ``collector_pn`` is authoritative; ``collector_ip`` is only a
+        # narrowing hint for an unidentified silent collector and can never claim
+        # or disturb a socket already identified as a different collector.
         async with self._pending_route_lock:
+            normalized_session_id = str(session_id or "").strip()
+            if normalized_session_id:
+                # The registry told us exactly which observed session is ours.
+                pending = self._select_pending_socket_by_session_id(normalized_session_id)
+                if pending is None:
+                    return None
+                await self._pause_pending_sniff(pending)
+                if not self._pending_socket_still_registered(pending):
+                    return None
+                return self._claim_pending_socket(pending)
+
             normalized_pn = str(collector_pn or "").strip()
             if not normalized_pn:
                 pending = self._select_pending_socket(collector_ip)
@@ -2238,6 +2286,17 @@ class _SharedEybondListener:
             for pending in candidates:
                 if not self._pending_socket_still_registered(pending):
                     continue
+                # Ownership safety: when a PN is present, never probe or claim a
+                # socket already identified as a DIFFERENT collector (e.g. a
+                # second collector behind the same NAT/public IP). Only our-PN or
+                # not-yet-identified (silent) sockets are eligible. Keep the
+                # skipped socket watched so its true owner can still claim it and
+                # it is not left as an unwatched phantom.
+                existing_entry = self._session_inventory.get(pending.session_id)
+                existing_pn = str(getattr(existing_entry, "collector_pn", "") or "").strip()
+                if existing_pn and not self._collector_pn_matches(normalized_pn, existing_pn):
+                    self._resume_pending_watch(pending)
+                    continue
                 await self._pause_pending_sniff(pending)
                 if not self._pending_socket_still_registered(pending):
                     continue
@@ -2257,6 +2316,18 @@ class _SharedEybondListener:
                 # registered for another claimant, so it needs a watcher again.
                 self._resume_pending_watch(pending)
             return None
+
+    def _select_pending_socket_by_session_id(
+        self,
+        session_id: str,
+    ) -> _PendingCollectorSocket | None:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        for pending in self._pending_sockets.values():
+            if pending.session_id == sid:
+                return pending
+        return None
 
     def _claim_pending_socket(self, pending: _PendingCollectorSocket) -> _PendingCollectorSocket:
         self._remove_pending_socket(pending)
@@ -2803,6 +2874,7 @@ class _SharedEybondListener:
             connection.set_raw_passthrough_bootstrap(raw_passthrough_bootstrap)
             connection.set_raw_passthrough_frame_format(raw_passthrough_frame_format)
             connection.set_raw_passthrough_min_interval_ms(raw_passthrough_min_interval_ms)
+        _seed_connection_collector_pn(connection, normalized_pn)
 
         if normalized_pn:
             self._at_connections_by_pn[normalized_pn] = connection
@@ -2859,6 +2931,7 @@ class _SharedEybondListener:
         else:
             connection.set_heartbeat_interval(heartbeat_interval)
             connection.set_write_timeout(write_timeout)
+        _seed_connection_collector_pn(connection, normalized_pn)
 
         if normalized_pn:
             self._connections_by_pn[normalized_pn] = connection
@@ -3468,6 +3541,10 @@ class SharedEybondTransport:
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
         self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
+        # Registry-mediated claim: the runtime injects a resolver that returns
+        # the registry-chosen session id for this collector, so the claim targets
+        # exactly the owned session instead of re-deriving ownership by IP/PN.
+        self._claimed_session_provider: Any = None
         self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
         self._collector_raw_passthrough_bootstrap = (
             str(collector_raw_passthrough_bootstrap or "").strip().lower()
@@ -3580,6 +3657,37 @@ class SharedEybondTransport:
             }
         return self._listener.session_inventory_diagnostics()
 
+    @property
+    def listener_key(self) -> str:
+        """Return a stable, public identity for the shared listener this uses.
+
+        Runtime code dedups transports that share one listener by this key
+        instead of ``id(transport._listener)``, so it never touches listener
+        internals.
+        """
+
+        return f"{self._host}:{self._port}"
+
+    def observed_collector_sessions(self) -> tuple[dict[str, object], ...]:
+        """Return raw observed inbound sessions on this listener (public facade).
+
+        Runtime session ownership/negotiation reads through this instead of
+        reaching into the listener's private ``_session_inventory``. Each dict is
+        stamped with the listener port so the callback session registry can build
+        a SessionHandle without knowing listener internals.
+        """
+
+        if self._listener is None:
+            return ()
+        sessions: list[dict[str, object]] = []
+        for session in self._listener.discovered_collector_sessions():
+            if not isinstance(session, dict):
+                continue
+            enriched = dict(session)
+            enriched.setdefault("listener_port", int(self._port))
+            sessions.append(enriched)
+        return tuple(sessions)
+
     async def async_disconnect_if_new_shared_connection(
         self,
         snapshot: _CollectorConnection | None,
@@ -3611,6 +3719,20 @@ class SharedEybondTransport:
         self._collector_ip = collector_ip
         self._connection(create_placeholder=bool(self._collector_ip))
 
+    def set_claimed_session_provider(self, provider: Any) -> None:
+        """Set the runtime's registry-mediated claimed-session-id resolver."""
+
+        self._claimed_session_provider = provider
+
+    def _resolve_claimed_session_id(self) -> str:
+        provider = self._claimed_session_provider
+        if not callable(provider):
+            return ""
+        try:
+            return str(provider() or "").strip()
+        except Exception:
+            return ""
+
     async def wait_until_connected(self, timeout: float) -> bool:
         if self._listener is None:
             return False
@@ -3629,6 +3751,7 @@ class SharedEybondTransport:
                     collector_ip=self._collector_ip,
                     collector_pn=self._collector_pn,
                     session_protocol=self._collector_session_protocol,
+                    session_id=self._resolve_claimed_session_id(),
                 )
                 if pending is not None:
                     connection = await listener.activate_pending_connection(
@@ -3671,6 +3794,7 @@ class SharedEybondTransport:
                     collector_ip=self._collector_ip,
                     collector_pn=self._collector_pn,
                     session_protocol=self._collector_session_protocol,
+                    session_id=self._resolve_claimed_session_id(),
                 )
                 if pending is not None:
                     connection = await self._listener.activate_pending_connection(
@@ -3749,6 +3873,7 @@ class SharedEybondTransport:
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
+                session_id=self._resolve_claimed_session_id(),
             )
             if pending is not None:
                 return await self._listener.activate_pending_connection(
@@ -3820,6 +3945,13 @@ class SharedCollectorAtTransport:
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
         self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
+        # Live negotiated wire (from the SessionHandle) set by the runtime. When
+        # present it is authoritative over the persisted protocol for deciding
+        # AT-vs-framed activation, so a stale persisted hint cannot mis-route a
+        # claimed live session. Empty until a live session is negotiated.
+        self._negotiated_wire = ""
+        # Registry-mediated claim resolver (see SharedEybondTransport).
+        self._claimed_session_provider: Any = None
         self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
         self._collector_raw_passthrough_bootstrap = (
             str(collector_raw_passthrough_bootstrap or "").strip().lower()
@@ -3917,6 +4049,7 @@ class SharedCollectorAtTransport:
                     collector_ip=self._collector_ip,
                     collector_pn=self._collector_pn,
                     session_protocol=self._collector_session_protocol,
+                    session_id=self._resolve_claimed_session_id(),
                 )
                 if pending is not None:
                     if self._uses_at_text_session():
@@ -3967,6 +4100,7 @@ class SharedCollectorAtTransport:
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
+                session_id=self._resolve_claimed_session_id(),
             )
             if pending is not None:
                 if self._uses_at_text_session():
@@ -4043,6 +4177,7 @@ class SharedCollectorAtTransport:
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
+                session_id=self._resolve_claimed_session_id(),
             )
             if pending is not None:
                 if self._uses_at_text_session():
@@ -4119,6 +4254,7 @@ class SharedCollectorAtTransport:
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
+                session_id=self._resolve_claimed_session_id(),
             )
             if pending is not None:
                 if self._uses_at_text_session():
@@ -4197,6 +4333,7 @@ class SharedCollectorAtTransport:
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
+                session_id=self._resolve_claimed_session_id(),
             )
             if pending is not None:
                 connection = await self._listener.activate_pending_at_connection(
@@ -4227,7 +4364,47 @@ class SharedCollectorAtTransport:
             return RawSerialLinkRoute(protocol=payload_family)
         return route
 
+    @property
+    def listener_key(self) -> str:
+        """Return a stable, public identity for the shared listener this uses."""
+
+        return f"{self._host}:{self._port}"
+
+    def set_negotiated_wire(self, wire: str) -> None:
+        """Set the live negotiated wire (from the runtime's SessionHandle).
+
+        ``"at_text"`` / ``"framed"`` make the live session authoritative for
+        AT-vs-framed activation; ``""`` clears it and restores the persisted
+        fallback.
+        """
+
+        normalized = str(wire or "").strip().lower()
+        self._negotiated_wire = normalized if normalized in ("at_text", "framed") else ""
+
+    def set_claimed_session_provider(self, provider: Any) -> None:
+        """Set the runtime's registry-mediated claimed-session-id resolver."""
+
+        self._claimed_session_provider = provider
+
+    def _resolve_claimed_session_id(self) -> str:
+        provider = self._claimed_session_provider
+        if not callable(provider):
+            return ""
+        try:
+            return str(provider() or "").strip()
+        except Exception:
+            return ""
+
     def _uses_at_text_session(self) -> bool:
+        # The live negotiated wire is authoritative: once the runtime has
+        # negotiated the claimed session's wire (via the SessionHandle), the
+        # persisted collector_session_protocol must NOT be a second source of
+        # truth. The persisted value is consulted only as a fallback before any
+        # live session has been observed.
+        if self._negotiated_wire == "at_text":
+            return True
+        if self._negotiated_wire == "framed":
+            return False
         return self._collector_session_protocol == "at_text"
 
     def _at_connection(self, *, create_placeholder: bool) -> _CollectorAtConnection | None:

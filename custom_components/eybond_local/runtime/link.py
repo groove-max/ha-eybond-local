@@ -17,7 +17,8 @@ from ..collector.cloud_family import (
     select_preferred_collector_cloud_family,
 )
 from ..collector.discovery import DiscoveryAnnouncer, async_probe_target
-from ..collector.transport_profile import collector_session_protocol_from_inventory_state
+from ..connection.session_handle import SessionHandle
+from ..connection.session_registry import CallbackSessionRegistry
 from ..collector.transport import (
     CollectorAtTransport,
     CollectorListenerBindError,
@@ -36,6 +37,11 @@ from ..support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandle
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LISTENER_BIND_HOST = "0.0.0.0"
+
+# Stable entry key for this link's own claim in its runtime-scoped session
+# registry. One link manages exactly one collector identity, so a fixed key is
+# sufficient; ownership is by durable PN, never peer IP.
+_RUNTIME_SESSION_ENTRY_KEY = "runtime"
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +368,15 @@ class EybondRuntimeLinkManager:
         self._last_discovery_reason = ""
         self._reverse_discovery_enabled = True
         self._auxiliary_listener_ports: set[int] = set()
+        # Session ownership + live wire negotiation goes through the registry
+        # API, not by scanning listener internals. This runtime-scoped registry
+        # observes only this entry's own listeners and owns this entry's durable
+        # collector identity, so the negotiated SessionHandle represents the
+        # entry-claimed session only.
+        self._session_registry = CallbackSessionRegistry(
+            sessions_source=self._iter_observed_sessions,
+        )
+        self._runtime_claim_pn: str | None = None
         if server_ip and self._effective_server_ip and self._effective_server_ip != server_ip:
             logger.warning(
                 "Configured EyeBond server_ip %s is not active on this host; falling back to %s",
@@ -585,54 +600,31 @@ class EybondRuntimeLinkManager:
         return diagnostics
 
     def _owned_observed_session_protocol(self) -> str:
-        """Return observed protocol for this entry's collector PN only."""
+        """Return the observed session protocol for this entry's claimed session.
 
-        collector_pn = str(self._collector_pn or "").strip()
-        if not collector_pn:
-            return ""
-        protocols: set[str] = set()
-        seen_listeners: set[int] = set()
-        for transport in self._payload_transports():
-            listener = getattr(transport, "_listener", None)
-            if listener is None:
-                continue
-            listener_id = id(listener)
-            if listener_id in seen_listeners:
-                continue
-            seen_listeners.add(listener_id)
-            inventory = getattr(listener, "_session_inventory", {})
-            if not isinstance(inventory, dict):
-                continue
-            pn_matches = getattr(listener, "_collector_pn_matches", None)
-            if not callable(pn_matches):
-                continue
-            for session in inventory.values():
-                observed_pn = str(getattr(session, "collector_pn", "") or "").strip()
-                if not observed_pn or not pn_matches(collector_pn, observed_pn):
-                    continue
-                protocol = collector_session_protocol_from_inventory_state(
-                    state=getattr(session, "state", ""),
-                    protocol_shape=getattr(session, "protocol_shape", ""),
-                )
-                if protocol:
-                    protocols.add(protocol)
-        if len(protocols) == 1:
-            return next(iter(protocols))
+        Derived from the registry-negotiated live SessionHandle (which excludes
+        route-identity-mismatch / not-yet-routed sessions), not from a direct
+        scan of listener internals. Empty when nothing trustworthy is observed.
+        """
+
+        handle = self._live_session_handle()
+        if handle.uses_framed_wire:
+            return "eybond_framed"
+        if handle.uses_at_text_wire:
+            return "at_text"
         return ""
 
     def _session_inventory_diagnostics(self) -> dict[str, object]:
         """Return passive callback-session inventory diagnostics."""
 
         summaries: list[dict[str, object]] = []
-        seen_listeners: set[int] = set()
+        seen_listeners: set[str] = set()
         for transport in self._payload_transports():
-            listener = getattr(transport, "_listener", None)
-            if listener is None:
+            listener_key = str(getattr(transport, "listener_key", "") or "")
+            dedup_key = listener_key or f"transport:{id(transport)}"
+            if dedup_key in seen_listeners:
                 continue
-            listener_id = id(listener)
-            if listener_id in seen_listeners:
-                continue
-            seen_listeners.add(listener_id)
+            seen_listeners.add(dedup_key)
             diagnostics = transport.session_inventory_diagnostics()
             summaries.append(diagnostics)
 
@@ -1224,6 +1216,7 @@ class EybondRuntimeLinkManager:
     ) -> bool:
         """Try to ensure a live collector connection without raising on timeout."""
 
+        self._apply_live_wire_to_transports()
         if self._uses_at_text_payload():
             if self.active_collector_at_transport is None:
                 if self._reverse_discovery_enabled:
@@ -1363,7 +1356,129 @@ class EybondRuntimeLinkManager:
         return None
 
     def _uses_at_text_payload(self) -> bool:
+        """Return whether the payload must ride the AT-text session.
+
+        Phase 2: this is negotiated from the *live* claimed session's observed
+        wire (byte shape / routed state), not the persisted
+        ``collector_session_protocol`` hint. The persisted value is only a
+        fallback used before any session has been observed. This breaks the
+        self-reinforcing bug where a stale ``at_text`` hint made the AT transport
+        mis-claim a framed session and mark it ``routed_at_text``, confirming the
+        wrong wire forever. The listener's passive sniff routes the socket by
+        byte shape (both transport owners are registered), so by the time the
+        seconds-later poll negotiates, a framed session already reports a framed
+        wire and the runtime uses the framed transport.
+        """
+
+        handle = self._live_session_handle()
+        if handle.uses_at_text_wire:
+            return True
+        if handle.uses_framed_wire:
+            return False
         return str(self._collector_session_protocol or "").strip().lower() == "at_text"
+
+    @property
+    def session_handle(self) -> SessionHandle:
+        """Return the negotiated live session handle for this entry's collector."""
+
+        return self._live_session_handle()
+
+    def _claimed_session_id(self) -> str:
+        """Return the registry-claimed session id for this entry's owned session.
+
+        Only a trusted (observed-wire) session is returned; a route-identity
+        mismatch / not-yet-routed session negotiates to an unknown wire and is
+        never handed to the transport as the claim target.
+        """
+
+        handle = self._live_session_handle()
+        return handle.session_id if handle.observed else ""
+
+    def _apply_live_wire_to_transports(self) -> None:
+        """Push the negotiated live wire + claim target down to the transports.
+
+        This makes the runtime's SessionHandle the single source of truth for
+        (a) AT-vs-framed activation inside the transport and (b) which inbound
+        socket the transport claims (the registry-chosen session id). When no
+        live session is observed the wire is cleared (persisted fallback) and the
+        claim id is empty (durable-PN claim path).
+        """
+
+        handle = self._live_session_handle()
+        wire = handle.wire
+        for transport in self._at_transports():
+            if callable(getattr(transport, "set_negotiated_wire", None)):
+                transport.set_negotiated_wire(wire)
+        for transport in (*self._payload_transports(), *self._at_transports()):
+            if callable(getattr(transport, "set_claimed_session_provider", None)):
+                transport.set_claimed_session_provider(self._claimed_session_id)
+
+    def _iter_observed_sessions(self) -> tuple[dict[str, object], ...]:
+        """Return raw observed inbound sessions across this entry's own listeners.
+
+        Uses the public ``observed_collector_sessions`` transport facade -- never
+        the listener's private ``_session_inventory``. This is the only source
+        the runtime session registry reads; ownership and short/full PN identity
+        matching and untrusted-state exclusion all live in the registry.
+        """
+
+        sessions: list[dict[str, object]] = []
+        seen_listeners: set[str] = set()
+        for transport in self._payload_transports():
+            provider = getattr(transport, "observed_collector_sessions", None)
+            if not callable(provider):
+                continue
+            listener_key = str(getattr(transport, "listener_key", "") or "")
+            dedup_key = listener_key or f"transport:{id(transport)}"
+            if dedup_key in seen_listeners:
+                continue
+            seen_listeners.add(dedup_key)
+            try:
+                sessions.extend(provider())
+            except Exception:
+                continue
+        return tuple(sessions)
+
+    def _live_session_handle(self) -> SessionHandle:
+        """Return the negotiated live SessionHandle for this entry's claimed session.
+
+        Obtained from the CallbackSessionRegistry ownership API -- not by scanning
+        listener internals. The registry owns this entry's durable full PN
+        (claimed below by identity, never by peer IP), matches short/full PN as
+        one identity, excludes route-identity-mismatch / not-yet-routed sessions,
+        and prefers the routed session. When nothing is observed for the claimed
+        identity the handle is unknown and callers fall back to the persisted
+        hint.
+        """
+
+        registry = self._session_registry
+        collector_pn = str(self._collector_pn or "").strip()
+        # Keep the registry claim aligned with this entry's durable identity so
+        # the handle represents the entry-owned session only. Re-claim only when
+        # the durable PN changes (e.g. after a session-profile reconcile).
+        if self._runtime_claim_pn != collector_pn:
+            registry.release(_RUNTIME_SESSION_ENTRY_KEY)
+            if collector_pn:
+                try:
+                    registry.claim(
+                        _RUNTIME_SESSION_ENTRY_KEY,
+                        collector_pn=collector_pn,
+                    )
+                except ValueError as exc:
+                    # This should be unreachable for the normal runtime-scoped
+                    # registry, but do not cache a failed claim as successful:
+                    # keep the handle unknown and retry on the next observation
+                    # cycle instead of freezing wire negotiation until PN changes.
+                    logger.debug(
+                        "Runtime callback-session claim rejected; will retry: %s",
+                        exc,
+                    )
+                    self._runtime_claim_pn = ""
+                    return SessionHandle()
+            self._runtime_claim_pn = collector_pn
+        if not collector_pn:
+            return SessionHandle()
+        return registry.session_handle_for_entry(_RUNTIME_SESSION_ENTRY_KEY) or SessionHandle()
 
     async def _async_wait_for_at_connection(self, *, timeout: float) -> bool:
         transports = self._at_transports()

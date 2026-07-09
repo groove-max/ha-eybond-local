@@ -77,6 +77,35 @@ def _prefer_more_complete_collector_pn(current: object, candidate: object) -> st
     return normalized_candidate
 
 
+def _reconcile_durable_collector_pn(
+    durable: object,
+    observed: object,
+) -> tuple[str, bool]:
+    """Reconcile the durable (entry/registry) PN against a live observed PN.
+
+    Phase 2 PN stability: the durable full PN is authoritative. A shorter live
+    heartbeat PN (a prefix of the durable one) must never downgrade it; a longer
+    same-identity PN enriches it; a genuinely different full PN is an identity
+    conflict -- keep the durable PN and report the conflict rather than silently
+    switching identity. Returns ``(pn, conflict)``.
+    """
+
+    durable_pn = str(durable or "").strip()
+    observed_pn = str(observed or "").strip()
+    if not durable_pn:
+        return observed_pn, False
+    if not observed_pn or observed_pn == durable_pn:
+        return durable_pn, False
+    if observed_pn.startswith(durable_pn):
+        # Live session revealed the fuller same-identity PN -> enrich.
+        return observed_pn, False
+    if durable_pn.startswith(observed_pn):
+        # Live heartbeat carried only a prefix -> keep the durable full PN.
+        return durable_pn, False
+    # Different identities entirely: keep the durable PN, flag the conflict.
+    return durable_pn, True
+
+
 def _split_collector_endpoint(endpoint: object) -> tuple[str, int | None, str]:
     raw = str(endpoint or "").strip()
     if not raw:
@@ -1947,6 +1976,29 @@ class EybondHub:
             values.pop(key, None)
         collector = self._link_manager.collector_info
 
+        # PN stability: the durable entry PN is authoritative. A short live
+        # heartbeat PN must not downgrade it, and a different full PN is an
+        # identity conflict rather than a normal update.
+        durable_collector_pn = str(
+            getattr(self._connection, "collector_pn", "") or ""
+        ).strip()
+        collector_pn_identity_conflict = False
+        if durable_collector_pn:
+            reconciled_pn, collector_pn_identity_conflict = _reconcile_durable_collector_pn(
+                durable_collector_pn,
+                collector.collector_pn,
+            )
+            if collector_pn_identity_conflict:
+                logger.warning(
+                    "Collector PN identity conflict: entry expects %s but live session reports %s; keeping the durable identity",
+                    durable_collector_pn,
+                    collector.collector_pn,
+                )
+            if reconciled_pn and reconciled_pn != collector.collector_pn:
+                collector.collector_pn = reconciled_pn
+                collector.collector_pn_prefix = reconciled_pn[:1]
+                collector.collector_pn_digits = reconciled_pn[1:]
+
         collector_field_overrides = extra_values or {}
         if collector_field_overrides:
             merged_collector_pn = _prefer_more_complete_collector_pn(
@@ -2026,6 +2078,8 @@ class EybondHub:
         values["collector_discovery_restart_count"] = collector.discovery_restart_count
         if collector.collector_pn:
             values["collector_pn"] = collector.collector_pn
+        if collector_pn_identity_conflict:
+            values["collector_pn_identity_conflict"] = True
         if collector.profile_name:
             values["collector_profile"] = collector.profile_name
         if collector.profile_key:

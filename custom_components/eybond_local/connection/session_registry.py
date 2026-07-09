@@ -28,6 +28,8 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Callable
 
+from .session_handle import SessionHandle, negotiate_session_adapters
+
 # One canonical prefix-match length for short/full PN reconciliation. A weak
 # short PN (e.g. the heartbeat prefix) can be a prefix of the full AT+DTUPN PN;
 # below this length a prefix is too ambiguous to treat as the same collector.
@@ -233,13 +235,16 @@ class CallbackSessionRegistry:
                 coalesced.append(session)
         return coalesced
 
+    def _normalized_sessions(self) -> list[CallbackSession]:
+        """Return per-socket normalized sessions (pre-coalesce) with owner attached."""
+
+        normalized = [self._normalize(raw) for raw in self._raw_sessions()]
+        return [self._attach_owner(session) for session in normalized if session.session_id]
+
     def observed_sessions(self) -> tuple[CallbackSession, ...]:
         """Return coalesced observed sessions with ownership state attached."""
 
-        normalized = [self._normalize(raw) for raw in self._raw_sessions()]
-        normalized = [session for session in normalized if session.session_id]
-        coalesced = self._coalesce(normalized)
-        return tuple(self._attach_owner(session) for session in coalesced)
+        return tuple(self._coalesce(self._normalized_sessions()))
 
     def _attach_owner(self, session: CallbackSession) -> CallbackSession:
         owner = self._owner_for_session(session)
@@ -364,6 +369,50 @@ class CallbackSessionRegistry:
 
         claim = self._claims.get(str(entry_id or "").strip())
         return claim.collector_pn if claim else ""
+
+    # --- session handle / adapter negotiation ---------------------------------
+
+    def session_handle_for_pn(self, collector_pn: object) -> SessionHandle | None:
+        """Return the negotiated live SessionHandle for one durable PN identity.
+
+        The handle's adapters/wire come from safe observation of the live session
+        (byte shape + routed state), never from a persisted protocol hint. Returns
+        ``None`` when no live session is observed for this identity yet.
+        """
+
+        pn = normalize_pn(collector_pn)
+        if not pn:
+            return None
+        # Rank over per-socket sessions (not the coalesced view) so a routed,
+        # identity-established session always wins over a same-PN-prefix session
+        # that is a route-identity mismatch or still awaiting identity. Untrusted
+        # states negotiate to an unknown wire (``observed`` False), so they can
+        # never become the runtime wire truth for this claimed identity.
+        best_handle: SessionHandle | None = None
+        best_rank: tuple[int, int, int, int] | None = None
+        for session in self._normalized_sessions():
+            if not pn_is_same_identity(session.collector_pn, pn):
+                continue
+            handle = negotiate_session_adapters(session.raw)
+            raw_state = str(session.raw.get("state") or "").strip().lower()
+            rank = (
+                1 if handle.observed else 0,
+                1 if raw_state in ("routed_framed", "routed_at_text") else 0,
+                1 if session.has_strong_identity else 0,
+                len(session.collector_pn),
+            )
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_handle = handle
+        return best_handle
+
+    def session_handle_for_entry(self, entry_id: str) -> SessionHandle | None:
+        """Return the negotiated live SessionHandle for one entry's claimed identity."""
+
+        pn = self.claimed_identity(entry_id)
+        if not pn:
+            return None
+        return self.session_handle_for_pn(pn)
 
     # --- diagnostics ----------------------------------------------------------
 
