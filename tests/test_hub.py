@@ -481,7 +481,7 @@ class HubSnapshotTests(unittest.TestCase):
             connection=EybondConnectionSpec(
                 server_ip="192.168.1.10",
                 collector_ip="",
-                collector_pn="V00102046262344022",
+                collector_pn="V001020SYN62344022",
                 tcp_port=18899,
                 udp_port=58899,
                 discovery_target="192.168.1.255",

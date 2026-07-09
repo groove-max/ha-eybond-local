@@ -2212,9 +2212,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             host, _port, _protocol = _parse_collector_server_endpoint(normalized_endpoint)
         except ValueError:
             return
+        # Whether to record an observed endpoint as the original external
+        # endpoint is a provenance decision driven by the endpoint SHAPE, not by
+        # the legacy collector_operation_mode. Recording provenance is not
+        # endpoint mutation -- it is what lets an explicit rollback restore the
+        # real cloud endpoint later. The two shape guards below (Home Assistant's
+        # own callback host, and any local-callback-shaped address) are the only
+        # things that must never be remembered as an "external" endpoint.
         if host == self._effective_callback_server_host:
-            return
-        if self.collector_home_assistant_primary:
             return
         if self._endpoint_looks_like_local_collector_callback(normalized_endpoint):
             return
@@ -2681,9 +2686,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         action) may reconcile it automatically. Explicit user actions
         (``async_set_collector_operation_mode`` / bind / rollback services) are
         separate and are not gated here.
+
+        An active shadow-learning route temporarily OWNS the collector endpoint
+        (it is the live-wire safety boundary of the scan), so the per-poll
+        reconcile must not touch the endpoint while it runs, regardless of the
+        policy axis. This is route ownership, not operation-mode coupling: it is
+        a no-op that never writes or restores.
         """
 
         snapshot.values.pop("collector_operation_endpoint_sync_error", None)
+        if await self._async_shadow_learning_owns_endpoint():
+            snapshot.values["collector_operation_endpoint_sync_status"] = "shadow_learning_active"
+            return
         if not may_auto_manage_endpoint(self.endpoint_control_policy):
             self._collector_operation_pending_target_endpoint = ""
             snapshot.values["collector_operation_endpoint_sync_status"] = "external_not_managed"
@@ -2773,6 +2787,26 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot.values["collector_operation_endpoint_sync_status"] = str(
             result.get("status") or "applied"
         )
+
+    async def _async_shadow_learning_owns_endpoint(self) -> bool:
+        """Return whether an active shadow-learning route owns the collector endpoint.
+
+        Shadow learning temporarily takes over the collector's main endpoint as
+        the safety boundary of the scan. While it runs, the per-poll endpoint
+        reconcile must leave the endpoint alone -- restoring or realigning it
+        mid-run could hand the real cloud a live route to the collector and leak
+        the next control write to the real inverter. This is route ownership
+        (like the callback-session registry), not a collector_operation_mode
+        decision, and it never writes or restores anything.
+        """
+
+        if self._shadow_learning_process_running():
+            return True
+        try:
+            state = await self._async_active_shadow_learning_state(require_process=False)
+        except Exception:
+            return False
+        return bool(state is not None and shadow_learning_session_is_active(state))
 
     def _prune_hidden_collector_values_for_mode(self, snapshot: RuntimeSnapshot) -> None:
         """Hide collector diagnostics that do not apply in Home-Assistant-primary mode."""

@@ -137,7 +137,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00040509794677058",
+                    "collector_pn": "V000405SYN94677058",
                     "protocol_shape": "at_text",
                     "collector_identity_source": "at_dtupn",
                 }
@@ -153,9 +153,9 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["source"], "integration_discovery")
         self.assertEqual(
             context["title_placeholders"],
-            {"name": "Collector PN V00040509794677058"},
+            {"name": "Collector PN V000405SYN94677058"},
         )
-        self.assertEqual(data["collector_pn"], "V00040509794677058")
+        self.assertEqual(data["collector_pn"], "V000405SYN94677058")
         self.assertEqual(data["peer_ip"], "195.138.86.175")
         self.assertEqual(data["tcp_port"], 18899)
 
@@ -167,7 +167,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "protocol_shape": "at_text",
                     "collector_identity_source": "at_dtupn",
                 }
@@ -189,9 +189,9 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         _domain, context, data = hass.config_entries.flow.flows[0]
         self.assertEqual(
             context["title_placeholders"],
-            {"name": "Collector PN V00102046262344022"},
+            {"name": "Collector PN V001020SYN62344022"},
         )
-        self.assertEqual(data["collector_pn"], "V00102046262344022")
+        self.assertEqual(data["collector_pn"], "V001020SYN62344022")
 
     async def test_poll_ignores_weak_short_pn_without_strong_identity(self) -> None:
         hass = _FakeHass()
@@ -201,7 +201,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "collector_identity_source": "framed_heartbeat",
                 },
             ]
@@ -219,13 +219,13 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "collector_identity_source": "framed_heartbeat",
                 },
                 {
                     "session_id": "listener-18899-2",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "at_dtupn",
                 },
             ]
@@ -235,10 +235,10 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         _domain, context, data = hass.config_entries.flow.flows[0]
-        self.assertEqual(data["collector_pn"], "V00102046262344022")
+        self.assertEqual(data["collector_pn"], "V001020SYN62344022")
         self.assertEqual(
             context["title_placeholders"],
-            {"name": "Collector PN V00102046262344022"},
+            {"name": "Collector PN V001020SYN62344022"},
         )
 
     async def test_poll_replaces_weak_short_pn_flow_with_strong_full_pn(self) -> None:
@@ -252,7 +252,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                     "flow_id": "flow-1",
                 },
                 {
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "peer_ip": "195.138.86.175",
                     "tcp_port": 18899,
                     "collector_identity_source": "framed_heartbeat",
@@ -264,7 +264,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-2",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "at_dtupn",
                 }
             ]
@@ -275,7 +275,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         self.assertEqual(
             hass.config_entries.flow.flows[0][2]["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
 
     async def test_poll_replaces_same_session_short_pn_flow_with_fc2_full_pn(self) -> None:
@@ -289,7 +289,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                     "flow_id": "flow-1",
                 },
                 {
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "peer_ip": "195.138.86.175",
                     "tcp_port": 18899,
                     "session_id": "listener-18899-1",
@@ -302,7 +302,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "fc2_parameter_2",
                 }
             ]
@@ -318,7 +318,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         self.assertEqual(
             hass.config_entries.flow.flows[0][2]["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
 
     async def test_poll_replaces_short_pn_flow_with_full_pn_after_reconnect(self) -> None:
@@ -332,7 +332,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                     "flow_id": "flow-1",
                 },
                 {
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "peer_ip": "192.168.1.1",
                     "tcp_port": 18899,
                     "session_id": "listener-18899-1",
@@ -345,7 +345,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-2",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "at_dtupn",
                 }
             ]
@@ -356,8 +356,8 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hass.config_entries.flow.aborted, ["flow-1"])
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         _domain, context, data = hass.config_entries.flow.flows[0]
-        self.assertEqual(context["title_placeholders"], {"name": "Collector PN V00102046262344022"})
-        self.assertEqual(data["collector_pn"], "V00102046262344022")
+        self.assertEqual(context["title_placeholders"], {"name": "Collector PN V001020SYN62344022"})
+        self.assertEqual(data["collector_pn"], "V001020SYN62344022")
         self.assertEqual(data["peer_ip"], "195.138.86.175")
 
     async def test_poll_suppresses_late_short_pn_when_full_pn_flow_exists(self) -> None:
@@ -371,7 +371,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                     "flow_id": "flow-1",
                 },
                 {
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "peer_ip": "195.138.86.175",
                     "tcp_port": 18899,
                     "session_id": "listener-18899-2",
@@ -384,7 +384,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-3",
                     "peer_ip": "192.168.1.1",
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "collector_identity_source": "framed_heartbeat",
                 }
             ]
@@ -400,7 +400,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         self.assertEqual(
             hass.config_entries.flow.flows[0][2]["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
 
     async def test_poll_allows_multiple_sessions_behind_same_peer_ip(self) -> None:
@@ -411,13 +411,13 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "at_dtupn",
                 },
                 {
                     "session_id": "listener-18899-2",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00040509794677058",
+                    "collector_pn": "V000405SYN94677058",
                     "collector_identity_source": "at_dtupn",
                 },
             ]
@@ -428,7 +428,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 2)
         self.assertEqual(
             {data["collector_pn"] for _domain, _context, data in hass.config_entries.flow.flows},
-            {"V00102046262344022", "V00040509794677058"},
+            {"V001020SYN62344022", "V000405SYN94677058"},
         )
 
     async def test_poll_skips_weak_short_pn_when_strong_full_pn_flow_is_active(self) -> None:
@@ -442,7 +442,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                     "flow_id": "flow-existing",
                 },
                 {
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "peer_ip": "195.138.86.175",
                     "tcp_port": 18899,
                     "collector_identity_source": "at_dtupn",
@@ -454,7 +454,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "collector_identity_source": "framed_heartbeat",
                 }
             ]
@@ -466,7 +466,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         self.assertEqual(
             hass.config_entries.flow.flows[0][2]["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
 
     async def test_poll_waits_for_strong_identity_before_notifying_short_pn(self) -> None:
@@ -477,7 +477,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V0010204626234",
+                    "collector_pn": "V001020SYN6234",
                     "collector_identity_source": "framed_heartbeat",
                 }
             ]
@@ -491,7 +491,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "at_dtupn",
                 }
             ]
@@ -501,14 +501,14 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         self.assertEqual(
             hass.config_entries.flow.flows[0][2]["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
 
     async def test_poll_skips_existing_collector_pn(self) -> None:
         entry = types.SimpleNamespace(
-            data={"collector_pn": "V00040509794677058"},
-            unique_id="collector:V00040509794677058",
-            title="Collector PN V00040509794677058",
+            data={"collector_pn": "V000405SYN94677058"},
+            unique_id="collector:V000405SYN94677058",
+            title="Collector PN V000405SYN94677058",
         )
         hass = _FakeHass(entries=[entry])
         discovery = PassiveCallbackDiscovery(hass)
@@ -517,7 +517,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00040509794677058",
+                    "collector_pn": "V000405SYN94677058",
                     "collector_identity_source": "at_dtupn",
                 }
             ]
@@ -530,14 +530,14 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_poll_upgrades_existing_callback_entry_from_short_to_full_pn(self) -> None:
         entry = types.SimpleNamespace(
             data={
-                "collector_pn": "V0011073728229",
+                "collector_pn": "V001107SYN8229",
                 "connection_mode": "callback_listener",
                 "collector_operation_mode": "home_assistant_only",
                 "tcp_port": 18899,
                 "collector_session_protocol": "eybond_framed",
             },
-            unique_id="collector:V0011073728229",
-            title="Collector PN V0011073728229",
+            unique_id="collector:V001107SYN8229",
+            title="Collector PN V001107SYN8229",
         )
         hass = _FakeHass(entries=[entry])
         discovery = PassiveCallbackDiscovery(hass)
@@ -546,7 +546,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "192.168.1.1",
-                    "collector_pn": "V00110737282291016",
+                    "collector_pn": "V001107SYN82291016",
                     "protocol_shape": "at_text",
                     "state": "routed_at_text",
                     "collector_identity_source": "at_dtupn",
@@ -557,20 +557,20 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         await discovery._async_poll_once()
 
         self.assertEqual(hass.config_entries.flow.flows, [])
-        self.assertEqual(entry.data["collector_pn"], "V00110737282291016")
+        self.assertEqual(entry.data["collector_pn"], "V001107SYN82291016")
         self.assertEqual(entry.data["collector_session_protocol"], "at_text")
-        self.assertEqual(entry.unique_id, "collector:V00110737282291016")
-        self.assertEqual(entry.title, "Collector PN V00110737282291016")
+        self.assertEqual(entry.unique_id, "collector:V001107SYN82291016")
+        self.assertEqual(entry.title, "Collector PN V001107SYN82291016")
 
     async def test_poll_does_not_treat_existing_short_pn_entry_as_full_pn_match(self) -> None:
         entry = types.SimpleNamespace(
             data={
-                "collector_pn": "V0010204626234",
+                "collector_pn": "V001020SYN6234",
                 "connection_mode": "known_ip",
                 "collector_operation_mode": "home_assistant_only",
             },
-            unique_id="collector:V0010204626234",
-            title="Collector PN V0010204626234",
+            unique_id="collector:V001020SYN6234",
+            title="Collector PN V001020SYN6234",
         )
         hass = _FakeHass(entries=[entry])
         discovery = PassiveCallbackDiscovery(hass)
@@ -579,7 +579,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "collector_identity_source": "at_dtupn",
                 }
             ]
@@ -590,11 +590,11 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
         self.assertEqual(
             hass.config_entries.flow.flows[0][2]["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
-        self.assertEqual(entry.data["collector_pn"], "V0010204626234")
+        self.assertEqual(entry.data["collector_pn"], "V001020SYN6234")
         self.assertEqual(entry.data["connection_mode"], "known_ip")
-        self.assertEqual(entry.unique_id, "collector:V0010204626234")
+        self.assertEqual(entry.unique_id, "collector:V001020SYN6234")
 
 
 if __name__ == "__main__":

@@ -1873,7 +1873,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._remembered_collector_server_endpoint = ""
             coordinator.config_entry = types.SimpleNamespace(
                 entry_id="entry-1",
-                data={},
+                # A factory collector allows both operation modes, so switching to
+                # home_assistant_only is a real transition (an unknown collector is
+                # fail-closed to HA-only, which would make the switch a no-op).
+                data={"collector_kind": "factory_eybond"},
                 options={},
             )
             coordinator.hass = types.SimpleNamespace(
@@ -2760,19 +2763,19 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-bridge",
             data={
-                "collector_pn": "V00040509794677058",
+                "collector_pn": "V000405SYN94677058",
                 "collector_ip": "195.138.86.175",
                 "collector_kind": "esp_eybond_bridge",
                 "collector_hardware_version": "esp-collector/0.1.8/ESP8266",
                 "collector_bridge_version": "0.1.8",
             },
             options={},
-            title="Collector PN V00040509794677058",
+            title="Collector PN V000405SYN94677058",
         )
         coordinator.data = self.RuntimeSnapshot(
             values={"collector_hardware_version": "esp-collector/0.1.8/ESP8266"},
             collector=types.SimpleNamespace(
-                collector_pn="V00040509794677058",
+                collector_pn="V000405SYN94677058",
                 profile_name="",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2794,14 +2797,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-unknown",
-            data={"collector_pn": "V0011073728229"},
+            data={"collector_pn": "V001107SYN8229"},
             options={},
-            title="Collector PN V0011073728229",
+            title="Collector PN V001107SYN8229",
         )
         coordinator.data = self.RuntimeSnapshot(
             values={},
             collector=types.SimpleNamespace(
-                collector_pn="V0011073728229",
+                collector_pn="V001107SYN8229",
                 profile_name="Unknown Collector 0x0000",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2825,14 +2828,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.hass = object()
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-unknown",
-            data={"collector_pn": "V0011073728229"},
+            data={"collector_pn": "V001107SYN8229"},
             options={},
-            title="Collector PN V0011073728229",
+            title="Collector PN V001107SYN8229",
         )
         coordinator.data = self.RuntimeSnapshot(
             values={},
             collector=types.SimpleNamespace(
-                collector_pn="V0011073728229",
+                collector_pn="V001107SYN8229",
                 profile_name="Unknown Collector 0x0000",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2846,7 +2849,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         stale = registry.async_get_or_create(
             config_entry_id="entry-unknown",
             identifiers={("eybond_local", "entry-unknown:collector")},
-            name="Collector PN V0011073728229",
+            name="Collector PN V001107SYN8229",
             manufacturer="OEM / EyeBond",
             model="Unknown Collector 0x0000",
         )
@@ -2966,13 +2969,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-callback",
             data={
                 "connection_mode": "callback_listener",
-                "collector_pn": "V00102046262344022",
+                "collector_pn": "V001020SYN62344022",
                 "detected_model": "",
                 "detected_serial": "",
                 "server_ip": "192.168.1.104",
             },
             options={},
-            title="Collector PN V00102046262344022",
+            title="Collector PN V001020SYN62344022",
         )
         coordinator.data = self.RuntimeSnapshot()
 
@@ -2984,7 +2987,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             ),
             collector=types.SimpleNamespace(
                 remote_ip="195.138.86.175",
-                collector_pn="V00102046262344022",
+                collector_pn="V001020SYN62344022",
                 profile_name="",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -2998,7 +3001,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertNotIn("collector_ip", coordinator.config_entry.data)
         self.assertEqual(
             coordinator.config_entry.data["collector_pn"],
-            "V00102046262344022",
+            "V001020SYN62344022",
         )
         self.assertEqual(len(updated_entries), 1)
 
@@ -3034,16 +3037,16 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-callback",
-            unique_id="collector:V0011073728229",
+            unique_id="collector:V001107SYN8229",
             data={
                 "connection_mode": "callback_listener",
-                "collector_pn": "V00110737282291016",
+                "collector_pn": "V001107SYN82291016",
                 "detected_model": "",
                 "detected_serial": "",
                 "server_ip": "192.168.1.104",
             },
             options={},
-            title="Collector PN V00110737282291016",
+            title="Collector PN V001107SYN82291016",
         )
         coordinator.data = self.RuntimeSnapshot()
 
@@ -3051,7 +3054,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             values={},
             collector=types.SimpleNamespace(
                 remote_ip="192.168.1.1",
-                collector_pn="V00110737282291016",
+                collector_pn="V001107SYN82291016",
                 profile_name="",
                 smartess_protocol_name=None,
                 smartess_protocol_asset_name=None,
@@ -3064,15 +3067,15 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(
             coordinator.config_entry.data["collector_pn"],
-            "V00110737282291016",
+            "V001107SYN82291016",
         )
         self.assertEqual(
             coordinator.config_entry.unique_id,
-            "collector:V00110737282291016",
+            "collector:V001107SYN82291016",
         )
         self.assertEqual(
             updated_entries[-1]["unique_id"],
-            "collector:V00110737282291016",
+            "collector:V001107SYN82291016",
         )
 
     def test_remember_runtime_identity_requests_reload_after_platform_setup(self) -> None:
@@ -4359,7 +4362,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator.config_entry = types.SimpleNamespace(
                 entry_id="entry-id",
-                data={},
+                data={"collector_kind": "factory_eybond"},
                 options={"proxy_capture_duration_minutes": 10},
             )
             coordinator.data = self.RuntimeSnapshot(
@@ -4530,7 +4533,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator.config_entry = types.SimpleNamespace(
                 entry_id="entry-id",
-                data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+                data={
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                    "collector_kind": "factory_eybond",
+                },
                 options={"proxy_capture_duration_minutes": 10},
             )
             coordinator.data = self.RuntimeSnapshot(
@@ -4742,7 +4748,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator.config_entry = types.SimpleNamespace(
                 entry_id="entry-id",
-                data={"collector_operation_mode": "smartess_cloud_home_assistant"},
+                data={
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                    "collector_kind": "factory_eybond",
+                },
                 options={"proxy_capture_duration_minutes": 10},
             )
             coordinator.data = self.RuntimeSnapshot(
@@ -5250,7 +5259,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-1",
             data={
                 "collector_cloud_family": "smartess_at",
-                "collector_pn": "V00110737282291016",
+                "collector_pn": "V001107SYN82291016",
                 "driver_hint": "auto",
             },
             options={},
@@ -5282,7 +5291,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             entry_id="entry-1",
             data={
                 "collector_cloud_family": "smartess_at",
-                "collector_pn": "V00110737282291016",
+                "collector_pn": "V001107SYN82291016",
                 "driver_hint": "auto",
             },
             options={},

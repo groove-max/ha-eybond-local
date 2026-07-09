@@ -121,16 +121,49 @@ class ConnectionModelsTests(unittest.TestCase):
             "framed_heartbeat_then_fc2_pn",
         )
 
-    def test_build_connection_spec_uses_framed_callback_for_virtual_bridge_on_dtu_endpoint(self) -> None:
+    def test_build_connection_spec_virtual_bridge_follows_cloud_family_not_bridge_kind(self) -> None:
+        # A community-firmware bridge (esp-collector) does NOT by itself define
+        # the inverter payload session: the same bridge can carry the framed
+        # EyeBond tunnel for a Modbus runtime or the SmartESS AT-text session for
+        # a PI30/G-ASCII runtime. With a known smartess_at cloud family and no
+        # runtime-owner evidence (driver_hint=auto), the payload follows the
+        # cloud family (at_text), not a hardcoded "bridge => framed" heuristic.
+        # Framed selection is driven by runtime ownership or an unknown family
+        # (covered by test_collector_transport_profile).
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",
                 CONF_TCP_PORT: 18899,
                 CONF_UDP_PORT: 58899,
-                CONF_COLLECTOR_IP: "195.138.86.175",
-                CONF_COLLECTOR_PN: "V00102046262344022",
+                CONF_COLLECTOR_IP: "203.0.113.175",
+                CONF_COLLECTOR_PN: "V001020SYN62344022",
                 CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
                 CONF_DRIVER_HINT: "auto",
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+                CONF_DISCOVERY_TARGET: "192.168.1.255",
+                CONF_HEARTBEAT_INTERVAL: 60,
+            },
+            {},
+        )
+
+        self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_session_protocol, "at_text")
+        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+
+    def test_build_connection_spec_virtual_bridge_smg_runtime_selects_framed(self) -> None:
+        # Runtime ownership (a framed-runtime driver hint) still wins over the
+        # cloud-family default on the same esp-collector bridge -- this is the
+        # evidence-based path that replaces the old bridge-kind heuristic.
+        spec = build_connection_spec(
+            {
+                CONF_SERVER_IP: "192.168.1.50",
+                CONF_TCP_PORT: 18899,
+                CONF_UDP_PORT: 58899,
+                CONF_COLLECTOR_IP: "203.0.113.175",
+                CONF_COLLECTOR_PN: "V001020SYN62344022",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
+                CONF_DRIVER_HINT: "modbus_smg",
                 "collector_virtual_bridge": True,
                 "collector_bridge_kind": "esp-collector",
                 CONF_DISCOVERY_TARGET: "192.168.1.255",

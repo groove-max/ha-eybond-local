@@ -1633,7 +1633,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             "",
             heartbeat_interval=60.0,
             write_timeout=0.5,
-            collector_pn="V00102046262344022",
+            collector_pn="V001020SYN62344022",
         )
 
         class _OpenWriter:
@@ -1652,7 +1652,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         connection = listener.ensure_at_connection(
             "",
             write_timeout=0.5,
-            collector_pn="V00102046262344022",
+            collector_pn="V001020SYN62344022",
         )
 
         class _OpenWriter:
@@ -1665,8 +1665,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_listener_collector_pn_lookup_prefers_connected_short_alias_over_disconnected_exact_placeholder(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
-        full_pn = "V00102046262344022"
-        short_pn = "V0010204626234"
+        full_pn = "V001020SYN62344022"
+        short_pn = "V001020SYN6234"
         placeholder = listener.ensure_at_connection(
             "",
             write_timeout=0.5,
@@ -1696,8 +1696,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_listener_payload_pn_lookup_prefers_connected_short_alias_over_disconnected_exact_placeholder(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
-        full_pn = "V00102046262344022"
-        short_pn = "V0010204626234"
+        full_pn = "V001020SYN62344022"
+        short_pn = "V001020SYN6234"
         placeholder = listener.ensure_connection(
             "",
             heartbeat_interval=60.0,
@@ -2854,7 +2854,7 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_activate_pending_payload_reuses_collector_pn_placeholder(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
-        collector_pn = "V00102046262344022"
+        collector_pn = "V001020SYN62344022"
         public_ip = "195.138.86.175"
         placeholder = listener.ensure_connection(
             "",
@@ -2882,7 +2882,7 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_activate_pending_at_reuses_collector_pn_placeholder(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
-        collector_pn = "V00102046262344022"
+        collector_pn = "V001020SYN62344022"
         public_ip = "195.138.86.175"
         placeholder = listener.ensure_at_connection(
             "",

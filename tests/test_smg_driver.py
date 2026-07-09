@@ -355,7 +355,12 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
         )
         self.assertEqual(len(inverter.capability_groups), 4)
-        self.assertEqual(len(inverter.capabilities), 47)
+        # Pinned tested-control count for this profile. It grows only as
+        # shadow-learned controls are deliberately graduated into the builtin
+        # catalog (each still tested=True and exposable, asserted below), so a
+        # change here must be a reviewed catalog change, never a silent runtime
+        # over-exposure of controls on real hardware.
+        self.assertEqual(len(inverter.capabilities), 52)
         self.assertEqual(inverter.get_capability("output_mode").register, 600)
         self.assertEqual(inverter.get_capability("charge_source_priority").register, 632)
         self.assertEqual(inverter.get_capability("force_eq_charge").register, 656)
@@ -385,7 +390,10 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("device_name", inverter.details)
         self.assertNotIn("program_version", inverter.details)
         self.assertNotIn("rated_cell_count", inverter.details)
-        self.assertNotIn("max_discharge_current_protection", inverter.details)
+        # max_discharge_current_protection (reg 642) is now part of the anenji
+        # 11kw model catalog (a tested control decoded into details), so assert
+        # its decoded value instead of its absence.
+        self.assertEqual(inverter.details["max_discharge_current_protection"], 0)
         self.assertEqual(inverter.details["output_mode"], "Split-Phase-P1")
 
     async def test_probe_rejects_anenji_variant_when_variant_anchor_fields_are_invalid(self) -> None:

@@ -2692,7 +2692,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00102046262344022"),
+                collector=CollectorInfo(collector_pn="V001020SYN62344022"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -2717,7 +2717,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00102046262344022"),
+                collector=CollectorInfo(collector_pn="V001020SYN62344022"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -2760,7 +2760,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00102046262344022"),
+                collector=CollectorInfo(collector_pn="V001020SYN62344022"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -3187,7 +3187,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00102046262344022"),
+                collector=CollectorInfo(collector_pn="V001020SYN62344022"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -3210,7 +3210,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="192.168.1.1",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V0011073728229"),
+                collector=CollectorInfo(collector_pn="V001107SYN8229"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -3918,7 +3918,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00040509794677058"),
+                collector=CollectorInfo(collector_pn="V000405SYN94677058"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -3946,12 +3946,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(flow._autodetect_results), 1)
         result = next(iter(flow._autodetect_results.values()))
         self.assertEqual(result.connection_mode, "callback_listener")
-        self.assertEqual(result.collector.collector.collector_pn, "V00040509794677058")
+        self.assertEqual(result.collector.collector.collector_pn, "V000405SYN94677058")
 
     async def test_do_scan_merges_passive_callback_with_active_results_when_passive_is_existing(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
-        existing.data.update({"collector_pn": "V00040509794677058"})
-        existing.unique_id = "collector:V00040509794677058"
+        existing.data.update({"collector_pn": "V000405SYN94677058"})
+        existing.unique_id = "collector:V000405SYN94677058"
         flow = self._make_flow(entries=[existing])
         passive_existing = OnboardingResult(
             collector=CollectorCandidate(
@@ -3959,7 +3959,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00040509794677058"),
+                collector=CollectorInfo(collector_pn="V000405SYN94677058"),
             ),
             connection_mode="callback_listener",
         )
@@ -3969,7 +3969,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="broadcast",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00040509794677059"),
+                collector=CollectorInfo(collector_pn="V000405SYN94677059"),
             ),
             connection_mode="broadcast",
             next_action="manual_driver_selection",
@@ -3994,7 +3994,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 for result in flow._autodetect_results.values()
                 if result.collector is not None and result.collector.collector is not None
             },
-            {"V00040509794677058", "V00040509794677059"},
+            {"V000405SYN94677058", "V000405SYN94677059"},
         )
         self.assertEqual(
             {
@@ -4002,7 +4002,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 for result in flow._available_autodetect_results().values()
                 if result.collector is not None and result.collector.collector is not None
             },
-            {"V00040509794677059"},
+            {"V000405SYN94677059"},
         )
 
     async def test_integration_discovery_selects_passive_callback_candidate(self) -> None:
@@ -4016,15 +4016,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_integration_discovery(
                 {
                     "tcp_port": 18899,
-                    "collector_pn": "V00040509794677058",
+                    "collector_pn": "V000405SYN94677058",
                     "peer_ip": "195.138.86.175",
                 }
             )
 
-        self.assertEqual(flow._test_unique_id, "collector:V00040509794677058")
+        self.assertEqual(flow._test_unique_id, "collector:V000405SYN94677058")
         self.assertEqual(
             flow.context["title_placeholders"],
-            {"name": "Collector PN V00040509794677058"},
+            {"name": "Collector PN V000405SYN94677058"},
         )
         assert flow._selected_result is not None
         assert flow._selected_result.collector is not None
@@ -4034,7 +4034,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._selected_result.collector.ip, "195.138.86.175")
         self.assertEqual(
             flow._selected_result.collector.collector.collector_pn,
-            "V00040509794677058",
+            "V000405SYN94677058",
         )
         self.assertIn(result["type"], {"form", "menu"})
 
@@ -4053,7 +4053,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             await flow.async_step_integration_discovery(
                 {
                     "tcp_port": 18899,
-                    "collector_pn": "V00102046262344022",
+                    "collector_pn": "V001020SYN62344022",
                     "peer_ip": "195.138.86.175",
                     "collector_session_protocol": "at_text",
                 }
@@ -4069,8 +4069,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_integration_discovery_aborts_existing_passive_collector(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
-        existing.data.update({"collector_pn": "V00040509794677058"})
-        existing.unique_id = "collector:V00040509794677058"
+        existing.data.update({"collector_pn": "V000405SYN94677058"})
+        existing.unique_id = "collector:V000405SYN94677058"
         flow = self._make_flow(entries=[existing])
 
         class _FakeDetector:
@@ -4084,7 +4084,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_integration_discovery(
                 {
                     "tcp_port": 18899,
-                    "collector_pn": "V00040509794677058",
+                    "collector_pn": "V000405SYN94677058",
                     "peer_ip": "195.138.86.175",
                 }
             )
@@ -4245,7 +4245,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         existing.data.update(
             {
                 "collector_ip": "195.138.86.175",
-                "collector_pn": "V00040509794677058",
+                "collector_pn": "V000405SYN94677058",
             }
         )
         existing.unique_id = "manual:195.138.86.175"
@@ -4441,7 +4441,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="195.138.86.175",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V00040509794677058"),
+                collector=CollectorInfo(collector_pn="V000405SYN94677058"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -4487,7 +4487,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     source="callback_listener",
                     ip="195.138.86.175",
                     connected=True,
-                    collector=CollectorInfo(collector_pn="V00040509794677058"),
+                    collector=CollectorInfo(collector_pn="V000405SYN94677058"),
                 ),
                 connection_mode="callback_listener",
                 next_action="manual_driver_selection",
@@ -4498,7 +4498,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     source="callback_listener",
                     ip="195.138.86.175",
                     connected=True,
-                    collector=CollectorInfo(collector_pn="V00040509794677059"),
+                    collector=CollectorInfo(collector_pn="V000405SYN94677059"),
                 ),
                 connection_mode="callback_listener",
                 next_action="manual_driver_selection",
@@ -4834,7 +4834,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         existing.data.update(
             {
                 "collector_ip": "195.138.86.175",
-                "collector_pn": "V00040509794677058",
+                "collector_pn": "V000405SYN94677058",
                 "detected_serial": "",
             }
         )
@@ -5277,7 +5277,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="callback_listener",
                 ip="192.168.1.1",
                 connected=True,
-                collector=CollectorInfo(collector_pn="V0011073728229"),
+                collector=CollectorInfo(collector_pn="V001107SYN8229"),
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
@@ -5289,7 +5289,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result_label = flow._result_label(result)
         scan_line = flow._scan_result_line(1, result)
 
-        self.assertIn("PN V0011073728229", result_label)
+        self.assertIn("PN V001107SYN8229", result_label)
         self.assertIn("з’єднання від 192.168.1.1", result_label)
         self.assertIn("з’єднання від 192.168.1.1", scan_line)
         self.assertNotIn("колектор 192.168.1.1", scan_line)
