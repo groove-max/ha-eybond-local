@@ -7,6 +7,8 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+## [0.3.0-beta.2] - 2026-07-09
+
 ### Changed
 
 - **Collector connection is now described by how it connects, not a "Cloud + HA /
