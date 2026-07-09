@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
-from .connection.session_registry import CallbackSessionRegistry
+from .connection.session_registry import CallbackSessionRegistry, pn_is_same_identity
 from .collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     LEGACY_BINARY_COLLECTOR_SERVER_PORT,
@@ -56,16 +56,10 @@ def _collector_identity_matches(left: str, right: str) -> bool:
 
 
 def _collector_prefix_matches(left: str, right: str) -> bool:
-    normalized_left = str(left or "").strip()
-    normalized_right = str(right or "").strip()
-    if not normalized_left or not normalized_right:
-        return False
-    if min(len(normalized_left), len(normalized_right)) < 10:
-        return False
-    return bool(
-        normalized_left.startswith(normalized_right)
-        or normalized_right.startswith(normalized_left)
-    )
+    # Short/full PN identity reconciliation lives in the registry; the transient
+    # discovery-flow dedup below defers to the same rule instead of duplicating
+    # the prefix logic.
+    return pn_is_same_identity(left, right)
 
 
 def _session_identity_source(session: dict[str, object]) -> str:

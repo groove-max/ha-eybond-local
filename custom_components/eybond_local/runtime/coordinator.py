@@ -1314,7 +1314,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._configure_reverse_discovery_mode()
         self._configure_callback_ownership()
         await self._runtime.async_start()
-        if self.collector_home_assistant_primary:
+        if self.collector_callback_listener_required:
             await self._async_prepare_home_assistant_callback_listener(
                 self.collector_callback_target_endpoint
             )
@@ -1654,7 +1654,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         changed = await self._async_reconcile_network(reason=reason)
         if changed:
-            if self.collector_home_assistant_primary:
+            if self.collector_callback_listener_required:
                 await self._async_prepare_home_assistant_callback_listener(
                     self.collector_callback_target_endpoint
                 )
@@ -1929,6 +1929,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return self.collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
 
     @property
+    def collector_callback_listener_required(self) -> bool:
+        """Return whether this entry must keep the callback listener prepared.
+
+        This is driven by the explicit architecture axes, not by the legacy
+        collector operation mode:
+
+        - inbound entries receive collector-initiated sessions;
+        - integration-managed endpoints are kept pointed at Home Assistant.
+        """
+
+        return (
+            self.connection_strategy == CONNECTION_STRATEGY_INBOUND
+            or may_auto_manage_endpoint(self.endpoint_control_policy)
+        )
+
+    @property
     def connection_strategy(self) -> str:
         """Return the explicit connection strategy for this entry.
 
@@ -2156,27 +2172,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             getattr(self._connection_spec, "effective_advertised_server_ip", "") or ""
         ).strip()
 
-    def _endpoint_host_targets_this_home_assistant(self, endpoint: str) -> bool:
-        """Return whether one collector endpoint is explicitly aimed at this HA host."""
-
-        try:
-            host, _port, _protocol = _parse_collector_server_endpoint(endpoint)
-        except ValueError:
-            return False
-
-        normalized_host = str(host or "").strip().lower()
-        if not normalized_host:
-            return False
-
-        candidate_hosts = {
-            str(self._effective_callback_server_host or "").strip().lower(),
-            str(getattr(self._runtime, "effective_advertised_server_ip", "") or "").strip().lower(),
-            str(getattr(self._connection_spec, "effective_advertised_server_ip", "") or "").strip().lower(),
-            str(getattr(self._connection_spec, "server_ip", "") or "").strip().lower(),
-        }
-        candidate_hosts.discard("")
-        return normalized_host in candidate_hosts
-
     async def _async_prepare_home_assistant_callback_listener(self, endpoint: str) -> None:
         ensure_listener = getattr(self._runtime, "async_ensure_callback_listener", None)
         if ensure_listener is None:
@@ -2192,6 +2187,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         await ensure_listener(callback_port)
 
     def _endpoint_looks_like_local_collector_callback(self, endpoint: str) -> bool:
+        # Endpoint-provenance safety only -- NOT transport ownership (that lives
+        # in the CallbackSessionRegistry / SessionHandle). This exists so the
+        # integration never records Home Assistant's own address as the "original
+        # external endpoint" it could later restore to. It never decides which
+        # collector owns a socket or which wire to use.
         try:
             host, _port, _protocol = _parse_collector_server_endpoint(endpoint)
         except ValueError:
@@ -2694,39 +2694,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             getattr(self, "_collector_operation_pending_target_endpoint", "") or ""
         ).strip()
         pending_target_parts = self._endpoint_effective_parts(pending_target_endpoint)
-        if self.collector_home_assistant_primary:
-            target_endpoint = self.collector_callback_target_endpoint
-            if not target_endpoint:
-                self._collector_operation_pending_target_endpoint = ""
-                snapshot.values["collector_operation_endpoint_sync_status"] = "target_unavailable"
-                return
-
-            await self._async_prepare_home_assistant_callback_listener(target_endpoint)
-        else:
+        # integration_managed always keeps the collector pointed at Home
+        # Assistant -- that is what "the integration manages this endpoint" means.
+        # The legacy collector_operation_mode and the hostname "looks like a local
+        # callback" heuristic are no longer consulted, and the endpoint is never
+        # auto-restored here: restoring the previous endpoint is an explicit user
+        # action (the rollback service/button), which also flips the axis back to
+        # external.
+        target_endpoint = self.collector_callback_target_endpoint
+        if not target_endpoint:
             self._collector_operation_pending_target_endpoint = ""
-            snapshot.values["collector_operation_endpoint_sync_status"] = "not_managed"
-            if not current_parts[0] or not self._endpoint_looks_like_local_collector_callback(
-                current_endpoint
-            ):
-                return
-            if await self._async_shadow_learning_blocks_endpoint_reconcile():
-                snapshot.values[
-                    "collector_operation_endpoint_sync_status"
-                ] = "shadow_learning_active"
-                return
-            if self.proxy_capture_overview.status in {
-                "starting",
-                "running",
-                "stopping",
-                "restoring",
-            }:
-                return
-            target_endpoint = self.collector_server_endpoint_rollback_target
-            if not target_endpoint:
-                snapshot.values[
-                    "collector_operation_endpoint_sync_status"
-                ] = "original_endpoint_unknown"
-                return
+            snapshot.values["collector_operation_endpoint_sync_status"] = "target_unavailable"
+            return
+
+        await self._async_prepare_home_assistant_callback_listener(target_endpoint)
 
         target_parts = self._endpoint_effective_parts(target_endpoint)
         pending_matches_target = bool(
@@ -2792,24 +2773,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot.values["collector_operation_endpoint_sync_status"] = str(
             result.get("status") or "applied"
         )
-
-    async def _async_shadow_learning_blocks_endpoint_reconcile(self) -> bool:
-        """Return whether shadow learning temporarily owns the collector endpoint.
-
-        In SmartESS+HA mode the steady-state reconcile normally restores a local
-        callback endpoint back to SmartESS. During shadow learning that same
-        endpoint is the safety boundary. Restoring it mid-run gives SmartESS a
-        direct route to the collector and can leak the next ``ctrlDevice`` write
-        to the real inverter.
-        """
-
-        if self._shadow_learning_process_running():
-            return True
-        try:
-            state = await self._async_active_shadow_learning_state(require_process=False)
-        except Exception:
-            return False
-        return bool(state is not None and shadow_learning_session_is_active(state))
 
     def _prune_hidden_collector_values_for_mode(self, snapshot: RuntimeSnapshot) -> None:
         """Hide collector diagnostics that do not apply in Home-Assistant-primary mode."""

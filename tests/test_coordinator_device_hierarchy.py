@@ -1965,6 +1965,153 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_reconcile_integration_managed_aligns_to_ha_regardless_of_operation_mode(self) -> None:
+        # Phase 5: the reconcile targets Home Assistant purely from
+        # endpoint_control_policy=integration_managed. The legacy operation mode
+        # (here SmartESS+HA) is no longer consulted, and the endpoint is never
+        # auto-restored to the previous/cloud endpoint here.
+        async def _run() -> None:
+            endpoint_writes: list[str] = []
+
+            async def _ensure_listener(port: int) -> None:
+                return None
+
+            async def _set_endpoint(endpoint: str, *, apply_changes: bool = True):
+                endpoint_writes.append(endpoint)
+                return {"readback_endpoint": endpoint, "status": "applied"}
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                effective_advertised_tcp_port=8899,
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                collector_server_endpoint_rollback_target="203.0.113.9,18899,TCP",
+                async_ensure_callback_listener=_ensure_listener,
+                async_set_collector_server_endpoint=_set_endpoint,
+            )
+            coordinator._remembered_collector_server_endpoint = ""
+            coordinator._collector_operation_pending_target_endpoint = ""
+            coordinator._ha_primary_reconcile_last_signature = None
+            coordinator._ha_primary_reconcile_last_attempt_monotonic = 0.0
+            coordinator.config_entry = types.SimpleNamespace(
+                data={},
+                options={
+                    # Legacy cloud-primary mode: must NOT drive the reconcile.
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                    "endpoint_control_policy": "integration_managed",
+                },
+            )
+            snapshot = self.RuntimeSnapshot(
+                connected=True,
+                values={"collector_server_endpoint": "203.0.113.9,18899,TCP"},
+            )
+            coordinator.data = snapshot
+
+            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+
+            # It wrote the Home Assistant endpoint, not restored to the previous.
+            self.assertEqual(len(endpoint_writes), 1)
+            self.assertIn("192.168.1.50", endpoint_writes[0])
+            self.assertNotIn("203.0.113.9", endpoint_writes[0])
+
+        asyncio.run(_run())
+
+    def test_reconcile_external_never_writes_endpoint(self) -> None:
+        # Phase 5: endpoint_control_policy=external must never auto-write/restore.
+        async def _run() -> None:
+            wrote = False
+
+            async def _set_endpoint(endpoint: str, *, apply_changes: bool = True):
+                nonlocal wrote
+                wrote = True
+                return {"readback_endpoint": endpoint, "status": "applied"}
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                effective_advertised_tcp_port=8899,
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                collector_server_endpoint_rollback_target="203.0.113.9,18899,TCP",
+                async_set_collector_server_endpoint=_set_endpoint,
+            )
+            coordinator._collector_operation_pending_target_endpoint = "stale"
+            coordinator.config_entry = types.SimpleNamespace(
+                data={},
+                options={"endpoint_control_policy": "external"},
+            )
+            snapshot = self.RuntimeSnapshot(
+                connected=True,
+                values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
+            )
+            coordinator.data = snapshot
+
+            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+
+            self.assertFalse(wrote)
+            self.assertEqual(
+                snapshot.values["collector_operation_endpoint_sync_status"],
+                "external_not_managed",
+            )
+            self.assertEqual(coordinator._collector_operation_pending_target_endpoint, "")
+
+        asyncio.run(_run())
+
+    def test_setup_prepares_listener_from_connection_axes_not_operation_mode(self) -> None:
+        # Phase 5: listener preparation is runtime behavior and must follow the
+        # explicit connection axes. A legacy cloud-primary operation mode must
+        # not suppress the listener for an inbound entry.
+        async def _run() -> None:
+            listener_ports: list[int] = []
+            started: list[bool] = []
+
+            async def _async_start() -> None:
+                started.append(True)
+
+            async def _ensure_listener(port: int) -> None:
+                listener_ports.append(port)
+
+            async def _noop_async(*_args, **_kwargs) -> None:
+                return None
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                effective_advertised_tcp_port=18899,
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                async_start=_async_start,
+                async_ensure_callback_listener=_ensure_listener,
+            )
+            coordinator.config_entry = types.SimpleNamespace(
+                data={},
+                options={
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                    "connection_strategy": "inbound",
+                    "endpoint_control_policy": "external",
+                },
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                values={"collector_server_endpoint": "203.0.113.9,18899,TCP"}
+            )
+            coordinator._configure_reverse_discovery_mode = lambda: None
+            coordinator._configure_callback_ownership = lambda: None
+            coordinator._async_recover_proxy_capture_state = _noop_async
+            coordinator._async_recover_shadow_learning_state = _noop_async
+            coordinator._async_warm_smartess_cloud_evidence_cache = _noop_async
+            coordinator._async_warm_effective_metadata_cache = _noop_async
+
+            await coordinator.async_setup()
+
+            self.assertEqual(started, [True])
+            self.assertEqual(listener_ports, [18899])
+
+        asyncio.run(_run())
+
     def test_shadow_learning_blocks_cloud_mode_endpoint_restore_reconcile(self) -> None:
         async def _run() -> None:
             set_endpoint_calls: list[tuple[str, bool]] = []

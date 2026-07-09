@@ -93,6 +93,31 @@ def prefer_full_pn(left: object, right: object) -> str:
     return a if len(a) >= len(b) else b
 
 
+def reconcile_pn(current: object, candidate: object) -> str:
+    """Merge two PN observations into the more complete durable identity.
+
+    Short PN enriches to the full PN when one is a prefix of the other; a genuine
+    identity conflict (neither is a prefix of the other) keeps ``current`` rather
+    than silently switching identity. This is the single home for connection- and
+    runtime-level short/full PN reconciliation -- the transport, hub, and link
+    all defer here instead of re-implementing the same prefix logic.
+    """
+
+    a = normalize_pn(current)
+    b = normalize_pn(candidate)
+    if not b:
+        return a
+    if not a:
+        return b
+    if a == b:
+        return a
+    if b.startswith(a):
+        return b
+    if a.startswith(b):
+        return a
+    return a
+
+
 def _identity_is_strong(source: object) -> bool:
     return str(source or "").strip() in _STRONG_IDENTITY_SOURCES
 

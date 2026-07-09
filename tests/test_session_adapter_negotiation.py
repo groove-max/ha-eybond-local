@@ -24,6 +24,7 @@ from custom_components.eybond_local.connection.session_handle import (
 )
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
+    reconcile_pn,
 )
 from custom_components.eybond_local.runtime.hub import _reconcile_durable_collector_pn
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
@@ -299,6 +300,36 @@ class PnStabilityTests(unittest.TestCase):
         pn, conflict = _reconcile_durable_collector_pn("", SHORT_PN)
         self.assertEqual(pn, SHORT_PN)
         self.assertFalse(conflict)
+
+
+class RegistryPnReconciliationTests(unittest.TestCase):
+    """Phase 5: short/full PN reconciliation has a single home in the registry."""
+
+    def test_reconcile_pn_enriches_short_to_full(self) -> None:
+        self.assertEqual(reconcile_pn(SHORT_PN, FULL_PN), FULL_PN)
+        self.assertEqual(reconcile_pn(FULL_PN, SHORT_PN), FULL_PN)
+
+    def test_reconcile_pn_keeps_current_on_identity_conflict(self) -> None:
+        # A genuinely different PN must not silently switch identity.
+        self.assertEqual(reconcile_pn(FULL_PN, OTHER_FULL_PN), FULL_PN)
+
+    def test_reconcile_pn_handles_empty(self) -> None:
+        self.assertEqual(reconcile_pn("", FULL_PN), FULL_PN)
+        self.assertEqual(reconcile_pn(FULL_PN, ""), FULL_PN)
+
+    def test_transport_and_link_helpers_delegate_to_registry(self) -> None:
+        # The transport/link connection-level helpers must resolve identically to
+        # the registry's single reconciliation function.
+        from custom_components.eybond_local.collector.transport import (
+            _prefer_more_complete_identity,
+        )
+        from custom_components.eybond_local.runtime.link import (
+            _prefer_more_complete_collector_pn,
+        )
+
+        for a, b in ((SHORT_PN, FULL_PN), (FULL_PN, SHORT_PN), (FULL_PN, OTHER_FULL_PN)):
+            self.assertEqual(_prefer_more_complete_identity(a, b), reconcile_pn(a, b))
+            self.assertEqual(_prefer_more_complete_collector_pn(a, b), reconcile_pn(a, b))
 
 
 if __name__ == "__main__":

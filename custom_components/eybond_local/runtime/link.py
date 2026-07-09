@@ -18,7 +18,7 @@ from ..collector.cloud_family import (
 )
 from ..collector.discovery import DiscoveryAnnouncer, async_probe_target
 from ..connection.session_handle import SessionHandle
-from ..connection.session_registry import CallbackSessionRegistry
+from ..connection.session_registry import CallbackSessionRegistry, reconcile_pn
 from ..collector.transport import (
     CollectorAtTransport,
     CollectorListenerBindError,
@@ -108,19 +108,8 @@ class RouteLease:
 
 
 def _prefer_more_complete_collector_pn(current: str, candidate: str) -> str:
-    normalized_current = str(current or "").strip()
-    normalized_candidate = str(candidate or "").strip()
-    if not normalized_candidate:
-        return normalized_current
-    if not normalized_current:
-        return normalized_candidate
-    if normalized_candidate == normalized_current:
-        return normalized_candidate
-    if normalized_candidate.startswith(normalized_current):
-        return normalized_candidate
-    if normalized_current.startswith(normalized_candidate):
-        return normalized_current
-    return normalized_current
+    # Short/full PN reconciliation lives in the registry; this defers to it.
+    return reconcile_pn(current, candidate)
 
 
 def _default_local_ip() -> str:

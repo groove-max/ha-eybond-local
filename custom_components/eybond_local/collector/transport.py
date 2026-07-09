@@ -15,6 +15,7 @@ from .cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
 )
+from ..connection.session_registry import reconcile_pn as _reconcile_pn
 from ..link_models import EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ..link_transport import PayloadLinkTransport
 from ..models import CollectorInfo
@@ -203,19 +204,9 @@ def _mask_identity_token(value: str) -> str:
 
 
 def _prefer_more_complete_identity(current: str, candidate: str) -> str:
-    normalized_current = str(current or "").strip()
-    normalized_candidate = str(candidate or "").strip()
-    if not normalized_candidate:
-        return normalized_current
-    if not normalized_current:
-        return normalized_candidate
-    if normalized_candidate == normalized_current:
-        return normalized_candidate
-    if normalized_candidate.startswith(normalized_current):
-        return normalized_candidate
-    if normalized_current.startswith(normalized_candidate):
-        return normalized_current
-    return normalized_current
+    # Short/full PN reconciliation lives in the callback session registry; the
+    # transport defers to it instead of re-implementing the prefix logic.
+    return _reconcile_pn(current, candidate)
 
 
 def _seed_connection_collector_pn(connection: object, collector_pn: str) -> None:
