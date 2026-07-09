@@ -28,6 +28,7 @@ from typing import Any
 
 from ..const import (
     COLLECTOR_OPERATION_HA_ONLY,
+    COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
@@ -81,14 +82,15 @@ def _derive_connection_strategy(
     data: Mapping[str, Any],
     options: Mapping[str, Any],
 ) -> str:
-    """Derive the connection strategy from the legacy fields (hostname-free)."""
+    """Derive the connection strategy from the legacy fields (hostname-free).
 
-    connection_mode = str(
-        _first_present(CONF_CONNECTION_MODE, data, options) or ""
-    ).strip()
-    if connection_mode == _CONNECTION_MODE_CALLBACK_LISTENER:
-        # The collector already dials the Home Assistant listener.
-        return CONNECTION_STRATEGY_INBOUND
+    Precedence matters. The operation mode is the stronger legacy signal and is
+    checked FIRST, because a stale ``callback_listener`` connection_mode (a
+    transient onboarding artifact) must not force a cloud-primary factory
+    collector to ``inbound``: that collector points at the vendor cloud, so Home
+    Assistant would wait for a dial-in that never comes (offline). This is the
+    E500/SMG family-A case.
+    """
 
     operation_mode = str(
         _first_present(CONF_COLLECTOR_OPERATION_MODE, data, options) or ""
@@ -96,9 +98,22 @@ def _derive_connection_strategy(
     if operation_mode == COLLECTOR_OPERATION_HA_ONLY:
         # HA owns the endpoint; the collector dials Home Assistant on its own.
         return CONNECTION_STRATEGY_INBOUND
+    if operation_mode == COLLECTOR_OPERATION_SMARTESS_AND_HA:
+        # Cloud-primary factory collector: it normally points at the vendor cloud,
+        # so Home Assistant borrows a callback session on demand (one UDP trigger
+        # per attempt) rather than waiting for an inbound dial-in.
+        return CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+
+    connection_mode = str(
+        _first_present(CONF_CONNECTION_MODE, data, options) or ""
+    ).strip()
+    if connection_mode == _CONNECTION_MODE_CALLBACK_LISTENER:
+        # A genuine passive-callback entry with no operation-mode signal: the
+        # collector already dials the Home Assistant listener (inbound).
+        return CONNECTION_STRATEGY_INBOUND
+
     if operation_mode:
-        # SmartESS+HA (cloud-primary): the collector normally points elsewhere
-        # and Home Assistant borrows a callback session on demand.
+        # Any other legacy operation mode: borrow a session on demand.
         return CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
     return DEFAULT_CONNECTION_STRATEGY
 
@@ -245,6 +260,152 @@ def migrate_entry_axes(
     return axes
 
 
+def correct_migrated_connection_strategy(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Return a corrected connection strategy for a provably-broken entry, else None.
+
+    A v2 migration derived ``connection_strategy=inbound`` for some cloud-primary
+    factory entries because a stale ``callback_listener`` connection_mode used to
+    take precedence over the operation mode. Such an entry cannot connect as
+    inbound: a cloud-primary collector points at the vendor cloud and will not
+    dial Home Assistant on its own, so Home Assistant waits forever (offline).
+
+    The correction is deterministic and applied ONLY:
+    - in the safe direction (``inbound`` -> ``callback_on_demand``, a superset
+      that still accepts a spontaneous inbound session but also triggers the
+      collector), and
+    - when the operation mode is explicitly the cloud-primary SmartESS+HA value, and
+    - when the integration did NOT write the endpoint (``external``): if the
+      integration wrote the endpoint to Home Assistant, the collector really does
+      dial in and inbound is correct.
+
+    No endpoint is written. Returns ``None`` when there is nothing to correct.
+    """
+
+    options = options or {}
+    strategy = str(_first_present(CONF_CONNECTION_STRATEGY, data, options) or "").strip()
+    if strategy != CONNECTION_STRATEGY_INBOUND:
+        return None
+    operation_mode = str(
+        _first_present(CONF_COLLECTOR_OPERATION_MODE, data, options) or ""
+    ).strip()
+    if operation_mode != COLLECTOR_OPERATION_SMARTESS_AND_HA:
+        return None
+    if is_integration_managed_endpoint(resolve_endpoint_control_policy(data, options)):
+        return None
+    return CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+
+
+def _connection_strategy_source(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any],
+) -> str:
+    """Return why the effective connection strategy has its value (provenance)."""
+
+    if str(_first_present(CONF_CONNECTION_STRATEGY, data, options) or "").strip() in CONNECTION_STRATEGIES:
+        return "explicit"
+    operation_mode = str(
+        _first_present(CONF_COLLECTOR_OPERATION_MODE, data, options) or ""
+    ).strip()
+    if operation_mode == COLLECTOR_OPERATION_HA_ONLY:
+        return "derived_operation_mode_ha_only"
+    if operation_mode == COLLECTOR_OPERATION_SMARTESS_AND_HA:
+        return "derived_operation_mode_cloud"
+    if str(_first_present(CONF_CONNECTION_MODE, data, options) or "").strip() == _CONNECTION_MODE_CALLBACK_LISTENER:
+        return "derived_connection_mode_callback_listener"
+    if operation_mode:
+        return "derived_operation_mode_other"
+    return "default"
+
+
+def _endpoint_control_policy_source(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any],
+) -> str:
+    """Return why the effective endpoint control policy has its value (provenance)."""
+
+    if str(_first_present(CONF_ENDPOINT_CONTROL_POLICY, data, options) or "").strip() in ENDPOINT_CONTROL_POLICIES:
+        return "explicit"
+    if _first_present(CONF_ENDPOINT_WRITTEN_VALUE, data, options) is not None:
+        return "derived_endpoint_written_value"
+    if str(
+        _first_present(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE, data, options) or ""
+    ).strip() in _INTEGRATION_WRITE_ENDPOINT_SOURCES:
+        return "derived_original_endpoint_source"
+    return "default"
+
+
+def migration_diagnostics(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return migration status/provenance for an entry (safe, read-only).
+
+    Surfaces WHY each axis resolved the way it did, whether a deterministic
+    correction applies, and a human-readable warning for ambiguous/corrected
+    entries. Never mutates state and never inspects hostnames/peer IPs.
+    """
+
+    options = options or {}
+    strategy_source = _connection_strategy_source(data, options)
+    policy_source = _endpoint_control_policy_source(data, options)
+    correction = correct_migrated_connection_strategy(data, options)
+
+    warnings: list[str] = []
+    status = "ok"
+    if correction is not None:
+        status = "corrected"
+        warnings.append(
+            "connection_strategy=inbound with a cloud-primary operation mode is "
+            f"unreachable; using {correction} instead."
+        )
+
+    strategy_explicit = strategy_source == "explicit"
+    policy_explicit = policy_source == "explicit"
+    if strategy_explicit and policy_explicit:
+        axes_source = "explicit"
+    elif strategy_explicit or policy_explicit:
+        axes_source = "mixed"
+    else:
+        axes_source = "derived"
+
+    return {
+        "migration_status": status,
+        "migration_warning": "; ".join(warnings),
+        "migration_axes_source": axes_source,
+        "connection_strategy_source": strategy_source,
+        "endpoint_control_policy_source": policy_source,
+    }
+
+
+def simulate_migration(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run derivation/correction on a (data, options) pair and return the decision.
+
+    A pure inspection helper for reviewing how a legacy entry maps to the explicit
+    axes. It never mutates state and never writes an endpoint -- use it to audit a
+    dumped config entry, and it backs the migration-matrix regression tests.
+    """
+
+    options = options or {}
+    correction = correct_migrated_connection_strategy(data, options)
+    strategy = correction if correction is not None else resolve_connection_strategy(data, options)
+    policy = resolve_endpoint_control_policy(data, options)
+    result: dict[str, Any] = {
+        CONF_CONNECTION_STRATEGY: strategy,
+        CONF_ENDPOINT_CONTROL_POLICY: policy,
+        CONF_PROXY_ENABLED: resolve_proxy_enabled(data, options),
+        "may_send_callback_trigger": may_send_callback_trigger(strategy),
+        "may_auto_manage_endpoint": may_auto_manage_endpoint(policy),
+    }
+    result.update(migration_diagnostics(data, options))
+    return result
+
+
 def entry_axis_diagnostics(
     data: Mapping[str, Any],
     options: Mapping[str, Any] | None = None,
@@ -252,9 +413,10 @@ def entry_axis_diagnostics(
     """Return a compact, opaque view of the three axes for support bundles."""
 
     options = options or {}
-    strategy = resolve_connection_strategy(data, options)
+    correction = correct_migrated_connection_strategy(data, options)
+    strategy = correction if correction is not None else resolve_connection_strategy(data, options)
     policy = resolve_endpoint_control_policy(data, options)
-    return {
+    diagnostics: dict[str, Any] = {
         "connection_strategy": strategy,
         "endpoint_control_policy": policy,
         "proxy_enabled": resolve_proxy_enabled(data, options),
@@ -270,3 +432,5 @@ def entry_axis_diagnostics(
         "may_send_callback_trigger": may_send_callback_trigger(strategy),
         "may_auto_manage_endpoint": may_auto_manage_endpoint(policy),
     }
+    diagnostics.update(migration_diagnostics(data, options))
+    return diagnostics

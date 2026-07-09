@@ -155,6 +155,15 @@ def _build_diagnostics_split(
             ),
             **_present(values, "smartess_device_address"),
         },
+        "migration": {
+            "migration_status": axes.get("migration_status", ""),
+            "migration_warning": axes.get("migration_warning", ""),
+            "migration_axes_source": axes.get("migration_axes_source", ""),
+            "connection_strategy_source": axes.get("connection_strategy_source", ""),
+            "endpoint_control_policy_source": axes.get(
+                "endpoint_control_policy_source", ""
+            ),
+        },
     }
 
 

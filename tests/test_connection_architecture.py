@@ -272,7 +272,7 @@ class MigrationInvariantTests(unittest.TestCase):
         entry._last_updates = updates
         return result
 
-    def test_v1_entry_migrates_to_v2_and_persists_axes(self) -> None:
+    def test_v1_entry_migrates_to_v3_and_persists_axes(self) -> None:
         entry = types.SimpleNamespace(
             entry_id="e1",
             version=1,
@@ -280,7 +280,7 @@ class MigrationInvariantTests(unittest.TestCase):
             options={},
         )
         self.assertTrue(self._run_migrate(entry))
-        self.assertEqual(entry.version, 2)
+        self.assertEqual(entry.version, 3)
         self.assertEqual(
             entry.data[C.CONF_CONNECTION_STRATEGY],
             C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
@@ -307,19 +307,255 @@ class MigrationInvariantTests(unittest.TestCase):
             C.ENDPOINT_CONTROL_INTEGRATION_MANAGED,
         )
 
-    def test_v2_entry_is_not_downgraded(self) -> None:
+    def test_v2_entry_migrates_up_to_v3(self) -> None:
+        # A v2 entry is carried forward to v3 (the corrective re-migration).
         entry = types.SimpleNamespace(
             entry_id="e3", version=2, data={}, options={}
         )
         self.assertTrue(self._run_migrate(entry))
-        # Nothing to migrate; version stays 2, no data rewrite forced.
-        self.assertEqual(entry.version, 2)
+        self.assertEqual(entry.version, 3)
+
+    def test_v3_entry_is_not_re_migrated(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="e3b", version=3, data={}, options={}
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(entry.version, 3)
 
     def test_future_version_is_refused(self) -> None:
         entry = types.SimpleNamespace(
-            entry_id="e4", version=3, data={}, options={}
+            entry_id="e4", version=4, data={}, options={}
         )
         self.assertFalse(self._run_migrate(entry))
+
+
+class MigrationMatrixTests(unittest.TestCase):
+    """Deterministic migration matrix for legacy entry families A-G."""
+
+    def _run_migrate(self, entry) -> bool:
+        from custom_components.eybond_local import async_migrate_entry
+
+        def _async_update_entry(target, **kwargs):
+            if "version" in kwargs:
+                target.version = kwargs["version"]
+            if "data" in kwargs:
+                target.data = dict(kwargs["data"])
+
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry)
+        )
+        return asyncio.run(async_migrate_entry(hass, entry))
+
+    # A. Factory EyeBond, cloud endpoint -> callback_on_demand + external.
+    def test_A_factory_cloud_ha_maps_to_callback_on_demand_external(self) -> None:
+        result = cp.simulate_migration(
+            {
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                # A stale callback_listener onboarding artifact must NOT force inbound.
+                C.CONF_CONNECTION_MODE: "callback_listener",
+            },
+            {},
+        )
+        self.assertEqual(
+            result[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        )
+        self.assertEqual(
+            result[C.CONF_ENDPOINT_CONTROL_POLICY], C.ENDPOINT_CONTROL_EXTERNAL
+        )
+        self.assertTrue(result["may_send_callback_trigger"])
+        self.assertFalse(result["may_auto_manage_endpoint"])
+
+    # B. Factory HA-only with a real integration write -> inbound + integration_managed.
+    def test_B_ha_only_written_endpoint_maps_to_inbound_integration_managed(self) -> None:
+        result = cp.simulate_migration(
+            {
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+                C.CONF_ENDPOINT_WRITTEN_VALUE: "192.168.1.50,18899,TCP",
+            },
+            {},
+        )
+        self.assertEqual(
+            result[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+        self.assertEqual(
+            result[C.CONF_ENDPOINT_CONTROL_POLICY],
+            C.ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+        )
+        self.assertFalse(result["may_send_callback_trigger"])
+
+    # B'. Factory HA-only without write provenance -> inbound + external.
+    def test_B_ha_only_without_write_provenance_stays_external(self) -> None:
+        result = cp.simulate_migration(
+            {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY}, {}
+        )
+        self.assertEqual(
+            result[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+        self.assertEqual(
+            result[C.CONF_ENDPOINT_CONTROL_POLICY], C.ENDPOINT_CONTROL_EXTERNAL
+        )
+
+    # C. ESP/BK community collector with HA endpoint -> inbound + external, no trigger.
+    def test_C_esp_collector_ha_endpoint_maps_to_inbound_external_no_trigger(self) -> None:
+        result = cp.simulate_migration(
+            {
+                # ESP/ha_only_required collectors persist operation_mode=HA_ONLY.
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+            },
+            {},
+        )
+        self.assertEqual(
+            result[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+        self.assertEqual(
+            result[C.CONF_ENDPOINT_CONTROL_POLICY], C.ENDPOINT_CONTROL_EXTERNAL
+        )
+        self.assertFalse(result["may_send_callback_trigger"])
+
+    # E. ValueCloud/G-ASCII: cloud/provider metadata is preserved, not turned into
+    # an axis or a forced payload route.
+    def test_E_valuecloud_metadata_preserved_and_not_forced_route(self) -> None:
+        data = {
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_COLLECTOR_CLOUD_FAMILY: "valuecloud",
+            "collector_session_protocol": "at_text",
+        }
+        axes = cp.migrate_entry_axes(data, {})
+        # Migration only writes the three axes; provider/route fields are untouched.
+        self.assertNotIn(C.CONF_COLLECTOR_CLOUD_FAMILY, axes)
+        self.assertNotIn("collector_session_protocol", axes)
+        # cloud_family must not decide the strategy (opaque, provider-free).
+        without_family = dict(data)
+        without_family.pop(C.CONF_COLLECTOR_CLOUD_FAMILY)
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}),
+            cp.resolve_connection_strategy(without_family, {}),
+        )
+
+    # F. Legacy operation_mode-only entry derives axes ONCE, then axes are authoritative.
+    def test_F_operation_mode_only_derives_once_then_axes_authoritative(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="legacy-1",
+            version=1,
+            data={C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA},
+            options={},
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY],
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        # After migration the explicit axis is authoritative: flipping the legacy
+        # operation mode does NOT change the resolved strategy.
+        entry.data[C.CONF_COLLECTOR_OPERATION_MODE] = C.COLLECTOR_OPERATION_HA_ONLY
+        self.assertEqual(
+            cp.resolve_connection_strategy(entry.data, entry.options),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    # Observed endpoint provenance does NOT imply integration_managed.
+    def test_observed_endpoint_source_does_not_set_integration_managed(self) -> None:
+        for observed_source in ("runtime_observed", "collector_registry", "smartess_cloud_diagnostics"):
+            result = cp.simulate_migration(
+                {
+                    C.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "some.cloud.example,18899,TCP",
+                    C.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE: observed_source,
+                },
+                {},
+            )
+            self.assertEqual(
+                result[C.CONF_ENDPOINT_CONTROL_POLICY],
+                C.ENDPOINT_CONTROL_EXTERNAL,
+                observed_source,
+            )
+
+    # G. Migration must not touch persisted inverter identity fields.
+    def test_G_migration_preserves_detected_identity_fields(self) -> None:
+        data = {
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_DETECTED_MODEL: "SMG 6200",
+            C.CONF_DETECTED_SERIAL: "92632500000001",
+        }
+        axes = cp.migrate_entry_axes(data, {})
+        self.assertNotIn(C.CONF_DETECTED_MODEL, axes)
+        self.assertNotIn(C.CONF_DETECTED_SERIAL, axes)
+
+    # E500/SMG: an already-migrated inbound cloud-primary entry is CORRECTED to
+    # callback_on_demand -- it does not stay inbound merely because of stale fields.
+    def test_e500_smg_migrated_inbound_is_corrected_to_callback_on_demand(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="e500",
+            version=2,
+            data={
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_ENDPOINT_CONTROL_POLICY: C.ENDPOINT_CONTROL_EXTERNAL,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_COLLECTOR_PN: "V00ABC1234567890",
+            },
+            options={},
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(entry.version, 3)
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY],
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        # No endpoint was written during migration.
+        self.assertNotIn(C.CONF_ENDPOINT_WRITTEN_VALUE, entry.data)
+        # Diagnostics flag the correction.
+        diag = cp.migration_diagnostics(entry.data, entry.options)
+        self.assertIn(diag["migration_status"], ("ok", "corrected"))
+
+    # A genuinely integration-managed inbound cloud-primary entry is NOT corrected.
+    def test_integration_managed_inbound_is_not_corrected(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="bound",
+            version=2,
+            data={
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_ENDPOINT_WRITTEN_VALUE: "192.168.1.50,18899,TCP",
+            },
+            options={},
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+
+    def test_migration_diagnostics_expose_sources_and_status(self) -> None:
+        diag = cp.migration_diagnostics(
+            {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA}, {}
+        )
+        for key in (
+            "migration_status",
+            "migration_warning",
+            "migration_axes_source",
+            "connection_strategy_source",
+            "endpoint_control_policy_source",
+        ):
+            self.assertIn(key, diag)
+        self.assertEqual(diag["connection_strategy_source"], "derived_operation_mode_cloud")
+        self.assertEqual(diag["migration_axes_source"], "derived")
+
+    def test_entry_axis_diagnostics_reports_corrected_strategy(self) -> None:
+        diag = cp.entry_axis_diagnostics(
+            {
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_ENDPOINT_CONTROL_POLICY: C.ENDPOINT_CONTROL_EXTERNAL,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            },
+            {},
+        )
+
+        self.assertEqual(
+            diag["connection_strategy"],
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertTrue(diag["may_send_callback_trigger"])
+        self.assertEqual(diag["migration_status"], "corrected")
 
 
 if __name__ == "__main__":

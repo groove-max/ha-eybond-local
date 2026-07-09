@@ -1337,51 +1337,85 @@ def _cleanup_obsolete_entities_allowed(coordinator) -> tuple[bool, str]:
     return True, "snapshot_metadata_consistent"
 
 
+_ENTRY_SCHEMA_VERSION = 3
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate a config entry to the explicit connection architecture axes.
 
-    Version 2 adds ``connection_strategy`` / ``endpoint_control_policy`` /
-    ``proxy_enabled`` as explicit, opaque, hostname-free entry state. The
-    migration derives them deterministically from the legacy operation-mode /
-    connection-mode / endpoint-provenance fields (see
-    :mod:`connection.connection_policy`). Only missing axis fields are filled;
-    the legacy fields are left untouched for backward compatibility.
+    Version 2 added ``connection_strategy`` / ``endpoint_control_policy`` /
+    ``proxy_enabled`` as explicit, opaque, hostname-free entry state, derived
+    deterministically from the legacy operation-mode / connection-mode /
+    endpoint-provenance fields (see :mod:`connection.connection_policy`).
+
+    Version 3 is a corrective re-migration: an earlier v2 pass could derive
+    ``connection_strategy=inbound`` for a cloud-primary factory collector because
+    a stale ``callback_listener`` connection_mode used to take precedence over the
+    operation mode. Such an entry can never connect as inbound (the collector
+    points at the vendor cloud and never dials Home Assistant), so it is corrected
+    to ``callback_on_demand`` -- a superset that still accepts a spontaneous
+    inbound session. No endpoint is ever written during migration.
+
+    Only missing axis fields are filled and only the provably-broken strategy is
+    corrected; all legacy fields are left untouched for backward compatibility.
     """
 
-    from .connection.connection_policy import migrate_entry_axes
+    from .connection.connection_policy import (
+        correct_migrated_connection_strategy,
+        migrate_entry_axes,
+    )
+    from .const import CONF_CONNECTION_STRATEGY
 
     version = int(getattr(entry, "version", 1) or 1)
-    if version > 2:
+    if version > _ENTRY_SCHEMA_VERSION:
         # A newer schema than this code understands: refuse rather than corrupt.
         return False
+    if version >= _ENTRY_SCHEMA_VERSION:
+        return True
 
-    if version < 2:
-        data = dict(entry.data)
-        axes = migrate_entry_axes(data, dict(entry.options))
-        changed = False
-        for key, value in axes.items():
-            if data.get(key) != value:
-                data[key] = value
-                changed = True
-        update_kwargs: dict[str, Any] = {"version": 2}
-        if changed:
-            update_kwargs["data"] = data
-        try:
-            hass.config_entries.async_update_entry(entry, **update_kwargs)
-        except TypeError:
-            # Older cores do not accept ``version=`` on async_update_entry.
-            if changed:
-                hass.config_entries.async_update_entry(entry, data=data)
-            try:
-                entry.version = 2  # type: ignore[misc]
-            except Exception:
-                pass
-        logger.info(
-            "Migrated EyeBond entry %s to connection axes %s",
+    data = dict(entry.data)
+    options = dict(entry.options)
+    changed = False
+
+    # v1 -> v2: fill any missing axes (idempotent; explicit axes are preserved).
+    for key, value in migrate_entry_axes(data, options).items():
+        if data.get(key) != value:
+            data[key] = value
+            changed = True
+
+    # v2 -> v3: correct a provably-broken cloud-primary inbound entry. Safe,
+    # deterministic, and only in the inbound -> callback_on_demand direction.
+    corrected_strategy = correct_migrated_connection_strategy(data, options)
+    if corrected_strategy is not None and data.get(CONF_CONNECTION_STRATEGY) != corrected_strategy:
+        logger.warning(
+            "EyeBond entry %s: correcting unreachable inbound cloud-primary entry to %s",
             entry.entry_id,
-            {k: axes[k] for k in axes},
+            corrected_strategy,
         )
+        data[CONF_CONNECTION_STRATEGY] = corrected_strategy
+        changed = True
 
+    update_kwargs: dict[str, Any] = {"version": _ENTRY_SCHEMA_VERSION}
+    if changed:
+        update_kwargs["data"] = data
+    try:
+        hass.config_entries.async_update_entry(entry, **update_kwargs)
+    except TypeError:
+        # Older cores do not accept ``version=`` on async_update_entry.
+        if changed:
+            hass.config_entries.async_update_entry(entry, data=data)
+        try:
+            entry.version = _ENTRY_SCHEMA_VERSION  # type: ignore[misc]
+        except Exception:
+            pass
+    logger.info(
+        "Migrated EyeBond entry %s to schema v%s (axes %s)",
+        entry.entry_id,
+        _ENTRY_SCHEMA_VERSION,
+        {
+            CONF_CONNECTION_STRATEGY: data.get(CONF_CONNECTION_STRATEGY),
+        },
+    )
     return True
 
 

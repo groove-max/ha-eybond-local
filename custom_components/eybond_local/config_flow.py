@@ -1602,8 +1602,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
     # Version 2 introduces the explicit connection architecture axes
     # (connection_strategy / endpoint_control_policy / proxy_enabled). See
-    # ``connection/connection_policy.py`` and ``async_migrate_entry``.
-    VERSION = 2
+    # ``connection/connection_policy.py`` and ``async_migrate_entry``. v3 adds a
+    # corrective re-migration for unreachable inbound cloud-primary entries.
+    VERSION = 3
 
     def __init__(self) -> None:
         self._translation_bundle: dict[str, Any] = {}
