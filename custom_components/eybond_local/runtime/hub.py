@@ -522,8 +522,12 @@ class EybondHub:
         )
         self._driver: InverterDriver | None = None
         self._inverter: DetectedInverter | None = None
+        self._inverter_binding_needs_live_detection_refresh = False
         self._inverter_overlay_applier: (
             Callable[[DetectedInverter, Any], DetectedInverter] | None
+        ) = None
+        self._inverter_detection_observer: (
+            Callable[[InverterDriver, DetectedInverter], None] | None
         ) = None
         self._snapshot_observer: Callable[[RuntimeSnapshot], None] | None = None
         self._last_snapshot = RuntimeSnapshot()
@@ -559,6 +563,7 @@ class EybondHub:
 
         self._snapshot_observer = None
         self._inverter_overlay_applier = None
+        self._inverter_detection_observer = None
         self.set_collector_connection_watcher(None)
         await self._link_manager.async_stop()
 
@@ -609,6 +614,11 @@ class EybondHub:
             return
         self._driver = driver
         self._inverter = inverter
+        details = getattr(inverter, "details", {}) or {}
+        self._inverter_binding_needs_live_detection_refresh = (
+            str(details.get("runtime_detection_status") or "").strip()
+            == "startup_persisted_identity"
+        )
         self._reset_runtime_read_state()
         self._write_blockers.clear()
 
@@ -623,6 +633,19 @@ class EybondHub:
         """
 
         self._inverter_overlay_applier = applier
+
+    def set_inverter_detection_observer(
+        self,
+        observer: Callable[[InverterDriver, DetectedInverter], None] | None,
+    ) -> None:
+        """Install a best-effort observer for newly detected inverter identity.
+
+        Runtime detection may succeed before the first runtime value read succeeds.
+        The coordinator uses this hook to persist the confirmed identity before a
+        later read timeout/reload can collapse the entry back to collector-only.
+        """
+
+        self._inverter_detection_observer = observer
 
     def set_runtime_snapshot_observer(
         self,
@@ -928,6 +951,14 @@ class EybondHub:
                 snapshot = self._build_snapshot(extra_values=collector_values, last_error=detect_error)
                 self._last_snapshot = snapshot
                 return snapshot
+        elif self._inverter_binding_needs_live_detection_refresh:
+            detect_error = await self._async_detect_driver()
+            _mark_refresh_phase("driver_identity_refresh")
+            if detect_error:
+                logger.debug(
+                    "Deferred inverter identity refresh failed: %s; keeping persisted binding",
+                    detect_error,
+                )
 
         remaining_backoff = self._recovery_backoff_remaining()
         if remaining_backoff > 0:
@@ -1920,6 +1951,7 @@ class EybondHub:
 
         self._driver = context.driver
         self._inverter = context.inverter
+        self._inverter_binding_needs_live_detection_refresh = False
         # The overlay merge is applied in _build_snapshot (every refresh, once the
         # collector identity is populated), not here -- at detection the collector is
         # not yet identified, so the device-scope match would fail and never retry.
@@ -1932,6 +1964,12 @@ class EybondHub:
             context.inverter.serial_number,
             context.match.confidence,
         )
+        observer = self._inverter_detection_observer
+        if observer is not None:
+            try:
+                observer(context.driver, context.inverter)
+            except Exception:
+                logger.debug("Runtime inverter detection observer failed", exc_info=True)
         return ""
 
     def _recovery_backoff_delay(self) -> float:

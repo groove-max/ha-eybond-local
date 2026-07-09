@@ -846,6 +846,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         set_overlay_applier = getattr(self._runtime, "set_inverter_overlay_applier", None)
         if callable(set_overlay_applier):
             set_overlay_applier(self._apply_device_overlay_to_inverter)
+        set_detection_observer = getattr(
+            self._runtime,
+            "set_inverter_detection_observer",
+            None,
+        )
+        if callable(set_detection_observer):
+            set_detection_observer(self._on_runtime_inverter_detected)
         set_snapshot_observer = getattr(
             self._runtime,
             "set_runtime_snapshot_observer",
@@ -1106,6 +1113,40 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         setter = getattr(self._runtime, "set_initial_inverter_binding", None)
         if callable(setter):
             setter(driver, inverter)
+
+    def _on_runtime_inverter_detected(
+        self,
+        _driver: object,
+        inverter: DetectedInverter,
+    ) -> None:
+        """Persist a runtime-confirmed inverter before the first value read.
+
+        Detection and runtime reading are separate phases. Some links can identify
+        the inverter and then time out on the first full poll; without persisting
+        the detected identity immediately, the reload requested for late identity
+        can recreate the entry as collector-only.
+        """
+
+        self.hass.async_create_task(
+            self._async_remember_detected_inverter_identity(inverter)
+        )
+
+    async def _async_remember_detected_inverter_identity(
+        self,
+        inverter: DetectedInverter,
+    ) -> None:
+        collector = (
+            self.data.collector if isinstance(self.data, RuntimeSnapshot) else None
+        )
+        snapshot = RuntimeSnapshot(
+            connected=True,
+            collector=collector,
+            inverter=inverter,
+            values={
+                "runtime_detection_status": "autodetected_high_confidence",
+            },
+        )
+        await self._async_remember_runtime_identity(snapshot)
 
     def _prime_startup_inverter_from_persisted_metadata(self) -> DetectedInverter | None:
         """Build a lightweight inverter identity from persisted metadata, if available.
