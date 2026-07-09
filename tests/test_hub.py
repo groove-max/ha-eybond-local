@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 import asyncio
 import sys
 import unittest
@@ -2293,6 +2295,273 @@ class HubAtTextAsciiProbeTests(unittest.TestCase):
             self.assertIsNone(probe)
 
         asyncio.run(_run())
+
+
+class _SuccessDriver:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.calls += 1
+        return {"output_power": 100, "battery_average_power": -50}
+
+
+class RuntimeStateMachineTests(unittest.TestCase):
+    """Runtime state-machine hardening: explicit states + sticky inverter identity."""
+
+    _MODEL = "SMG 6200"
+    # Pure-digit synthetic serials (no leading letter -> not PN-shaped identifiers).
+    _SERIAL = "92632500000001"
+    _OTHER_SERIAL = "92632599999999"
+
+    def _hub(self) -> EybondHub:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                collector_pn="V001020SYN62344022",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        return hub
+
+    def _inverter(
+        self,
+        *,
+        serial: str | None = None,
+        model: str | None = None,
+        driver_key: str = "modbus_smg",
+        detection_status: str = "",
+    ) -> DetectedInverter:
+        details: dict[str, object] = {}
+        if detection_status:
+            details["runtime_detection_status"] = detection_status
+        return DetectedInverter(
+            driver_key=driver_key,
+            protocol_family=driver_key,
+            model_name=model or self._MODEL,
+            serial_number=serial or self._SERIAL,
+            probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
+            details=details,
+        )
+
+    def _fake_detection(self, inverter: DetectedInverter, driver: object):
+        async def _detect(_transport, *, driver_hint=""):
+            return SimpleNamespace(
+                driver=driver,
+                inverter=inverter,
+                match=SimpleNamespace(confidence="high"),
+            )
+
+        return _detect
+
+    # 1. detected inverter + first poll timeout keeps inverter identity.
+    def test_first_poll_timeout_after_detection_keeps_inverter_identity(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            hub._driver = _TimeoutDriver()
+            hub._inverter = self._inverter()
+            # A first bound+connected snapshot records the driver-bound identity.
+            hub._last_snapshot = hub._build_snapshot()
+            self.assertEqual(
+                hub._last_snapshot.values["runtime_driver_state"], "driver_bound"
+            )
+
+            snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            # Identity survives the first-poll timeout; the entry is not collapsed.
+            self.assertIsNotNone(snapshot.inverter)
+            self.assertEqual(snapshot.inverter.serial_number, self._SERIAL)
+            self.assertEqual(snapshot.inverter.model_name, self._MODEL)
+            self.assertFalse(snapshot.connected)
+            self.assertEqual(snapshot.values["runtime_poll_state"], "offline")
+            self.assertEqual(
+                snapshot.values["runtime_last_driver_bound_identity"],
+                "modbus_smg|SMG 6200|92632500000001",
+            )
+
+        asyncio.run(_run())
+
+    # 2. collector-only build after driver-bound does not erase the inverter.
+    def test_collector_only_build_keeps_confirmed_inverter(self) -> None:
+        hub = self._hub()
+        hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+        hub._last_snapshot = hub._build_snapshot()
+
+        # A subsequent snapshot (e.g. a collector-metadata-only refresh) keeps the
+        # confirmed inverter; the inverter track is independent of the collector.
+        snapshot = hub._build_snapshot(extra_values={"collector_signal_strength": -55})
+
+        self.assertIsNotNone(snapshot.inverter)
+        self.assertEqual(snapshot.inverter.serial_number, self._SERIAL)
+        self.assertEqual(snapshot.values["runtime_inverter_state"], "live_confirmed")
+        self.assertEqual(snapshot.values["runtime_driver_state"], "driver_bound")
+
+    # 3. startup persisted identity is provisional; live detection promotes it.
+    def test_startup_persisted_identity_is_provisional_then_promoted(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            hub.set_initial_inverter_binding(
+                _SuccessDriver(),
+                self._inverter(detection_status="startup_persisted_identity"),
+            )
+            provisional = hub._build_snapshot()
+            self.assertEqual(
+                provisional.values["runtime_inverter_state"], "provisional"
+            )
+            self.assertTrue(hub._inverter_binding_needs_live_detection_refresh)
+
+            # Live detection confirms the SAME identity -> promote to live-confirmed.
+            live_inverter = self._inverter()
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                new=self._fake_detection(live_inverter, _SuccessDriver()),
+            ):
+                snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertFalse(hub._inverter_binding_needs_live_detection_refresh)
+            self.assertEqual(snapshot.values["runtime_inverter_state"], "live_confirmed")
+            self.assertNotIn("runtime_identity_conflict", snapshot.values)
+
+        asyncio.run(_run())
+
+    # 4. startup persisted identity + different live full identity reports conflict.
+    def test_startup_persisted_identity_conflict_keeps_durable(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            hub.set_initial_inverter_binding(
+                _SuccessDriver(),
+                self._inverter(detection_status="startup_persisted_identity"),
+            )
+
+            # Live detection reports a DIFFERENT serial (different physical inverter).
+            other = self._inverter(serial=self._OTHER_SERIAL)
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                new=self._fake_detection(other, _SuccessDriver()),
+            ):
+                snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            # Durable identity kept, not silently swapped; conflict published.
+            self.assertEqual(snapshot.inverter.serial_number, self._SERIAL)
+            self.assertEqual(snapshot.values["runtime_inverter_state"], "conflict")
+            self.assertIn("runtime_identity_conflict", snapshot.values)
+            self.assertIn(self._SERIAL, snapshot.values["runtime_identity_conflict"])
+            self.assertIn(self._OTHER_SERIAL, snapshot.values["runtime_identity_conflict"])
+            self.assertFalse(hub._inverter_binding_needs_live_detection_refresh)
+
+        asyncio.run(_run())
+
+    # 5. reconnect after offline preserves driver and resumes polling.
+    def test_reconnect_after_offline_resumes_driver_bound_polling(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+            hub._last_snapshot = hub._build_snapshot()
+
+            # Simulate an offline gap; the fake link reconnects on the next attempt.
+            hub._link_manager.connected = False
+
+            snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertTrue(snapshot.connected)
+            self.assertIsNotNone(snapshot.inverter)
+            self.assertEqual(snapshot.inverter.serial_number, self._SERIAL)
+            self.assertEqual(snapshot.values["runtime_driver_state"], "driver_bound")
+            self.assertEqual(snapshot.values["runtime_poll_state"], "polling")
+
+        asyncio.run(_run())
+
+    # 6. short PN / partial metadata does not downgrade durable identity.
+    def test_short_collector_pn_does_not_downgrade_durable_identity(self) -> None:
+        hub = self._hub()
+        hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+        # Live session reports only the short heartbeat PN prefix.
+        hub._link_manager.collector_info.collector_pn = "V001020SYN6234"
+
+        snapshot = hub._build_snapshot()
+
+        self.assertEqual(snapshot.collector.collector_pn, "V001020SYN62344022")
+        self.assertEqual(snapshot.values["collector_pn"], "V001020SYN62344022")
+        self.assertEqual(snapshot.values["runtime_collector_state"], "identified")
+        self.assertNotIn("runtime_identity_conflict", snapshot.values)
+
+    # 7. no infinite live-detection refresh loop.
+    def test_provisional_refresh_is_bounded_when_detection_keeps_failing(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            hub.set_initial_inverter_binding(
+                _SuccessDriver(),
+                self._inverter(detection_status="startup_persisted_identity"),
+            )
+
+            detect_calls = 0
+
+            async def _always_fail(_transport, *, driver_hint=""):
+                nonlocal detect_calls
+                detect_calls += 1
+                raise RuntimeError("probe_timeout")
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                new=_always_fail,
+            ):
+                for _ in range(6):
+                    await hub.async_refresh(poll_interval=3.0)
+
+            # Bounded: detection stops re-running after the max attempts, and the
+            # provisional identity is kept rather than lost.
+            self.assertEqual(detect_calls, 3)
+            self.assertFalse(hub._inverter_binding_needs_live_detection_refresh)
+            self.assertIsNotNone(hub._inverter)
+            self.assertEqual(hub._inverter.serial_number, self._SERIAL)
+
+        asyncio.run(_run())
+
+    # 8. support diagnostics include the explicit runtime state fields.
+    def test_snapshot_exposes_all_runtime_state_fields(self) -> None:
+        hub = self._hub()
+        hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+
+        snapshot = hub._build_snapshot()
+
+        for key in (
+            "runtime_session_state",
+            "runtime_collector_state",
+            "runtime_inverter_state",
+            "runtime_driver_state",
+            "runtime_poll_state",
+            "runtime_last_driver_bound_identity",
+            "runtime_state_transitions",
+        ):
+            self.assertIn(key, snapshot.values, key)
+        self.assertEqual(snapshot.values["runtime_session_state"], "online")
+        self.assertEqual(snapshot.values["runtime_collector_state"], "identified")
+        self.assertEqual(snapshot.values["runtime_inverter_state"], "live_confirmed")
+
+    def test_state_transition_history_is_bounded(self) -> None:
+        hub = self._hub()
+        hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+        # Force many distinct composite states so the ring would overflow.
+        for index in range(40):
+            hub._link_manager.connected = bool(index % 2)
+            hub._build_snapshot()
+
+        self.assertLessEqual(len(hub._state_transition_history), 20)
 
 
 if __name__ == "__main__":

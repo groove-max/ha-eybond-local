@@ -2501,9 +2501,27 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
 
         inverter = snapshot.inverter
-        if inverter is not None:
+        detected_serial = str(getattr(inverter, "serial_number", "") or "").strip()
+        persisted_serial = str(current_data.get(CONF_DETECTED_SERIAL) or "").strip()
+        # Defensive identity-conflict guard at the persistence boundary: a
+        # confirmed durable serial must not be silently overwritten by a
+        # different confirmed serial. The hub already keeps the durable identity
+        # bound on conflict (so this rarely triggers), but persisting must never
+        # be the path that swaps a confirmed inverter identity.
+        inverter_identity_conflict = bool(
+            inverter is not None
+            and detected_serial
+            and persisted_serial
+            and detected_serial != persisted_serial
+        )
+        if inverter_identity_conflict:
+            logger.warning(
+                "Persisted inverter identity conflict: durable serial=%s live serial=%s; keeping durable identity",
+                persisted_serial,
+                detected_serial,
+            )
+        if inverter is not None and not inverter_identity_conflict:
             detected_model = str(inverter.model_name or "").strip()
-            detected_serial = str(inverter.serial_number or "").strip()
             driver_key = str(getattr(inverter, "driver_key", "") or "").strip()
             variant_key = str(getattr(inverter, "variant_key", "") or "").strip()
             if detected_model and updated_data.get(CONF_DETECTED_MODEL) != detected_model:

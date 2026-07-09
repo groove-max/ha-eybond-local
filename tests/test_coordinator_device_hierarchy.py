@@ -2946,6 +2946,109 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(len(updated_entries), 1)
 
+    def test_remember_runtime_identity_collector_only_does_not_erase_inverter(self) -> None:
+        # Runtime state-machine invariant: a collector-only snapshot (no inverter)
+        # must not erase a previously confirmed inverter identity.
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                del title, options
+                if data is not None:
+                    entry.data = dict(data)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-3",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0000000000001",
+                "detected_model": "PowMr 4.2kW",
+                "detected_serial": "55355535553555",
+                "detection_confidence": "high",
+                "driver_hint": "pi30",
+                "server_ip": "192.168.1.104",
+            },
+            options={},
+            title="PowMr 4.2kW (55355535553555)",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+
+        collector_only = self.RuntimeSnapshot(
+            values={},
+            inverter=None,
+            collector=types.SimpleNamespace(
+                collector_pn="Q0000000000001",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+                smartess_protocol_profile_key="smartess_at",
+            ),
+        )
+
+        import asyncio
+
+        asyncio.run(coordinator._async_remember_runtime_identity(collector_only))
+
+        self.assertEqual(coordinator.config_entry.data["detected_model"], "PowMr 4.2kW")
+        self.assertEqual(
+            coordinator.config_entry.data["detected_serial"], "55355535553555"
+        )
+
+    def test_remember_runtime_identity_different_serial_keeps_durable(self) -> None:
+        # Runtime state-machine invariant 6: a different confirmed serial is a
+        # conflict, not a silent swap of the durable inverter identity.
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                del title, options
+                if data is not None:
+                    entry.data = dict(data)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-4",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0000000000001",
+                "detected_model": "PowMr 4.2kW",
+                "detected_serial": "55355535553555",
+                "detection_confidence": "high",
+                "driver_hint": "pi30",
+                "server_ip": "192.168.1.104",
+            },
+            options={},
+            title="PowMr 4.2kW (55355535553555)",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+
+        conflicting = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 4.2kW",
+                serial_number="55355599999999",
+                driver_key="pi30",
+                variant_key="default",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0000000000001",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="8.50.12.3",
+                smartess_protocol_profile_key="smartess_at",
+            ),
+        )
+
+        import asyncio
+
+        asyncio.run(coordinator._async_remember_runtime_identity(conflicting))
+
+        # Durable serial is kept; the different serial is not silently swapped in.
+        self.assertEqual(
+            coordinator.config_entry.data["detected_serial"], "55355535553555"
+        )
+
     def test_remember_runtime_identity_does_not_persist_callback_peer_ip(self) -> None:
         updated_entries: list[dict[str, object]] = []
 

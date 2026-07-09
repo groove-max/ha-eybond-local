@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from time import monotonic
 from typing import Any, Callable
 
@@ -135,6 +136,86 @@ _AT_METADATA_CHANNEL_KEY = "collector:at_metadata"
 # probe commands stay under half a minute even in total silence.
 _AT_TEXT_ASCII_PROBE_TIMEOUT = 3.0
 RUNTIME_DRIVER_STATE_DRIVER_BOUND = "driver_bound"
+
+# --- Explicit runtime state-machine tracks -----------------------------------
+# These are diagnostic/auditable projections of the hub's otherwise-implicit
+# runtime state. They are derived in _build_snapshot and never drive transport
+# or ownership decisions. The five tracks are kept INDEPENDENT so a collector-
+# only observation can never erase a confirmed inverter identity: the inverter
+# track has its own lifecycle (absent -> detecting -> provisional/live_confirmed,
+# or conflict) that is not coupled to the session/collector tracks.
+RUNTIME_SESSION_STATE_OFFLINE = "offline"
+RUNTIME_SESSION_STATE_ONLINE = "online"
+
+RUNTIME_COLLECTOR_STATE_UNKNOWN = "unknown"
+RUNTIME_COLLECTOR_STATE_IDENTIFIED = "identified"
+
+RUNTIME_INVERTER_STATE_ABSENT = "absent"
+RUNTIME_INVERTER_STATE_DETECTING = "detecting"
+RUNTIME_INVERTER_STATE_PROVISIONAL = "provisional"
+RUNTIME_INVERTER_STATE_LIVE_CONFIRMED = "live_confirmed"
+RUNTIME_INVERTER_STATE_CONFLICT = "conflict"
+
+RUNTIME_POLL_STATE_OFFLINE = "offline"
+RUNTIME_POLL_STATE_DETECTING = "detecting"
+RUNTIME_POLL_STATE_POLLING = "polling"
+RUNTIME_POLL_STATE_DEGRADED = "degraded"
+
+# A provisional (startup-persisted) binding refreshes itself against live
+# detection. Bound the number of refresh attempts so a permanently-silent
+# inverter cannot re-run detection on every single poll.
+_INVERTER_BINDING_REFRESH_MAX_ATTEMPTS = 3
+
+# Keep a small ring of recent composite state transitions for the support
+# package. Bounded on purpose: no unbounded growth, no per-poll logging.
+_RUNTIME_STATE_TRANSITION_HISTORY_MAX = 20
+
+
+def _inverter_identity_signature(inverter: object | None) -> str:
+    """Return a stable identity signature (driver|model|serial) for comparison."""
+
+    if inverter is None:
+        return ""
+    driver_key = str(getattr(inverter, "driver_key", "") or "").strip()
+    model = str(getattr(inverter, "model_name", "") or "").strip()
+    serial = str(getattr(inverter, "serial_number", "") or "").strip()
+    return "|".join((driver_key, model, serial))
+
+
+def _inverter_identity_is_present(inverter: object | None) -> bool:
+    """Return whether an inverter object carries a usable model/serial identity."""
+
+    if inverter is None:
+        return False
+    return bool(
+        str(getattr(inverter, "model_name", "") or "").strip()
+        or str(getattr(inverter, "serial_number", "") or "").strip()
+    )
+
+
+def _inverter_identities_conflict(current: object, candidate: object) -> bool:
+    """Return whether two present identities denote different physical inverters.
+
+    Serial number is the strongest signal: two non-empty different serials are a
+    conflict. When a serial is unavailable, a different driver_key or model is a
+    conflict. Same identity, or a refinement of a missing field, is NOT a conflict.
+    """
+
+    cur_serial = str(getattr(current, "serial_number", "") or "").strip()
+    cand_serial = str(getattr(candidate, "serial_number", "") or "").strip()
+    if cur_serial and cand_serial:
+        return cur_serial != cand_serial
+    cur_driver = str(getattr(current, "driver_key", "") or "").strip()
+    cand_driver = str(getattr(candidate, "driver_key", "") or "").strip()
+    if cur_driver and cand_driver and cur_driver != cand_driver:
+        return True
+    cur_model = str(getattr(current, "model_name", "") or "").strip()
+    cand_model = str(getattr(candidate, "model_name", "") or "").strip()
+    if cur_model and cand_model and cur_model != cand_model:
+        return True
+    return False
+
+
 _VOLATILE_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
     {
         "smartess_collector_version",
@@ -523,6 +604,13 @@ class EybondHub:
         self._driver: InverterDriver | None = None
         self._inverter: DetectedInverter | None = None
         self._inverter_binding_needs_live_detection_refresh = False
+        self._inverter_binding_refresh_attempts = 0
+        self._inverter_identity_conflict = ""
+        self._last_driver_bound_identity = ""
+        self._state_transition_history: deque[str] = deque(
+            maxlen=_RUNTIME_STATE_TRANSITION_HISTORY_MAX
+        )
+        self._last_composite_state: tuple[str, ...] = ()
         self._inverter_overlay_applier: (
             Callable[[DetectedInverter, Any], DetectedInverter] | None
         ) = None
@@ -952,11 +1040,23 @@ class EybondHub:
                 self._last_snapshot = snapshot
                 return snapshot
         elif self._inverter_binding_needs_live_detection_refresh:
+            # A startup-persisted (provisional) binding refreshes itself against
+            # live detection. Bound the attempts so a permanently-silent inverter
+            # cannot re-run detection on every poll: on success/conflict
+            # _async_detect_driver clears the flag; on transient failure we stop
+            # after a few tries and keep the provisional binding.
+            self._inverter_binding_refresh_attempts += 1
             detect_error = await self._async_detect_driver()
             _mark_refresh_phase("driver_identity_refresh")
             if detect_error:
+                if (
+                    self._inverter_binding_refresh_attempts
+                    >= _INVERTER_BINDING_REFRESH_MAX_ATTEMPTS
+                ):
+                    self._inverter_binding_needs_live_detection_refresh = False
                 logger.debug(
-                    "Deferred inverter identity refresh failed: %s; keeping persisted binding",
+                    "Deferred inverter identity refresh attempt %d failed: %s; keeping persisted binding",
+                    self._inverter_binding_refresh_attempts,
                     detect_error,
                 )
 
@@ -1949,9 +2049,35 @@ class EybondHub:
         except RuntimeError as exc:
             return str(exc)
 
+        # Identity-conflict guard: a durable/provisional binding is sticky. When
+        # live detection reports a DIFFERENT full identity, report the conflict
+        # and keep the durable identity -- never silently swap it. This runs on
+        # the deferred provisional refresh and on any post-reset re-detection.
+        previous = self._inverter
+        if (
+            _inverter_identity_is_present(previous)
+            and _inverter_identity_is_present(context.inverter)
+            and _inverter_identities_conflict(previous, context.inverter)
+        ):
+            self._inverter_identity_conflict = (
+                f"{_inverter_identity_signature(previous)}"
+                f" != {_inverter_identity_signature(context.inverter)}"
+            )
+            # Terminal for the provisional refresh: stop retrying and keep durable.
+            self._inverter_binding_needs_live_detection_refresh = False
+            self._inverter_binding_refresh_attempts = 0
+            logger.warning(
+                "Runtime inverter identity conflict: durable=%s live=%s; keeping durable identity",
+                _inverter_identity_signature(previous),
+                _inverter_identity_signature(context.inverter),
+            )
+            return "inverter_identity_conflict"
+
+        self._inverter_identity_conflict = ""
         self._driver = context.driver
         self._inverter = context.inverter
         self._inverter_binding_needs_live_detection_refresh = False
+        self._inverter_binding_refresh_attempts = 0
         # The overlay merge is applied in _build_snapshot (every refresh, once the
         # collector identity is populated), not here -- at detection the collector is
         # not yet identified, so the device-scope match would fail and never retry.
@@ -1996,6 +2122,116 @@ class EybondHub:
         self._recovery_streak = 0
         self._recovery_backoff_until_monotonic = 0.0
         self._last_recovery_reason = ""
+
+    def _record_state_transition(self, tracks: tuple[str, ...]) -> None:
+        """Append a composite state transition to the bounded diagnostic ring."""
+
+        if tracks == self._last_composite_state:
+            return
+        self._last_composite_state = tracks
+        self._state_transition_history.append("/".join(tracks))
+
+    def _apply_runtime_state_values(
+        self,
+        values: dict[str, object],
+        *,
+        snapshot_connected: bool,
+        last_error: str | None,
+    ) -> None:
+        """Derive the explicit runtime state-machine tracks onto the snapshot.
+
+        These are diagnostic/auditable projections of the hub's implicit state;
+        they never drive transport, ownership, or wire decisions. The tracks are
+        independent on purpose -- the inverter track keeps its own lifecycle so a
+        collector-only observation never erases a confirmed inverter identity.
+        """
+
+        collector = self._link_manager.collector_info
+        collector_pn = str(getattr(collector, "collector_pn", "") or "").strip()
+        durable_pn = str(getattr(self._connection, "collector_pn", "") or "").strip()
+        inverter = self._inverter
+        identity_present = _inverter_identity_is_present(inverter)
+        detection_status = str(values.get("runtime_detection_status") or "").strip()
+        recovering = (
+            self._recovery_streak > 0
+            or self._recovery_backoff_remaining() > 0.0
+            or bool(last_error)
+        )
+
+        session_state = (
+            RUNTIME_SESSION_STATE_ONLINE
+            if snapshot_connected
+            else RUNTIME_SESSION_STATE_OFFLINE
+        )
+        collector_state = (
+            RUNTIME_COLLECTOR_STATE_IDENTIFIED
+            if (collector_pn or durable_pn)
+            else RUNTIME_COLLECTOR_STATE_UNKNOWN
+        )
+
+        if self._inverter_identity_conflict:
+            inverter_state = RUNTIME_INVERTER_STATE_CONFLICT
+        elif not identity_present:
+            inverter_state = (
+                RUNTIME_INVERTER_STATE_DETECTING
+                if snapshot_connected
+                else RUNTIME_INVERTER_STATE_ABSENT
+            )
+        elif (
+            detection_status == "startup_persisted_identity"
+            or self._inverter_binding_needs_live_detection_refresh
+        ):
+            inverter_state = RUNTIME_INVERTER_STATE_PROVISIONAL
+        else:
+            inverter_state = RUNTIME_INVERTER_STATE_LIVE_CONFIRMED
+
+        # runtime_driver_state keeps its historical three values (backward compat).
+        if not snapshot_connected:
+            driver_state = RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE
+        elif inverter is not None:
+            driver_state = RUNTIME_DRIVER_STATE_DRIVER_BOUND
+        else:
+            driver_state = RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
+
+        if not snapshot_connected:
+            poll_state = RUNTIME_POLL_STATE_OFFLINE
+        elif inverter is None:
+            poll_state = RUNTIME_POLL_STATE_DETECTING
+        elif recovering:
+            poll_state = RUNTIME_POLL_STATE_DEGRADED
+        else:
+            poll_state = RUNTIME_POLL_STATE_POLLING
+
+        values["runtime_session_state"] = session_state
+        values["runtime_collector_state"] = collector_state
+        values["runtime_inverter_state"] = inverter_state
+        values["runtime_driver_state"] = driver_state
+        values["runtime_poll_state"] = poll_state
+
+        if self._inverter_identity_conflict:
+            values["runtime_identity_conflict"] = self._inverter_identity_conflict
+        elif values.get("collector_pn_identity_conflict"):
+            values["runtime_identity_conflict"] = "collector_pn"
+        else:
+            values.pop("runtime_identity_conflict", None)
+
+        # The last identity that reached driver_bound stays available across
+        # offline/degraded snapshots so support can see the confirmed inverter
+        # even while it is temporarily unreachable.
+        if driver_state == RUNTIME_DRIVER_STATE_DRIVER_BOUND and identity_present:
+            signature = _inverter_identity_signature(inverter)
+            if signature:
+                self._last_driver_bound_identity = signature
+        if self._last_driver_bound_identity:
+            values["runtime_last_driver_bound_identity"] = self._last_driver_bound_identity
+
+        self._record_state_transition(
+            (session_state, collector_state, inverter_state, driver_state, poll_state)
+        )
+        if self._state_transition_history:
+            values["runtime_state_transitions"] = " | ".join(
+                self._state_transition_history
+            )
 
     def _build_snapshot(
         self,
@@ -2321,12 +2557,11 @@ class EybondHub:
             values.pop("blocked_write_summary", None)
 
         snapshot_connected = self._link_manager.connected if connected is None else connected
-        if not snapshot_connected:
-            values["runtime_driver_state"] = RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE
-        elif self._inverter is not None:
-            values["runtime_driver_state"] = RUNTIME_DRIVER_STATE_DRIVER_BOUND
-        else:
-            values["runtime_driver_state"] = RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
+        self._apply_runtime_state_values(
+            values,
+            snapshot_connected=snapshot_connected,
+            last_error=last_error,
+        )
 
         if last_error:
             values["last_error"] = last_error
