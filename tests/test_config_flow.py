@@ -6074,6 +6074,31 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # True from older options/capability snapshots.
         self.assertFalse(result["data"][CONF_PROXY_ENABLED])
 
+    async def test_options_runtime_step_hides_proxy_toggle_when_capability_disallows(self) -> None:
+        # Phase 7 (scenario 5): a community/ESP bridge cannot host proxy capture,
+        # so the runtime options FORM must not even show the proxy control for
+        # it, while a proxy-capable (factory) collector still shows it. This is
+        # form-level capability gating, complementing the fail-closed submit path
+        # asserted in test_options_runtime_step_forces_inbound_for_bridge_on_submit.
+        proxy_capable = self._make_options_flow()
+        proxy_capable._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(collector=None, values={}),
+        )
+        proxy_result = await proxy_capable.async_step_runtime()
+        self.assertEqual(proxy_result["type"], "form")
+        self.assertIn(CONF_PROXY_ENABLED, proxy_result["data_schema"].schema)
+
+        bridge = self._make_options_flow()
+        bridge._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+        bridge_result = await bridge.async_step_runtime()
+        self.assertEqual(bridge_result["type"], "form")
+        self.assertNotIn(CONF_PROXY_ENABLED, bridge_result["data_schema"].schema)
+
     async def test_options_runtime_step_persists_connection_strategy_and_proxy(self) -> None:
         # Phase 4: the runtime step persists the connection_strategy + proxy axes.
         options = self._make_options_flow()

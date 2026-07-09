@@ -61,6 +61,54 @@ async def _wait_for_ready(handler: InProcessFailClosedShadowProxyHandler, timeou
     return False
 
 
+class _TrackedServer:
+    """asyncio server wrapper that also closes accepted connections on teardown.
+
+    ``asyncio.start_server(...).wait_closed()`` closes only the listening
+    socket, not the connections its handler already accepted. Under
+    ``IsolatedAsyncioTestCase`` those accepted transports are then orphaned when
+    the per-test event loop is torn down, surfacing later (during unrelated
+    tests) as ResourceWarnings about unclosed sockets/transports. Tracking and
+    closing the accepted writers here keeps the fake servers leak-free without
+    masking any warning globally.
+    """
+
+    def __init__(
+        self,
+        server: asyncio.AbstractServer,
+        connections: list[asyncio.StreamWriter],
+    ) -> None:
+        self._server = server
+        self._connections = connections
+        self.sockets = server.sockets
+
+    def close(self) -> None:
+        self._server.close()
+
+    async def wait_closed(self) -> None:
+        await self._server.wait_closed()
+        for writer in list(self._connections):
+            try:
+                if not writer.is_closing():
+                    writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+
+async def _start_tracked_server(handler, host: str = "127.0.0.1", port: int = 0) -> _TrackedServer:
+    """Like ``asyncio.start_server`` but tracks accepted connections for cleanup."""
+
+    connections: list[asyncio.StreamWriter] = []
+
+    async def _wrapped(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connections.append(writer)
+        await handler(reader, writer)
+
+    server = await asyncio.start_server(_wrapped, host, port)
+    return _TrackedServer(server, connections)
+
+
 class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_and_readiness_with_fake_endpoints(self) -> None:
         collector_frames: list[bytes] = []
@@ -71,7 +119,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
-        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_server = await _start_tracked_server(_upstream_handler, "127.0.0.1", 0)
         upstream_port = upstream_server.sockets[0].getsockname()[1]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,7 +130,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_path=Path(tmp) / "shadow_runtime.jsonl",
             )
             await handler.start()
-            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_server = await _start_tracked_server(handler.handle_client, "127.0.0.1", 0)
             proxy_port = proxy_server.sockets[0].getsockname()[1]
 
             reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
@@ -110,7 +158,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await writer.wait_closed()
             await reader.read()
 
-        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_server = await _start_tracked_server(_upstream_handler, "127.0.0.1", 0)
         upstream_port = upstream_server.sockets[0].getsockname()[1]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,7 +169,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_path=Path(tmp) / "shadow_runtime.jsonl",
             )
             await handler.start()
-            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_server = await _start_tracked_server(handler.handle_client, "127.0.0.1", 0)
             proxy_port = proxy_server.sockets[0].getsockname()[1]
 
             reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
@@ -152,7 +200,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
-        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_server = await _start_tracked_server(_upstream_handler, "127.0.0.1", 0)
         upstream_port = upstream_server.sockets[0].getsockname()[1]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,7 +211,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_path=Path(tmp) / "shadow_runtime.jsonl",
             )
             await handler.start()
-            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_server = await _start_tracked_server(handler.handle_client, "127.0.0.1", 0)
             proxy_port = proxy_server.sockets[0].getsockname()[1]
 
             reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
@@ -194,7 +242,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await writer.wait_closed()
             await reader.read()
 
-        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_server = await _start_tracked_server(_upstream_handler, "127.0.0.1", 0)
         upstream_port = upstream_server.sockets[0].getsockname()[1]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,7 +253,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_path=Path(tmp) / "shadow_runtime.jsonl",
             )
             await handler.start()
-            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_server = await _start_tracked_server(handler.handle_client, "127.0.0.1", 0)
             proxy_port = proxy_server.sockets[0].getsockname()[1]
 
             reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
@@ -243,7 +291,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 output_path=Path(tmp) / "shadow_runtime.jsonl",
             )
             await handler.start()
-            proxy_server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
+            proxy_server = await _start_tracked_server(handler.handle_client, "127.0.0.1", 0)
             proxy_port = proxy_server.sockets[0].getsockname()[1]
 
             reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
@@ -266,7 +314,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await writer.wait_closed()
             await reader.read()
 
-        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_server = await _start_tracked_server(_upstream_handler, "127.0.0.1", 0)
         upstream_port = upstream_server.sockets[0].getsockname()[1]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,7 +337,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
-        upstream_server = await asyncio.start_server(_upstream_handler, "127.0.0.1", 0)
+        upstream_server = await _start_tracked_server(_upstream_handler, "127.0.0.1", 0)
         upstream_port = upstream_server.sockets[0].getsockname()[1]
 
         with tempfile.TemporaryDirectory() as tmp:
