@@ -127,6 +127,10 @@ class CollectorEntityScopeTests(unittest.TestCase):
         self.assertTrue(is_collector_entity_key("configured_collector_ip"))
         self.assertTrue(is_collector_entity_key("smartess_protocol_asset_id"))
         self.assertTrue(is_collector_entity_key("runtime_driver_state"))
+        self.assertTrue(is_collector_entity_key("collector_last_frame_devcode"))
+        self.assertFalse(is_collector_entity_key("inverter_route_devcode"))
+        self.assertFalse(is_collector_entity_key("inverter_route_collector_addr"))
+        self.assertFalse(is_collector_entity_key("inverter_route_device_addr"))
         self.assertFalse(is_collector_entity_key("model_name"))
         self.assertFalse(is_collector_entity_key("driver_key"))
 

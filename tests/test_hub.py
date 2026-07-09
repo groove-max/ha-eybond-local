@@ -2564,5 +2564,116 @@ class RuntimeStateMachineTests(unittest.TestCase):
         self.assertLessEqual(len(hub._state_transition_history), 20)
 
 
+class CollectorDevcodeDiagnosticsTests(unittest.TestCase):
+    """Diagnostics/devcode split: stable identity vs volatile frame vs route."""
+
+    def _hub(self) -> EybondHub:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                collector_pn="V001020SYN62344022",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        return hub
+
+    def test_zero_heartbeat_devcode_is_preserved_as_0x0000(self) -> None:
+        hub = self._hub()
+        hub._link_manager.collector_info.heartbeat_devcode = 0x0000
+        hub._link_manager.collector_info.last_devcode = 0x0994  # volatile last frame
+
+        snapshot = hub._build_snapshot()
+
+        # 0x0000 is a valid identity, not "no data": collector_devcode stays 0x0000
+        # and never falls through to the volatile last-frame devcode.
+        self.assertEqual(snapshot.values["collector_devcode"], "0x0000")
+        self.assertEqual(snapshot.values["collector_heartbeat_devcode"], "0x0000")
+        self.assertEqual(snapshot.values["collector_last_frame_devcode"], "0x0994")
+
+    def test_last_frame_devcode_changes_without_changing_identity(self) -> None:
+        hub = self._hub()
+        hub._link_manager.collector_info.heartbeat_devcode = 0x0994  # stable identity
+
+        hub._link_manager.collector_info.last_devcode = 0x0001
+        first = hub._build_snapshot()
+        hub._last_snapshot = first
+        hub._link_manager.collector_info.last_devcode = 0x0002
+        second = hub._build_snapshot()
+
+        # Stable identity is unchanged across frames; only the frame diagnostic moves.
+        self.assertEqual(first.values["collector_devcode"], "0x0994")
+        self.assertEqual(second.values["collector_devcode"], "0x0994")
+        self.assertEqual(first.values["collector_last_frame_devcode"], "0x0001")
+        self.assertEqual(second.values["collector_last_frame_devcode"], "0x0002")
+
+    def test_inverter_route_devcode_distinct_from_collector_devcode(self) -> None:
+        hub = self._hub()
+        hub._link_manager.collector_info.heartbeat_devcode = 0x0000  # collector identity
+        hub._link_manager.collector_info.smartess_device_address = 4  # mgmt addr
+        hub._inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG 6200",
+            serial_number="92632500000001",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0),
+        )
+
+        snapshot = hub._build_snapshot()
+
+        # The inverter payload route (probe target) is distinct from the collector
+        # identity/management devcode.
+        self.assertEqual(snapshot.values["inverter_route_devcode"], "0x0994")
+        self.assertEqual(snapshot.values["collector_devcode"], "0x0000")
+        self.assertNotEqual(
+            snapshot.values["inverter_route_devcode"],
+            snapshot.values["collector_devcode"],
+        )
+        self.assertEqual(snapshot.values["smartess_device_address"], 4)
+
+    def test_snapshot_exposes_separate_heartbeat_frame_route_diagnostics(self) -> None:
+        hub = self._hub()
+        hub._link_manager.collector_info.heartbeat_devcode = 0x0001
+        hub._link_manager.collector_info.last_devcode = 0x0994
+        hub._inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG 6200",
+            serial_number="92632500000001",
+            probe_target=ProbeTarget(devcode=0x0002, collector_addr=1, device_addr=0),
+        )
+
+        snapshot = hub._build_snapshot()
+
+        self.assertEqual(snapshot.values["collector_heartbeat_devcode"], "0x0001")
+        self.assertEqual(snapshot.values["collector_last_frame_devcode"], "0x0994")
+        self.assertEqual(snapshot.values["inverter_route_devcode"], "0x0002")
+        # 0 collector/device addr are preserved (is-not-None, not falsy).
+        self.assertEqual(snapshot.values["inverter_route_collector_addr"], 1)
+        self.assertEqual(snapshot.values["inverter_route_device_addr"], 0)
+
+    def test_stable_devcode_does_not_mask_last_frame_devcode(self) -> None:
+        hub = self._hub()
+        hub._link_manager.collector_info.heartbeat_devcode = 0x0994
+        hub._link_manager.collector_info.last_devcode = 0x0001
+
+        snapshot = hub._build_snapshot()
+
+        # The stable collector_devcode and the volatile last-frame field coexist
+        # as distinct, clearer fields -- neither masks the other.
+        self.assertIn("collector_devcode", snapshot.values)
+        self.assertIn("collector_last_frame_devcode", snapshot.values)
+        self.assertNotEqual(
+            snapshot.values["collector_devcode"],
+            snapshot.values["collector_last_frame_devcode"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

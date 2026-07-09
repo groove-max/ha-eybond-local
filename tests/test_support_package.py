@@ -52,6 +52,68 @@ class SupportPackageTests(unittest.TestCase):
             async_register_support_package_download_view(types.SimpleNamespace())
         )
 
+    def test_support_bundle_diagnostics_split_separates_identity_frame_route(self) -> None:
+        support_bundle = build_support_bundle_payload(
+            entry_id="entry-diag",
+            entry_title="SMG 6200",
+            connected=True,
+            collector={"collector_pn": "E5000020000000"},
+            inverter={
+                "driver_key": "modbus_smg",
+                "model_name": "SMG 6200",
+                "serial_number": "92632500000001",
+            },
+            values={
+                "collector_pn": "E5000020000000",
+                "collector_devcode": "0x0000",
+                "collector_heartbeat_devcode": "0x0000",
+                "collector_last_frame_devcode": "0x0994",
+                "inverter_route_devcode": "0x0994",
+                "collector_callback_wire_framing": "eybond_framed",
+                "collector_callback_identity_sources": "framed_heartbeat",
+                "collector_callback_inverter_forward_adapter": "framed_forward",
+                "collector_callback_collector_management_adapter": "framed_collector_commands",
+                "collector_callback_proxy_adapter": "raw_passthrough",
+                "collector_callback_adapter_conflict": "",
+                "smartess_device_address": 4,
+            },
+            data={
+                "collector_cloud_family": "smartess_at",
+                "connection_strategy": "inbound",
+                "endpoint_control_policy": "external",
+            },
+            options={},
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+        )
+
+        diag = support_bundle["roles"]["diagnostics"]
+
+        # Stable identity carries the heartbeat devcode + axes, never the frame.
+        self.assertEqual(diag["collector_identity"]["devcode"], "0x0000")
+        self.assertEqual(diag["collector_identity"]["connection_strategy"], "inbound")
+        self.assertEqual(
+            diag["collector_identity"]["endpoint_control_policy"], "external"
+        )
+        # Frame vs heartbeat are clearly separated.
+        self.assertEqual(diag["last_frame"]["collector_last_frame_devcode"], "0x0994")
+        self.assertEqual(diag["heartbeat"]["collector_heartbeat_devcode"], "0x0000")
+        # Session/adapter fields are present.
+        self.assertIn("collector_callback_wire_framing", diag["session"])
+        # Inverter route + selected forward adapter.
+        self.assertEqual(diag["inverter_route"]["inverter_route_devcode"], "0x0994")
+        self.assertEqual(
+            diag["inverter_route"]["inverter_forward_adapter"], "framed_forward"
+        )
+        # Collector-management route is distinct from the inverter route.
+        self.assertEqual(
+            diag["collector_management_route"]["collector_management_adapter"],
+            "framed_collector_commands",
+        )
+        self.assertEqual(
+            diag["collector_management_route"]["smartess_device_address"], 4
+        )
+
     def test_exports_support_package_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_dir = Path(temp_dir)

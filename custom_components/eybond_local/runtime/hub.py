@@ -2415,14 +2415,20 @@ class EybondHub:
             values.update(listener_diagnostics())
             if not values.get("collector_listener_last_error"):
                 values.pop("collector_listener_last_error", None)
-        # The heartbeat devcode is the collector's stable identity; the last
-        # received frame's devcode alternates with every data forward and made
-        # the sensor flip between values continuously.
-        display_devcode = collector.heartbeat_devcode
-        if not display_devcode:
-            display_devcode = collector.last_devcode
-        if display_devcode is not None:
-            values["collector_devcode"] = f"0x{display_devcode:04X}"
+        # Collector Devcode is STABLE identity: the heartbeat frame's devcode.
+        # 0x0000 is a valid devcode, so gate on ``is not None`` and NEVER fall
+        # back to the volatile last-frame devcode -- that alternates with every
+        # data forward and made the sensor flip between 0x0994 / 0x0001 / 0x0000.
+        # The last frame is exposed separately as an honestly-labelled frame
+        # diagnostic so it can never be mistaken for the collector identity.
+        if collector.heartbeat_devcode is not None:
+            values["collector_devcode"] = f"0x{collector.heartbeat_devcode:04X}"
+        else:
+            values.pop("collector_devcode", None)
+        if collector.last_devcode is not None:
+            values["collector_last_frame_devcode"] = f"0x{collector.last_devcode:04X}"
+        else:
+            values.pop("collector_last_frame_devcode", None)
         if collector.last_udp_reply:
             values["collector_udp_reply"] = collector.last_udp_reply
         if collector.last_udp_reply_from:
@@ -2463,6 +2469,18 @@ class EybondHub:
                 values["register_schema_name"] = self._inverter.register_schema_name
             values["model_name"] = self._inverter.model_name
             values["serial_number"] = self._inverter.serial_number
+            # Inverter payload route (probe target). This is the route the driver
+            # reaches the inverter over -- distinct from the collector-management
+            # route and from any single last frame. Every field gates on
+            # ``is not None`` so devcode/addr 0x0000 stay visible.
+            probe_target = getattr(self._inverter, "probe_target", None)
+            if probe_target is not None:
+                if getattr(probe_target, "devcode", None) is not None:
+                    values["inverter_route_devcode"] = f"0x{probe_target.devcode:04X}"
+                if getattr(probe_target, "collector_addr", None) is not None:
+                    values["inverter_route_collector_addr"] = probe_target.collector_addr
+                if getattr(probe_target, "device_addr", None) is not None:
+                    values["inverter_route_device_addr"] = probe_target.device_addr
             if self._inverter.capabilities:
                 values["write_capabilities"] = ", ".join(
                     capability.key for capability in self._inverter.capabilities

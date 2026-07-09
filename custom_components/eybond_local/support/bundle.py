@@ -60,6 +60,104 @@ def _split_runtime_values_by_role(values: dict[str, Any]) -> dict[str, dict[str,
     return grouped
 
 
+def _present(source: dict[str, Any], *keys: str) -> dict[str, Any]:
+    """Return only the present, non-None keys (so devcode/addr 0x0000/0 survive)."""
+
+    return {key: source[key] for key in keys if source.get(key) is not None}
+
+
+def _build_diagnostics_split(
+    values: dict[str, Any],
+    data: dict[str, Any],
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the split collector/session/frame/route diagnostics.
+
+    This makes the support package clearly separate STABLE identity from volatile
+    last-frame / route metadata, so a reader never mistakes the last frame's
+    devcode for the collector identity. Everything is projected from the runtime
+    snapshot values; nothing here mutates runtime state.
+    """
+
+    try:
+        from ..connection.connection_policy import entry_axis_diagnostics
+
+        axes = entry_axis_diagnostics(data, options)
+    except Exception:  # pragma: no cover - defensive: never fail the bundle
+        axes = {}
+
+    return {
+        "collector_identity": {
+            "collector_pn": values.get("collector_pn") or data.get("collector_pn", ""),
+            "collector_kind": (
+                "esp_eybond_bridge"
+                if values.get("collector_virtual_bridge") or data.get("collector_virtual_bridge")
+                else data.get("collector_kind", "")
+            ),
+            "collector_virtual_bridge": bool(
+                values.get("collector_virtual_bridge") or data.get("collector_virtual_bridge")
+            ),
+            "collector_bridge_version": values.get("collector_bridge_version", ""),
+            "collector_firmware_version": values.get("smartess_collector_version", ""),
+            "collector_cloud_family": values.get("collector_cloud_family")
+            or data.get("collector_cloud_family", ""),
+            "collector_cloud_profile_key": values.get("collector_cloud_profile_key")
+            or data.get("collector_cloud_profile_key", ""),
+            "connection_strategy": axes.get("connection_strategy", ""),
+            "endpoint_control_policy": axes.get("endpoint_control_policy", ""),
+            # Stable identity devcode (heartbeat), NOT the volatile last frame.
+            "devcode": values.get("collector_devcode", ""),
+        },
+        "session": _present(
+            values,
+            "collector_remote_ip",
+            "collector_callback_session_protocol",
+            "collector_callback_observed_session_protocol",
+            "collector_callback_wire_framing",
+            "collector_callback_identity_sources",
+            "collector_callback_collector_management_adapter",
+            "collector_callback_inverter_forward_adapter",
+            "collector_callback_proxy_adapter",
+            "collector_callback_adapter_conflict",
+            "collector_connection_count",
+            "collector_disconnect_count",
+            "collector_last_disconnect_reason",
+            "collector_heartbeat_age_seconds",
+            "runtime_session_state",
+        ),
+        "last_frame": _present(values, "collector_last_frame_devcode"),
+        "heartbeat": _present(
+            values,
+            "collector_heartbeat_devcode",
+            "collector_heartbeat_payload_len",
+            "collector_heartbeat_payload",
+            "collector_heartbeat_format",
+            "collector_heartbeat_age_seconds",
+        ),
+        "inverter_route": {
+            "driver_key": values.get("driver_key") or data.get("driver_hint", ""),
+            "protocol_family": values.get("protocol_family", ""),
+            "model": values.get("model_name") or data.get("detected_model", ""),
+            "serial": values.get("serial_number") or data.get("detected_serial", ""),
+            "inverter_forward_adapter": values.get(
+                "collector_callback_inverter_forward_adapter", ""
+            ),
+            **_present(
+                values,
+                "inverter_route_devcode",
+                "inverter_route_collector_addr",
+                "inverter_route_device_addr",
+            ),
+        },
+        "collector_management_route": {
+            "collector_management_adapter": values.get(
+                "collector_callback_collector_management_adapter", ""
+            ),
+            **_present(values, "smartess_device_address"),
+        },
+    }
+
+
 def _build_role_payloads(
     *,
     collector: dict[str, Any] | None,
@@ -103,6 +201,7 @@ def _build_role_payloads(
             "payload_ref": "runtime.values",
             "values": grouped_values["integration"],
         },
+        "diagnostics": _build_diagnostics_split(values, data, options),
     }
 
 

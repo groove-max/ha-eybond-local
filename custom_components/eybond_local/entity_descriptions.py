@@ -147,10 +147,29 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
         live=False,
     ),
     MeasurementDescription(
+        # Stable collector identity: sourced from the heartbeat frame devcode
+        # only (0x0000 preserved). The volatile last-frame devcode is a separate
+        # "Collector Last Frame Devcode" diagnostic below.
         key="collector_devcode",
         name="Collector Devcode",
         icon="mdi:chip",
         diagnostic=True,
+        live=False,
+    ),
+    MeasurementDescription(
+        key="collector_last_frame_devcode",
+        name="Collector Last Frame Devcode",
+        icon="mdi:transit-connection-variant",
+        diagnostic=True,
+        enabled_default=False,
+        live=False,
+    ),
+    MeasurementDescription(
+        key="inverter_route_devcode",
+        name="Inverter Route Devcode",
+        icon="mdi:sitemap-outline",
+        diagnostic=True,
+        enabled_default=False,
         live=False,
     ),
     MeasurementDescription(
