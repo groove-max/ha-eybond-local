@@ -280,6 +280,8 @@ def _callback_identity_status_values(
     recent_count: int,
     duplicate_peer_ip_count: int,
     sessions: list[dict[str, object]],
+    expects_collector_identity: bool = False,
+    owned_session_observed: bool = False,
 ) -> dict[str, object]:
     """Return compact, user-facing callback identity diagnostics."""
 
@@ -309,6 +311,14 @@ def _callback_identity_status_values(
         if state in pending_states:
             waiting_count += 1
             unresolved_count += 1
+
+    if (
+        expects_collector_identity
+        and identified_count > 0
+        and not owned_session_observed
+    ):
+        mismatch_count += identified_count
+        unresolved_count += identified_count
 
     if pending_count <= 0:
         status = "idle"
@@ -756,6 +766,8 @@ class EybondRuntimeLinkManager:
                 recent_count=recent_count,
                 duplicate_peer_ip_count=duplicate_peer_ip_count,
                 sessions=sessions,
+                expects_collector_identity=bool(str(self._collector_pn or "").strip()),
+                owned_session_observed=bool(self.session_handle.observed),
             )
         )
         return result
