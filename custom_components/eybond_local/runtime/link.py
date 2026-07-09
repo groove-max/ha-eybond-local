@@ -43,6 +43,21 @@ _DEFAULT_LISTENER_BIND_HOST = "0.0.0.0"
 # sufficient; ownership is by durable PN, never peer IP.
 _RUNTIME_SESSION_ENTRY_KEY = "runtime"
 
+# Phase 3: typed outcomes of a callback_on_demand connect attempt. Surfaced in
+# listener diagnostics / support packages so a failed one-shot callback is
+# explainable instead of a generic "collector_offline".
+CALLBACK_STATE_IDLE = ""
+CALLBACK_STATE_CONNECTED = "callback_connected"
+CALLBACK_STATE_TIMEOUT = "callback_timeout"
+CALLBACK_STATE_IDENTITY_MISMATCH = "callback_identity_mismatch"
+CALLBACK_STATE_CLAIMED_BY_OTHER = "callback_session_claimed_by_other_entry"
+CALLBACK_STATE_LISTENER_UNAVAILABLE = "callback_listener_unavailable"
+CALLBACK_STATE_LISTENER_ERROR = "callback_listener_error"
+
+# One-shot UDP callback trigger send/reply window (seconds). This is not a
+# polling interval -- exactly one datagram is sent per connect attempt.
+_CALLBACK_TRIGGER_TIMEOUT = 0.75
+
 
 @dataclass(frozen=True, slots=True)
 class RouteLease:
@@ -377,6 +392,16 @@ class EybondRuntimeLinkManager:
             sessions_source=self._iter_observed_sessions,
         )
         self._runtime_claim_pn: str | None = None
+        # Phase 3 callback_on_demand one-shot trigger state.
+        self._callback_trigger_count = 0
+        self._last_callback_state: str = CALLBACK_STATE_IDLE
+        self._last_callback_detail: str = ""
+        # Cross-entry ownership authority (the domain registry) + this entry id,
+        # injected read-only by the coordinator. Used only to classify the
+        # "session claimed by another entry" callback outcome. Never used to read
+        # listener internals or to pick a wire.
+        self._callback_ownership_registry: CallbackSessionRegistry | None = None
+        self._callback_entry_id: str = ""
         if server_ip and self._effective_server_ip and self._effective_server_ip != server_ip:
             logger.warning(
                 "Configured EyeBond server_ip %s is not active on this host; falling back to %s",
@@ -597,6 +622,7 @@ class EybondRuntimeLinkManager:
             ),
         }
         diagnostics.update(self._session_inventory_diagnostics())
+        diagnostics.update(self.callback_trigger_diagnostics())
         return diagnostics
 
     def _owned_observed_session_protocol(self) -> str:
@@ -674,10 +700,9 @@ class EybondRuntimeLinkManager:
         self._started = True
         self._listener_status = "listening"
         self._listener_last_error = ""
-        if self._reverse_discovery_enabled:
-            await self._ensure_discovery(reason="runtime_start")
-        else:
-            await self._announcer.stop()
+        # Phase 3: no continuous announcer. callback_on_demand sends a one-shot
+        # trigger per connect attempt (async_try_connect); nothing runs here.
+        await self._announcer.stop()
 
     async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
         """Re-resolve the collector-facing host and rebuild listeners if it changed."""
@@ -699,10 +724,7 @@ class EybondRuntimeLinkManager:
         self._listener_status = "listening"
         self._listener_last_error = ""
         self._started = True
-        if self._reverse_discovery_enabled:
-            await self._ensure_discovery(reason=reason or "network_change")
-        else:
-            await self._announcer.stop()
+        await self._announcer.stop()
         return True
 
     async def async_reconcile_collector_session_profile(
@@ -776,10 +798,7 @@ class EybondRuntimeLinkManager:
         self._listener_status = "listening"
         self._listener_last_error = ""
         self._started = True
-        if self._reverse_discovery_enabled:
-            await self._ensure_discovery(reason=reason or "collector_session_profile_change")
-        else:
-            await self._announcer.stop()
+        await self._announcer.stop()
         return True
 
     async def async_stop(self) -> None:
@@ -848,6 +867,126 @@ class EybondRuntimeLinkManager:
             "reply": probe.reply,
             "reply_from": probe.reply_from,
             "local_port": probe.local_port,
+        }
+
+    def set_callback_ownership(
+        self,
+        registry: CallbackSessionRegistry | None,
+        entry_id: str,
+    ) -> None:
+        """Inject the domain callback-session registry + this entry id (read-only).
+
+        Used only to classify the ``callback_session_claimed_by_other_entry``
+        outcome (is a matching session already owned by a *different* entry?). It
+        is never used to read listener internals or to select a wire.
+        """
+
+        self._callback_ownership_registry = registry
+        self._callback_entry_id = str(entry_id or "").strip()
+
+    async def _send_callback_trigger(self) -> None:
+        """Send exactly ONE UDP callback trigger for a callback_on_demand attempt.
+
+        This is the one-shot replacement for the old continuous
+        ``DiscoveryAnnouncer`` loop: one datagram per connect attempt, never a
+        repeating N-second broadcast. The bounded wait for the inbound session
+        happens after this returns. ``collector_ip``/``discovery_target`` are only
+        the UDP target here, not identity.
+        """
+
+        target_ip = str(self._collector_ip or self._discovery_target or "").strip()
+        if not target_ip:
+            # No UDP target to poke; the collector may still dial in on its own,
+            # and the bounded wait handles that.
+            return
+        advertised_port = int(self._configured_advertised_tcp_port or self._tcp_port)
+        self._callback_trigger_count += 1
+        try:
+            probe = await async_probe_target(
+                bind_ip=self._effective_server_ip,
+                advertised_server_ip=self.effective_advertised_server_ip,
+                advertised_server_port=advertised_port,
+                target_ip=target_ip,
+                udp_port=self._udp_port,
+                timeout=_CALLBACK_TRIGGER_TIMEOUT,
+            )
+        except Exception as exc:  # pragma: no cover - defensive UDP send guard
+            logger.debug("EyeBond one-shot callback trigger send failed: %s", exc)
+            return
+        self._announcer.last_reply = probe.reply
+        self._announcer.last_reply_from = probe.reply_from
+
+    def _callback_ownership_owner_for_pn(self, collector_pn: str) -> str:
+        registry = self._callback_ownership_registry
+        if registry is None:
+            return ""
+        try:
+            return str(registry.owner_for_pn(collector_pn) or "")
+        except Exception:
+            return ""
+
+    def _callback_listener_ready(self) -> bool:
+        """Return whether a one-shot callback trigger has a ready listener."""
+
+        return bool(self._started and self._listener_status == "listening")
+
+    def _observed_foreign_session_exists(self, collector_pn: str) -> bool:
+        """Return whether an inbound session with a NON-matching PN is observed."""
+
+        from ..connection.session_registry import pn_is_same_identity
+
+        for session in self._session_registry.observed_sessions():
+            observed_pn = str(session.collector_pn or "").strip()
+            if observed_pn and not pn_is_same_identity(collector_pn, observed_pn):
+                return True
+        return False
+
+    def _classify_callback_failure(self) -> tuple[str, str]:
+        """Classify why a callback_on_demand attempt did not connect (typed)."""
+
+        if not self._started or self._listener_status == "error":
+            detail = str(self._listener_last_error or "").strip()
+            if detail:
+                return CALLBACK_STATE_LISTENER_ERROR, detail
+            return CALLBACK_STATE_LISTENER_UNAVAILABLE, self._listener_status
+        collector_pn = str(self._collector_pn or "").strip()
+        if collector_pn:
+            handle = self._live_session_handle()
+            if handle.observed:
+                # Our session is here but we did not connect: a different entry
+                # already owns this identity in the domain registry -> conflict.
+                owner = self._callback_ownership_owner_for_pn(collector_pn)
+                if owner and self._callback_entry_id and owner != self._callback_entry_id:
+                    return CALLBACK_STATE_CLAIMED_BY_OTHER, owner
+                return CALLBACK_STATE_TIMEOUT, "session_not_yet_connected"
+            if self._observed_foreign_session_exists(collector_pn):
+                return CALLBACK_STATE_IDENTITY_MISMATCH, ""
+        return CALLBACK_STATE_TIMEOUT, ""
+
+    def _record_callback_state(self, state: str, detail: str = "") -> None:
+        self._last_callback_state = state
+        self._last_callback_detail = str(detail or "")
+
+    def _note_callback_failure(self) -> None:
+        # Only meaningful for callback_on_demand; and only a real failure when we
+        # are not connected (a heartbeat-only timeout keeps the CONNECTED state).
+        if not self._reverse_discovery_enabled or self.connected:
+            return
+        state, detail = self._classify_callback_failure()
+        self._record_callback_state(state, detail)
+
+    def _note_callback_connected(self) -> None:
+        if self._reverse_discovery_enabled and self.connected:
+            self._record_callback_state(CALLBACK_STATE_CONNECTED)
+
+    def callback_trigger_diagnostics(self) -> dict[str, object]:
+        """Return typed callback_on_demand trigger/outcome diagnostics."""
+
+        return {
+            "collector_callback_on_demand": bool(self._reverse_discovery_enabled),
+            "collector_callback_trigger_count": self._callback_trigger_count,
+            "collector_callback_state": self._last_callback_state,
+            "collector_callback_state_detail": self._last_callback_detail,
         }
 
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:
@@ -1217,29 +1356,41 @@ class EybondRuntimeLinkManager:
         """Try to ensure a live collector connection without raising on timeout."""
 
         self._apply_live_wire_to_transports()
+
+        # callback_on_demand: send exactly ONE UDP callback trigger for this
+        # attempt, then bounded-wait for the inbound session. inbound entries
+        # have _reverse_discovery_enabled=False and never reach this, so they
+        # never send a UDP trigger -- they only claim/wait for an already-inbound
+        # session.
+        if self._reverse_discovery_enabled and not self.connected:
+            if not self._callback_listener_ready():
+                self._note_callback_failure()
+                return False
+            await self._send_callback_trigger()
+
         if self._uses_at_text_payload():
             if self.active_collector_at_transport is None:
-                if self._reverse_discovery_enabled:
-                    await self._ensure_discovery(reason="waiting_for_callback")
                 ok = await self._async_wait_for_at_connection(timeout=timeout)
                 if not ok:
+                    self._note_callback_failure()
                     return False
 
             await self._announcer.stop()
+            self._note_callback_connected()
             return self.connected
 
         if not self.connected:
-            if self._reverse_discovery_enabled:
-                await self._ensure_discovery(reason="waiting_for_callback")
             ok = await self._async_wait_for_payload_connection(timeout=timeout)
             if not ok:
+                self._note_callback_failure()
                 return False
+
+        # The callback session itself connected; heartbeat is a separate concern.
+        self._note_callback_connected()
 
         if require_heartbeat:
             heartbeat_ok = await self._async_wait_for_payload_heartbeat(timeout=min(timeout, 1.5))
             if not heartbeat_ok:
-                if self._reverse_discovery_enabled:
-                    await self._ensure_discovery(reason="heartbeat_timeout")
                 return False
 
         await self._announcer.stop()
@@ -1274,8 +1425,8 @@ class EybondRuntimeLinkManager:
             f"0x{collector.last_devcode:04X}" if collector.last_devcode is not None else "unknown",
         )
         await self._disconnect_all_transports()
-        if self._reverse_discovery_enabled:
-            await self._ensure_discovery(reason=reason or "runtime_reset")
+        # Phase 3: no continuous announcer restart here. The next connect attempt
+        # (async_try_connect) sends a single one-shot callback trigger.
 
     def _payload_transports(self) -> tuple[CollectorTransport, ...]:
         transports: list[CollectorTransport] = [self._transport]
@@ -1576,7 +1727,13 @@ class EybondRuntimeLinkManager:
             await transport.disconnect()
 
     async def _ensure_discovery(self, *, reason: str) -> None:
-        """Start discovery if needed and track why it restarted."""
+        """Start the continuous discovery announcer (legacy/manual path only).
+
+        Phase 3 removed this from the callback_on_demand connect path, which now
+        sends a single one-shot UDP trigger per attempt. This is retained only
+        for an explicit legacy/manual continuous-discovery caller and is not part
+        of the runtime connect flow.
+        """
 
         was_running = bool(getattr(self._announcer, "running", False))
         await self._announcer.start()

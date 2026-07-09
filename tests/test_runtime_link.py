@@ -4,8 +4,15 @@ import asyncio
 from pathlib import Path
 import subprocess
 import sys
+import types
 import unittest
 from unittest.mock import AsyncMock, patch
+
+
+def _fake_probe():
+    """Return an AsyncMock standing in for the one-shot UDP callback trigger."""
+
+    return AsyncMock(return_value=types.SimpleNamespace(reply="", reply_from=""))
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.discovery import DiscoveryProbeResult
+from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
 from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager, resolve_server_ip
 
@@ -26,16 +34,25 @@ class _FakeTransport:
         connect_result: bool = True,
         heartbeat_result: bool = True,
         remote_ip: str = "192.168.1.14",
+        observed_sessions: tuple = (),
     ) -> None:
         self.connected = connected
         self.collector_info = CollectorInfo(remote_ip=remote_ip, collector_pn="PN123")
         self._connect_result = connect_result
         self._heartbeat_result = heartbeat_result
+        self._observed_sessions = tuple(dict(s) for s in observed_sessions)
         self.connected_waits: list[float] = []
         self.heartbeat_waits: list[float] = []
         self.disconnect_calls = 0
         self.start_calls = 0
         self.stop_calls = 0
+
+    @property
+    def listener_key(self) -> str:
+        return "fake:0"
+
+    def observed_collector_sessions(self) -> tuple:
+        return self._observed_sessions
 
     async def start(self) -> None:
         self.start_calls += 1
@@ -242,6 +259,8 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             manager._transport = payload  # type: ignore[assignment]
             manager._at_transport = at_transport  # type: ignore[assignment]
             manager._announcer = _FakeAnnouncer()
+            manager._started = True
+            manager._listener_status = "listening"
 
             ok = await manager.async_try_connect(timeout=0.5, require_heartbeat=True)
 
@@ -384,20 +403,34 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(collector.remote_ip, "203.0.113.10")
         self.assertEqual(collector.collector_pn, "PN-TWO")
 
-    def test_async_try_connect_uses_discovery_then_stops_it(self) -> None:
+    def test_callback_on_demand_sends_exactly_one_udp_trigger_per_attempt(self) -> None:
+        # Phase 3: one-shot trigger, not a continuous announcer loop.
         manager = self._build_manager()
         transport = _FakeTransport(connected=False, connect_result=True)
         announcer = _FakeAnnouncer()
         manager._transport = transport  # type: ignore[assignment]
         manager._announcer = announcer  # type: ignore[assignment]
+        manager._started = True
+        manager._listener_status = "listening"
+        probe = _fake_probe()
 
-        connected = asyncio.run(manager.async_try_connect(timeout=5.0, require_heartbeat=True))
+        with patch(
+            "custom_components.eybond_local.runtime.link.async_probe_target", probe
+        ):
+            connected = asyncio.run(
+                manager.async_try_connect(timeout=5.0, require_heartbeat=True)
+            )
 
         self.assertTrue(connected)
-        self.assertEqual(announcer.start_calls, 1)
-        self.assertEqual(announcer.stop_calls, 1)
+        self.assertEqual(probe.await_count, 1)  # exactly one UDP trigger
+        self.assertEqual(manager._callback_trigger_count, 1)
+        self.assertEqual(announcer.start_calls, 0)  # no continuous announcer
         self.assertEqual(transport.connected_waits, [5.0])
         self.assertEqual(transport.heartbeat_waits, [1.5])
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"],
+            "callback_connected",
+        )
 
     def test_async_try_connect_can_wait_without_reverse_discovery(self) -> None:
         manager = self._build_manager()
@@ -488,6 +521,8 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         manager._auxiliary_transports = {502: auxiliary_transport}  # type: ignore[assignment]
         manager._auxiliary_at_transports = {}  # type: ignore[assignment]
         manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
+        manager._started = True
+        manager._listener_status = "listening"
 
         connected = asyncio.run(manager.async_try_connect(timeout=5.0, require_heartbeat=True))
 
@@ -959,12 +994,22 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         announcer = _FakeAnnouncer()
         manager._transport = transport  # type: ignore[assignment]
         manager._announcer = announcer  # type: ignore[assignment]
+        manager._started = True
+        manager._listener_status = "listening"
+        probe = _fake_probe()
 
-        connected = asyncio.run(manager.async_try_connect(timeout=5.0, require_heartbeat=True))
+        with patch(
+            "custom_components.eybond_local.runtime.link.async_probe_target", probe
+        ):
+            connected = asyncio.run(
+                manager.async_try_connect(timeout=5.0, require_heartbeat=True)
+            )
 
         self.assertFalse(connected)
         self.assertEqual(transport.heartbeat_waits, [1.5])
-        self.assertEqual(announcer.start_calls, 1)
+        # Already connected -> no callback trigger; no continuous announcer.
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(announcer.start_calls, 0)
         self.assertEqual(announcer.stop_calls, 0)
 
     def test_async_ensure_connected_raises_when_heartbeat_times_out(self) -> None:
@@ -975,7 +1020,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(ConnectionError, "collector_heartbeat_timeout"):
             asyncio.run(manager.async_ensure_connected(timeout=5.0, require_heartbeat=True))
 
-    def test_async_reset_connection_disconnects_transport_and_restarts_discovery(self) -> None:
+    def test_async_reset_connection_disconnects_without_restarting_discovery(self) -> None:
         manager = self._build_manager()
         transport = _FakeTransport(connected=True)
         announcer = _FakeAnnouncer()
@@ -985,7 +1030,9 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         asyncio.run(manager.async_reset_connection(reason="request_timeout"))
 
         self.assertEqual(transport.disconnect_calls, 1)
-        self.assertEqual(announcer.start_calls, 1)
+        # Phase 3: reset no longer restarts a continuous announcer; the next
+        # connect attempt sends a single one-shot callback trigger instead.
+        self.assertEqual(announcer.start_calls, 0)
 
     def test_runtime_manager_uses_bind_ip_for_advertised_endpoint_when_override_is_empty(self) -> None:
         manager = self._build_manager()
@@ -1040,6 +1087,150 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         manager._rebuild_link("192.168.1.10")
         self.assertIsNotNone(manager._transport._connection_watcher_callback)
+
+
+class CallbackOnDemandPhase3Tests(unittest.TestCase):
+    """Phase 3: bounded once-per-attempt callback trigger + typed outcomes."""
+
+    _PN = "V00AAA1111111111"
+    _FOREIGN_PN = "V00BBB2222222222"
+
+    def _manager(self, *, callback_on_demand: bool, collector_pn: str = "") -> EybondRuntimeLinkManager:
+        with patch(
+            "custom_components.eybond_local.runtime.link.resolve_server_ip",
+            return_value="192.168.1.10",
+        ):
+            manager = EybondRuntimeLinkManager(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+            )
+        manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
+        manager.set_reverse_discovery_enabled(callback_on_demand)
+        if collector_pn:
+            manager._collector_pn = collector_pn
+        manager._started = True
+        manager._listener_status = "listening"
+        return manager
+
+    @staticmethod
+    def _session(pn, *, state="routed_framed", shape="eybond_framed_or_binary"):
+        return {
+            "session_id": "listener-8899-9",
+            "peer_ip": "203.0.113.10",
+            "listener_port": 8899,
+            "collector_pn": pn,
+            "state": state,
+            "protocol_shape": shape,
+            "collector_identity_source": "at_dtupn",
+        }
+
+    def _run_connect(self, manager, *, timeout=0.2):
+        probe = _fake_probe()
+        with patch(
+            "custom_components.eybond_local.runtime.link.async_probe_target", probe
+        ):
+            ok = asyncio.run(manager.async_try_connect(timeout=timeout))
+        return ok, probe
+
+    def test_inbound_sends_zero_udp_triggers(self) -> None:
+        manager = self._manager(callback_on_demand=False)
+        manager._transport = _FakeTransport(connected=False, connect_result=True)  # type: ignore[assignment]
+        ok, probe = self._run_connect(manager)
+        self.assertTrue(ok)
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(manager._callback_trigger_count, 0)
+
+    def test_callback_on_demand_sends_one_trigger_then_times_out(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        manager._transport = _FakeTransport(connected=False, connect_result=False)  # type: ignore[assignment]
+        ok, probe = self._run_connect(manager)
+        self.assertFalse(ok)
+        self.assertEqual(probe.await_count, 1)  # exactly one UDP trigger
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"],
+            "callback_timeout",
+        )
+
+    def test_callback_on_demand_listener_unavailable(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        manager._started = False
+        manager._listener_status = "stopped"
+        manager._transport = _FakeTransport(connected=False, connect_result=False)  # type: ignore[assignment]
+        ok, probe = self._run_connect(manager)
+        self.assertFalse(ok)
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"],
+            "callback_listener_unavailable",
+        )
+
+    def test_callback_on_demand_identity_mismatch_does_not_claim(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        # A session arrives, but its PN is a DIFFERENT collector.
+        manager._transport = _FakeTransport(
+            connected=False,
+            connect_result=False,
+            observed_sessions=(self._session(self._FOREIGN_PN),),
+        )  # type: ignore[assignment]
+        ok, _probe = self._run_connect(manager)
+        self.assertFalse(ok)
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"],
+            "callback_identity_mismatch",
+        )
+        # The foreign session is not owned by this entry.
+        self.assertEqual(manager._session_registry.owner_for_pn(self._FOREIGN_PN), "")
+
+    def test_callback_on_demand_session_claimed_by_other_entry(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        # Our own session is observed (matching PN) but we can't connect...
+        manager._transport = _FakeTransport(
+            connected=False,
+            connect_result=False,
+            observed_sessions=(self._session(self._PN),),
+        )  # type: ignore[assignment]
+        # ...because a DIFFERENT entry owns this identity in the domain registry.
+        domain = CallbackSessionRegistry()
+        domain.claim("other-entry", collector_pn=self._PN)
+        manager.set_callback_ownership(domain, "our-entry")
+        ok, _probe = self._run_connect(manager)
+        self.assertFalse(ok)
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"],
+            "callback_session_claimed_by_other_entry",
+        )
+
+    def test_two_collectors_same_ip_resolved_by_pn(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        manager._transport = _FakeTransport(
+            connected=False,
+            connect_result=False,
+            observed_sessions=(
+                self._session(self._PN, state="routed_framed", shape="eybond_framed_or_binary"),
+                self._session(self._FOREIGN_PN, state="routed_at_text", shape="at_text"),
+            ),
+        )  # type: ignore[assignment]
+        # The manager negotiates ITS OWN framed wire, not the other collector's
+        # AT wire, even though both share the peer IP.
+        handle = manager.session_handle
+        self.assertEqual(handle.collector_pn, self._PN)
+        self.assertEqual(handle.wire, "framed")
+
+    def test_inbound_never_sends_trigger_even_when_disconnected(self) -> None:
+        manager = self._manager(callback_on_demand=False, collector_pn=self._PN)
+        manager._transport = _FakeTransport(connected=False, connect_result=False)  # type: ignore[assignment]
+        ok, probe = self._run_connect(manager)
+        self.assertFalse(ok)
+        self.assertEqual(probe.await_count, 0)  # inbound: zero UDP triggers
+        # No callback state recorded for inbound.
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"], ""
+        )
 
 
 if __name__ == "__main__":

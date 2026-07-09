@@ -1312,6 +1312,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Start the underlying hub."""
 
         self._configure_reverse_discovery_mode()
+        self._configure_callback_ownership()
         await self._runtime.async_start()
         if self.collector_home_assistant_primary:
             await self._async_prepare_home_assistant_callback_listener(
@@ -2049,6 +2050,26 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         set_reverse_discovery_enabled(
             may_run_steady_reverse_discovery(self.connection_strategy)
         )
+
+    def _configure_callback_ownership(self) -> None:
+        """Give the runtime the domain callback-session registry + this entry id.
+
+        Read-only wiring: lets the link classify the
+        ``callback_session_claimed_by_other_entry`` outcome. Never used to select
+        a wire or read listener internals.
+        """
+
+        set_ownership = getattr(self._runtime, "set_callback_ownership", None)
+        if not callable(set_ownership):
+            return
+        try:
+            from ..passive_discovery import get_callback_session_registry
+
+            registry = get_callback_session_registry(self.hass)
+        except Exception:
+            registry = None
+        entry_id = str(getattr(self.config_entry, "entry_id", "") or "")
+        set_ownership(registry, entry_id)
 
     def consume_entry_reload_suppression(self) -> bool:
         """Return whether the next config-entry update listener should skip reload."""

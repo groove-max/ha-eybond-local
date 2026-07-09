@@ -29,9 +29,9 @@ from custom_components.eybond_local.runtime.hub import _reconcile_durable_collec
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
 
 
-FULL_PN = "V00102046262344022"
-SHORT_PN = "V0010204626234"  # a 14-char prefix of FULL_PN (the framed heartbeat PN)
-OTHER_FULL_PN = "V00040509794677058"
+FULL_PN = "PNALPHA-FULL-0001"
+SHORT_PN = "PNALPHA-FU"  # a 10-char prefix of FULL_PN (the framed heartbeat PN)
+OTHER_FULL_PN = "PNBETA-FULL-0002"
 
 
 def _observed(session_id, pn, *, peer_ip="203.0.113.9", state="", shape="", source=""):

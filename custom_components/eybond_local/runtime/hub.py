@@ -637,6 +637,17 @@ class EybondHub:
 
         self._link_manager.set_reverse_discovery_enabled(enabled)
 
+    def set_callback_ownership(self, registry: object, entry_id: str) -> None:
+        """Pass the domain callback-session registry + entry id to the link layer.
+
+        Read-only: lets the link classify the ``callback_session_claimed_by_other_entry``
+        outcome for callback_on_demand attempts.
+        """
+
+        set_ownership = getattr(self._link_manager, "set_callback_ownership", None)
+        if callable(set_ownership):
+            set_ownership(registry, entry_id)
+
     def set_collector_connection_watcher(self, callback: Callable[[str], None] | None) -> None:
         """Notify ``callback(remote_ip)`` when this entry's collector dials in."""
 
