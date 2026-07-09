@@ -57,7 +57,7 @@ class CollectorTransportProfileTests(unittest.TestCase):
         self.assertEqual(profile.session_protocol, "eybond_framed")
         self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
 
-    def test_virtual_bridge_pi30_smartess_at_keeps_at_text_payload(self) -> None:
+    def test_virtual_bridge_pi30_smartess_at_keeps_at_text_legacy_hint(self) -> None:
         profile = resolve_collector_transport_profile(
             cloud_family="smartess_at",
             runtime_owner_key="pi30",
@@ -82,7 +82,7 @@ class CollectorTransportProfileTests(unittest.TestCase):
         self.assertEqual(profile.session_protocol, "eybond_framed")
         self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
 
-    def test_virtual_bridge_without_family_falls_back_to_framed_identity(self) -> None:
+    def test_virtual_bridge_without_family_does_not_choose_payload_transport(self) -> None:
         profile = resolve_collector_transport_profile(
             cloud_family="",
             runtime_owner_key="",
@@ -91,8 +91,8 @@ class CollectorTransportProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.cloud_family, "")
         self.assertEqual(profile.runtime_owner_key, "")
-        self.assertEqual(profile.session_protocol, "eybond_framed")
-        self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
+        self.assertEqual(profile.session_protocol, "")
+        self.assertEqual(profile.identity_strategy, "")
 
     def test_entry_context_recovers_family_from_original_endpoint_profile(self) -> None:
         profile = resolve_collector_transport_profile_from_entry_context(

@@ -121,15 +121,10 @@ class ConnectionModelsTests(unittest.TestCase):
             "framed_heartbeat_then_fc2_pn",
         )
 
-    def test_build_connection_spec_virtual_bridge_follows_cloud_family_not_bridge_kind(self) -> None:
-        # A community-firmware bridge (esp-collector) does NOT by itself define
-        # the inverter payload session: the same bridge can carry the framed
-        # EyeBond tunnel for a Modbus runtime or the SmartESS AT-text session for
-        # a PI30/G-ASCII runtime. With a known smartess_at cloud family and no
-        # runtime-owner evidence (driver_hint=auto), the payload follows the
-        # cloud family (at_text), not a hardcoded "bridge => framed" heuristic.
-        # Framed selection is driven by runtime ownership or an unknown family
-        # (covered by test_collector_transport_profile).
+    def test_build_connection_spec_virtual_bridge_follows_cloud_family_as_legacy_hint(self) -> None:
+        # A community bridge marker is metadata/capability only. ConnectionSpec
+        # stores the pre-live legacy callback hint; live SessionHandle adapter
+        # negotiation later decides inverter payload forwarding.
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",

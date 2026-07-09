@@ -242,7 +242,15 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         reader = writer = None
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.write(b"\x00")
+            writer.write(
+                build_collector_request(
+                    1,
+                    b"",
+                    devcode=0x0994,
+                    collector_addr=1,
+                    fcode=4,
+                )
+            )
             await writer.drain()
             self.assertTrue(await first.wait_until_connected(1.0))
             self.assertTrue(await second.wait_until_connected(1.0))
@@ -1191,7 +1199,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 session["session_id"]: session["state"]
                 for session in listener.session_inventory_diagnostics()["sessions"]
             }
-            self.assertIn("parked_no_payload_owner", states.values())
+            self.assertIn("waiting_for_more_initial_bytes", states.values())
             self.assertTrue(listener._server is not None)
         finally:
             if writer is not None:
@@ -3136,7 +3144,7 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pending.writer.closed)
         self.assertFalse(listener._pending_socket_still_registered(pending))
 
-    async def test_sniff_routes_at_shaped_bytes_framed_for_registered_framed_owner(
+    async def test_sniff_does_not_route_at_shaped_bytes_framed_for_framed_owner(
         self,
     ) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -3158,8 +3166,13 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         pending.sniff_task = sniff
 
         await asyncio.sleep(0.3)
-        self.assertIn("203.0.113.10", listener._connections)
+        self.assertNotIn("203.0.113.10", listener._connections)
         self.assertNotIn("203.0.113.10", listener._at_connections)
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        self.assertEqual(
+            listener._session_inventory["s1"].state,
+            "parked_no_at_owner",
+        )
 
         reader.feed_eof()
         await asyncio.wait_for(sniff, timeout=2.0)
@@ -3186,6 +3199,85 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.3)
         self.assertIn("203.0.113.10", listener._at_connections)
         self.assertNotIn("203.0.113.10", listener._connections)
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+
+    async def test_short_non_at_prefix_waits_for_more_bytes_not_raw_tcp(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_payload_owner("203.0.113.10")
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        frame = build_collector_request(
+            1,
+            b"",
+            devcode=0x0994,
+            collector_addr=1,
+            fcode=4,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(frame[:2])
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.3)
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        self.assertNotIn("203.0.113.10", listener._at_connections)
+        self.assertNotIn("203.0.113.10", listener._connections)
+        entry = listener._session_inventory["s1"]
+        self.assertEqual(entry.protocol_shape, "unknown")
+        self.assertEqual(entry.state, "waiting_for_more_initial_bytes")
+
+        reader.feed_data(frame[2:])
+        await asyncio.sleep(0.3)
+        self.assertIn("203.0.113.10", listener._connections)
+        self.assertNotIn("203.0.113.10", listener._at_connections)
+        self.assertEqual(listener._session_inventory["s1"].protocol_shape, "eybond_framed")
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+
+    async def test_partial_raw_passthrough_waits_then_routes_to_at_owner(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_at_owner("203.0.113.10")
+        listener._remember_session(
+            session_id="s1", remote_ip="203.0.113.10", remote_port=41000
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"(")
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s1",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s1"] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.3)
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        self.assertNotIn("203.0.113.10", listener._at_connections)
+        self.assertEqual(
+            listener._session_inventory["s1"].state,
+            "waiting_for_more_initial_bytes",
+        )
+
+        reader.feed_data(b"230.0 50.0 230.0 50.0\r")
+        await asyncio.sleep(0.3)
+        self.assertIn("203.0.113.10", listener._at_connections)
+        self.assertNotIn("203.0.113.10", listener._connections)
+        self.assertEqual(listener._session_inventory["s1"].protocol_shape, "raw_tcp")
 
         reader.feed_eof()
         await asyncio.wait_for(sniff, timeout=2.0)

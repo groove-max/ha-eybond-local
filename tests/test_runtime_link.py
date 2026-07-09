@@ -1227,7 +1227,7 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         # AT wire, even though both share the peer IP.
         handle = manager.session_handle
         self.assertEqual(handle.collector_pn, self._PN)
-        self.assertEqual(handle.wire, "framed")
+        self.assertEqual(handle.wire, "eybond_framed")
 
     def test_inbound_never_sends_trigger_even_when_disconnected(self) -> None:
         manager = self._manager(callback_on_demand=False, collector_pn=self._PN)

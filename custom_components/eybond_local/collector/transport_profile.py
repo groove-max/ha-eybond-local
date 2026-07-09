@@ -163,11 +163,10 @@ def resolve_collector_transport_profile(
 ) -> CollectorTransportProfile:
     """Resolve callback session protocol and identity strategy.
 
-    ``virtual_bridge`` means the collector is community firmware.  It does not,
-    by itself, define the inverter payload session: a bridge may carry the
-    framed EyeBond tunnel for Modbus-like runtimes, or the SmartESS AT text
-    session for PI30/G-ASCII-like runtimes.  Runtime ownership wins first; the
-    cloud family is the fallback when ownership is not yet known.
+    ``virtual_bridge`` is collector metadata/capability only. It must not choose
+    inverter payload transport: the live SessionHandle adapter negotiation owns
+    that decision. Runtime owner evidence can still provide an initial fallback;
+    otherwise the cloud family remains a legacy pre-live-observation hint.
     """
 
     normalized_family = known_collector_cloud_family(cloud_family)
@@ -182,12 +181,6 @@ def resolve_collector_transport_profile(
             raw_passthrough_frame_format="",
             raw_passthrough_min_interval_ms=0,
         )
-    if virtual_bridge and not normalized_family:
-        return framed_collector_transport_profile(
-            cloud_family=cloud_family,
-            runtime_owner_key=runtime_owner_key,
-        )
-
     return CollectorTransportProfile(
         cloud_family=normalized_family,
         runtime_owner_key=normalized_owner,

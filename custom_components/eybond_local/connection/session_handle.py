@@ -35,16 +35,30 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 # Adapter identifiers. Names are stable strings so drivers/tests can reference
-# them without importing the transport layer.
-ADAPTER_FRAMED_FORWARD = "framed_forward"
-ADAPTER_FRAMED_COLLECTOR_COMMANDS = "framed_collector_commands"
-ADAPTER_AT_COMMANDS = "at_commands"
-ADAPTER_RAW_PASSTHROUGH = "raw_passthrough"
+# them without importing the transport layer. The role prefix is intentional:
+# identity, collector management, inverter forwarding, and proxying are separate
+# capabilities even when they share one TCP socket.
+ADAPTER_COLLECTOR_FRAMED_COMMANDS = "framed_collector_commands"
+ADAPTER_COLLECTOR_AT_COMMANDS = "at_commands"
+ADAPTER_INVERTER_FRAMED_FC4 = "framed_fc4"
+ADAPTER_INVERTER_RAW_PASSTHROUGH = "raw_passthrough"
+ADAPTER_INVERTER_NATIVE_MODBUS_TCP = "native_modbus_tcp"
+ADAPTER_PROXY_FRAMED_CLOUD = "framed_cloud_proxy"
+ADAPTER_PROXY_RAW_TCP = "raw_tcp_proxy"
+ADAPTER_NONE = "none"
+
+# Backwards-compatible aliases used by older tests/callers. Keep them as aliases
+# of the new explicit adapter roles, not as separate concepts.
+ADAPTER_FRAMED_FORWARD = ADAPTER_INVERTER_FRAMED_FC4
+ADAPTER_FRAMED_COLLECTOR_COMMANDS = ADAPTER_COLLECTOR_FRAMED_COMMANDS
+ADAPTER_AT_COMMANDS = ADAPTER_COLLECTOR_AT_COMMANDS
+ADAPTER_RAW_PASSTHROUGH = ADAPTER_INVERTER_RAW_PASSTHROUGH
 
 # Negotiated live wire values.
-WIRE_FRAMED = "framed"
+WIRE_FRAMED = "eybond_framed"
 WIRE_AT_TEXT = "at_text"
-WIRE_UNKNOWN = ""
+WIRE_RAW_TCP = "raw_tcp"
+WIRE_UNKNOWN = "unknown"
 
 # Observed signals that mean the live session is a framed EyeBond tunnel.
 _FRAMED_STATES = frozenset({"routed_framed"})
@@ -52,6 +66,7 @@ _FRAMED_SHAPES = frozenset({"eybond_framed_or_binary", "eybond_framed"})
 # Observed signals that mean the live session is a SmartESS AT-text session.
 _AT_STATES = frozenset({"routed_at_text"})
 _AT_SHAPES = frozenset({"at_text"})
+_RAW_TCP_SHAPES = frozenset({"raw_tcp"})
 
 # Listener states that are NOT trustworthy as wire truth: a route-identity
 # mismatch or a socket still awaiting identity confirmation has not established
@@ -70,18 +85,14 @@ _UNTRUSTED_STATES = frozenset(
 # collector commands. An AT-text wire carries AT commands + raw passthrough, and
 # can also carry a single framed collector-command probe (FC over AT) which the
 # transport uses to read the ESP bridge identity without switching the wire.
-_ADAPTERS_BY_WIRE: dict[str, frozenset[str]] = {
-    WIRE_FRAMED: frozenset(
-        {ADAPTER_FRAMED_FORWARD, ADAPTER_FRAMED_COLLECTOR_COMMANDS}
-    ),
-    WIRE_AT_TEXT: frozenset(
-        {
-            ADAPTER_AT_COMMANDS,
-            ADAPTER_RAW_PASSTHROUGH,
-            ADAPTER_FRAMED_COLLECTOR_COMMANDS,
-        }
-    ),
-    WIRE_UNKNOWN: frozenset(),
+_TRANSPORT_WIRE_BY_WIRE_FRAMING: dict[str, str] = {
+    WIRE_FRAMED: WIRE_FRAMED,
+    WIRE_AT_TEXT: WIRE_AT_TEXT,
+    # ``raw_tcp`` means inverter payload bytes are raw on the stream, but the
+    # current shared runtime still claims that stream through the AT/raw facade.
+    # Keep this mapping explicit so raw TCP does not look like framed.
+    WIRE_RAW_TCP: WIRE_AT_TEXT,
+    WIRE_UNKNOWN: "",
 }
 
 
@@ -93,35 +104,161 @@ class SessionHandle:
     collector_pn: str = ""
     peer_ip: str = ""  # diagnostic / display only, never identity
     listener_port: int = 0
-    wire: str = WIRE_UNKNOWN
-    available_adapters: frozenset[str] = field(default_factory=frozenset)
-    identity_source: str = ""
+    wire_framing: str = WIRE_UNKNOWN
+    identity_sources: frozenset[str] = field(default_factory=frozenset)
+    collector_management_adapter: str = ADAPTER_NONE
+    inverter_forward_adapter: str = ADAPTER_NONE
+    proxy_adapter: str = ADAPTER_NONE
+    conflict: str = ""
     state: str = ""
 
     @property
-    def payload_wire(self) -> str:
-        """Return the live wire the payload must ride (``""`` when unknown)."""
+    def wire(self) -> str:
+        """Backward-compatible negotiated wire value."""
 
-        return self.wire
+        return self.wire_framing
+
+    @property
+    def payload_wire(self) -> str:
+        """Return the live wire the payload must ride."""
+
+        return self.wire_framing
+
+    @property
+    def transport_wire(self) -> str:
+        """Return the legacy transport selector for the current implementation.
+
+        The high-level model exposes ``wire_framing``. The existing shared
+        transport still takes a coarse selector ("eybond_framed"/"at_text"/"").
+        This adapter keeps that conversion explicit and localized.
+        """
+
+        return _TRANSPORT_WIRE_BY_WIRE_FRAMING.get(self.wire_framing, "")
+
+    @property
+    def identity_source(self) -> str:
+        """Backward-compatible primary identity source."""
+
+        return next(iter(sorted(self.identity_sources)), "")
+
+    @property
+    def available_adapters(self) -> frozenset[str]:
+        """Return all non-empty negotiated adapters."""
+
+        return frozenset(
+            adapter
+            for adapter in (
+                self.collector_management_adapter,
+                self.inverter_forward_adapter,
+                self.proxy_adapter,
+            )
+            if adapter and adapter != ADAPTER_NONE
+        )
 
     @property
     def observed(self) -> bool:
         """Return whether a live wire has actually been observed for this session."""
 
-        return self.wire in (WIRE_FRAMED, WIRE_AT_TEXT)
+        return self.wire_framing in (WIRE_FRAMED, WIRE_AT_TEXT, WIRE_RAW_TCP)
 
     @property
     def uses_at_text_wire(self) -> bool:
-        return self.wire == WIRE_AT_TEXT
+        return self.wire_framing == WIRE_AT_TEXT
 
     @property
     def uses_framed_wire(self) -> bool:
-        return self.wire == WIRE_FRAMED
+        return self.wire_framing == WIRE_FRAMED
+
+    @property
+    def uses_raw_tcp_wire(self) -> bool:
+        return self.wire_framing == WIRE_RAW_TCP
 
     def supports(self, adapter: str) -> bool:
         """Return whether the live session supports one adapter."""
 
         return adapter in self.available_adapters
+
+
+def _normalize_wire_signal(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in _FRAMED_STATES or normalized in _FRAMED_SHAPES:
+        return WIRE_FRAMED
+    if normalized in _AT_STATES or normalized in _AT_SHAPES:
+        return WIRE_AT_TEXT
+    if normalized in _RAW_TCP_SHAPES:
+        return WIRE_RAW_TCP
+    if normalized == "framed":
+        return WIRE_FRAMED
+    return WIRE_UNKNOWN
+
+
+def _adapters_for_wire(wire: str) -> tuple[str, str, str]:
+    if wire == WIRE_FRAMED:
+        return (
+            ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+            ADAPTER_INVERTER_FRAMED_FC4,
+            ADAPTER_PROXY_FRAMED_CLOUD,
+        )
+    if wire == WIRE_AT_TEXT:
+        return (
+            ADAPTER_COLLECTOR_AT_COMMANDS,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            ADAPTER_PROXY_RAW_TCP,
+        )
+    if wire == WIRE_RAW_TCP:
+        return (
+            ADAPTER_NONE,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            ADAPTER_PROXY_RAW_TCP,
+        )
+    return (ADAPTER_NONE, ADAPTER_NONE, ADAPTER_NONE)
+
+
+def negotiate_wire_result(
+    *,
+    state: object = "",
+    protocol_shape: object = "",
+    session_protocol: object = "",
+) -> tuple[str, str]:
+    """Negotiate the live wire + conflict from safely-observed session signals.
+
+    Precedence: routed state (authoritative -- the socket is already carrying
+    that framing) > confirmed session protocol > sniffed byte shape. If routed
+    state and observed shape contradict each other, return fail-closed
+    ``WIRE_UNKNOWN`` with a conflict instead of silently downgrading.
+    """
+
+    normalized_state = str(state or "").strip().lower()
+    if normalized_state in _UNTRUSTED_STATES:
+        # Identity mismatch / not-yet-routed: no owned wire established. Do not
+        # trust the sniffed shape as runtime wire truth.
+        return WIRE_UNKNOWN, ""
+
+    state_wire = _normalize_wire_signal(normalized_state)
+    shape_wire = _normalize_wire_signal(protocol_shape)
+    protocol_wire = _normalize_wire_signal(session_protocol)
+
+    if (
+        state_wire != WIRE_UNKNOWN
+        and shape_wire != WIRE_UNKNOWN
+        and state_wire != shape_wire
+        # Raw bytes may be routed through the AT/raw passthrough facade. A
+        # framed shape routed as AT is the dangerous impossible state we must
+        # fail closed; raw_tcp routed_at_text is a valid raw-passthrough stream.
+        and not (state_wire == WIRE_AT_TEXT and shape_wire == WIRE_RAW_TCP)
+    ):
+        return WIRE_UNKNOWN, f"wire_conflict:state={normalized_state}:shape={shape_wire}"
+
+    if state_wire != WIRE_UNKNOWN:
+        return state_wire, ""
+
+    normalized_protocol = str(session_protocol or "").strip().lower()
+    if protocol_wire != WIRE_UNKNOWN:
+        if shape_wire != WIRE_UNKNOWN and protocol_wire != shape_wire:
+            return shape_wire, ""
+        return protocol_wire, ""
+
+    return shape_wire, ""
 
 
 def negotiate_wire(
@@ -130,36 +267,14 @@ def negotiate_wire(
     protocol_shape: object = "",
     session_protocol: object = "",
 ) -> str:
-    """Negotiate the live wire from safely-observed session signals.
+    """Backward-compatible wire negotiation helper."""
 
-    Precedence: routed state (authoritative -- the socket is already carrying
-    that framing) > confirmed session protocol > sniffed byte shape. Returns
-    ``""`` when nothing has been observed yet, so callers fall back to the
-    persisted hint rather than guessing.
-    """
-
-    normalized_state = str(state or "").strip().lower()
-    if normalized_state in _UNTRUSTED_STATES:
-        # Identity mismatch / not-yet-routed: no owned wire established. Do not
-        # trust the sniffed shape as runtime wire truth.
-        return WIRE_UNKNOWN
-    if normalized_state in _FRAMED_STATES:
-        return WIRE_FRAMED
-    if normalized_state in _AT_STATES:
-        return WIRE_AT_TEXT
-
-    normalized_protocol = str(session_protocol or "").strip().lower()
-    if normalized_protocol == "eybond_framed":
-        return WIRE_FRAMED
-    if normalized_protocol == "at_text":
-        return WIRE_AT_TEXT
-
-    normalized_shape = str(protocol_shape or "").strip().lower()
-    if normalized_shape in _FRAMED_SHAPES:
-        return WIRE_FRAMED
-    if normalized_shape in _AT_SHAPES:
-        return WIRE_AT_TEXT
-    return WIRE_UNKNOWN
+    wire, _conflict = negotiate_wire_result(
+        state=state,
+        protocol_shape=protocol_shape,
+        session_protocol=session_protocol,
+    )
+    return wire
 
 
 def negotiate_session_adapters(observed: Mapping[str, object] | None) -> SessionHandle:
@@ -172,18 +287,23 @@ def negotiate_session_adapters(observed: Mapping[str, object] | None) -> Session
 
     if not observed:
         return SessionHandle()
-    wire = negotiate_wire(
+    wire, conflict = negotiate_wire_result(
         state=observed.get("state"),
         protocol_shape=observed.get("protocol_shape"),
         session_protocol=observed.get("session_protocol"),
     )
+    collector_adapter, inverter_adapter, proxy_adapter = _adapters_for_wire(wire)
+    identity_source = str(observed.get("collector_identity_source") or "").strip()
     return SessionHandle(
         session_id=str(observed.get("session_id") or "").strip(),
         collector_pn=str(observed.get("collector_pn") or "").strip(),
         peer_ip=str(observed.get("peer_ip") or "").strip(),
         listener_port=int(observed.get("listener_port") or 0),
-        wire=wire,
-        available_adapters=_ADAPTERS_BY_WIRE.get(wire, frozenset()),
-        identity_source=str(observed.get("collector_identity_source") or "").strip(),
+        wire_framing=wire,
+        identity_sources=frozenset({identity_source} if identity_source else ()),
+        collector_management_adapter=collector_adapter,
+        inverter_forward_adapter=inverter_adapter,
+        proxy_adapter=proxy_adapter,
+        conflict=conflict,
         state=str(observed.get("state") or "").strip(),
     )

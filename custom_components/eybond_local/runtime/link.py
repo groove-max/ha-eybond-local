@@ -17,7 +17,12 @@ from ..collector.cloud_family import (
     select_preferred_collector_cloud_family,
 )
 from ..collector.discovery import DiscoveryAnnouncer, async_probe_target
-from ..connection.session_handle import SessionHandle
+from ..connection.session_handle import (
+    ADAPTER_NONE,
+    ADAPTER_INVERTER_FRAMED_FC4,
+    ADAPTER_INVERTER_RAW_PASSTHROUGH,
+    SessionHandle,
+)
 from ..connection.session_registry import CallbackSessionRegistry, reconcile_pn
 from ..collector.transport import (
     CollectorAtTransport,
@@ -28,6 +33,7 @@ from ..collector.transport import (
     SharedProxyCaptureRoute,
 )
 from ..const import DEFAULT_REQUEST_TIMEOUT
+from ..link_models import LinkRoute
 from ..link_transport import PayloadLinkTransport
 from ..models import CollectorInfo
 from ..support.proxy_session import InProcessProxyCaptureHandler
@@ -105,6 +111,34 @@ class RouteLease:
     upstream_host: str
     upstream_port: int
     state: str
+
+
+class _UnavailablePayloadTransport:
+    """Fail-closed payload transport used when adapter negotiation conflicts."""
+
+    @property
+    def connected(self) -> bool:
+        return False
+
+    async def wait_until_connected(self, timeout: float) -> bool:
+        return False
+
+    async def async_send_payload(
+        self,
+        payload: bytes,
+        *,
+        route: LinkRoute,
+        request_timeout: float | None = None,
+    ) -> bytes:
+        raise TypeError("inverter_forward_adapter_not_available")
+
+    def select_payload_route(
+        self,
+        route: LinkRoute,
+        *,
+        payload_family: str = "",
+    ) -> LinkRoute:
+        raise TypeError("inverter_forward_adapter_not_available")
 
 
 def _prefer_more_complete_collector_pn(current: str, candidate: str) -> str:
@@ -433,6 +467,7 @@ class EybondRuntimeLinkManager:
             )
         self._transport: CollectorTransport
         self._at_transport: CollectorAtTransport
+        self._unavailable_payload_transport = _UnavailablePayloadTransport()
         self._auxiliary_transports: dict[int, SharedEybondTransport]
         self._auxiliary_at_transports: dict[int, SharedCollectorAtTransport]
         self._proxy_capture_route: SharedProxyCaptureRoute | None = None
@@ -475,7 +510,7 @@ class EybondRuntimeLinkManager:
     def active_transport(self) -> CollectorTransport | None:
         """Return the connected payload transport selected for the active collector."""
 
-        if self._uses_at_text_payload():
+        if self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH:
             return None
         return self._connected_payload_transport()
 
@@ -489,7 +524,10 @@ class EybondRuntimeLinkManager:
     def transport(self) -> CollectorTransport:
         """Return the active payload-capable transport."""
 
-        if self._uses_at_text_payload():
+        adapter = self._inverter_forward_adapter()
+        if adapter == ADAPTER_NONE:
+            return self._unavailable_payload_transport
+        if adapter == ADAPTER_INVERTER_RAW_PASSTHROUGH:
             return self.active_collector_at_transport or self._at_transport
         return self.active_transport or self._transport
 
@@ -503,7 +541,10 @@ class EybondRuntimeLinkManager:
     def connected(self) -> bool:
         """Return whether the physical link is currently connected."""
 
-        if self._uses_at_text_payload():
+        adapter = self._inverter_forward_adapter()
+        if adapter == ADAPTER_NONE:
+            return False
+        if adapter == ADAPTER_INVERTER_RAW_PASSTHROUGH:
             return self.active_collector_at_transport is not None
         return self.active_transport is not None
 
@@ -633,6 +674,18 @@ class EybondRuntimeLinkManager:
             "collector_callback_observed_session_protocol": (
                 self._owned_observed_session_protocol()
             ),
+            "collector_callback_wire_framing": self.session_handle.wire_framing,
+            "collector_callback_identity_sources": ", ".join(
+                sorted(self.session_handle.identity_sources)
+            ),
+            "collector_callback_collector_management_adapter": (
+                self.session_handle.collector_management_adapter
+            ),
+            "collector_callback_inverter_forward_adapter": (
+                self.session_handle.inverter_forward_adapter
+            ),
+            "collector_callback_proxy_adapter": self.session_handle.proxy_adapter,
+            "collector_callback_adapter_conflict": self.session_handle.conflict,
             "collector_callback_identity_strategy": self._collector_identity_strategy,
             "collector_callback_raw_passthrough_bootstrap": (
                 self._collector_raw_passthrough_bootstrap
@@ -1394,7 +1447,7 @@ class EybondRuntimeLinkManager:
                 return False
             await self._send_callback_trigger()
 
-        if self._uses_at_text_payload():
+        if self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH:
             if self.active_collector_at_transport is None:
                 ok = await self._async_wait_for_at_connection(timeout=timeout)
                 if not ok:
@@ -1532,27 +1585,33 @@ class EybondRuntimeLinkManager:
             return transport
         return None
 
-    def _uses_at_text_payload(self) -> bool:
-        """Return whether the payload must ride the AT-text session.
+    def _inverter_forward_adapter(self) -> str:
+        """Return the adapter that must carry inverter payloads.
 
-        Phase 2: this is negotiated from the *live* claimed session's observed
-        wire (byte shape / routed state), not the persisted
-        ``collector_session_protocol`` hint. The persisted value is only a
-        fallback used before any session has been observed. This breaks the
-        self-reinforcing bug where a stale ``at_text`` hint made the AT transport
-        mis-claim a framed session and mark it ``routed_at_text``, confirming the
-        wrong wire forever. The listener's passive sniff routes the socket by
-        byte shape (both transport owners are registered), so by the time the
-        seconds-later poll negotiates, a framed session already reports a framed
-        wire and the runtime uses the framed transport.
+        Live SessionHandle adapters are authoritative. The persisted
+        collector_session_protocol is only a fallback before any live session has
+        been observed. This is the critical separation: identity source and
+        legacy callback protocol do not choose inverter payload routing once a
+        live session exists.
         """
 
         handle = self._live_session_handle()
-        if handle.uses_at_text_wire:
-            return True
-        if handle.uses_framed_wire:
-            return False
-        return str(self._collector_session_protocol or "").strip().lower() == "at_text"
+        if handle.conflict:
+            return ADAPTER_NONE
+        if handle.observed:
+            return handle.inverter_forward_adapter
+        protocol = str(self._collector_session_protocol or "").strip().lower()
+        if protocol == "at_text":
+            return ADAPTER_INVERTER_RAW_PASSTHROUGH
+        if protocol == "eybond_framed":
+            return ADAPTER_INVERTER_FRAMED_FC4
+        # Preserve legacy default: unknown profile used the framed transport.
+        return ADAPTER_INVERTER_FRAMED_FC4
+
+    def _uses_at_text_payload(self) -> bool:
+        """Compatibility helper for tests/diagnostics."""
+
+        return self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH
 
     @property
     def session_handle(self) -> SessionHandle:
@@ -1582,7 +1641,7 @@ class EybondRuntimeLinkManager:
         """
 
         handle = self._live_session_handle()
-        wire = handle.wire
+        wire = handle.transport_wire
         for transport in self._at_transports():
             if callable(getattr(transport, "set_negotiated_wire", None)):
                 transport.set_negotiated_wire(wire)

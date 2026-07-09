@@ -5218,6 +5218,45 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(profile.session_protocol, "eybond_framed")
         self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
 
+    def test_virtual_bridge_at_management_session_is_not_collector_kind_framed_override(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "collector_cloud_family": "smartess_at",
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+                "collector_session_protocol": "eybond_framed",
+                "driver_hint": "auto",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._runtime = types.SimpleNamespace(
+            listener_diagnostics=lambda: {
+                "collector_callback_session_protocol": "eybond_framed",
+                "collector_callback_observed_session_protocol": "at_text",
+                "collector_callback_session_inventory": [
+                    {
+                        "state": "routed_at_text",
+                        "protocol_shape": "eybond_framed_or_binary",
+                        "collector_identity_masked": "V001…4022",
+                    }
+                ],
+            },
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+
+        profile = coordinator.collector_transport_profile
+
+        self.assertEqual(profile.cloud_family, "smartess_at")
+        # collector_transport_profile is a legacy callback-profile hint, not
+        # inverter payload authority. It must not hardcode "virtual bridge =>
+        # framed"; payload routing is handled by SessionHandle adapters.
+        self.assertEqual(profile.session_protocol, "at_text")
+        self.assertEqual(profile.identity_strategy, "at_dtupn")
+        self.assertEqual(profile.raw_passthrough_frame_format, "transparent")
+
     def test_live_session_inventory_overrides_configured_callback_protocol(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(

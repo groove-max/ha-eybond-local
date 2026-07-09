@@ -37,7 +37,7 @@ if __name__ == "__main__":
     unittest.main()
 
 class VirtualBridgeTransportProfileTests(unittest.TestCase):
-    def test_virtual_bridge_entry_with_smartess_at_family_uses_at_text_until_owner_is_known(self) -> None:
+    def test_virtual_bridge_entry_with_smartess_at_family_keeps_legacy_hint(self) -> None:
         from custom_components.eybond_local.collector.transport_profile import (
             resolve_collector_transport_profile_from_entry_context,
         )

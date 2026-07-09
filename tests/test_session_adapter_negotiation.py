@@ -10,9 +10,12 @@ PN, never peer IP; short PNs only enrich the full PN.
 from __future__ import annotations
 
 import unittest
+import types
 
 from custom_components.eybond_local.connection.session_handle import (
     ADAPTER_AT_COMMANDS,
+    ADAPTER_INVERTER_FRAMED_FC4,
+    ADAPTER_INVERTER_RAW_PASSTHROUGH,
     ADAPTER_FRAMED_COLLECTOR_COMMANDS,
     ADAPTER_FRAMED_FORWARD,
     ADAPTER_RAW_PASSTHROUGH,
@@ -22,12 +25,17 @@ from custom_components.eybond_local.connection.session_handle import (
     negotiate_session_adapters,
     negotiate_wire,
 )
+from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.link_transport import select_payload_route
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
     reconcile_pn,
 )
 from custom_components.eybond_local.runtime.hub import _reconcile_durable_collector_pn
-from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
+from custom_components.eybond_local.runtime.link import (
+    EybondRuntimeLinkManager,
+    _UnavailablePayloadTransport,
+)
 
 
 FULL_PN = "PNALPHA-FULL-0001"
@@ -53,9 +61,22 @@ class _FakeTransport:
     def __init__(self, sessions):
         self._listener = object()  # opaque; the link must not read its internals
         self._sessions = tuple(dict(s) for s in sessions)
+        self.connected = True
+        self.collector_info = types.SimpleNamespace(remote_ip="", heartbeat_fresh=False)
 
     def observed_collector_sessions(self):
         return self._sessions
+
+    def select_payload_route(self, route, *, payload_family=""):
+        return route
+
+
+class _FakeAtTransport:
+    connected = True
+    collector_info = types.SimpleNamespace(remote_ip="")
+
+    def select_payload_route(self, route, *, payload_family=""):
+        return RawSerialLinkRoute(protocol=payload_family)
 
 
 def _bare_link(*, collector_pn, collector_ip, persisted_protocol, sessions):
@@ -64,7 +85,10 @@ def _bare_link(*, collector_pn, collector_ip, persisted_protocol, sessions):
     link._collector_ip = collector_ip
     link._collector_session_protocol = persisted_protocol
     link._transport = _FakeTransport(sessions)
+    link._at_transport = _FakeAtTransport()
+    link._unavailable_payload_transport = _UnavailablePayloadTransport()
     link._auxiliary_transports = {}
+    link._auxiliary_at_transports = {}
     link._auxiliary_listener_ports = set()
     link._runtime_claim_pn = None
     link._session_registry = CallbackSessionRegistry(
@@ -83,15 +107,34 @@ class SessionHandleNegotiationTests(unittest.TestCase):
         self.assertTrue(handle.supports(ADAPTER_FRAMED_COLLECTOR_COMMANDS))
         self.assertFalse(handle.supports(ADAPTER_AT_COMMANDS))
 
-    def test_routed_state_takes_precedence_over_shape(self) -> None:
-        # Even if a stale shape hints AT, the routed framed state is authoritative.
+    def test_routed_state_takes_precedence_only_when_not_contradicted(self) -> None:
+        # Even if a stale shape hints AT, the routed framed state is authoritative
+        # only when the observation is not an impossible framed-vs-AT conflict.
         self.assertEqual(
-            negotiate_wire(state="routed_framed", protocol_shape="at_text"), WIRE_FRAMED
+            negotiate_wire(state="routed_framed", protocol_shape="unknown"),
+            WIRE_FRAMED,
         )
-        self.assertEqual(
-            negotiate_wire(state="routed_at_text", protocol_shape="eybond_framed_or_binary"),
-            WIRE_AT_TEXT,
+        handle = negotiate_session_adapters(
+            _observed(
+                "s-conflict",
+                FULL_PN,
+                state="routed_at_text",
+                shape="eybond_framed",
+                source="at_dtupn",
+            )
         )
+        self.assertEqual(handle.wire, WIRE_UNKNOWN)
+        self.assertIn("wire_conflict", handle.conflict)
+        self.assertFalse(handle.supports(ADAPTER_RAW_PASSTHROUGH))
+
+    def test_framed_shape_with_at_identity_source_stays_framed(self) -> None:
+        handle = negotiate_session_adapters(
+            _observed("s1", FULL_PN, shape="eybond_framed", source="at_dtupn")
+        )
+        self.assertEqual(handle.wire_framing, WIRE_FRAMED)
+        self.assertIn("at_dtupn", handle.identity_sources)
+        self.assertEqual(handle.inverter_forward_adapter, ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertFalse(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
 
     def test_at_text_negotiates_raw_passthrough_and_at_commands(self) -> None:
         handle = negotiate_session_adapters(
@@ -101,6 +144,10 @@ class SessionHandleNegotiationTests(unittest.TestCase):
         self.assertTrue(handle.supports(ADAPTER_AT_COMMANDS))
         self.assertTrue(handle.supports(ADAPTER_RAW_PASSTHROUGH))
         self.assertFalse(handle.supports(ADAPTER_FRAMED_FORWARD))
+        self.assertEqual(
+            handle.inverter_forward_adapter,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+        )
 
     def test_unknown_shape_is_unobserved(self) -> None:
         handle = negotiate_session_adapters(_observed("s3", FULL_PN))
@@ -176,6 +223,13 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
         handle = link.session_handle
         self.assertEqual(handle.wire, WIRE_FRAMED)
         self.assertTrue(handle.supports(ADAPTER_FRAMED_FORWARD))
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        route = select_payload_route(
+            link.transport,
+            EybondLinkRoute(devcode=0x0994, collector_addr=1),
+            payload_family="pi30_ascii",
+        )
+        self.assertIsInstance(route, EybondLinkRoute)
 
     def test_at_text_live_session_uses_at_wire(self) -> None:
         link = _bare_link(
@@ -187,6 +241,44 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
             ],
         )
         self.assertTrue(link._uses_at_text_payload())
+        self.assertEqual(
+            link._inverter_forward_adapter(),
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+        )
+        route = select_payload_route(
+            link.transport,
+            EybondLinkRoute(devcode=0x0994, collector_addr=1),
+            payload_family="pi30_ascii",
+        )
+        self.assertIsInstance(route, RawSerialLinkRoute)
+        self.assertEqual(route.protocol, "pi30_ascii")
+
+    def test_conflicting_live_session_does_not_silently_select_raw_passthrough(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[
+                _observed(
+                    "s1",
+                    FULL_PN,
+                    state="routed_at_text",
+                    shape="eybond_framed",
+                    source="at_dtupn",
+                )
+            ],
+        )
+        self.assertTrue(link.session_handle.conflict)
+        # Conflict is fail-closed to no live adapter; only the documented legacy
+        # fallback remains until the listener stops producing contradictory state.
+        self.assertEqual(link.session_handle.inverter_forward_adapter, "none")
+        self.assertFalse(link.connected)
+        with self.assertRaises(TypeError):
+            select_payload_route(
+                link.transport,
+                EybondLinkRoute(devcode=0x0994, collector_addr=1),
+                payload_family="pi30_ascii",
+            )
 
     def test_unobserved_session_falls_back_to_persisted_hint(self) -> None:
         link = _bare_link(

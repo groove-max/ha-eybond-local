@@ -151,6 +151,49 @@ def _looks_like_at_traffic(chunk: bytes) -> bool:
     return chunk.lstrip().startswith(b"AT+")
 
 
+def _looks_like_eybond_frame_start(chunk: bytes) -> bool:
+    """Return whether initial bytes plausibly start an EyeBond framed packet."""
+
+    if len(chunk) < HEADER_SIZE:
+        return False
+    try:
+        header = decode_header(chunk)
+    except Exception:
+        return False
+    if header.total_len < HEADER_SIZE:
+        return False
+    if header.total_len > 4096:
+        return False
+    if header.fcode not in {
+        FC_HEARTBEAT,
+        FC_QUERY_COLLECTOR,
+        FC_SET_COLLECTOR,
+        FC_FORWARD_TO_DEVICE,
+        FC_SET_DEVICE_REG,
+        FC_TRIGGER_QUERY_REAL_TIME,
+        FC_TRIGGER_QUERY_HISTORY,
+    }:
+        return False
+    return True
+
+
+def _classify_initial_protocol_shape(chunk: bytes) -> str:
+    """Classify initial callback bytes without using owner/collector metadata."""
+
+    if _looks_like_at_traffic(chunk):
+        return "at_text"
+    if 0 < len(chunk) < HEADER_SIZE:
+        # TCP can deliver a partial EyeBond header. A short non-AT prefix is not
+        # enough evidence for raw passthrough and must remain unknown until more
+        # bytes arrive or the route explicitly proves otherwise.
+        return "unknown"
+    if _looks_like_eybond_frame_start(chunk):
+        return "eybond_framed"
+    if chunk:
+        return "raw_tcp"
+    return "unknown"
+
+
 def _looks_like_uart_passthrough_value(value: str) -> bool:
     normalized = str(value or "").strip()
     if not normalized.isascii():
@@ -2101,13 +2144,7 @@ class _SharedEybondListener:
             return
         entry.first_bytes_len = len(chunk)
         entry.first_bytes_prefix_hex = chunk[:4].hex()
-        if _looks_like_at_traffic(chunk):
-            entry.protocol_shape = "at_text"
-            return
-        if len(chunk) >= 3:
-            entry.protocol_shape = "eybond_framed_or_binary"
-            return
-        entry.protocol_shape = "unknown"
+        entry.protocol_shape = _classify_initial_protocol_shape(chunk)
 
     def _mark_session_identity(
         self,
@@ -2565,6 +2602,10 @@ class _SharedEybondListener:
                 pending.initial_bytes = (
                     pending.initial_bytes + data
                 )[: self._PARKED_IDENTITY_BUFFER_LIMIT]
+                if _classify_initial_protocol_shape(pending.initial_bytes) != "unknown":
+                    pending.parked = False
+                    await self._sniff_pending_socket(pending)
+                    return
 
         if not self._pending_socket_still_registered(pending):
             return
@@ -3070,11 +3111,24 @@ class _SharedEybondListener:
             await _close_writer_bounded(pending.writer)
             return
 
+        self._mark_session_first_bytes(pending.session_id, chunk)
+        protocol_shape = _classify_initial_protocol_shape(chunk)
+        if protocol_shape == "unknown" and 0 < len(chunk) < HEADER_SIZE:
+            self._mark_session_state(
+                pending.session_id,
+                "waiting_for_more_initial_bytes",
+            )
+            await self._park_unclaimed_pending_socket(
+                pending,
+                chunk,
+                session_state="waiting_for_more_initial_bytes",
+            )
+            return
+
         self._remove_pending_socket(pending)
         if self._last_pending_ip == pending.remote_ip:
             self._last_pending_ip = ""
 
-        self._mark_session_first_bytes(pending.session_id, chunk)
         initial_pn, initial_pn_source = _collector_pn_from_initial_chunk(chunk)
         if initial_pn:
             self._mark_session_identity(
@@ -3083,13 +3137,14 @@ class _SharedEybondListener:
                 initial_pn_source,
             )
 
-        route_at = _looks_like_at_traffic(chunk)
-        # The byte-shape guess must not overrule a registered owner: the entry
-        # that owns this collector (by PN, or by IP when no PN was seen)
-        # already knows its session protocol.  A framed frame can begin with
-        # the bytes "AT+", and an at_text collector in raw-passthrough mode
-        # can open with non-AT bytes — shape only decides when ownership is
-        # absent or ambiguous.
+        route_at = protocol_shape == "at_text"
+        # Byte-shape is the only safe authority for explicit framed-vs-AT wire
+        # observations. Owners/PN/entry metadata decide who may claim a socket,
+        # not what wire the socket carries. Raw bytes are intentionally
+        # ambiguous: a raw-passthrough AT stream can start with inverter bytes
+        # rather than AT+, so for raw_tcp we allow a single registered owner to
+        # choose the activation facade. A plausible EyeBond frame is never
+        # downgraded to routed_at_text by an AT owner.
         framed_owner = self._has_owner_for_collector_pn(
             self._payload_pn_owner_counts, initial_pn
         ) or (
@@ -3104,18 +3159,15 @@ class _SharedEybondListener:
             not initial_pn
             and self._has_owner_for_remote_ip(self._at_owner_counts, pending.remote_ip)
         )
-        if route_at and framed_owner and not at_owner:
-            logger.debug(
-                "Sniffed AT-shaped bytes from %s but a framed owner is registered; routing framed",
-                pending.remote_ip,
-            )
+        if protocol_shape == "eybond_framed":
             route_at = False
-        elif not route_at and at_owner and not framed_owner:
-            logger.debug(
-                "Sniffed non-AT bytes from %s but an AT owner is registered; routing at_text",
-                pending.remote_ip,
-            )
-            route_at = True
+        elif protocol_shape == "raw_tcp":
+            if at_owner and not framed_owner:
+                route_at = True
+            elif framed_owner and not at_owner:
+                route_at = False
+            elif at_owner:
+                route_at = True
 
         if route_at:
             connection = None
@@ -4364,13 +4416,19 @@ class SharedCollectorAtTransport:
     def set_negotiated_wire(self, wire: str) -> None:
         """Set the live negotiated wire (from the runtime's SessionHandle).
 
-        ``"at_text"`` / ``"framed"`` make the live session authoritative for
-        AT-vs-framed activation; ``""`` clears it and restores the persisted
-        fallback.
+        ``"at_text"`` / ``"raw_tcp"`` / ``"eybond_framed"`` make the live session
+        authoritative for activation; ``""`` clears it and restores the
+        persisted fallback.
         """
 
         normalized = str(wire or "").strip().lower()
-        self._negotiated_wire = normalized if normalized in ("at_text", "framed") else ""
+        if normalized == "framed":
+            normalized = "eybond_framed"
+        self._negotiated_wire = (
+            normalized
+            if normalized in ("at_text", "raw_tcp", "eybond_framed")
+            else ""
+        )
 
     def set_claimed_session_provider(self, provider: Any) -> None:
         """Set the runtime's registry-mediated claimed-session-id resolver."""
@@ -4394,7 +4452,9 @@ class SharedCollectorAtTransport:
         # live session has been observed.
         if self._negotiated_wire == "at_text":
             return True
-        if self._negotiated_wire == "framed":
+        if self._negotiated_wire == "raw_tcp":
+            return True
+        if self._negotiated_wire == "eybond_framed":
             return False
         return self._collector_session_protocol == "at_text"
 
