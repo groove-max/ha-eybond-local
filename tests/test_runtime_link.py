@@ -1228,6 +1228,38 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
             diagnostics["collector_callback_identity_summary"],
         )
 
+    def test_recent_foreign_identified_session_keeps_conflict_without_pending(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        transport = _FakeTransport(
+            connected=False,
+            connect_result=False,
+            observed_sessions=(self._session(self._FOREIGN_PN),),
+        )
+        transport.session_inventory_diagnostics = lambda: {  # type: ignore[method-assign]
+            "pending_session_count": 0,
+            "recent_session_count": 1,
+            "duplicate_peer_ip_count": 0,
+            "duplicate_peer_ips": [],
+            "sessions": [
+                {
+                    "session_id": "listener-8899-9",
+                    "peer_ip": "203.0.113.10",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_masked": "V00…2222",
+                    "collector_identity_source": "at_dtupn",
+                }
+            ],
+        }
+        manager._transport = transport  # type: ignore[assignment]
+
+        diagnostics = manager.listener_diagnostics()
+
+        self.assertEqual(diagnostics["collector_callback_identity_status"], "conflict")
+        self.assertEqual(diagnostics["collector_callback_pending_session_count"], 0)
+        self.assertEqual(diagnostics["collector_callback_recent_session_count"], 1)
+        self.assertEqual(diagnostics["collector_callback_identity_mismatch_count"], 1)
+
     def test_callback_on_demand_session_claimed_by_other_entry(self) -> None:
         manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
         # Our own session is observed (matching PN) but we can't connect...

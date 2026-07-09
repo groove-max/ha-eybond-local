@@ -320,14 +320,14 @@ def _callback_identity_status_values(
         mismatch_count += identified_count
         unresolved_count += identified_count
 
-    if pending_count <= 0:
-        status = "idle"
-        summary = "No unresolved collector callback sessions are pending."
-    elif mismatch_count:
+    if mismatch_count:
         status = "conflict"
         summary = (
             "A collector callback was identified, but it does not match the expected collector PN."
         )
+    elif pending_count <= 0:
+        status = "idle"
+        summary = "No unresolved collector callback sessions are pending."
     elif duplicate_peer_ip_count and unresolved_count:
         status = "unresolved"
         summary = (
