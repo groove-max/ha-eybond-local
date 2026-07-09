@@ -43,9 +43,9 @@ cloud. See the full, always-current list in the
 
 - Reads inverter, battery, PV, load, and grid data locally.
 - Creates normal Home Assistant sensors, numbers, selects, switches, and buttons.
-- Supports two collector modes:
-  - **Cloud + HA** — keep the vendor app and Home Assistant working together.
-  - **HA only** — make that collector talk only to Home Assistant.
+- Keeps the vendor app working alongside Home Assistant by default, or lets you
+  point a collector at Home Assistant only — a reversible, explicit action that
+  is never done silently.
 - Lets you choose control access:
   - **Read-only** — monitoring only.
   - **Auto** — enable verified controls when the device match is confident.
@@ -62,8 +62,9 @@ monitoring does not depend on the vendor cloud being reachable. Updates arrive a
 local speed, and your inverter data stays inside your Home Assistant installation.
 
 On supported collectors you can keep the SmartESS or SmartValue app working at the
-same time (**Cloud + HA** mode), or switch a collector to talk only to Home Assistant
-(**HA only** mode).
+same time, or explicitly point a collector at Home Assistant only. Home Assistant
+never silently redirects a collector — pointing it at Home Assistant and restoring
+its previous server are both explicit, reversible actions.
 
 ---
 
@@ -174,7 +175,7 @@ Manual setup is available when automatic scanning is not practical.
 
 EyeBond Local usually creates two Home Assistant devices:
 
-- **Collector device** — Wi-Fi signal, network actions, collector mode, restart, support archive, and troubleshooting actions.
+- **Collector device** — Wi-Fi signal, network actions, connection settings, restart, support archive, and troubleshooting actions.
 - **Inverter device** — live sensors, energy totals, binary sensors, and supported controls.
 
 <p align="center"><img src="docs/images/device-overview.png" alt="Collector and inverter devices in Home Assistant" width="720"></p>
@@ -191,8 +192,8 @@ The inverter device may include:
 
 <p align="center"><img src="docs/images/inverter-sensors.png" alt="Inverter sensors after setup" width="320"></p>
 
-You can change collector mode, control mode, and sensor refresh mode later from
-**Connection and polling**.
+You can change how the collector connects, control mode, and sensor refresh mode
+later from **Connection and polling**.
 
 <p align="center"><img src="docs/images/settings.png" alt="EyeBond Local configuration menu" width="480"></p>
 
@@ -206,7 +207,7 @@ stays high, increase the interval or switch back to Automatic.
 detecting an inverter, or only checking the collector, so long detection cycles
 are not confused with normal runtime polling.
 
-<p align="center"><img src="docs/images/runtime-settings.png" alt="Runtime settings with control mode and collector operation mode" width="480"></p>
+<p align="center"><img src="docs/images/runtime-settings.png" alt="Runtime settings with control mode and connection strategy" width="480"></p>
 
 ---
 
@@ -270,7 +271,7 @@ Use these issue templates:
 | Device stays on **EyeBond Setup Pending** | Wait a few minutes, refresh the device page, then retry scan or manual setup. If it still stays pending, create a Support Archive. |
 | Stuck on **Collector only** | The collector answered, but the inverter was not identified confidently. Create a Support Archive. |
 | Sensors stay unavailable | Check that the collector and Home Assistant are on the same network and that the collector has stable Wi-Fi. |
-| Vendor app stopped showing live data | Check collector mode. **HA only** disconnects that collector from its cloud by design. Switch back to **Cloud + HA** mode if you want the vendor app too. |
+| Vendor app stopped showing live data | If you pointed the collector at Home Assistant only, that disconnects it from its cloud by design. Use **Restore previous collector endpoint** to bring the vendor app back. |
 | Vendor app works, but Home Assistant says unavailable | The collector may have reconnected to its cloud faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
 | A setting changes back immediately | The inverter rejected the value or did not confirm it. Check diagnostics, avoid changing the same setting from the vendor app at the same time, and retry after the collector is stable. |
 | Remote setup is needed | Use [Remote / NAT setup guide](docs/REMOTE_SETUP.md). Prefer VPN over public port forwarding when possible. |

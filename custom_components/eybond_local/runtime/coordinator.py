@@ -322,9 +322,9 @@ _LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
         "uk": "EyeBond Local: перевірте відновлення колектора",
     },
     "proxy_capture_restore_unconfirmed_body": {
-        "en": "The proxy capture stopped, but automatic SmartESS endpoint restore was not confirmed. The collector may still point at Home Assistant. If SmartESS no longer sees the collector, manually set Collector Operation Mode to SmartESS + Home Assistant after the collector reconnects.",
-        "ru": "Захват трафика остановлен, но автоматическое восстановление endpoint SmartESS не подтверждено. Коллектор может всё ещё указывать на Home Assistant. Если SmartESS больше не видит коллектор, после его повторного подключения вручную установите Collector Operation Mode в SmartESS + Home Assistant.",
-        "uk": "Захоплення трафіку зупинено, але автоматичне відновлення endpoint SmartESS не підтверджено. Колектор може все ще вказувати на Home Assistant. Якщо SmartESS більше не бачить колектор, після повторного підключення колектора вручну встановіть Collector Operation Mode у SmartESS + Home Assistant.",
+        "en": "The proxy capture stopped, but restoring the collector's previous endpoint was not confirmed. The collector may still point at Home Assistant. If the vendor cloud no longer sees the collector, use the \"Restore previous collector endpoint\" action after the collector reconnects.",
+        "ru": "Захват трафика остановлен, но восстановление предыдущего адреса коллектора не подтверждено. Коллектор может всё ещё указывать на Home Assistant. Если облако производителя больше не видит коллектор, после его повторного подключения воспользуйтесь действием «Восстановить предыдущий адрес коллектора».",
+        "uk": "Захоплення трафіку зупинено, але відновлення попередньої адреси колектора не підтверджено. Колектор може все ще вказувати на Home Assistant. Якщо хмара виробника більше не бачить колектор, після повторного підключення скористайтеся дією «Відновити попередню адресу колектора».",
     },
     "support_archive_notification_title": {
         "en": "EyeBond Local Support Archive",

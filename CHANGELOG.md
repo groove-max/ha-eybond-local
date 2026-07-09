@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is inspired by Keep a Changelog, with one practical rule for this repository:
 the GitHub release body should be rendered from the matching version section here.
 
+## [Unreleased]
+
+### Changed
+
+- **Collector connection is now described by how it connects, not a "Cloud + HA /
+  HA-only" mode.** The main collector choice is **How the collector connects**:
+  *Collector connects to Home Assistant on its own* (Home Assistant just waits and
+  sends nothing), or *Ask the collector to connect when needed* (Home Assistant
+  sends one connection request per attempt). Whether the collector still reaches
+  its vendor cloud is now controlled by explicit endpoint actions instead of a
+  named mode.
+- **Home Assistant never silently redirects or restores a collector's server.**
+  Pointing a collector at Home Assistant (*Write Home Assistant endpoint*) and
+  putting its server back (*Restore previous collector endpoint*) are explicit,
+  reversible actions. The previous endpoint is only restored when you ask for it.
+- **Callback ("ask the collector to connect") sends exactly one request per
+  attempt** — no constant background traffic — and reports a clear reason when a
+  collector does not answer (callback timeout, identity mismatch, or already
+  owned by another entry).
+- The legacy **Collector Operation Mode** control remains only as a
+  compatibility/migration setting and no longer drives runtime behavior; its
+  label is now the provider-neutral **Cloud + HA** everywhere.
+
+### Migration
+
+- **Existing entries are migrated automatically** to the new connection settings
+  the first time they load — no manual reconfiguration is needed.
+- **Your collector's server endpoint is not touched on upgrade.** If it pointed at
+  the vendor cloud, it still does; if it pointed at Home Assistant, it still does.
+- **Remote / NAT collectors are identified by their PN, not their IP address.**
+  Two collectors behind the same public IP stay distinct, and a collector's public
+  IP is never used as its identity.
+- If a collector's vendor app stops showing data because it was pointed at Home
+  Assistant only, use **Restore previous collector endpoint** to bring it back.
+- If anything looks wrong after the upgrade, open the integration's **Configure**
+  menu and create a **Support Archive**, then attach it to a GitHub issue.
+
 ## [0.3.0-beta.1] - 2026-07-06
 
 ### Added
