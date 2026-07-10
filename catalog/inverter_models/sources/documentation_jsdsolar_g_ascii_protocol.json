@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_jsdsolar_g_ascii_protocol",
+  "kind": "documentation",
+  "title": "JsdSolar G-command ASCII inverter communication protocol",
+  "reference": "sha256:7a91d25f6523ce3adda43f1657ca04550f10d1e15281330f3b40fd518f7c3b0c",
+  "captured_at": "2026-06-26",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Local protocol document describes an inverter ASCII command family using carriage-return-terminated commands and responses such as GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL. It confirms the SmartValue capture is a distinct G-command protocol family rather than PI30 ASCII and documents read-only telemetry field positions.",
+  "assertions": [
+    "runtime_compatibility",
+    "telemetry_validation",
+    "register_map"
+  ]
+}

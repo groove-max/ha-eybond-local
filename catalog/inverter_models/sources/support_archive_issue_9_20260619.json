@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_9_20260619",
+  "kind": "support_archive",
+  "title": "Anenji ANJ-4000W-24V runtime support archive",
+  "reference": "private:support-archive-issue-9-20260619",
+  "captured_at": "2026-06-19",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private support archive for the issue #9 device. The runtime selected modbus_smg/models/anenji_4200_protocol_1.json, matched layout 1 and model code 13569 with rated power 4200, and reported live telemetry values. Control learning did not run because cloud login preflight failed for this account.",
+  "assertions": [
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

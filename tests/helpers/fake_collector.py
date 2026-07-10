@@ -50,6 +50,7 @@ class FakeCollectorService:
         connect_timeout: float,
         udp_reply: str,
         scenario: CollectorScenario,
+        nat_peer_scenarios: tuple[CollectorScenario, ...] = (),
     ) -> None:
         self._listen_ip = listen_ip
         self._udp_port = int(udp_port)
@@ -59,6 +60,18 @@ class FakeCollectorService:
         self._udp_reply = udp_reply
         self._scenario = scenario
         self._profile = scenario.profile
+        self._nat_peer_services: tuple[FakeCollectorService, ...] = tuple(
+            FakeCollectorService(
+                listen_ip=listen_ip,
+                udp_port=udp_port,
+                tcp_bind_ip=tcp_bind_ip,
+                heartbeat_interval=heartbeat_interval,
+                connect_timeout=connect_timeout,
+                udp_reply="",
+                scenario=peer_scenario,
+            )
+            for peer_scenario in nat_peer_scenarios
+        )
         self._udp_transport: asyncio.DatagramTransport | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -124,6 +137,9 @@ class FakeCollectorService:
             except asyncio.CancelledError:
                 pass
 
+        for peer in self._nat_peer_services:
+            await peer.stop()
+
     def create_background_task(self, coro: Any, *, name: str) -> None:
         task = asyncio.create_task(coro, name=name)
         self._background_tasks.add(task)
@@ -156,6 +172,8 @@ class FakeCollectorService:
             )
 
         await self._ensure_reverse_tcp(redirect.server_ip, redirect.server_port)
+        for peer in self._nat_peer_services:
+            await peer._ensure_reverse_tcp(redirect.server_ip, redirect.server_port)
 
     async def _ensure_reverse_tcp(self, server_ip: str, server_port: int) -> None:
         endpoint = (server_ip, server_port)

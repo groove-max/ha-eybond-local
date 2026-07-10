@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_3",
+  "kind": "github_issue",
+  "title": "Aninerel ANL-4200T-24L-W-PRO user report",
+  "reference": "project-issue:3",
+  "captured_at": "2026-06-15",
+  "visibility": "public",
+  "summary": "Device owner reported the Aninerel ANL-4200T-24L-W-PRO commercial model.",
+  "assertions": [
+    "commercial_identity"
+  ]
+}

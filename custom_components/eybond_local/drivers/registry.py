@@ -12,8 +12,11 @@ from ..entity_descriptions import (
     BASE_SENSOR_DESCRIPTIONS,
     merge_descriptions,
 )
-from ..metadata.model_binding_catalog_loader import load_driver_model_binding_catalog
-from ..metadata.pi_family_catalog_loader import load_pi_family_catalog
+from ..metadata.collector_cloud_profile_catalog_loader import (
+    load_collector_cloud_profile_catalog,
+)
+from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
+from ..metadata.device_catalog_loader import load_device_catalog
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
@@ -26,18 +29,27 @@ from ..models import (
     decimals_for_divisor,
 )
 from .base import InverterDriver
+from .modbus_catalog import ModbusCatalogDriver
+from .must import MustPvPh18Driver
 from .pi18 import Pi18Driver
 from .pi30 import Pi30Driver
+from .smartess_local import SmartEssLocalDriver
 from .smg import SmgModbusDriver
+from .srne import SrneModbusDriver
+from .eybond_g_ascii import EybondGAsciiDriver
 
 _DRIVERS: tuple[InverterDriver, ...] = (
     SmgModbusDriver(),
+    SrneModbusDriver(),
+    MustPvPh18Driver(),
+    ModbusCatalogDriver(),
     Pi30Driver(),
-)
-
-_EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = (
+    EybondGAsciiDriver(),
+    SmartEssLocalDriver(),
     Pi18Driver(),
 )
+
+_EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = ()
 
 _COLLECTOR_ONLY_BASE_SENSOR_EXTRA_KEYS: frozenset[str] = frozenset({"last_error"})
 
@@ -87,6 +99,7 @@ def measurements_for_runtime(
     *,
     driver_key: str | None = None,
     register_schema_name: str = "",
+    variant_key: str | None = None,
     write_capabilities: tuple[WriteCapability, ...] | None = None,
     include_all_drivers_when_unknown: bool = True,
     collector_only_mode: bool = False,
@@ -102,6 +115,16 @@ def measurements_for_runtime(
             or description.key in _COLLECTOR_ONLY_BASE_SENSOR_EXTRA_KEYS
         )
     ]
+    if collector_only_mode:
+        # No inverter identity yet (e.g. a manual driver hint on a collector
+        # with nothing attached): schema, driver, and canonical measurements
+        # describe an inverter that does not exist and would materialize as
+        # unavailable entities on the collector device. The entry reloads
+        # once detection persists an identity, so nothing is lost.
+        return _promote_readback_defaults(
+            merge_descriptions(*driver_measurements),
+            (),
+        )
     if register_schema_name:
         driver_measurements.append(load_register_schema(register_schema_name).measurement_descriptions)
     elif driver_key is None:
@@ -119,7 +142,9 @@ def measurements_for_runtime(
         else:
             resolved_write_capabilities = () if write_capabilities is None else write_capabilities
     else:
-        driver_measurements.append(canonical_measurements_for_driver(driver_key))
+        driver_measurements.append(
+            canonical_measurements_for_driver(driver_key, variant_key=variant_key)
+        )
         resolved_write_capabilities = (
             get_driver(driver_key).write_capabilities
             if write_capabilities is None
@@ -205,10 +230,15 @@ def binary_sensors_for_runtime(
     driver_key: str | None = None,
     register_schema_name: str = "",
     include_all_drivers_when_unknown: bool = True,
+    collector_only_mode: bool = False,
 ) -> tuple[BinarySensorDescription, ...]:
     """Return binary sensors for one concrete runtime schema selection."""
 
     driver_binary_sensors = [BASE_BINARY_SENSOR_DESCRIPTIONS]
+    if collector_only_mode:
+        # Same rule as measurements_for_runtime: without an inverter
+        # identity, schema/driver binary sensors describe a phantom device.
+        return merge_descriptions(*driver_binary_sensors)
     if register_schema_name:
         driver_binary_sensors.append(load_register_schema(register_schema_name).binary_sensor_descriptions)
     elif driver_key is None:
@@ -286,11 +316,18 @@ def prime_metadata_caches() -> None:
 def _prime_catalog_driven_metadata() -> None:
     """Warm JSON-backed metadata that is only reached through runtime catalogs."""
 
-    for binding in load_driver_model_binding_catalog().bindings.values():
-        if binding.profile_name:
-            load_driver_profile(binding.profile_name)
-        if binding.register_schema_name:
-            load_register_schema(binding.register_schema_name)
+    # Warm the identity/cloud-profile catalogs too: their first read otherwise
+    # lands in the event loop during driver detection (HA's blocking-call
+    # warning), which needlessly prolongs startup on slow/throttled hosts.
+    load_device_catalog()
+    compiled_catalog = load_compiled_detection_catalog()
+    load_collector_cloud_profile_catalog()
+
+    for surface in compiled_catalog.surfaces.values():
+        if surface.profile_name:
+            load_driver_profile(surface.profile_name)
+        if surface.register_schema_name:
+            load_register_schema(surface.register_schema_name)
 
     for protocol in load_smartess_protocol_catalog().protocols.values():
         for profile_name in (protocol.raw_profile_name, protocol.profile_name):
@@ -302,9 +339,3 @@ def _prime_catalog_driven_metadata() -> None:
         ):
             if schema_name:
                 load_register_schema(schema_name)
-
-    for variant in load_pi_family_catalog().pi30_variants:
-        if variant.profile_name:
-            load_driver_profile(variant.profile_name)
-        if variant.register_schema_name:
-            load_register_schema(variant.register_schema_name)

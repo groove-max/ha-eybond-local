@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ..link_models import EybondLinkRoute
-from ..link_transport import PayloadLinkTransport, async_send_payload
+from ..link_models import EybondLinkRoute, LinkRoute
+from ..link_transport import PayloadLinkTransport, async_send_payload, select_payload_route
 
 
 class Pi30Error(Exception):
@@ -74,7 +74,7 @@ class Pi30Session:
         self,
         transport: PayloadLinkTransport,
         *,
-        route: EybondLinkRoute | None = None,
+        route: LinkRoute | None = None,
         devcode: int | None = None,
         collector_addr: int | None = None,
     ) -> None:
@@ -86,16 +86,21 @@ class Pi30Session:
                 devcode=devcode,
                 collector_addr=collector_addr,
             )
-        self._route = route
+        self._route: LinkRoute = route
 
     async def request(self, command: str) -> str:
         """Send one PI30 command and return the decoded ASCII payload."""
 
         try:
+            route = select_payload_route(
+                self._transport,
+                self._route,
+                payload_family="pi30_ascii",
+            )
             response = await async_send_payload(
                 self._transport,
                 build_request(command),
-                route=self._route,
+                route=route,
             )
         except asyncio.TimeoutError as exc:
             raise Pi30Error("request_timeout") from exc
@@ -202,6 +207,7 @@ def parse_qflag(payload: str) -> dict[str, Any]:
     values: dict[str, Any] = {
         "capability_flags_enabled": enabled_letters,
         "capability_flags_disabled": disabled_letters,
+        "capability_flags_all": enabled_letters + disabled_letters,
     }
     for letter, key in _QFLAG_KEY_MAP.items():
         if letter in enabled_set:

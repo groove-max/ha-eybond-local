@@ -1,0 +1,629 @@
+{
+  "profile_key": "must_pv_ph18/base.json",
+  "title": "MUST PV/PH18",
+  "driver_key": "must_pv_ph18",
+  "protocol_family": "must_pv_ph18",
+  "groups": [
+    {
+      "key": "output",
+      "title": "Output",
+      "order": 100,
+      "description": "Inverter output behavior.",
+      "icon": "mdi:transmission-tower-export"
+    },
+    {
+      "key": "charging",
+      "title": "Charging",
+      "order": 200,
+      "description": "Charger source and current limits.",
+      "icon": "mdi:battery-charging"
+    },
+    {
+      "key": "battery",
+      "title": "Battery",
+      "order": 300,
+      "description": "Battery voltage windows and discharge limits.",
+      "icon": "mdi:battery-cog"
+    },
+    {
+      "key": "grid",
+      "title": "Grid",
+      "order": 400,
+      "description": "Energy-use mode and grid interaction.",
+      "icon": "mdi:transmission-tower"
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "offgrid_output_enable",
+      "title": "Off-Grid Output",
+      "register": 20101,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "output",
+      "note": "MUST PH holding register 20101; the write function code is undocumented, single-register write assumed.",
+      "change_summary": "Enables inverter output when the grid is absent.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "power_save_mode",
+      "title": "Power Save (Search Mode)",
+      "register": 20104,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "output",
+      "note": "MUST PH holding register 20104.",
+      "change_summary": "Enables load-search power saving.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "grid_charge_enable",
+      "title": "Grid Charging",
+      "register": 20106,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "charging",
+      "note": "MUST PH holding register 20106.",
+      "change_summary": "Allows the battery to charge from the grid.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; write path not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "charge_source_priority",
+      "title": "Charge Source Priority",
+      "register": 20143,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "charging",
+      "note": "MUST PH holding register 20143; the protocol defines no value 1.",
+      "change_summary": "Chooses which source charges the battery.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Solar First",
+          "order": 0,
+          "description": "Charge from solar first, utility assists."
+        },
+        {
+          "value": 2,
+          "label": "Solar and Utility",
+          "order": 1,
+          "description": "Charge from solar and utility together."
+        },
+        {
+          "value": 3,
+          "label": "Only Solar",
+          "order": 2,
+          "description": "Charge from solar only."
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "grid_max_charge_current",
+      "title": "Grid Max Charge Current",
+      "register": 20125,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "charging",
+      "unit": "A",
+      "divisor": 10,
+      "minimum": 10,
+      "maximum": 800,
+      "step": 1,
+      "note": "MUST PH holding register 20125 (1.0-80.0 A DC, raw 0.1 A).",
+      "change_summary": "Limits the battery charge current taken from the grid.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "max_combined_charge_current",
+      "title": "Max Combined Charge Current",
+      "register": 20132,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "charging",
+      "unit": "A",
+      "divisor": 10,
+      "minimum": 10,
+      "maximum": 1400,
+      "step": 1,
+      "note": "MUST PH holding register 20132 (solar + grid total, 1.0-140.0 A DC, raw 0.1 A).",
+      "change_summary": "Limits the total battery charge current from all sources.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "inverter_output_voltage",
+      "title": "Inverter Output Voltage",
+      "register": 20102,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "output",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 3000,
+      "step": 1,
+      "note": "MUST PH holding register 20102 (documented 220.0-240.0 V, raw 0.1 V). Window intentionally left wide; the inverter validates its own range.",
+      "change_summary": "Sets the inverter AC output voltage.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "inverter_output_frequency",
+      "title": "Inverter Output Frequency",
+      "register": 20103,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "output",
+      "note": "MUST PH holding register 20103 (raw 0.01 Hz; 5000 = 50 Hz, 6000 = 60 Hz).",
+      "change_summary": "Sets the inverter output frequency.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "choices": [
+        {
+          "value": 5000,
+          "label": "50 Hz",
+          "order": 0,
+          "description": "50 Hz output."
+        },
+        {
+          "value": 6000,
+          "label": "60 Hz",
+          "order": 1,
+          "description": "60 Hz output."
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "pv_max_charge_current",
+      "title": "PV Max Charge Current",
+      "register": 10108,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "charging",
+      "unit": "A",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 2000,
+      "step": 1,
+      "note": "MUST PV charger holding register 10108 (raw 0.1 A). Window intentionally left wide; the inverter validates its own range.",
+      "change_summary": "Limits the battery charge current taken from PV.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "float_voltage",
+      "title": "Float Voltage",
+      "register": 10103,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PV charger holding register 10103 (raw 0.1 V). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Sets the battery float charge voltage.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "absorption_voltage",
+      "title": "Absorption Voltage",
+      "register": 10104,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PV charger holding register 10104 (raw 0.1 V). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Sets the battery absorption (boost) charge voltage.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_type",
+      "title": "Battery Type",
+      "register": 10110,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "battery",
+      "note": "MUST PV charger holding register 10110.",
+      "change_summary": "Selects the battery chemistry charge profile.",
+      "provenance": "doc_backed",
+      "support_notes": "Enum from SmartESS cloud device_settings for this firmware; register from RS485 Modbus RTU 1.4.15 xlsx. The SmartESS cloud exposes this control in its device settings for this model; awaiting on-hardware write confirmation.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "No choose",
+          "order": 0,
+          "description": "No battery type selected."
+        },
+        {
+          "value": 1,
+          "label": "User defined",
+          "order": 1,
+          "description": "User-defined battery profile."
+        },
+        {
+          "value": 2,
+          "label": "Lithium",
+          "order": 2,
+          "description": "Lithium battery."
+        },
+        {
+          "value": 3,
+          "label": "Sealed Lead",
+          "order": 3,
+          "description": "Sealed lead-acid battery."
+        },
+        {
+          "value": 4,
+          "label": "AGM",
+          "order": 4,
+          "description": "AGM battery."
+        },
+        {
+          "value": 5,
+          "label": "GEL",
+          "order": 5,
+          "description": "GEL battery."
+        },
+        {
+          "value": 6,
+          "label": "Flooded",
+          "order": 6,
+          "description": "Flooded lead-acid battery."
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_stop_charge_voltage",
+      "title": "Battery Stop Charging Voltage",
+      "register": 20119,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PH holding register 20119 (raw 0.1 V). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Sets the voltage at which charging stops.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_stop_discharge_voltage",
+      "title": "Battery Stop Discharging Voltage",
+      "register": 20118,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PH holding register 20118 (raw 0.1 V). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Sets the voltage at which discharging stops.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_low_voltage",
+      "title": "Battery Low Voltage",
+      "register": 20127,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PH holding register 20127 (raw 0.1 V). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Sets the battery low-voltage warning threshold.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_high_voltage",
+      "title": "Battery High Voltage",
+      "register": 20128,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PH holding register 20128 (raw 0.1 V). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Sets the battery high-voltage threshold.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "max_discharge_current",
+      "title": "Inverter Max Discharge Current",
+      "register": 20113,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "A",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 2000,
+      "step": 1,
+      "note": "MUST PH holding register 20113 (raw 0.1 A). Window intentionally left wide because the documented range is battery-voltage-grade dependent; the inverter validates its own range.",
+      "change_summary": "Limits the inverter discharge current.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "energy_use_mode",
+      "title": "Energy Use Mode",
+      "register": 20109,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "grid",
+      "note": "MUST PH holding register 20109; enum values are battery-voltage-grade dependent (values below confirmed from this unit's cloud settings).",
+      "change_summary": "Chooses the output source priority order.",
+      "provenance": "doc_backed",
+      "support_notes": "Enum from SmartESS cloud device_settings for this firmware; register from RS485 Modbus RTU 1.4.15 xlsx. The SmartESS cloud exposes this control in its device settings for this model; awaiting on-hardware write confirmation.",
+      "choices": [
+        {
+          "value": 1,
+          "label": "SBU (Solar, Battery, Utility)",
+          "order": 0,
+          "description": "Solar first, then battery, then utility."
+        },
+        {
+          "value": 2,
+          "label": "SUB (Solar, Utility, Battery)",
+          "order": 1,
+          "description": "Solar first, then utility, then battery."
+        },
+        {
+          "value": 3,
+          "label": "UTI (Utility First)",
+          "order": 2,
+          "description": "Utility first."
+        },
+        {
+          "value": 4,
+          "label": "SOL (Solar First)",
+          "order": 3,
+          "description": "Solar first."
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "grid_protect_standard",
+      "title": "Grid Protection Standard",
+      "register": 20111,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "grid",
+      "note": "MUST PH holding register 20111.",
+      "change_summary": "Selects the grid interconnection protection standard.",
+      "provenance": "doc_backed",
+      "support_notes": "Enum from SmartESS cloud device_settings for this firmware; register from RS485 Modbus RTU 1.4.15 xlsx. The SmartESS cloud exposes this control in its device settings for this model; awaiting on-hardware write confirmation.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "VDE4105",
+          "order": 0,
+          "description": "VDE-AR-N 4105 standard."
+        },
+        {
+          "value": 1,
+          "label": "UPS",
+          "order": 1,
+          "description": "UPS mode."
+        },
+        {
+          "value": 2,
+          "label": "Home",
+          "order": 2,
+          "description": "Home mode."
+        },
+        {
+          "value": 3,
+          "label": "GEN",
+          "order": 3,
+          "description": "Generator mode."
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "solar_use_aim",
+      "title": "Solar Use Priority",
+      "register": 20112,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "grid",
+      "note": "MUST PH holding register 20112.",
+      "change_summary": "Chooses whether solar serves load or battery first.",
+      "provenance": "doc_backed",
+      "support_notes": "Enum from SmartESS cloud device_settings for this firmware; register from RS485 Modbus RTU 1.4.15 xlsx. The SmartESS cloud exposes this control in its device settings for this model; awaiting on-hardware write confirmation.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "LBU (Load, Battery, Utility)",
+          "order": 0,
+          "description": "Solar serves load first, then battery."
+        },
+        {
+          "value": 1,
+          "label": "BLU (Battery, Load, Utility)",
+          "order": 1,
+          "description": "Solar charges battery first, then load."
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "discharge_to_grid_enable",
+      "title": "Discharge to Grid",
+      "register": 20108,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "grid",
+      "note": "MUST PH holding register 20108.",
+      "change_summary": "Allows the inverter to export battery energy to the grid.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_equalization_enable",
+      "title": "Battery Equalization",
+      "register": 10118,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "battery",
+      "note": "MUST PV charger holding register 10118.",
+      "change_summary": "Enables periodic battery equalization charging.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; datasheet-only control (not exposed by the SmartESS cloud); not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "title": "Battery Equalization Voltage",
+      "register": 10119,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "divisor": 10,
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST PV charger holding register 10119 (raw 0.1 V). Window left wide; the inverter validates its own range.",
+      "change_summary": "Sets the battery equalization charge voltage.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; datasheet-only control (not exposed by the SmartESS cloud); not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "battery_ah",
+      "title": "Battery Capacity",
+      "register": 10111,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "Ah",
+      "minimum": 0,
+      "maximum": 2000,
+      "step": 1,
+      "note": "MUST PV charger holding register 10111 (1 Ah).",
+      "change_summary": "Sets the configured battery bank capacity.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; datasheet-only control (not exposed by the SmartESS cloud); not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalized_time",
+      "title": "Equalization Duration",
+      "register": 10121,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "min",
+      "minimum": 0,
+      "maximum": 900,
+      "step": 1,
+      "note": "MUST PV charger holding register 10121 (documented 5-900 min).",
+      "change_summary": "Sets how long an equalization cycle runs.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; datasheet-only control (not exposed by the SmartESS cloud); not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalized_timeout",
+      "title": "Equalization Timeout",
+      "register": 10122,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "min",
+      "minimum": 0,
+      "maximum": 900,
+      "step": 1,
+      "note": "MUST PV charger holding register 10122 (documented 5-900 min).",
+      "change_summary": "Sets the maximum time before an equalization cycle times out.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; datasheet-only control (not exposed by the SmartESS cloud); not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalization_interval",
+      "title": "Equalization Interval",
+      "register": 10123,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "d",
+      "minimum": 0,
+      "maximum": 90,
+      "step": 1,
+      "note": "MUST PV charger holding register 10123 (documented 0-90 days).",
+      "change_summary": "Sets how often equalization runs.",
+      "provenance": "doc_backed",
+      "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; datasheet-only control (not exposed by the SmartESS cloud); not yet confirmed on hardware.",
+      "enabled_default": true
+    }
+  ]
+}

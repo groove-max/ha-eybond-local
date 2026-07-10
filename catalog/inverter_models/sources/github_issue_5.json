@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_5",
+  "kind": "github_issue",
+  "title": "MUST PV18-3024 user report",
+  "reference": "project-issue:5",
+  "captured_at": "2026-06-13",
+  "visibility": "public",
+  "summary": "Device owner reported a MUST PV18-3024 Modbus inverter with Wi-Fi data logger. Initial Auto and manual PI30 attempts timed out; follow-up evidence showed the collector serial baudrate was 19200-8-1-0 and the SmartESS protocol asset was \"02FF,0,0,\".",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility"
+  ]
+}

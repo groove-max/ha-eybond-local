@@ -1,0 +1,447 @@
+{
+  "extends": "../base.json",
+  "profile_key": "modbus_smg_smg_variant_4200",
+  "title": "SMG family 4200 variant",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capabilities": [
+    {
+      "key": "input_voltage_range",
+      "note": "Input Mode; register 302. Field->register and enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "choices": [
+        {
+          "value": 0,
+          "label": "APL",
+          "order": 0,
+          "description": "Wide appliance input voltage window."
+        },
+        {
+          "value": 1,
+          "label": "UPS",
+          "order": 1,
+          "description": "Narrow UPS input voltage window."
+        },
+        {
+          "value": 2,
+          "label": "GNT",
+          "order": 2,
+          "description": "Generator input mode."
+        }
+      ],
+      "tested": true
+    },
+    {
+      "key": "buzzer_mode",
+      "note": "Register 303; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Beeps Off",
+          "order": 0,
+          "description": "Buzzer silent."
+        },
+        {
+          "value": 1,
+          "label": "Beeps On",
+          "order": 1,
+          "description": "Buzzer enabled."
+        },
+        {
+          "value": 2,
+          "label": "Mute When Input Source Changes",
+          "order": 2,
+          "description": "Silent on source change."
+        },
+        {
+          "value": 3,
+          "label": "Beeps Only In Fault Mode",
+          "order": 3,
+          "description": "Buzzer only on faults."
+        }
+      ],
+      "tested": true
+    },
+    {
+      "key": "lcd_backlight_mode",
+      "note": "Register 305; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Timed Off",
+          "order": 0,
+          "description": "Backlight turns off after a timeout."
+        },
+        {
+          "value": 1,
+          "label": "Always On",
+          "order": 1,
+          "description": "Backlight stays on."
+        }
+      ],
+      "tested": true
+    },
+    {
+      "key": "lcd_auto_return_mode",
+      "note": "Register 306; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Do Not Return Automatically",
+          "order": 0,
+          "description": "Stay on the current page."
+        },
+        {
+          "value": 1,
+          "label": "Return After 1 Minute",
+          "order": 1,
+          "description": "Return to home page after 1 minute."
+        }
+      ],
+      "tested": true
+    },
+    {
+      "key": "turn_on_mode",
+      "note": "Boot method; register 406; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Local Or Remote",
+          "order": 0,
+          "description": "Can be powered on locally or remotely."
+        },
+        {
+          "value": 1,
+          "label": "Only Local",
+          "order": 1,
+          "description": "Local power-on only."
+        },
+        {
+          "value": 2,
+          "label": "Only Remote",
+          "order": 2,
+          "description": "Remote power-on only."
+        }
+      ],
+      "tested": true
+    },
+    {
+      "key": "output_rating_voltage",
+      "minimum": 0,
+      "maximum": 3000,
+      "note": "Register 320 (raw 0.1 V; observed 220/230/240 V). Window left wide; the inverter validates its own range. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
+      "tested": true
+    },
+    {
+      "key": "output_rating_frequency",
+      "minimum": 0,
+      "maximum": 7000,
+      "note": "Register 321 (raw 0.01 Hz; observed 50/60 Hz). Field->register confirmed by shadow-learning capture on this unit (dc6514).",
+      "tested": true
+    },
+    {
+      "key": "battery_under_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "Mains-mode battery low-voltage protection; register 327. Window left wide because the setpoint limits are battery-voltage-grade dependent; the inverter validates its own range. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
+      "tested": true
+    },
+    {
+      "key": "battery_under_voltage_off_grid",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "Off-grid-mode battery low-voltage protection; register 329. Window left wide because the setpoint limits are battery-voltage-grade dependent; the inverter validates its own range. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
+      "tested": true
+    },
+    {
+      "key": "exit_fault_mode",
+      "note": "Register 426; action confirmed by shadow-learning capture on this unit (dc6514). Left untested: it is only effective while the machine is in a fault-lock state, which was not exercised on hardware.",
+      "tested": false
+    },
+    {
+      "key": "battery_type",
+      "register": 322,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "battery",
+      "note": "SMG holding register 322; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "change_summary": "Selects the battery chemistry.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "AGM",
+          "order": 0,
+          "description": "AGM"
+        },
+        {
+          "value": 1,
+          "label": "FLD",
+          "order": 1,
+          "description": "FLD"
+        },
+        {
+          "value": 2,
+          "label": "USER",
+          "order": 2,
+          "description": "USER"
+        },
+        {
+          "value": 4,
+          "label": "Li2",
+          "order": 3,
+          "description": "Li2"
+        },
+        {
+          "value": 6,
+          "label": "Li4",
+          "order": 4,
+          "description": "Li4"
+        },
+        {
+          "value": 8,
+          "label": "LiB",
+          "order": 5,
+          "description": "LiB"
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "float_charge_wait_time",
+      "register": 330,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "charging",
+      "unit": "min",
+      "minimum": 0,
+      "maximum": 600,
+      "step": 1,
+      "note": "MUST/SMG holding register 330. Window left wide; the inverter validates its own range.",
+      "change_summary": "Sets the constant-pressure to float wait time.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "register": 338,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "output",
+      "note": "SMG holding register 338; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "change_summary": "Enables output before the unit is booted.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Manual Boot Required",
+          "order": 0,
+          "description": "Manual Boot Required"
+        },
+        {
+          "value": 1,
+          "label": "Auto Output",
+          "order": 1,
+          "description": "Auto Output"
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "lithium_auto_activation",
+      "register": 339,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "battery",
+      "note": "SMG holding register 339; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "change_summary": "Enables automatic lithium battery activation.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disabled",
+          "order": 0,
+          "description": "Disabled"
+        },
+        {
+          "value": 1,
+          "label": "Enabled",
+          "order": 1,
+          "description": "Enabled"
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "low_dc_protection_soc_ac_mode",
+      "register": 341,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 100,
+      "step": 1,
+      "note": "MUST/SMG holding register 341. Window left wide; the inverter validates its own range.",
+      "change_summary": "Low DC protection SOC in AC mode.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "low_dc_recovery_soc_ac_mode",
+      "register": 342,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 100,
+      "step": 1,
+      "note": "MUST/SMG holding register 342. Window left wide; the inverter validates its own range.",
+      "change_summary": "Low DC recovery SOC in AC mode.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "op1_offgrid_soc_protection",
+      "register": 343,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 100,
+      "step": 1,
+      "note": "MUST/SMG holding register 343. Window left wide; the inverter validates its own range.",
+      "change_summary": "OP1 SOC protection in off-grid mode.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "battery_low_cutoff_soc",
+      "register": 344,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 100,
+      "step": 1,
+      "note": "MUST/SMG holding register 344. Window left wide; the inverter validates its own range.",
+      "change_summary": "Battery low cut-off SOC.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "max_discharge_current_protection",
+      "register": 351,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "A",
+      "minimum": 0,
+      "maximum": 1000,
+      "step": 1,
+      "note": "MUST/SMG holding register 351. Window left wide; the inverter validates its own range.",
+      "change_summary": "Maximum discharge current protection.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "op1_offgrid_battery_low_voltage",
+      "register": 352,
+      "value_kind": "scaled_u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "V",
+      "minimum": 0,
+      "maximum": 700,
+      "step": 1,
+      "note": "MUST/SMG holding register 352. Window left wide; the inverter validates its own range.",
+      "change_summary": "OP1 off-grid battery low-voltage protection.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true,
+      "divisor": 10
+    },
+    {
+      "key": "op2_overload_warning_percent",
+      "register": 353,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "output",
+      "unit": "%",
+      "minimum": 0,
+      "maximum": 150,
+      "step": 1,
+      "note": "MUST/SMG holding register 353. Window left wide; the inverter validates its own range.",
+      "change_summary": "OP2 overload alarm threshold.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "output2_allow_output",
+      "register": 354,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "output",
+      "note": "SMG holding register 354; enum confirmed by shadow-learning capture on this unit (dc6514).",
+      "change_summary": "Allows the OP2 output.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Prohibit",
+          "order": 0,
+          "description": "Prohibit"
+        },
+        {
+          "value": 1,
+          "label": "Allow",
+          "order": 1,
+          "description": "Allow"
+        }
+      ],
+      "enabled_default": true,
+      "tested": true
+    },
+    {
+      "key": "equalization_activate_now",
+      "register": 425,
+      "value_kind": "action",
+      "action_value": 1,
+      "write_function": 6,
+      "group": "battery",
+      "title": "Equalization Now",
+      "order": 901,
+      "requires_confirm": true,
+      "note": "SMG holding register 425; momentary action confirmed by shadow-learning capture on this unit (dc6514).",
+      "change_summary": "Forces an equalization charge once.",
+      "provenance": "doc_backed",
+      "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",
+      "enabled_default": true,
+      "tested": false
+    }
+  ]
+}

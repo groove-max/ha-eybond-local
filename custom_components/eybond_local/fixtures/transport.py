@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from .utils import load_fixture_json
@@ -27,12 +28,24 @@ class FixtureTransport:
         probe_target: ProbeTarget,
         name: str = "",
         collector: dict[str, Any] | None = None,
+        input_registers: dict[int, int] | None = None,
     ) -> None:
         self._registers = dict(registers or {})
+        self._input_registers = dict(input_registers or {})
         self._command_responses = dict(command_responses or {})
         self._probe_target = probe_target
         self.name = name
         self.collector = collector or {}
+
+    @property
+    def collector_info(self) -> SimpleNamespace:
+        """Expose saved collector metadata through the runtime-like attribute.
+
+        Some drivers use ``transport.collector_info`` during offline detection
+        for identity/evidence.  Fixtures store that metadata as a plain dict.
+        """
+
+        return SimpleNamespace(**self.collector)
 
     async def async_send_forward(
         self,
@@ -59,6 +72,10 @@ class FixtureTransport:
 
         if function_code == 0x03:
             return self._handle_read_holding(payload)
+        if function_code == 0x04:
+            return self._handle_read_input(payload)
+        if function_code == 0x06:
+            return self._handle_write_single(payload)
         if function_code == 0x10:
             return self._handle_write_multiple(payload)
         raise FixtureTransportError(f"unsupported_function:{function_code}")
@@ -89,10 +106,19 @@ class FixtureTransport:
             )
 
     def _handle_command_request(self, payload: bytes, *, devcode: int, collector_addr: int) -> bytes:
-        if len(payload) < 4:
-            raise FixtureTransportError("request_too_short")
         if payload[-1] != 0x0D:
             raise FixtureTransportError("missing_terminator")
+
+        no_crc_command = _decode_no_crc_ascii_command(payload)
+        if no_crc_command is not None:
+            response_payload = self._command_responses.get(
+                (devcode, collector_addr, no_crc_command)
+            )
+            if response_payload is not None:
+                return _encode_no_crc_ascii_response(response_payload)
+
+        if len(payload) < 4:
+            raise FixtureTransportError("request_too_short")
 
         request_crc = payload[-3:-1]
         body = payload[:-3]
@@ -119,6 +145,22 @@ class FixtureTransport:
         return response_body + response_crc + b"\r"
 
     def _handle_read_holding(self, payload: bytes) -> bytes:
+        """FC 0x03 entrypoint — tests override this to observe/inject reads."""
+
+        return self._handle_read(payload, function=0x03, registers=self._registers)
+
+    def _handle_read_input(self, payload: bytes) -> bytes:
+        """FC 0x04 entrypoint — reads the separate input-register space."""
+
+        return self._handle_read(payload, function=0x04, registers=self._input_registers)
+
+    def _handle_read(
+        self,
+        payload: bytes,
+        *,
+        function: int,
+        registers: dict[int, int],
+    ) -> bytes:
         request_crc = int.from_bytes(payload[-2:], "little")
         expected_crc = crc16_modbus(payload[:-2])
         if request_crc != expected_crc:
@@ -128,13 +170,28 @@ class FixtureTransport:
         count = int.from_bytes(payload[4:6], "big")
         words: list[int] = []
         for register in range(address, address + count):
-            if register not in self._registers:
+            if register not in registers:
                 raise FixtureTransportError(f"missing_register:{register}")
-            words.append(self._registers[register])
+            words.append(registers[register])
 
-        response = bytearray([self._probe_target.device_addr, 0x03, count * 2])
+        response = bytearray([self._probe_target.device_addr, function, count * 2])
         for value in words:
             response.extend(value.to_bytes(2, "big", signed=False))
+        response_crc = crc16_modbus(response)
+        response.extend(response_crc.to_bytes(2, "little"))
+        return bytes(response)
+
+    def _handle_write_single(self, payload: bytes) -> bytes:
+        request_crc = int.from_bytes(payload[-2:], "little")
+        expected_crc = crc16_modbus(payload[:-2])
+        if request_crc != expected_crc:
+            raise FixtureTransportError("request_crc_mismatch")
+
+        address = int.from_bytes(payload[2:4], "big")
+        value = int.from_bytes(payload[4:6], "big")
+        self._registers[address] = value
+
+        response = bytearray(payload[:-2])
         response_crc = crc16_modbus(response)
         response.extend(response_crc.to_bytes(2, "little"))
         return bytes(response)
@@ -191,11 +248,15 @@ def load_fixture_payload(
     )
     ranges = raw.get("ranges", [])
     registers: dict[int, int] = {}
+    input_registers: dict[int, int] = {}
     for range_item in ranges:
         start = int(range_item["start"])
+        # Input (0x04) and holding (0x03) registers are distinct address
+        # spaces; captures record the function per range.
+        target = input_registers if int(range_item.get("function", 3)) == 4 else registers
         values = [int(value) for value in range_item["values"]]
         for offset, value in enumerate(values):
-            registers[start + offset] = value
+            target[start + offset] = value
 
     command_responses_raw = raw.get("command_responses", {})
     command_responses: dict[tuple[int, int, str], str] = {}
@@ -214,6 +275,7 @@ def load_fixture_payload(
 
     transport = FixtureTransport(
         registers=registers,
+        input_registers=input_registers,
         command_responses=command_responses,
         probe_target=probe_target,
         name=name or str(raw.get("name", "fixture")),
@@ -224,6 +286,39 @@ def load_fixture_payload(
 
 def _command_family(body: bytes) -> str:
     return "pi18" if body.startswith(b"^") else "pi30"
+
+
+def _decode_no_crc_ascii_command(payload: bytes) -> str | None:
+    """Decode a CR-terminated plain ASCII command, if the frame is one.
+
+    EyeBond G-ASCII commands are plain ``COMMAND\r`` lines without the PI30/PI18
+    CRC bytes.  This intentionally runs before the CRC path and only succeeds
+    when the decoded command exists in the fixture response map.
+    """
+
+    if not payload or payload[-1] != 0x0D:
+        return None
+    body = payload[:-1]
+    try:
+        command = body.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    command = command.strip()
+    return command or None
+
+
+def _encode_no_crc_ascii_response(response_payload: str) -> bytes:
+    """Return a replay response for plain ASCII command fixtures.
+
+    New support packages store raw G-ASCII response frames such as ``"(B\r"``
+    or ``"NAK\r"``.  Older synthetic fixtures may store only the parsed payload;
+    those are still accepted and terminated as plain ASCII lines.
+    """
+
+    text = str(response_payload)
+    if text.endswith("\r"):
+        return text.encode("ascii", errors="replace")
+    return f"{text}\r".encode("ascii", errors="replace")
 
 
 def _encode_command_crc(body: bytes, *, family: str) -> bytes:

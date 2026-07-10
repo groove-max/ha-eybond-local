@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "private_message_lvyuan_ty_sic_3_6kbe_w1_identity",
+  "kind": "private_message",
+  "title": "LVYUAN TY-SIC-3.6KBE-W1 user identity report",
+  "reference": "private:valuecloud-lvyuan-identity-20260624",
+  "captured_at": "2026-06-24",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Device owner reported the commercial model as LVYUAN TY-SIC-3.6KBE-W1 behind an EyeBond/SmartValue Wi-Fi logger. The same owner reported local RS485 settings as 9600 8N1.",
+  "assertions": [
+    "commercial_identity"
+  ]
+}

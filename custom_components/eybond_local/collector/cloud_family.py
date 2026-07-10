@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..collector_endpoint import inspect_collector_server_endpoint
+from ..metadata.collector_cloud_profile_catalog_loader import (
+    resolve_collector_cloud_default_host,
+    resolve_collector_cloud_family_by_host,
+    resolve_collector_cloud_family_by_port,
+)
 
 COLLECTOR_CLOUD_FAMILY_UNKNOWN = "unknown"
 COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY = "legacy_binary"
@@ -13,15 +18,6 @@ COLLECTOR_CLOUD_FAMILY_SMARTESS_AT = "smartess_at"
 COLLECTOR_CLOUD_FAMILY_SOURCE_TRANSPORT_SNIFF = "transport_sniff"
 COLLECTOR_CLOUD_FAMILY_SOURCE_EXPLICIT_ENDPOINT_PORT = "explicit_endpoint_port"
 COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST = "endpoint_host"
-
-_AT_CLOUD_PORTS = frozenset({18899, 38899})
-_LEGACY_BINARY_CLOUD_PORTS = frozenset({502})
-_LEGACY_BINARY_CLOUD_HOSTS = frozenset({"ess.eybond.com"})
-_SMARTESS_AT_CLOUD_HOSTS = frozenset({"dtu_ess.eybond.com"})
-_DEFAULT_CLOUD_HOSTS = {
-    COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY: "ess.eybond.com",
-    COLLECTOR_CLOUD_FAMILY_SMARTESS_AT: "dtu_ess.eybond.com",
-}
 
 _CONFIDENCE_RANK = {
     "": 0,
@@ -85,31 +81,21 @@ def collector_cloud_family_observation_from_endpoint(
 
     normalized_host = str(parsed.host or "").strip().lower()
 
-    if not parsed.has_explicit_port:
-        if normalized_host in _LEGACY_BINARY_CLOUD_HOSTS:
-            return CollectorCloudFamilyObservation(
-                family=COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY,
-                source=COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
-                confidence="low",
-            )
-        if normalized_host in _SMARTESS_AT_CLOUD_HOSTS:
-            return CollectorCloudFamilyObservation(
-                family=COLLECTOR_CLOUD_FAMILY_SMARTESS_AT,
-                source=COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
-                confidence="low",
-            )
-        return CollectorCloudFamilyObservation()
-
-    if parsed.port in _LEGACY_BINARY_CLOUD_PORTS:
+    family = resolve_collector_cloud_family_by_host(normalized_host)
+    if family:
         return CollectorCloudFamilyObservation(
-            family=COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY,
-            source=COLLECTOR_CLOUD_FAMILY_SOURCE_EXPLICIT_ENDPOINT_PORT,
-            confidence="medium",
+            family=family,
+            source=COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
+            confidence="high" if parsed.has_explicit_port else "low",
         )
 
-    if parsed.port in _AT_CLOUD_PORTS:
+    if not parsed.has_explicit_port:
+        return CollectorCloudFamilyObservation()
+
+    family = resolve_collector_cloud_family_by_port(parsed.port)
+    if family:
         return CollectorCloudFamilyObservation(
-            family=COLLECTOR_CLOUD_FAMILY_SMARTESS_AT,
+            family=family,
             source=COLLECTOR_CLOUD_FAMILY_SOURCE_EXPLICIT_ENDPOINT_PORT,
             confidence="medium",
         )
@@ -139,7 +125,7 @@ def collector_cloud_family_observation_from_collector(
 def default_collector_cloud_host(cloud_family: str) -> str:
     """Return a known default upstream cloud host for one collector family."""
 
-    return _DEFAULT_CLOUD_HOSTS.get(str(cloud_family or "").strip().lower(), "")
+    return resolve_collector_cloud_default_host(cloud_family)
 
 
 def select_preferred_collector_cloud_family(

@@ -21,9 +21,21 @@ from ..payload.pi18 import (
     parse_qpiri,
     parse_serial_number,
 )
-from ..metadata.model_binding_catalog_loader import resolve_driver_model_binding
+from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .command_support import (
+    apply_unsupported_diagnostics,
+    command_skipped_as_unsupported,
+    commit_cycle_failures,
+    record_command_failure,
+    record_command_success,
+)
+from .catalog_probe import (
+    async_probe_ascii_catalog,
+    catalog_model_name,
+    evidence_providers_from_transport,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +45,6 @@ class Pi18CommandSpec:
     optional: bool = False
 
 
-_PROBE_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
-    Pi18CommandSpec(command="^P005PI", parser=parse_protocol_id),
-    Pi18CommandSpec(command="^P005ID", parser=parse_serial_number),
-    Pi18CommandSpec(command="^P007PIRI", parser=parse_qpiri),
-    Pi18CommandSpec(command="^P006VFW", parser=parse_firmware_versions, optional=True),
-)
-
 _RUNTIME_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
     Pi18CommandSpec(command="^P005GS", parser=parse_qpigs),
     Pi18CommandSpec(command="^P006MOD", parser=parse_qmod),
@@ -47,21 +52,35 @@ _RUNTIME_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
     Pi18CommandSpec(command="^P005FWS", parser=parse_qfws, optional=True),
 )
 
-_SUPPORT_COMMANDS: tuple[str, ...] = tuple(
-    dict.fromkeys([*(spec.command for spec in _PROBE_COMMAND_SPECS), *(spec.command for spec in _RUNTIME_COMMAND_SPECS)])
-)
+_CATALOG_PARSERS = {
+    "pi18.protocol_id": parse_protocol_id,
+    "pi18.serial_number": parse_serial_number,
+    "pi18.qpiri": parse_qpiri,
+    "pi18.firmware_versions": parse_firmware_versions,
+}
 
 
 class Pi18Driver(InverterDriver):
-    """Experimental read-only PI18 family driver."""
+    """Read-only PI18 family driver."""
 
     key = "pi18"
-    name = "PI18 / Experimental"
-    probe_targets = (
-        ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-        ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
-        ProbeTarget(devcode=0x0102, collector_addr=0xFF, device_addr=0),
-    )
+    name = "PI18 / ASCII"
+
+    @property
+    def probe_timeout(self) -> float:
+        return load_compiled_detection_catalog().protocols[self.key].probe_timeout
+
+    @property
+    def probe_targets(self) -> tuple[ProbeTarget, ...]:
+        return tuple(
+            ProbeTarget(
+                devcode=devcode,
+                collector_addr=collector_addr,
+                device_addr=device_addr,
+            )
+            for devcode, collector_addr, device_addr
+            in load_compiled_detection_catalog().protocols[self.key].probe_targets
+        )
 
     @property
     def profile_name(self) -> str:
@@ -84,28 +103,43 @@ class Pi18Driver(InverterDriver):
     async def async_probe(self, transport, target: ProbeTarget) -> DetectedInverter | None:
         session = self._session(transport, target)
         try:
-            values = await _async_collect_values(session, _PROBE_COMMAND_SPECS)
-        except Pi18Error:
+            probe = await async_probe_ascii_catalog(
+                protocol_key="pi18",
+                session=session,
+                parsers=_CATALOG_PARSERS,
+                collector=getattr(transport, "collector_info", None),
+                evidence_providers=evidence_providers_from_transport(transport),
+            )
+        except (Pi18Error, RuntimeError):
             return None
-
-        if values.get("protocol_id") != "PI18":
+        if not probe.resolution.resolved:
             return None
-
+        values = probe.values
+        values["catalog_detection"] = probe.as_details()
         serial_number = values.get("serial_number", "")
         if len(serial_number) < 6:
             return None
 
         schema = load_register_schema(self.register_schema_name)
         values.update(_translate_config_enums(values, schema))
-        model_name = _build_model_name(values)
+        model_name = catalog_model_name(
+            protocol_key="pi18",
+            resolution=probe.resolution,
+            values=values,
+        )
+        surface = load_compiled_detection_catalog().surfaces[
+            probe.resolution.surface_key
+        ]
         return DetectedInverter(
             driver_key=self.key,
             protocol_family="pi18",
             model_name=model_name,
+            variant_key=surface.variant_key,
             serial_number=serial_number,
             probe_target=target,
             details=values,
-            register_schema_name=self.register_schema_name,
+            profile_name=surface.profile_name,
+            register_schema_name=surface.register_schema_name,
         )
 
     async def async_read_values(
@@ -118,9 +152,17 @@ class Pi18Driver(InverterDriver):
         now_monotonic: float | None = None,
     ) -> dict[str, Any]:
         session = self._session(transport, inverter.probe_target)
-        values = await _async_collect_values(session, _RUNTIME_COMMAND_SPECS)
+        values = await _async_collect_values(
+            session,
+            _RUNTIME_COMMAND_SPECS,
+            runtime_state=runtime_state,
+        )
         values.update(_translate_runtime_enums(values, load_register_schema(inverter.register_schema_name or self.register_schema_name)))
-        values.update(await _async_collect_energy_values(session))
+        values.update(
+            await _async_collect_energy_values(session, runtime_state=runtime_state)
+        )
+        commit_cycle_failures(runtime_state)
+        apply_unsupported_diagnostics(values, runtime_state)
         return values
 
     async def async_write_capability(self, transport, inverter: DetectedInverter, capability_key: str, value: Any) -> Any:
@@ -130,7 +172,7 @@ class Pi18Driver(InverterDriver):
         session = self._session(transport, inverter.probe_target)
         responses: dict[str, str] = {}
         failures: dict[str, str] = {}
-        for command in _SUPPORT_COMMANDS:
+        for command in _support_commands():
             try:
                 responses[command] = await session.request(command)
             except Exception as exc:
@@ -154,37 +196,70 @@ class Pi18Driver(InverterDriver):
         )
 
 
-async def _async_collect_values(session: Pi18Session, specs: tuple[Pi18CommandSpec, ...]) -> dict[str, Any]:
+async def _async_collect_values(
+    session: Pi18Session,
+    specs: tuple[Pi18CommandSpec, ...],
+    *,
+    runtime_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for spec in specs:
+        if spec.optional and command_skipped_as_unsupported(runtime_state, spec.command):
+            continue
         try:
             values.update(spec.parser(await session.request(spec.command)))
         except Pi18Error:
             if not spec.optional:
                 raise
+            record_command_failure(runtime_state, spec.command)
+        else:
+            record_command_success(runtime_state, spec.command)
     return values
 
 
-async def _async_collect_energy_values(session: Pi18Session) -> dict[str, Any]:
+async def _async_collect_energy_values(
+    session: Pi18Session,
+    *,
+    runtime_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    try:
-        values.update(parse_energy_counter(await session.request("^P005ET"), key="pv_generation_sum"))
-    except Pi18Error:
-        return values
 
+    async def _request(command: str, cache_key: str) -> str | None:
+        # Dated commands are cached under a stable prefix key.
+        if command_skipped_as_unsupported(runtime_state, cache_key):
+            return None
+        try:
+            payload = await session.request(command)
+        except Pi18Error:
+            record_command_failure(runtime_state, cache_key)
+            return None
+        record_command_success(runtime_state, cache_key)
+        return payload
+
+    payload = await _request("^P005ET", "^P005ET")
+    if payload is None:
+        return values
+    values.update(parse_energy_counter(payload, key="pv_generation_sum"))
+
+    payload = await _request("^P004T", "^P004T")
+    if payload is None:
+        return values
     try:
-        clock_token = parse_current_time(await session.request("^P004T"))["clock_token"]
+        clock_token = parse_current_time(payload)["clock_token"]
     except Pi18Error:
         return values
 
     dynamic_specs = (
-        (f"^P009EY{clock_token[:4]}", "pv_generation_year"),
-        (f"^P011EM{clock_token[:6]}", "pv_generation_month"),
-        (f"^P013ED{clock_token[:8]}", "pv_generation_day"),
+        (f"^P009EY{clock_token[:4]}", "^P009EY", "pv_generation_year"),
+        (f"^P011EM{clock_token[:6]}", "^P011EM", "pv_generation_month"),
+        (f"^P013ED{clock_token[:8]}", "^P013ED", "pv_generation_day"),
     )
-    for command, key in dynamic_specs:
+    for command, cache_key, key in dynamic_specs:
+        payload = await _request(command, cache_key)
+        if payload is None:
+            continue
         try:
-            values.update(parse_energy_counter(await session.request(command), key=key))
+            values.update(parse_energy_counter(payload, key=key))
         except Pi18Error:
             continue
     return values
@@ -211,18 +286,31 @@ async def _async_capture_energy_support(session: Pi18Session, responses: dict[st
             failures[command] = str(exc)
 
 
-def _build_model_name(values: dict[str, Any]) -> str:
-    rated_power = values.get("output_rating_active_power")
-    if isinstance(rated_power, int) and rated_power > 0:
-        return f"PI18 {rated_power}"
-    return "PI18"
-
-
 def _pi18_default_binding():
-    binding = resolve_driver_model_binding("pi18")
-    if binding is None:
-        raise RuntimeError("missing_model_binding:pi18")
-    return binding
+    surfaces = tuple(
+        surface
+        for surface in load_compiled_detection_catalog().surfaces.values()
+        if surface.driver_key == "pi18" and surface.default_for_driver
+    )
+    if len(surfaces) != 1:
+        raise RuntimeError("missing_default_surface:pi18")
+    return surfaces[0]
+
+
+def _support_commands() -> tuple[str, ...]:
+    protocol = load_compiled_detection_catalog().protocols["pi18"]
+    return tuple(
+        dict.fromkeys(
+            [
+                *(
+                    action.command
+                    for action in protocol.probe_actions
+                    if action.kind == "ascii_command" and action.command
+                ),
+                *(spec.command for spec in _RUNTIME_COMMAND_SPECS),
+            ]
+        )
+    )
 
 
 def _translate_config_enums(values: dict[str, Any], schema) -> dict[str, Any]:

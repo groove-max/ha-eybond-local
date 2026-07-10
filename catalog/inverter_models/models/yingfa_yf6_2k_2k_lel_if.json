@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "model_key": "yingfa_yf6_2k_2k_lel_if",
+  "manufacturer": "Yingfa",
+  "model": "YF6.2K-2K-LEL-IF",
+  "aliases": [
+    "YF6.2K",
+    "PI30 6200"
+  ],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "pi30_max_qpiri",
+      "label": "PI30 MAX 6200W raw-ASCII runtime over SmartESS DTU AT collector",
+      "device_descriptor_keys": [
+        "pi30_max_qpiri"
+      ],
+      "known_firmware": [
+        "VERFW:00074.11",
+        "VERFW2:00000.00"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "cloud_catalog",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "The proxy capture proves PI30 ASCII telemetry and cloud-visible PI30 controls, but Home Assistant write behavior is not yet independently user-confirmed.",
+      "This collector family uses raw PI30 ASCII payloads directly over the SmartESS DTU AT callback stream rather than the legacy EyeBond binary FC=4 forwarding tunnel."
+    ]
+  },
+  "known_limitations": [
+    "The commercial model name is known from the user report, not from a local inverter identity command in the captured traffic.",
+    "QMN/model-number evidence was not present in the cloud proxy capture, so runtime resolution is currently by PI30 protocol plus QPIRI 28-field MAX-family shape."
+  ],
+  "knowledge_summary": "Yingfa YF6.2K-2K-LEL-IF support is based on issue #6 and a private proxy capture. The inverter speaks PI30 ASCII through a SmartESS DTU AT collector; QPI reports PI30, QPIRI reports a 28-field 6200W/48V MAX-style rating, and QPIGS returns live telemetry. The integration should use the PI30 MAX runtime surface over raw AT-text payload transport for this collector family.",
+  "source_keys": [
+    "github_issue_6",
+    "support_archive_issue_6_20260622_proxy_capture"
+  ]
+}

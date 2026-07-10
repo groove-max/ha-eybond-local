@@ -1,0 +1,137 @@
+{
+  "extends": "../base.json",
+  "schema_key": "modbus_smg_smg_variant_4200",
+  "title": "SMG family 4200 variant register schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "enum_tables": {
+    "input_voltage_range": {
+      "0": "APL",
+      "1": "UPS",
+      "2": "GNT"
+    },
+    "buzzer_mode": {
+      "0": "Beeps Off",
+      "1": "Beeps On",
+      "2": "Mute When Input Source Changes",
+      "3": "Beeps Only In Fault Mode"
+    },
+    "lcd_backlight_mode": {
+      "0": "Timed Off",
+      "1": "Always On"
+    },
+    "lcd_auto_return_mode": {
+      "0": "Do Not Return Automatically",
+      "1": "Return After 1 Minute"
+    },
+    "turn_on_mode": {
+      "0": "Local Or Remote",
+      "1": "Only Local",
+      "2": "Only Remote"
+    },
+    "battery_type": {
+      "0": "AGM",
+      "1": "FLD",
+      "2": "USER",
+      "4": "Li2",
+      "6": "Li4",
+      "8": "LiB"
+    },
+    "automatic_mains_output_enabled": {
+      "0": "Manual Boot Required",
+      "1": "Auto Output"
+    },
+    "lithium_auto_activation": {
+      "0": "Disabled",
+      "1": "Enabled"
+    },
+    "output2_allow_output": {
+      "0": "Prohibit",
+      "1": "Allow"
+    }
+  },
+  "blocks": [
+    {
+      "key": "learned_battery_type",
+      "start": 322,
+      "count": 1
+    },
+    {
+      "key": "learned_float_wait",
+      "start": 330,
+      "count": 1
+    },
+    {
+      "key": "learned_auto_mains",
+      "start": 338,
+      "count": 2
+    },
+    {
+      "key": "learned_soc_block",
+      "start": 341,
+      "count": 4
+    },
+    {
+      "key": "learned_op_block",
+      "start": 351,
+      "count": 4
+    }
+  ],
+  "spec_sets": {
+    "runtime": [
+      {
+        "key": "battery_type",
+        "register": 322,
+        "enum_table": "battery_type"
+      },
+      {
+        "key": "float_charge_wait_time",
+        "register": 330
+      },
+      {
+        "key": "automatic_mains_output_enabled",
+        "register": 338,
+        "enum_table": "automatic_mains_output_enabled"
+      },
+      {
+        "key": "lithium_auto_activation",
+        "register": 339,
+        "enum_table": "lithium_auto_activation"
+      },
+      {
+        "key": "low_dc_protection_soc_ac_mode",
+        "register": 341
+      },
+      {
+        "key": "low_dc_recovery_soc_ac_mode",
+        "register": 342
+      },
+      {
+        "key": "op1_offgrid_soc_protection",
+        "register": 343
+      },
+      {
+        "key": "battery_low_cutoff_soc",
+        "register": 344
+      },
+      {
+        "key": "max_discharge_current_protection",
+        "register": 351
+      },
+      {
+        "key": "op1_offgrid_battery_low_voltage",
+        "register": 352,
+        "divisor": 10
+      },
+      {
+        "key": "op2_overload_warning_percent",
+        "register": 353
+      },
+      {
+        "key": "output2_allow_output",
+        "register": 354,
+        "enum_table": "output2_allow_output"
+      }
+    ]
+  }
+}

@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .collector_endpoint import normalize_collector_server_endpoint
 from .collector.entity_scope import is_collector_tooling_key
+from .metadata.collector_cloud_profile_catalog_loader import load_collector_cloud_profile_catalog
 from .runtime.coordinator import EybondLocalCoordinator
 from .models import CapabilityPreset, WriteCapability
 from .platform_context import entity_setup_context
@@ -39,13 +40,32 @@ async def async_setup_entry(
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
     driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
+    # Without an inverter identity, capability presets would describe a
+    # phantom inverter on the collector device (manual driver hint, nothing
+    # attached yet). The entry reloads once detection persists an identity.
     capabilities = (
-        inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
+        (
+            inverter.capabilities
+            if inverter is not None
+            else (driver.write_capabilities if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
     capability_keys = {capability.key for capability in capabilities}
     profile_name = getattr(inverter, "profile_name", "") or coordinator.effective_profile_name
     presets = (
-        inverter.capability_presets if inverter is not None else (driver.capability_presets if driver is not None else ())
+        (
+            inverter.capability_presets
+            if inverter is not None
+            else (driver.capability_presets if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
+    )
+    collector_capabilities = getattr(coordinator, "collector_capabilities", None)
+    collector_proxy_capture_allowed = bool(
+        getattr(collector_capabilities, "proxy_capture", True)
     )
     async_add_entities(
         [
@@ -55,6 +75,7 @@ async def async_setup_entry(
                     capability_keys,
                     profile_name,
                     has_inverter_identity=has_inverter_identity,
+                    collector_proxy_capture_allowed=collector_proxy_capture_allowed,
                 )
             ],
             *[
@@ -104,7 +125,7 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
         ),
         _ToolingButtonSpec(
             key="rediscover_collector",
-            name="Re-discover Collector",
+            name="Request Collector Callback",
             icon="mdi:radar",
             entity_category=EntityCategory.DIAGNOSTIC,
             enabled_default=True,
@@ -137,6 +158,13 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
             entity_category=EntityCategory.CONFIG,
             enabled_default=True,
         ),
+        _ToolingButtonSpec(
+            key="recheck_supported_commands",
+            name="Re-check Supported Commands",
+            icon="mdi:playlist-check",
+            entity_category=EntityCategory.DIAGNOSTIC,
+            enabled_default=True,
+        ),
     )
 
 
@@ -144,12 +172,14 @@ def _tooling_button_specs_for_runtime(
     capability_keys: set[str] | frozenset[str],
     profile_name: str,
     has_inverter_identity: bool = True,
+    collector_proxy_capture_allowed: bool = True,
 ) -> tuple[_ToolingButtonSpec, ...]:
     allowed_keys = set(
         tooling_button_keys_for_runtime(
             capability_keys,
             profile_name,
             has_inverter_identity=has_inverter_identity,
+            collector_proxy_capture_allowed=collector_proxy_capture_allowed,
         )
     )
     return tuple(spec for spec in _tooling_button_specs() if spec.key in allowed_keys)
@@ -179,6 +209,23 @@ def _normalize_collector_endpoint(endpoint: object) -> str:
         )
     except ValueError:
         return raw
+
+
+def _callback_owner_label_from_family(
+    cloud_family: object,
+    *,
+    fallback: str,
+    include_current_suffix: bool = False,
+) -> str:
+    normalized = str(cloud_family or "").strip().lower()
+    if not normalized:
+        return fallback
+    catalog = load_collector_cloud_profile_catalog()
+    if normalized not in catalog.profiles:
+        return fallback
+    if include_current_suffix:
+        return f"{normalized}_or_current"
+    return normalized
 
 
 class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity):
@@ -242,7 +289,9 @@ class EybondCapabilityButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEn
 
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_button_{capability.key}"
         self._attr_name = capability.display_name
-        self._attr_entity_registry_enabled_default = capability.enabled_default
+        self._attr_entity_registry_enabled_default = coordinator.capability_enabled_by_default(
+            capability
+        )
 
     @property
     def device_info(self):
@@ -302,7 +351,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                     "Wait for the transition to finish."
                 )
             if overview_status == "running":
-                return "Stop proxy capture before triggering collector re-discovery."
+                return "Stop proxy capture before requesting collector callback."
             config_entry = getattr(self.coordinator, "config_entry", None)
             collector_ip = str(
                 getattr(config_entry, "data", {}).get("collector_ip", "")
@@ -322,10 +371,12 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 return None
             if overview.blocking_reason == "collector_control_disabled":
                 return "Proxy capture needs Auto or Full Control to redirect the callback endpoint."
+            if overview.blocking_reason == "collector_proxy_capture_unavailable":
+                return "Proxy capture is not available for this collector."
             if overview.blocking_reason == "collector_not_connected":
                 return "Collector is not connected."
             if overview.blocking_reason == "upstream_endpoint_unavailable":
-                return "No upstream callback endpoint is available yet. Restore SmartESS access first or wait for one external callback endpoint to be detected."
+                return "No upstream callback endpoint is available yet. Restore cloud access first or wait for one external callback endpoint to be detected."
             if overview.blocking_reason == "target_endpoint_unavailable":
                 return "Proxy target endpoint is not available."
             if overview.blocking_reason == "current_endpoint_unavailable":
@@ -389,7 +440,9 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
     @property
     def available(self) -> bool:
         if self._spec.key == "create_support_package":
-            return True
+            return not bool(
+                getattr(self.coordinator, "support_package_export_running", False)
+            )
         if self._spec.key == "reload_local_metadata":
             return True
         if self._spec.key == "create_local_profile_draft":
@@ -438,6 +491,11 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             "support_package_download_path": values.get("support_package_download_path"),
             "support_package_download_url": values.get("support_package_download_url"),
             "support_package_download_relative_url": values.get("support_package_download_relative_url"),
+            "support_package_export_running": values.get(
+                "support_package_export_running",
+                bool(getattr(self.coordinator, "support_package_export_running", False)),
+            ),
+            "support_package_export_status": values.get("support_package_export_status"),
             "cloud_evidence_path": values.get("cloud_evidence_path"),
             "local_profile_draft_path": values.get("local_profile_draft_path"),
             "local_schema_draft_path": values.get("local_schema_draft_path"),
@@ -510,7 +568,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 attributes["target_callback_owner"] = "home_assistant"
             elif self._spec.key == "rediscover_collector":
                 attributes["action_summary"] = (
-                    "Sends one bootstrap UDP re-discovery announcement so the collector can reconnect after a Home Assistant address change."
+                    "Sends one bootstrap UDP request asking the collector to connect back to the Home Assistant listener."
                 )
                 attributes["collector_redirect_expected"] = True
                 attributes["target_callback_owner"] = "bootstrap"
@@ -524,10 +582,14 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 attributes["collector_restart_expected"] = True
             elif self._spec.key == "rollback_collector_server_endpoint":
                 attributes["action_summary"] = (
-                    "Restores SmartESS access by putting back the callback endpoint captured before the last redirect."
+                    "Restores cloud access by putting back the callback endpoint captured before the last redirect."
                 )
                 attributes["rollback_requires_cached_endpoint"] = True
                 attributes["target_callback_owner"] = "smartess"
+                attributes["target_callback_owner_label"] = _callback_owner_label_from_family(
+                    values.get("collector_cloud_family"),
+                    fallback="smartess",
+                )
             elif self._spec.key == "start_proxy_capture":
                 attributes["action_summary"] = (
                     "Starts live collector proxy capture and writes a standalone JSONL trace artifact."
@@ -539,11 +601,19 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                     "Stops live collector proxy capture, restores the callback endpoint if needed, and writes a manifest."
                 )
                 attributes["target_callback_owner"] = "smartess_or_current"
+                attributes["target_callback_owner_label"] = _callback_owner_label_from_family(
+                    values.get("proxy_capture_collector_cloud_family")
+                    or values.get("collector_cloud_family"),
+                    fallback="smartess_or_current",
+                    include_current_suffix=True,
+                )
                 attributes["confirmation_mode"] = "none"
         return attributes
 
     async def async_press(self) -> None:
         if self._spec.key == "create_support_package":
+            if bool(getattr(self.coordinator, "support_package_export_running", False)):
+                raise RuntimeError("support_package_export_in_progress")
             await self.coordinator.async_export_support_package()
             return
         if self._spec.key == "create_local_profile_draft":
@@ -554,6 +624,9 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return
         if self._spec.key == "reload_local_metadata":
             await self.coordinator.async_reload_local_metadata()
+            return
+        if self._spec.key == "recheck_supported_commands":
+            await self.coordinator.async_recheck_supported_commands()
             return
         if self._spec.key == "rediscover_collector":
             await self.coordinator.async_trigger_collector_rediscovery()

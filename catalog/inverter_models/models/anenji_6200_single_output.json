@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_6200_single_output",
+  "manufacturer": "Anenji",
+  "model": "6200 (single output)",
+  "aliases": [],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "layout1_model14080",
+      "label": "Anenji single-output variant",
+      "device_descriptor_keys": [
+        "anenji_6200"
+      ],
+      "known_firmware": [
+        "3700_A6250424v1"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "Runtime write surface is inherited from the shared SMG base profile; not every write is independently validated on this commercial unit."
+    ]
+  },
+  "known_limitations": [
+    "Controls inherit the SMG 6200 control set; not every writable setting is independently confirmed on this unit."
+  ],
+  "knowledge_summary": "Anenji single-output 6200 (layout 1) bound to the shared SMG base surface; same control set as the verified SMG 6200.",
+  "source_keys": [
+    "corpus_anenji_6200_single"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_6",
+  "kind": "github_issue",
+  "title": "Yingfa YF6.2K-2K-LEL-IF user report",
+  "reference": "project-issue:6",
+  "captured_at": "2026-06-22",
+  "visibility": "public",
+  "summary": "Device owner reported a Yingfa YF6.2K-2K-LEL-IF inverter behind an EyeBond logger. The local network topology initially masked the callback source address, but routing/NAT diagnostics later confirmed that the collector could call Home Assistant back with its real remote address.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility"
+  ]
+}

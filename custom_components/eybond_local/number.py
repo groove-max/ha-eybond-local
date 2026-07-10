@@ -37,6 +37,9 @@ class _RuntimeNumberSpec:
 def _runtime_number_specs(coordinator: EybondLocalCoordinator) -> tuple[_RuntimeNumberSpec, ...]:
     if not hasattr(coordinator, "async_set_proxy_capture_duration_minutes"):
         return ()
+    collector_capabilities = getattr(coordinator, "collector_capabilities", None)
+    if not bool(getattr(collector_capabilities, "proxy_capture", True)):
+        return ()
     return (
         _RuntimeNumberSpec(
             key=CONF_PROXY_CAPTURE_DURATION_MINUTES,
@@ -66,9 +69,18 @@ async def async_setup_entry(
     """Create number entities for numeric write capabilities."""
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
-    driver, inverter, _has_inverter_identity = entity_setup_context(entry, coordinator)
+    driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
+    # Without an inverter identity, capability entities would describe a
+    # phantom inverter on the collector device (manual driver hint, nothing
+    # attached yet). The entry reloads once detection persists an identity.
     capabilities = (
-        inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
+        (
+            inverter.capabilities
+            if inverter is not None
+            else (driver.write_capabilities if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
     async_add_entities(
         [
@@ -148,7 +160,9 @@ class EybondCapabilityNumber(CoordinatorEntity[EybondLocalCoordinator], NumberEn
         self._attr_native_min_value = capability.native_minimum if capability.native_minimum is not None else 0.0
         self._attr_native_max_value = capability.native_maximum if capability.native_maximum is not None else 65535.0
         self._attr_native_step = capability.native_step
-        self._attr_entity_registry_enabled_default = capability.enabled_default
+        self._attr_entity_registry_enabled_default = coordinator.capability_enabled_by_default(
+            capability
+        )
         self._attr_native_unit_of_measurement = capability.unit
 
     @property

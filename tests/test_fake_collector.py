@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -14,7 +16,14 @@ if str(HELPERS_DIR) not in sys.path:
 
 
 from custom_components.eybond_local.collector.at import parse_at_response
+from custom_components.eybond_local.collector.protocol import (
+    FC_HEARTBEAT,
+    HEADER_SIZE,
+    decode_header,
+    parse_heartbeat_pn,
+)
 from custom_components.eybond_local.collector.smartess_local import parse_query_collector_response
+from custom_components.eybond_local.collector.transport import SharedEybondTransport
 from custom_components.eybond_local.onboarding.eybond import DiscoveryTarget, OnboardingDetector
 from custom_components.eybond_local.payload.modbus import (
     ModbusError,
@@ -158,6 +167,32 @@ class FakeCollectorLibTests(unittest.TestCase):
         self.assertEqual(parsed.command, "CLDSRVHOST1")
         self.assertEqual(parsed.value, "192.168.1.50,18899,TCP")
 
+    def test_build_at_reply_vdtu_is_empty_for_default_factory_profile(self) -> None:
+        response = build_at_reply(
+            "VDTU",
+            profile=CollectorProfile(),
+            cloud_endpoint="",
+        )
+
+        parsed = parse_at_response(response)
+        self.assertEqual(parsed.command, "VDTU")
+        self.assertEqual(parsed.value, "")
+
+    def test_build_at_reply_vdtu_reflects_bridge_profile(self) -> None:
+        bridge_reply = (
+            "esp-collector,0.4.0;features=local_only,no_cloud,wifi_params;"
+            "uart=2400,8,1,NONE;spacing_ms=100;queue=4"
+        )
+        response = build_at_reply(
+            "VDTU",
+            profile=CollectorProfile(vdtu=bridge_reply),
+            cloud_endpoint="",
+        )
+
+        parsed = parse_at_response(response)
+        self.assertEqual(parsed.command, "VDTU")
+        self.assertEqual(parsed.value, bridge_reply)
+
     def test_modbus_smg_preset_uses_matching_transport_defaults(self) -> None:
         scenario = resolve_scenario(
             preset=PRESET_MODBUS_SMG_READONLY,
@@ -169,6 +204,15 @@ class FakeCollectorLibTests(unittest.TestCase):
 
 
 class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
     async def _detect_with_scenario(
         self,
         scenario,
@@ -283,6 +327,132 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.collector.connected)
         self.assertEqual(result.next_action, "manual_driver_selection")
 
+    async def test_nat_peer_mode_creates_multiple_sessions_from_same_source_ip(self) -> None:
+        tcp_port = _free_tcp_port()
+        udp_port = _free_udp_port()
+        sessions: list[tuple[str, str]] = []
+
+        async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                header_bytes = await asyncio.wait_for(
+                    reader.readexactly(HEADER_SIZE),
+                    timeout=1.0,
+                )
+                header = decode_header(header_bytes)
+                payload = await asyncio.wait_for(
+                    reader.readexactly(header.payload_len),
+                    timeout=1.0,
+                )
+                if header.fcode == FC_HEARTBEAT:
+                    peer = writer.get_extra_info("peername") or ("", 0)
+                    sessions.append((str(peer[0]), parse_heartbeat_pn(payload)))
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(_handle_client, "127.0.0.1", tcp_port)
+        primary_pn = "E5000099990001"
+        peer_pn = "E5000099990002"
+        primary = resolve_scenario(
+            preset=PRESET_COLLECTOR_ONLY,
+            profile=CollectorProfile(pn=primary_pn, mode=PRESET_COLLECTOR_ONLY),
+        )
+        peer = resolve_scenario(
+            preset=PRESET_COLLECTOR_ONLY,
+            profile=CollectorProfile(pn=peer_pn, mode=PRESET_COLLECTOR_ONLY),
+        )
+        service = FakeCollectorService(
+            listen_ip="127.0.0.1",
+            udp_port=udp_port,
+            tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=0.5,
+            connect_timeout=1.0,
+            udp_reply="rsp>server=2;",
+            scenario=primary,
+            nat_peer_scenarios=(peer,),
+        )
+
+        await service.start()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.sendto(
+                    f"set>server=127.0.0.1:{tcp_port};\n".encode("ascii"),
+                    ("127.0.0.1", udp_port),
+                )
+
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while len(sessions) < 2 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.02)
+
+            self.assertEqual(len(sessions), 2)
+            self.assertEqual({ip for ip, _pn in sessions}, {"127.0.0.1"})
+            self.assertEqual({pn for _ip, pn in sessions}, {primary_pn, peer_pn})
+        finally:
+            await service.stop()
+            server.close()
+            await server.wait_closed()
+
+    async def test_nat_peer_mode_routes_shared_transports_by_pn(self) -> None:
+        tcp_port = _free_tcp_port()
+        udp_port = _free_udp_port()
+        primary_pn = "E5000099990001"
+        peer_pn = "E5000099990002"
+        primary = resolve_scenario(
+            preset=PRESET_COLLECTOR_ONLY,
+            profile=CollectorProfile(pn=primary_pn, mode=PRESET_COLLECTOR_ONLY),
+        )
+        peer = resolve_scenario(
+            preset=PRESET_COLLECTOR_ONLY,
+            profile=CollectorProfile(pn=peer_pn, mode=PRESET_COLLECTOR_ONLY),
+        )
+        service = FakeCollectorService(
+            listen_ip="127.0.0.1",
+            udp_port=udp_port,
+            tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=0.5,
+            connect_timeout=1.0,
+            udp_reply="rsp>server=2;",
+            scenario=primary,
+            nat_peer_scenarios=(peer,),
+        )
+        first = SharedEybondTransport(
+            host="127.0.0.1",
+            port=tcp_port,
+            request_timeout=0.5,
+            heartbeat_interval=1.0,
+            collector_ip="",
+            collector_pn=primary_pn,
+        )
+        second = SharedEybondTransport(
+            host="127.0.0.1",
+            port=tcp_port,
+            request_timeout=0.5,
+            heartbeat_interval=1.0,
+            collector_ip="",
+            collector_pn=peer_pn,
+        )
+
+        await first.start()
+        await second.start()
+        await service.start()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.sendto(
+                    f"set>server=127.0.0.1:{tcp_port};\n".encode("ascii"),
+                    ("127.0.0.1", udp_port),
+                )
+
+            self.assertTrue(await first.wait_until_connected(timeout=2.0))
+            self.assertTrue(await second.wait_until_connected(timeout=2.0))
+            self.assertEqual(first.collector_info.collector_pn, primary_pn)
+            self.assertEqual(second.collector_info.collector_pn, peer_pn)
+            diagnostics = first.session_inventory_diagnostics()
+            self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
+            self.assertEqual(set(diagnostics["duplicate_peer_ips"]), {"127.0.0.1"})
+        finally:
+            await service.stop()
+            await second.stop()
+            await first.stop()
 
 if __name__ == "__main__":
     unittest.main()

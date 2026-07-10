@@ -37,10 +37,10 @@ from custom_components.eybond_local.metadata.smartess_smg_bridge import (
 def _sample_smartess_cloud_evidence() -> dict[str, object]:
     return {
         "source": "smartess_cloud_probe",
-        "match": {"collector_pn": "E5000025388419"},
+        "match": {"collector_pn": "E5000020000000"},
         "device_identity": {
-            "pn": "E50000253884199645",
-            "sn": "E50000253884199645094801",
+            "pn": "E50000200000000001",
+            "sn": "E50000200000000001000001",
             "devcode": 2376,
             "devaddr": 1,
         },
@@ -73,10 +73,10 @@ def _sample_smartess_cloud_evidence() -> dict[str, object]:
 def _sample_smartess_smg_cloud_evidence() -> dict[str, object]:
     return {
         "source": "smartess_cloud_probe",
-        "match": {"collector_pn": "E5000025388419"},
+        "match": {"collector_pn": "E5000020000000"},
         "device_identity": {
-            "pn": "E50000253884199645",
-            "sn": "E50000253884199645094801",
+            "pn": "E50000200000000001",
+            "sn": "E50000200000000001000001",
             "devcode": 2376,
             "devaddr": 1,
         },

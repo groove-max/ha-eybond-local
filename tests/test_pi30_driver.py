@@ -35,6 +35,7 @@ class _FakeTransport:
         self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
         self.connected = True
         self.commands: list[str] = []
+        self.detection_evidence_providers = {}
 
     async def wait_until_connected(self, timeout: float) -> bool:
         return True
@@ -61,6 +62,38 @@ class _FakeTransport:
 
 
 class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_uses_optional_smartess_evidence_provider(self) -> None:
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPI"): "PI30",
+                (0x0994, 0x01, "QID"): "553555355535552",
+                (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 28.2 27.0 2 30 80 0 2 2 1 10 0 0 27.0 0 1",
+            }
+        )
+        calls = []
+
+        async def _smartess_provider(action):
+            calls.append(action.key)
+            return {"protocol_asset_id": "0925"}
+
+        transport.detection_evidence_providers = {
+            "smartess.protocol_asset": _smartess_provider,
+        }
+
+        inverter = await Pi30Driver().async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(calls, ["pi30.smartess.asset"])
+        self.assertEqual(
+            inverter.details["catalog_detection"]["candidate_keys"],
+            ["pi30_smartess_query_0925_compatible"],
+        )
+        self.assertEqual(
+            inverter.details["catalog_detection"]["surface_key"],
+            "pi30_default_full",
+        )
+
     async def test_probe_detects_pi30_inverter(self) -> None:
         driver = Pi30Driver()
         self.assertEqual(driver.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
@@ -90,7 +123,9 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["output_source_priority"], "SBU first")
         self.assertEqual(inverter.details["machine_type"], "Hybrid")
         self.assertTrue(inverter.details["buzzer_enabled"])
-        self.assertEqual(inverter.details["main_cpu_firmware_version"], "00012.09")
+        self.assertNotIn("main_cpu_firmware_version", inverter.details)
+        self.assertNotIn("QVFW", transport.commands)
+        self.assertEqual(inverter.details["catalog_detection"]["resolution"], "family")
         self.assertEqual(driver.profile_metadata.source_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(driver.register_schema_metadata.source_name, "pi30_ascii/models/smartess_0925_compat.json")
         self.assertEqual(driver.measurements, driver.register_schema_metadata.measurement_descriptions)
@@ -168,7 +203,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
                 (0x0994, 0x01, "QID"): "553555355535552",
                 (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 5000 5000 48.0 54.0 42.0 56.4 54.0 2 30 80 0 2 2 1 10 0 0 54.0 0 1 120 1 80",
                 (0x0994, 0x01, "QFLAG"): "EadzDbjkuvxy",
-                (0x0994, 0x01, "QMOD"): "E",
+                (0x0994, 0x01, "QPIGS"): "239.5 49.9 239.5 49.9 0927 0924 015 396 26.60 000 100 0028 002.2 315.9 00.00 00000 00010000 00 00 00665 000",
                 (0x0994, 0x01, "QPIWS"): "000000000000000000000000000000000000",
             }
         )
@@ -177,8 +212,9 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.details["qpiri_field_count"], 28)
-        self.assertEqual(inverter.details["operating_mode_code"], "E")
         self.assertEqual(inverter.details["qpiws_bit_count"], 36)
+        self.assertNotIn("QMOD", transport.commands)
+        self.assertEqual(inverter.variant_key, "pi30_pip_gk")
 
     async def test_read_values_decodes_live_metrics(self) -> None:
         driver = Pi30Driver()
@@ -373,6 +409,78 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_read_values_stops_retrying_unsupported_commands(self) -> None:
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        inverter = await Pi30Driver().async_probe(
+            _FakeTransport(
+                {
+                    (0x0994, 0x01, "QPI"): "PI30",
+                    (0x0994, 0x01, "QID"): "553555355535552",
+                    (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 28.2 27.0 2 30 80 0 2 2 1 10 0 0 27.0 0 1",
+                }
+            ),
+            target,
+        )
+        assert inverter is not None
+        # An inverter that only answers the core pair: every other command
+        # times out (like a PowMr behind an EyeBond collector).
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPIGS"): "239.5 49.9 239.5 49.9 0927 0924 015 396 26.60 000 100 0028 002.2 315.9 00.00 00000 00010000 00 00 00665 000",
+                (0x0994, 0x01, "QMOD"): "L",
+            }
+        )
+        runtime_state: dict[str, object] = {}
+
+        from custom_components.eybond_local.drivers.command_support import (
+            UNSUPPORTED_COMMAND_STRIKES,
+            clear_unsupported_commands,
+        )
+
+        # Full failure-strike cycles collect the strikes; the failing
+        # commands stay on the wire through the final learning cycle.
+        now = 0.0
+        for _ in range(UNSUPPORTED_COMMAND_STRIKES):
+            now += 100.0
+            transport.commands.clear()
+            await driver.async_read_values(
+                transport, inverter, runtime_state=runtime_state,
+                poll_interval=10.0, now_monotonic=now,
+            )
+            self.assertIn("QPIWS", transport.commands)
+
+        now += 100.0
+        transport.commands.clear()
+        values = await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=now,
+        )
+
+        # Once the strike threshold is reached, only the supported pair
+        # goes on the wire.
+        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+        self.assertEqual(values["driver_unsupported_commands"], "Q1, QET, QPIWS")
+
+        # The set is permanent: no timer-based re-probe. An explicit re-check
+        # (the diagnostic button) clears the cache and probes everything again.
+        transport.commands.clear()
+        await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=now + 100_000.0,
+        )
+        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+
+        clear_unsupported_commands(runtime_state)
+        transport.commands.clear()
+        await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state,
+            poll_interval=10.0, now_monotonic=now + 100_100.0,
+        )
+        self.assertIn("QPIWS", transport.commands)
+        self.assertIn("Q1", transport.commands)
+        self.assertIn("QET", transport.commands)
+
     async def test_write_enum_capability_sends_pi30_command(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
@@ -491,6 +599,43 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
     def test_registry_exposes_pi30_driver(self) -> None:
         self.assertIn("pi30", driver_options())
         self.assertEqual(get_driver("pi30").name, "PI30 / ASCII")
+
+
+class ReplaceVoltageRangeTests(unittest.TestCase):
+    def test_rescaling_a_capability_preserves_every_other_field(self) -> None:
+        # The voltage-range rescaler must change ONLY minimum/maximum; dropping
+        # provenance/word_count/bitmask/etc. (the old field-by-field rebuild)
+        # silently changed write-gating and would clobber shared-register bits.
+        from custom_components.eybond_local.drivers.pi30 import _replace_voltage_range
+        from custom_components.eybond_local.models import WriteCapability
+
+        capability = WriteCapability(
+            key="battery_bulk_voltage",
+            register=0,
+            value_kind="scaled_u16",
+            note="n",
+            word_count=2,
+            combine="u32_high_first",
+            bitmask=0x00FF,
+            provenance="cloud_hint",
+            experimental=True,
+            metadata_scope="device",
+            divisor=10,
+            minimum=400,
+            maximum=600,
+        )
+
+        rescaled = _replace_voltage_range(capability, scale=10.0, minimum=44, maximum=58)
+
+        self.assertEqual(rescaled.minimum, 440)
+        self.assertEqual(rescaled.maximum, 580)
+        # Everything else is preserved.
+        self.assertEqual(rescaled.word_count, 2)
+        self.assertEqual(rescaled.combine, "u32_high_first")
+        self.assertEqual(rescaled.bitmask, 0x00FF)
+        self.assertEqual(rescaled.provenance, "cloud_hint")
+        self.assertTrue(rescaled.experimental)
+        self.assertEqual(rescaled.metadata_scope, "device")
 
 
 if __name__ == "__main__":

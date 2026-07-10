@@ -82,8 +82,12 @@ _install_select_stubs()
 from custom_components.eybond_local.select import (  # noqa: E402
     EybondRuntimeSettingSelect,
     _RuntimeSelectSpec,
+    async_setup_entry,
     default_enabled_runtime_select_keys_for_runtime,
     runtime_select_keys_for_runtime,
+)
+from custom_components.eybond_local.collector.capabilities import (  # noqa: E402
+    collector_capability_profile,
 )
 
 
@@ -105,6 +109,7 @@ class _CoordinatorStub:
         self.collector_callback_target_endpoint = "192.168.1.50,18899,TCP"
         self.collector_server_endpoint_rollback_target = "47.91.67.66,18899,TCP"
         self.proxy_capture_upstream_endpoint = "47.91.67.66,18899,TCP"
+        self.collector_capabilities = collector_capability_profile()
         self.calls: list[tuple[str, str]] = []
 
     def collector_device_info(self):
@@ -129,11 +134,11 @@ class RuntimeSelectTests(unittest.TestCase):
     def test_runtime_select_keys_are_exposed_and_default_enabled(self) -> None:
         self.assertEqual(
             runtime_select_keys_for_runtime(),
-            ("collector_operation_mode", "control_mode"),
+            ("collector_operation_mode",),
         )
         self.assertEqual(
             default_enabled_runtime_select_keys_for_runtime(),
-            ("collector_operation_mode", "control_mode"),
+            ("collector_operation_mode",),
         )
 
     def test_runtime_select_keys_can_be_limited_to_collector_only_mode(self) -> None:
@@ -144,6 +149,32 @@ class RuntimeSelectTests(unittest.TestCase):
         self.assertEqual(
             default_enabled_runtime_select_keys_for_runtime(has_inverter_identity=False),
             ("collector_operation_mode",),
+        )
+
+    def test_setup_skips_collector_operation_mode_select_for_local_bridge(self) -> None:
+        async def _run() -> list[object]:
+            coordinator = _CoordinatorStub()
+            coordinator.collector_capabilities = collector_capability_profile(
+                virtual_bridge=True
+            )
+            entry = types.SimpleNamespace(
+                data={"collector_virtual_bridge": True},
+                options={},
+                runtime_data=coordinator,
+            )
+            entities: list[object] = []
+
+            await async_setup_entry(None, entry, entities.extend)
+            return entities
+
+        entities = asyncio.run(_run())
+
+        self.assertFalse(
+            any(
+                isinstance(entity, EybondRuntimeSettingSelect)
+                and entity._spec.key == "collector_operation_mode"
+                for entity in entities
+            )
         )
 
     def test_collector_operation_mode_select_routes_to_collector_device(self) -> None:
@@ -260,41 +291,6 @@ class RuntimeSelectTests(unittest.TestCase):
             "No upstream callback endpoint is available yet.",
         )
         self.assertFalse(entity.extra_state_attributes["write_enabled"])
-
-    def test_control_mode_select_routes_to_inverter_device_and_calls_coordinator(self) -> None:
-        async def _run() -> None:
-            coordinator = _CoordinatorStub()
-            entity = EybondRuntimeSettingSelect(
-                coordinator,
-                _RuntimeSelectSpec(
-                    key="control_mode",
-                    translation_key="control_mode",
-                    name="Control Mode",
-                    options=("auto", "read_only", "full"),
-                    device_scope="inverter",
-                ),
-            )
-
-            self.assertEqual(entity.device_info, {"scope": "inverter"})
-            self.assertEqual(entity.current_option, "auto")
-
-            await entity.async_select_option("full")
-
-            self.assertEqual(coordinator.calls, [("control_mode", "full")])
-            self.assertEqual(entity.current_option, "full")
-            self.assertEqual(
-                entity.extra_state_attributes,
-                {
-                    "setting_scope": "integration",
-                    "write_enabled": True,
-                    "controls_enabled": True,
-                    "control_policy_reason": "autodetected_high_confidence",
-                    "control_policy_summary": "Controls are enabled automatically.",
-                },
-            )
-
-        asyncio.run(_run())
-
 
 if __name__ == "__main__":
     unittest.main()

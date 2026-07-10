@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_anj6200_48pl",
+  "kind": "support_archive",
+  "title": "ANJ-6200-48PL support capture",
+  "reference": "private:support-archive-anj6200-48pl",
+  "captured_at": "2026-06-15",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Support capture (layout 2, model code 8960, rated 6200) that bound successfully to the SMG 6200 register schema and profile.",
+  "assertions": [
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

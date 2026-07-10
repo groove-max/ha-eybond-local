@@ -69,6 +69,10 @@ class CollectorProfile:
     uart: str = "9600,8,1,NONE"
     link_status: str = "connected"
     wifi_scan_list: str = ""
+    # Optional legacy/manual ``AT+VDTU?`` reply used by low-level transport tests.
+    # Runtime bridge detection no longer sends this probe; it keys off the
+    # FC=2 parameter-6 hardware-version token instead.
+    vdtu: str = ""
     rated_power: int = 6200
     protocol_number: int = 1
     device_type: int = 0x1E00
@@ -285,6 +289,9 @@ def build_at_reply(
         return build_at_response(normalized, profile.link_status)
     if normalized == "INTPARA49":
         return build_at_response(normalized, profile.wifi_scan_list)
+    if normalized == "VDTU":
+        # Factory collectors leave ``vdtu`` empty -> no prefix -> not a bridge.
+        return build_at_response(normalized, profile.vdtu)
     return build_at_response(normalized, "")
 
 

@@ -7,7 +7,7 @@ from collections import deque
 import json
 from pathlib import Path
 import sys
-from typing import Any, TextIO
+from typing import Any, Awaitable, Callable, TextIO
 
 from ..collector.at import parse_at_command, parse_at_response
 from ..collector.protocol import HEADER_SIZE, decode_header
@@ -18,6 +18,25 @@ from .collector_cloud_proxy import (
     parse_restore_target,
 )
 from .proxy_trace import proxy_trace_root
+
+AsyncOutputCloser = Callable[[TextIO], Awaitable[None]]
+AsyncOutputOpener = Callable[[Path], Awaitable[TextIO]]
+
+
+def open_proxy_trace_output_file(path: Path) -> TextIO:
+    """Create parent directories and open one proxy trace stream for appending."""
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return output_path.open("a", encoding="utf-8")
+
+
+async def _default_async_open_output(path: Path) -> TextIO:
+    return await asyncio.to_thread(open_proxy_trace_output_file, path)
+
+
+async def _default_async_close_output(output: TextIO) -> None:
+    await asyncio.to_thread(output.close)
 
 
 class InProcessProxyCaptureHandler:
@@ -31,12 +50,16 @@ class InProcessProxyCaptureHandler:
         output_path: Path,
         masked_endpoint: str = "",
         restore_trigger_path: Path | None = None,
+        async_open_output: AsyncOutputOpener | None = None,
+        async_close_output: AsyncOutputCloser | None = None,
     ) -> None:
         self._upstream_host = str(upstream_host)
         self._upstream_port = int(upstream_port)
         self._output_path = Path(output_path)
         self._masked_endpoint = str(masked_endpoint or "").strip()
         self._restore_trigger_path = restore_trigger_path
+        self._async_open_output = async_open_output or _default_async_open_output
+        self._async_close_output = async_close_output or _default_async_close_output
         self._output_handle: TextIO | None = None
         self._frame_writer: JsonLineWriter | None = None
         self._tasks: set[asyncio.Task[None]] = set()
@@ -53,8 +76,7 @@ class InProcessProxyCaptureHandler:
 
         if self._running:
             return
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._output_handle = self._output_path.open("a", encoding="utf-8")
+        self._output_handle = await self._async_open_output(self._output_path)
         self._frame_writer = JsonLineWriter(self._output_handle)
         self._running = True
 
@@ -78,7 +100,7 @@ class InProcessProxyCaptureHandler:
         self._output_handle = None
         self._frame_writer = None
         if output_handle is not None:
-            output_handle.close()
+            await self._async_close_output(output_handle)
 
     async def handle_client(
         self,
@@ -228,6 +250,8 @@ def summarize_proxy_capture_trace(trace_path: Path) -> dict[str, Any]:
 
     line_count = 0
     kind_counts: dict[str, int] = {}
+    g_ascii_command_counts: dict[str, int] = {}
+    g_ascii_response_counts: dict[str, int] = {}
     invalid_lines = 0
     with trace_path.open("r", encoding="utf-8") as handle:
         for raw_line in handle:
@@ -245,12 +269,22 @@ def summarize_proxy_capture_trace(trace_path: Path) -> dict[str, Any]:
                 continue
             kind = str(payload.get("kind") or "unknown").strip() or "unknown"
             kind_counts[kind] = kind_counts.get(kind, 0) + 1
+            for line in _extract_g_ascii_lines_from_trace_payload(payload):
+                if _looks_like_g_ascii_command(line):
+                    g_ascii_command_counts[line] = g_ascii_command_counts.get(line, 0) + 1
+                else:
+                    label = _g_ascii_response_label(line)
+                    g_ascii_response_counts[label] = g_ascii_response_counts.get(label, 0) + 1
 
     summary: dict[str, Any] = {
         "exists": True,
         "line_count": line_count,
         "kind_counts": kind_counts,
     }
+    if g_ascii_command_counts:
+        summary["g_ascii_command_counts"] = g_ascii_command_counts
+    if g_ascii_response_counts:
+        summary["g_ascii_response_counts"] = g_ascii_response_counts
     if invalid_lines:
         summary["invalid_lines"] = invalid_lines
     return summary
@@ -436,11 +470,30 @@ def _describe_transport_payload(data: bytes, *, ascii_preview: str = "") -> str:
     if at_description:
         return at_description
 
+    g_ascii_description = _describe_g_ascii_payload(data, ascii_preview=ascii_preview)
+    if g_ascii_description:
+        return g_ascii_description
+
     rtu_description = _describe_modbus_rtu_payload(data)
     if rtu_description:
         return rtu_description
 
     return ""
+
+
+def _describe_g_ascii_payload(data: bytes, *, ascii_preview: str) -> str:
+    text = ascii_preview or data.decode("ascii", errors="ignore")
+    lines = _extract_g_ascii_lines(text)
+    if not lines:
+        return ""
+
+    rendered: list[str] = []
+    for line in lines:
+        if _looks_like_g_ascii_command(line):
+            rendered.append(f"G-ASCII command {line}")
+        else:
+            rendered.append(f"G-ASCII response {_single_line_preview(line)}")
+    return " ; ".join(rendered)
 
 
 def _describe_at_payload(data: bytes, *, ascii_preview: str) -> str:
@@ -548,6 +601,63 @@ def _single_line_preview(value: str, *, limit: int = 120) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _extract_g_ascii_lines_from_trace_payload(payload: dict[str, Any]) -> list[str]:
+    data_fields = ("chunk_hex", "payload_hex", "remaining_hex")
+    ascii_fields = ("chunk_ascii", "payload_ascii", "remaining_ascii")
+    lines: list[str] = []
+    for key in ascii_fields:
+        lines.extend(_extract_g_ascii_lines(str(payload.get(key) or "")))
+    for key in data_fields:
+        data = _decode_hex_bytes(str(payload.get(key) or ""))
+        if data:
+            lines.extend(_extract_g_ascii_lines(data.decode("ascii", errors="ignore")))
+
+    nested = payload.get("payload")
+    if isinstance(nested, dict):
+        lines.extend(_extract_g_ascii_lines_from_trace_payload(nested))
+    return lines
+
+
+def _extract_g_ascii_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    lines: list[str] = []
+    for raw_line in str(text).replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("AT+"):
+            continue
+        if not all(0x20 <= ord(char) <= 0x7E for char in line):
+            continue
+        if line.startswith(("#", "(", "ACK", "NAK", "NOA", "ERCRC", "BL")) or _looks_like_g_ascii_command(line):
+            lines.append(line)
+    return lines
+
+
+def _looks_like_g_ascii_command(line: str) -> bool:
+    text = str(line or "").strip().upper()
+    if not text or text.startswith(("AT+", "ACK", "NAK", "NOA", "ERCRC", "BL", "#", "(")):
+        return False
+    return (
+        text in {"F", "GMOD", "SVFW", "GTMP", "GLINE", "GBAT", "GBUS", "GCHG", "GOP", "GINV", "GWS", "GPV"}
+        or (text.startswith("GPDAT") and text[5:].isdigit())
+        or text.endswith("?")
+    )
+
+
+def _g_ascii_response_label(line: str) -> str:
+    text = str(line or "").strip()
+    if text.startswith("("):
+        return "data"
+    if text.startswith("#"):
+        return "firmware"
+    upper = text.upper()
+    if upper.startswith("BL"):
+        return "battery_level"
+    if upper in {"ACK", "NAK", "NOA", "ERCRC"}:
+        return upper
+    return "data"
 
 
 def _slugify(value: str) -> str:

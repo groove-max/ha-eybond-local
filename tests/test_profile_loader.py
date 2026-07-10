@@ -57,7 +57,7 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.protocol_family, "modbus_smg")
         self.assertEqual(profile.source_name, "smg_modbus.json")
         self.assertEqual(profile.source_scope, "builtin")
-        self.assertTrue(profile.source_path.endswith("profiles/smg_modbus.json"))
+        self.assertTrue(profile.source_path.endswith("profiles/modbus_smg/default.json"))
         self.assertGreaterEqual(len(profile.groups), 4)
         self.assertEqual(len(profile.capabilities), 33)
         self.assertEqual(len(profile.presets), 2)
@@ -77,6 +77,29 @@ class ProfileLoaderTests(unittest.TestCase):
             "exception_code:7",
             profile.get_capability("power_saving_mode").support_notes,
         )
+
+    def test_loads_smg_6200_model_profile_shadow_learned_controls(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/smg_6200.json")
+
+        self.assertEqual(profile.key, "modbus_smg_6200")
+        self.assertEqual(profile.title, "SMG 6200")
+        self.assertEqual(len(profile.capabilities), 38)
+        learned_keys = {
+            "beeps_while_primary_source_interrupted": 304,
+            "battery_type": 322,
+            "constant_voltage_to_float_time": 330,
+            "automatic_mains_output_enabled": 338,
+            "forced_equalization_charging": 425,
+        }
+        for key, register in learned_keys.items():
+            capability = profile.get_capability(key)
+            self.assertEqual(capability.register, register)
+            self.assertTrue(capability.tested)
+            self.assertEqual(capability.provenance, "verified")
+            self.assertFalse(capability.enabled_default)
+            self.assertIn("shadow-learning", capability.support_notes)
 
     def test_loads_anenji_4200_protocol_1_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -107,6 +130,51 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("power_saving_mode").support_notes, "")
         with self.assertRaises(KeyError):
             profile.get_capability("low_dc_cutoff_soc")
+
+    def test_loads_anenji_op2_profile_overlay_with_bitmask_capability(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile("modbus_smg/models/anenji_op2_6200.json")
+
+        self.assertEqual(profile.key, "modbus_smg_anenji_op2_6200")
+        self.assertEqual(profile.title, "SMG OP2 6200 Dual Output")
+        # The full SMG control set rides along from the default profile...
+        charge_source_priority = profile.get_capability("charge_source_priority")
+        self.assertEqual(charge_source_priority.register, 331)
+        self.assertEqual(
+            charge_source_priority.enum_value_map,
+            {
+                1: "PV Priority",
+                2: "PV and Utility",
+                3: "PV Only",
+                4: "PV Priority With Load Reserve",
+            },
+        )
+        self.assertNotIn(0, charge_source_priority.enum_value_map)
+        self.assertGreaterEqual(len(profile.capabilities), 28)
+        # ...plus the OP2 switch as a masked single-bit field of register 354.
+        capability = profile.get_capability("output2_enable")
+        self.assertEqual(capability.register, 354)
+        self.assertEqual(capability.bitmask, 0x0001)
+        self.assertEqual(capability.bitmask_shift, 0)
+        self.assertEqual(capability.value_kind, "bool")
+        self.assertTrue(capability.requires_confirm)
+        self.assertFalse(capability.tested)
+
+    def test_capability_bitmask_parsing_and_validation(self) -> None:
+        parse = profile_loader._optional_bitmask
+        self.assertEqual(parse("0x0001", capability_key="x", word_count=1), 1)
+        self.assertEqual(parse("0x0008", capability_key="x", word_count=1), 8)
+        self.assertEqual(parse(4, capability_key="x", word_count=1), 4)
+        self.assertIsNone(parse(None, capability_key="x", word_count=1))
+        self.assertIsNone(parse("", capability_key="x", word_count=1))
+        with self.assertRaises(ValueError):
+            parse(0, capability_key="x", word_count=1)
+        with self.assertRaises(ValueError):
+            parse("0x10000", capability_key="x", word_count=1)
+        with self.assertRaises(ValueError):
+            # A bitmask only makes sense inside one 16-bit word.
+            parse(1, capability_key="x", word_count=2)
 
     def test_loads_pi30_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -463,7 +531,7 @@ class ProfileLoaderTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 47)
+        self.assertEqual(len(profile.capabilities), 52)
         self.assertEqual(len(profile.presets), 0)
 
         self.assertEqual(profile.get_capability("output_mode").register, 600)
@@ -483,6 +551,15 @@ class ProfileLoaderTests(unittest.TestCase):
             profile.get_capability("charge_source_priority").enum_value_map[4],
             "PV Priority With Load Reserve",
         )
+        self.assertEqual(profile.get_capability("secondary_charge_source_priority").register, 633)
+        self.assertEqual(
+            profile.get_capability("secondary_charge_source_priority").enum_value_map[4],
+            "SOR",
+        )
+        self.assertEqual(profile.get_capability("op2_overload_warning_percent").register, 608)
+        self.assertEqual(profile.get_capability("float_charge_wait_time").register, 639)
+        self.assertEqual(profile.get_capability("max_discharge_current_protection").register, 642)
+        self.assertEqual(profile.get_capability("op1_offgrid_soc_protection").register, 649)
         self.assertEqual(profile.get_capability("battery_type").register, 630)
         self.assertEqual(profile.get_capability("battery_type").enum_value_map[8], "LiB")
         self.assertEqual(profile.get_capability("turn_on_mode").register, 693)
@@ -726,6 +803,127 @@ class ProfileLoaderTests(unittest.TestCase):
 
         self.assertTrue(profile.get_capability("templated_switch").tested)
         self.assertTrue(profile.get_capability("direct_action").tested)
+
+    def test_capability_provenance_defaults_follow_tested_flag(self) -> None:
+        raw = {
+            "profile_key": "provenance_defaults_profile",
+            "title": "Provenance Defaults Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "tested_capability",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "tested",
+                    "group": "system",
+                    "tested": True,
+                },
+                {
+                    "key": "untested_capability",
+                    "register": 101,
+                    "value_kind": "bool",
+                    "note": "untested",
+                    "group": "system",
+                },
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "provenance_defaults_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                profile = profile_loader.load_driver_profile("provenance_defaults_profile.json")
+
+        self.assertEqual(profile.get_capability("tested_capability").provenance, "verified")
+        self.assertEqual(profile.get_capability("untested_capability").provenance, "inferred")
+
+    def test_capability_provenance_parses_explicit_values(self) -> None:
+        raw = {
+            "profile_key": "provenance_values_profile",
+            "title": "Provenance Values Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "verified_capability",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "verified",
+                    "group": "system",
+                    "provenance": "verified",
+                },
+                {
+                    "key": "doc_backed_capability",
+                    "register": 101,
+                    "value_kind": "bool",
+                    "note": "doc",
+                    "group": "system",
+                    "provenance": "doc_backed",
+                },
+                {
+                    "key": "inferred_capability",
+                    "register": 102,
+                    "value_kind": "bool",
+                    "note": "inferred",
+                    "group": "system",
+                    "provenance": "inferred",
+                },
+                {
+                    "key": "cloud_hint_capability",
+                    "register": 103,
+                    "value_kind": "bool",
+                    "note": "hint",
+                    "group": "system",
+                    "provenance": "cloud_hint",
+                },
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "provenance_values_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                profile = profile_loader.load_driver_profile("provenance_values_profile.json")
+
+        self.assertEqual(profile.get_capability("verified_capability").provenance, "verified")
+        self.assertEqual(profile.get_capability("doc_backed_capability").provenance, "doc_backed")
+        self.assertEqual(profile.get_capability("inferred_capability").provenance, "inferred")
+        self.assertEqual(profile.get_capability("cloud_hint_capability").provenance, "cloud_hint")
+        self.assertFalse(
+            profile.get_capability("cloud_hint_capability").allows_runtime_write_without_local_proof
+        )
+
+    def test_rejects_invalid_capability_provenance(self) -> None:
+        raw = {
+            "profile_key": "bad_provenance_profile",
+            "title": "Bad Provenance Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "invalid_provenance",
+                    "register": 100,
+                    "value_kind": "bool",
+                    "note": "invalid",
+                    "group": "system",
+                    "provenance": "runtime_guess",
+                }
+            ],
+            "presets": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path = Path(temp_dir) / "bad_provenance_profile.json"
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with mock.patch.object(profile_loader, "PROFILES_DIR", Path(temp_dir)):
+                profile_loader.load_driver_profile.cache_clear()
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"invalid_capability_provenance:runtime_guess",
+                ):
+                    profile_loader.load_driver_profile("bad_provenance_profile.json")
 
 
 if __name__ == "__main__":

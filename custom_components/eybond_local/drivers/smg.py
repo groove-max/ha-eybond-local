@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ..const import DEFAULT_COLLECTOR_ADDR, DEFAULT_MODBUS_DEVICE_ADDR
 from ..models import (
     DetectedInverter,
     ProbeTarget,
@@ -13,45 +12,97 @@ from ..models import (
     WriteCapability,
     decimals_for_divisor,
 )
-from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
-from ..metadata.model_binding_catalog_loader import (
-    load_driver_model_binding_catalog,
-    resolve_driver_model_binding,
+from ..payload.modbus import (
+    ModbusError,
+    ModbusSession,
+    merge_register_field,
+    to_signed_16,
 )
+from ..payload.register_decode import decode_block as shared_decode_block
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
+from ..metadata.detection_evidence import (
+    anchor_evidence_from_catalog_identity_probe,
+    build_descriptor_decision_report,
+)
+from ..metadata.compiled_detection_catalog import (
+    RESOLUTION_FAMILY,
+    load_compiled_detection_catalog,
+)
+from ..metadata.device_catalog_loader import (
+    CatalogBinding,
+    RuntimeProbePolicy,
+    SupportCapturePolicy,
+    load_device_catalog,
+    resolve_catalog_surface_binding,
+    resolve_runtime_probe_policy,
+    resolve_support_capture_policy,
+)
 from .base import InverterDriver
+from .capability_codec import (
+    decode_capability_value as _decode_capability_value,
+    encode_capability_words as _encode_capability_words,
+    find_capability as _find_capability,
+)
+from .catalog_identity import (
+    CatalogIdentityProbe,
+    InverterIdentityNoDataError,
+    async_probe_catalog_identity,
+    attach_catalog_match_details,
+    catalog_match_from_resolution,
+    probe_indicates_link_down,
+)
 
 
-_SMG_VARIANT_MODEL_NAMES = {
-    "anenji_4200_protocol_1": "Anenji 4200 (Protocol 1)",
-    "anenji_anj_11kw_48v_wifi_p": "Anenji ANJ-11KW-48V-WIFI-P",
-    "family_fallback": "SMG Family (Unverified Variant)",
-}
-
-_SMG_DEFAULT_RATED_POWERS = frozenset({6200})
-_SMG_ANENJI_4200_PROTOCOL_1_VARIANT = "anenji_4200_protocol_1"
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
-_SMG_PROTOCOL_1_BASE_VARIANTS = frozenset(
-    {
-        _SMG_ANENJI_4200_PROTOCOL_1_VARIANT,
-        "default",
-        _SMG_FAMILY_FALLBACK_VARIANT,
+
+
+class CapabilityPreWriteReadError(RuntimeError):
+    """A masked write's read-modify-write failed on its PRE-WRITE read.
+
+    No write was attempted, so the hub must NOT classify it as a write
+    rejection (which would record a persistent 'unsupported_or_locked' blocker).
+    It carries no Modbus exception code, so the hub's write-error classifier
+    skips it and the failure surfaces as a plain transient error.
+    """
+
+
+def _attach_descriptor_decision_shadow_details(
+    detected: DetectedInverter,
+    catalog_probe: CatalogIdentityProbe | None,
+    *,
+    selection_source: str,
+) -> None:
+    """Attach the backward-compatible descriptor decision diagnostic alias."""
+
+    catalog_match_kind = ""
+    catalog_entry_key = ""
+    if catalog_probe is not None:
+        catalog_match_kind = str(catalog_probe.match.kind or "")
+        if catalog_probe.match.entry is not None:
+            catalog_entry_key = catalog_probe.match.entry.entry_key
+
+    evidence = anchor_evidence_from_catalog_identity_probe(catalog_probe)
+    rated_power = detected.details.get("rated_power")
+    if rated_power is not None:
+        evidence["fingerprint.rated_power"] = rated_power
+    report = build_descriptor_decision_report(
+        protocol_family=detected.protocol_family,
+        evidence=evidence,
+        catalog_match_kind=catalog_match_kind,
+        catalog_entry_key=catalog_entry_key,
+    )
+    report["selection"] = {
+        "source": selection_source,
+        "safe_switch_active": True,
+        "runtime_variant_key": detected.variant_key,
+        "runtime_profile_name": detected.profile_name,
+        "runtime_register_schema_name": detected.register_schema_name,
     }
-)
-_SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
-    RegisterValueSpec(key="device_type", register=171),
-    RegisterValueSpec(key="protocol_number", register=184),
-    RegisterValueSpec(key="rated_cell_count", register=644),
-)
-_SMG_DEFAULT_OPTIONAL_PROBE_SPECS: tuple[RegisterValueSpec, ...] = (
-    *_SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS,
-    RegisterValueSpec(key="max_discharge_current_protection", register=351),
-)
-_SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES: tuple[tuple[str, int, int], ...] = (
-    ("device_name", 172, 12),
-    ("program_version", 626, 8),
-)
+    detected.details["descriptor_decision_shadow"] = report
+    device_catalog = detected.details.get("device_catalog")
+    if isinstance(device_catalog, dict):
+        device_catalog["descriptor_decision"] = report
 
 
 class SmgModbusDriver(InverterDriver):
@@ -59,14 +110,22 @@ class SmgModbusDriver(InverterDriver):
 
     key = "modbus_smg"
     name = "SMG / Modbus"
-    probe_timeout = 18.0
-    probe_targets = (
-        ProbeTarget(
-            devcode=0x0001,
-            collector_addr=DEFAULT_COLLECTOR_ADDR,
-            device_addr=DEFAULT_MODBUS_DEVICE_ADDR,
-        ),
-    )
+
+    @property
+    def probe_timeout(self) -> float:
+        return load_compiled_detection_catalog().protocols[self.key].probe_timeout
+
+    @property
+    def probe_targets(self) -> tuple[ProbeTarget, ...]:
+        return tuple(
+            ProbeTarget(
+                devcode=devcode,
+                collector_addr=collector_addr,
+                device_addr=device_addr,
+            )
+            for devcode, collector_addr, device_addr
+            in load_compiled_detection_catalog().protocols[self.key].probe_targets
+        )
 
     @property
     def profile_name(self) -> str:
@@ -107,99 +166,217 @@ class SmgModbusDriver(InverterDriver):
         target: ProbeTarget,
     ) -> DetectedInverter | None:
         session = self._session(transport, target)
-        for binding in _smg_bindings():
-            try:
-                schema = load_register_schema(binding.register_schema_name)
-            except Exception:
-                continue
 
-            try:
-                profile = load_driver_profile(binding.profile_name) if binding.profile_name else None
-            except Exception:
-                continue
+        # The offline device catalog is the identification authority. An
+        # identity region that READS as zeros means the collector has no
+        # inverter link right now — probing deeper would only misreport an
+        # unsupported device (the 2026-06-08 false negative class).
+        try:
+            catalog_probe = await async_probe_catalog_identity(session)
+        except Exception:
+            catalog_probe = None
+        if probe_indicates_link_down(catalog_probe):
+            raise InverterIdentityNoDataError()
 
-            try:
-                serial_block = await session.read_holding(
-                    schema.block("serial").start,
-                    schema.block("serial").count,
-                )
-                serial_number = _decode_ascii_words(serial_block)
-                if len(serial_number) < 6:
-                    continue
+        if catalog_probe is not None:
+            return await self._async_probe_with_catalog(session, target, catalog_probe)
 
-                live_block = await session.read_holding(
+        # No catalog opinion: descriptor-driven SMG detection abstains instead
+        # of guessing through legacy variant scoring.
+        return None
+
+    async def _async_probe_with_catalog(
+        self,
+        session: ModbusSession,
+        target: ProbeTarget,
+        catalog_probe: CatalogIdentityProbe,
+    ) -> DetectedInverter | None:
+        resolution = catalog_probe.compiled_resolution
+        if resolution is None or not resolution.resolved:
+            return None
+
+        detected = await self._async_probe_resolution(
+            session,
+            target,
+            catalog_probe,
+            resolution=resolution,
+            selection_source=f"compiled_catalog_{resolution.resolution}",
+        )
+        if detected is not None:
+            return detected
+        if resolution.resolution == RESOLUTION_FAMILY:
+            return None
+
+        family_resolution = load_compiled_detection_catalog().resolve_family(
+            protocol_key=self.key,
+            evidence=anchor_evidence_from_catalog_identity_probe(catalog_probe),
+        )
+        if not family_resolution.resolved:
+            return None
+        family_probe = CatalogIdentityProbe(
+            layout_code=catalog_probe.layout_code,
+            model_code=catalog_probe.model_code,
+            rated_power=catalog_probe.rated_power,
+            serial_ascii=catalog_probe.serial_ascii,
+            match=catalog_match_from_resolution(
+                resolution=family_resolution,
+                layout_code=catalog_probe.layout_code or 0,
+                rated_power=catalog_probe.rated_power,
+                serial_ascii=catalog_probe.serial_ascii,
+            ),
+            compiled_resolution=family_resolution,
+            probe_action_keys=catalog_probe.probe_action_keys,
+            failed_probe_action_keys=catalog_probe.failed_probe_action_keys,
+        )
+        return await self._async_probe_resolution(
+            session,
+            target,
+            family_probe,
+            resolution=family_resolution,
+            selection_source="compiled_catalog_runtime_fallback",
+        )
+
+    async def _async_probe_resolution(
+        self,
+        session: ModbusSession,
+        target: ProbeTarget,
+        catalog_probe: CatalogIdentityProbe,
+        *,
+        resolution,
+        selection_source: str,
+    ) -> DetectedInverter | None:
+        catalog = load_compiled_detection_catalog()
+        surface = catalog.surfaces.get(resolution.surface_key or "")
+        if surface is None:
+            return None
+        descriptors = tuple(
+            catalog.devices[key]
+            for key in resolution.candidate_keys
+            if key in catalog.devices
+        )
+        model_names = {descriptor.model_name for descriptor in descriptors}
+        binding = CatalogBinding(
+            driver_key=surface.driver_key,
+            variant_key=surface.variant_key,
+            profile_name=surface.profile_name,
+            register_schema_name=surface.register_schema_name,
+        )
+        detected = await self._async_probe_binding(
+            session,
+            target,
+            binding,
+            runtime_probe=_runtime_probe_policy_for_resolution(
+                resolution.candidate_keys,
+                resolution.surface_key or "",
+                binding,
+            ),
+            model_name=next(iter(model_names)) if len(model_names) == 1 else "SMG",
+        )
+        if detected is None:
+            return None
+        attach_catalog_match_details(detected, catalog_probe)
+        _attach_descriptor_decision_shadow_details(
+            detected,
+            catalog_probe,
+            selection_source=selection_source,
+        )
+        return detected
+
+    async def _async_probe_binding(
+        self,
+        session: ModbusSession,
+        target: ProbeTarget,
+        binding,
+        *,
+        runtime_probe: RuntimeProbePolicy | None = None,
+        model_name: str = "",
+    ) -> DetectedInverter | None:
+        try:
+            schema = load_register_schema(binding.register_schema_name)
+        except Exception:
+            return None
+
+        try:
+            profile = load_driver_profile(binding.profile_name) if binding.profile_name else None
+        except Exception:
+            return None
+
+        try:
+            serial_block = await session.read_holding(
+                schema.block("serial").start,
+                schema.block("serial").count,
+            )
+            # Read the serial for display/diagnostics only. The SmartESS server does NOT bind
+            # identity to the inverter serial, and neither do we: a short or blank serial must
+            # not block detection of an otherwise-identified inverter.
+            serial_number = _decode_ascii_words(serial_block)
+
+            live_block = await session.read_holding(
+                schema.block("live").start,
+                schema.block("live").count,
+            )
+            live_values = _decode_block(
+                schema.block("live").start,
+                live_block,
+                _specs_for_block(
+                    schema.spec_set("live"),
                     schema.block("live").start,
                     schema.block("live").count,
-                )
-                live_values = _decode_block(
-                    schema.block("live").start,
-                    live_block,
-                    _specs_for_block(
-                        schema.spec_set("live"),
-                        schema.block("live").start,
-                        schema.block("live").count,
-                    ),
-                )
+                ),
+            )
 
-                config_block = await session.read_holding(
+            config_block = await session.read_holding(
+                schema.block("config").start,
+                schema.block("config").count,
+            )
+            config_values = _decode_block(
+                schema.block("config").start,
+                config_block,
+                _specs_for_block(
+                    schema.spec_set("config"),
                     schema.block("config").start,
                     schema.block("config").count,
-                )
-                config_values = _decode_block(
-                    schema.block("config").start,
-                    config_block,
-                    _specs_for_block(
-                        schema.spec_set("config"),
-                        schema.block("config").start,
-                        schema.block("config").count,
-                    ),
-                )
-                config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
-                rated_power = await _read_rated_power(session, schema)
-            except Exception:
-                continue
-
-            if not _is_valid_smg_probe(
-                schema,
-                live_values,
-                config_values,
-                binding.variant_key,
-                rated_power=rated_power,
-            ):
-                continue
-
-            details = dict(config_values)
-            details.update(
-                await _read_optional_specs(
-                    session,
-                    _optional_probe_specs_for_variant(binding.variant_key),
-                )
+                ),
             )
-            details.update(
-                await _read_optional_ascii_ranges(
-                    session,
-                    _optional_ascii_probe_ranges_for_variant(binding.variant_key),
-                )
-            )
-            if rated_power:
-                details["rated_power"] = rated_power
+            config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
+            rated_power = await _read_rated_power(session, schema)
+        except Exception:
+            return None
 
-            return DetectedInverter(
-                driver_key=self.key,
-                protocol_family="modbus_smg",
-                model_name=_smg_model_name(binding.variant_key, rated_power),
-                serial_number=serial_number,
-                probe_target=target,
-                variant_key=binding.variant_key,
-                details=details,
-                profile_name=binding.profile_name,
-                register_schema_name=binding.register_schema_name,
-                capability_groups=profile.groups if profile is not None else (),
-                capabilities=profile.capabilities if profile is not None else (),
-                capability_presets=profile.presets if profile is not None else (),
-            )
+        probe_policy = runtime_probe or _runtime_probe_policy_for_binding(binding)
+        if not _is_valid_smg_probe(config_values, probe_policy, rated_power=rated_power):
+            return None
 
-        return None
+        details = dict(config_values)
+        details.update(
+            await _read_optional_specs(
+                session,
+                _optional_probe_specs_for_policy(probe_policy),
+            )
+        )
+        details.update(
+            await _read_optional_ascii_ranges(
+                session,
+                _optional_ascii_probe_ranges_for_policy(probe_policy),
+            )
+        )
+        if rated_power:
+            details["rated_power"] = rated_power
+
+        return DetectedInverter(
+            driver_key=self.key,
+            protocol_family="modbus_smg",
+            model_name=_smg_model_name(model_name, rated_power),
+            serial_number=serial_number,
+            probe_target=target,
+            variant_key=binding.variant_key,
+            details=details,
+            profile_name=binding.profile_name,
+            register_schema_name=binding.register_schema_name,
+            capability_groups=profile.groups if profile is not None else (),
+            capabilities=profile.capabilities if profile is not None else (),
+            capability_presets=profile.presets if profile is not None else (),
+        )
 
     async def async_read_values(
         self,
@@ -283,6 +460,26 @@ class SmgModbusDriver(InverterDriver):
             values.pop("battery_voltage", None)
 
         values.update(_derive_runtime_states(values))
+        # Read-back for controls that have a register but no decode spec -- notably
+        # learned-overlay controls, which otherwise toggle but report no current state. This
+        # never changes the schema/scope, so the write-exposure proof is unaffected.
+        polled_blocks = (
+            (status_block_start, status_block),
+            (live_block_start, live_block),
+            (config_block_start, config_block),
+        )
+        # A few learned controls (e.g. Boot method reg 406, Output control reg 420) sit OUTSIDE
+        # the polled blocks; read those single registers directly so they too report state.
+        # The aux_config registers were already fetched above, so exclude them from the budget.
+        aux_registers = frozenset(
+            spec.register + offset
+            for spec in aux_config_fields
+            for offset in range(max(int(getattr(spec, "word_count", 1) or 1), 1))
+        )
+        extra_blocks = await _read_out_of_block_capability_registers(
+            session, inverter.capabilities, polled_blocks, already_read=aux_registers
+        )
+        _apply_capability_read_back(values, inverter.capabilities, polled_blocks + extra_blocks)
         return values
 
     async def async_write_capability(
@@ -296,7 +493,34 @@ class SmgModbusDriver(InverterDriver):
         raw_words = _encode_capability_words(capability, value)
 
         session = self._session(transport, inverter.probe_target)
-        await session.write_holding(capability.register, raw_words)
+        if capability.bitmask:
+            # The capability owns only some bits of a shared register: read the
+            # current word first and rewrite it with ONLY the masked field
+            # changed. A blind write would clobber the other bits, whose
+            # meanings may be unknown (e.g. OP2 enable is bit 0 of reg 354).
+            shift = capability.bitmask_shift
+            field = (int(raw_words[0]) << shift) & 0xFFFF
+            if field & ~capability.bitmask:
+                raise ValueError(f"value_exceeds_bitmask:{capability.key}:{raw_words[0]}")
+            try:
+                current = await session.read_holding(capability.register, 1)
+            except ModbusError as exc:
+                # A Modbus exception on the PRE-WRITE read is NOT a write
+                # rejection (no write happened): re-raise without a Modbus code
+                # so the hub does not lock the control. A ConnectionError here
+                # propagates unchanged so the hub's retry-after-reconnect still
+                # applies.
+                raise CapabilityPreWriteReadError(
+                    f"bitmask_pre_write_read_failed:{capability.key}:{exc}"
+                ) from exc
+            if not current:
+                raise CapabilityPreWriteReadError(
+                    f"bitmask_read_back_empty:{capability.key}"
+                )
+            merged = merge_register_field(int(current[0]), capability.bitmask, field)
+            await session.write_holding(capability.register, [merged])
+        else:
+            await session.write_holding(capability.register, raw_words)
 
         native_value = _decode_capability_value(capability, raw_words)
         inverter.details[capability.key] = native_value
@@ -395,36 +619,135 @@ def _specs_for_block(
     )
 
 
+async def _read_out_of_block_capability_registers(
+    session: ModbusSession,
+    capabilities,
+    polled_blocks: tuple[tuple[int, list[int]], ...],
+    *,
+    already_read: frozenset[int] = frozenset(),
+) -> tuple[tuple[int, list[int]], ...]:
+    """Read writable-capability registers that fall OUTSIDE the polled blocks.
+
+    Most controls live in the status/live/config blocks the driver already reads, but a few
+    learned-overlay controls (e.g. Boot method 406, Output control 420) do not. Read those single
+    registers directly so their selects/numbers report current state too. De-duplicated and
+    bounded (at most 16 extra reads per refresh); ``action`` controls have no readable state and
+    are skipped; individual read failures are skipped silently.
+
+    ``already_read`` lists registers the caller fetched through other paths (the
+    aux_config / optional-spec reads). Excluding them stops the 16-read budget
+    from being spent re-reading registers already in hand -- which on variants
+    with many aux registers (anenji_anj_11kw: 677-693) would otherwise crowd out
+    the genuinely out-of-block controls this helper exists to read.
+    """
+
+    polled: set[int] = set(already_read)
+    for start, block in polled_blocks:
+        polled.update(range(start, start + len(block)))
+
+    needed: set[int] = set()
+    for capability in capabilities:
+        if str(getattr(capability, "value_kind", "") or "") == "action":
+            continue
+        register = int(getattr(capability, "register", 0) or 0)
+        if register <= 0:
+            continue
+        for offset in range(max(int(getattr(capability, "word_count", 1) or 1), 1)):
+            if register + offset not in polled:
+                needed.add(register + offset)
+
+    extra: list[tuple[int, list[int]]] = []
+    for register in sorted(needed)[:16]:
+        try:
+            raw = await session.read_holding(register, 1)
+        except ModbusError:
+            continue
+        if raw:
+            extra.append((register, [int(raw[0])]))
+    return tuple(extra)
+
+
+def _apply_capability_read_back(
+    values: dict[str, Any],
+    capabilities,
+    register_blocks: tuple[tuple[int, list[int]], ...],
+) -> None:
+    """Fill ``values`` for writable capabilities that have a register but no decode spec.
+
+    Built-in controls are decoded from the schema spec-sets, so their value is already
+    present. Learned-overlay controls carry a register but no schema spec, so without this they
+    would toggle yet report no current state (``is_on`` reads an absent ``value_key``). We read
+    the raw register straight from the blocks the driver already polled -- crucially WITHOUT
+    changing the inverter's ``register_schema_name`` (which would flip the metadata scope and
+    break write-exposure for every control). Registers outside every polled block are skipped.
+    """
+
+    register_map: dict[int, int] = {}
+    for start, block in register_blocks:
+        for index, raw in enumerate(block):
+            register_map[start + index] = raw
+
+    for capability in capabilities:
+        value_key = getattr(capability, "value_key", "") or getattr(capability, "key", "")
+        if not value_key or value_key in values:
+            continue
+        register = int(getattr(capability, "register", 0) or 0)
+        if register <= 0 or register not in register_map:
+            continue
+        word_count = int(getattr(capability, "word_count", 1) or 1)
+        if word_count >= 2:
+            high = register_map.get(register)
+            low = register_map.get(register + 1)
+            if high is None or low is None:
+                continue
+            if str(getattr(capability, "combine", "") or "") == "u32_high_first":
+                raw_value = (high << 16) | low
+            else:
+                raw_value = (low << 16) | high
+        else:
+            raw_value = register_map[register]
+        bitmask = int(getattr(capability, "bitmask", 0) or 0)
+        if bitmask:
+            # Masked capability: only its own bits carry the value (the rest of
+            # the register belongs to other settings).
+            shift = (bitmask & -bitmask).bit_length() - 1
+            raw_value = (raw_value & bitmask) >> shift
+        value_kind = str(getattr(capability, "value_kind", "") or "")
+        divisor = int(getattr(capability, "divisor", 0) or 0)
+        if value_kind == "enum":
+            # A select reads the decoded LABEL (a string), like built-in enums. Map the raw
+            # register value to its label via the capability's enum map; without this the select
+            # gets a bare int and shows "unknown".
+            enum_map = getattr(capability, "enum_value_map", None) or {}
+            values[value_key] = enum_map.get(raw_value, f"Unknown ({raw_value})")
+        elif divisor > 1:
+            # Scaled number: store the NATIVE (display) value, since the number entity reads
+            # value_key as-is and its native_min/max + the write encode use the same divisor.
+            values[value_key] = round(raw_value / divisor, decimals_for_divisor(divisor))
+        else:
+            values[value_key] = raw_value
+
+
 def _decode_block(
     start_register: int,
     values: list[int],
     specs: tuple[RegisterValueSpec, ...],
 ) -> dict[str, Any]:
-    registers = {start_register + index: value for index, value in enumerate(values)}
-    decoded: dict[str, Any] = {}
-    for spec in specs:
-        raw = _decode_raw_value(registers, spec)
-        if spec.enum_map is not None:
-            decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
-            continue
-        if spec.divisor:
-            scaled = raw / spec.divisor
-            decoded[spec.key] = round(scaled, spec.decimals or 0)
-            continue
-        decoded[spec.key] = raw
-    return decoded
+    """Decode one SMG block via the shared decoder (all-ones sentinel on).
 
+    Kept as a module symbol: tests exercise the sentinel semantics through
+    this name. Behavioral equivalence with the historical private copy was
+    verified against the schema corpus: every multi-word SMG spec is
+    u32_high_first/unsigned, and no SMG spec uses multiplier or ascii
+    combines.
+    """
 
-def _decode_raw_value(registers: dict[int, int], spec: RegisterValueSpec) -> int:
-    if spec.combine == "u32_high_first":
-        high = registers[spec.register]
-        low = registers[spec.register + 1]
-        return (high << 16) | low
-
-    value = registers[spec.register]
-    if spec.signed:
-        return to_signed_16(value)
-    return value
+    return shared_decode_block(
+        start_register,
+        [int(value) for value in values],
+        specs,
+        all_ones_unavailable=True,
+    )
 
 
 def _group_optional_specs(
@@ -505,14 +828,15 @@ async def _read_missing_optional_probe_details(
     session: ModbusSession,
     inverter: DetectedInverter,
 ) -> dict[str, Any]:
+    probe_policy = _runtime_probe_policy_for_inverter(inverter)
     missing_specs = tuple(
         spec
-        for spec in _optional_probe_specs_for_variant(inverter.variant_key)
+        for spec in _optional_probe_specs_for_policy(probe_policy)
         if spec.key not in inverter.details
     )
     missing_ascii_ranges = tuple(
         item
-        for item in _optional_ascii_probe_ranges_for_variant(inverter.variant_key)
+        for item in _optional_ascii_probe_ranges_for_policy(probe_policy)
         if item[0] not in inverter.details
     )
     if not missing_specs and not missing_ascii_ranges:
@@ -1337,286 +1661,12 @@ def _alarm_matches(
     return any(keyword in haystack for keyword in keywords for haystack in haystacks)
 
 
-def _find_capability(
-    capability_key: str,
-    capabilities: tuple[WriteCapability, ...],
-) -> WriteCapability:
-    for capability in capabilities:
-        if capability.key == capability_key:
-            return capability
-    raise ValueError(f"unsupported_capability:{capability_key}")
-
-
-def _encode_capability_words(capability: WriteCapability, value: Any) -> list[int]:
-    if capability.value_kind == "action":
-        return [_encode_action_value(capability, value)]
-    if capability.value_kind == "bool":
-        return [_encode_bool_value(capability, value)]
-    if capability.value_kind == "enum":
-        return [_encode_enum_value(capability, value)]
-    if capability.value_kind == "scaled_u16":
-        return [_encode_scaled_u16_value(capability, value)]
-    if capability.value_kind == "u16":
-        return [_encode_u16_value(capability, value)]
-    if capability.value_kind == "u32":
-        return _encode_u32_words(capability, value)
-    if capability.value_kind == "date_words":
-        return _encode_date_words(capability, value)
-    if capability.value_kind == "time_words":
-        return _encode_time_words(capability, value)
-    raise ValueError(f"unsupported_value_kind:{capability.value_kind}")
-
-
-def _decode_capability_value(capability: WriteCapability, raw_words: list[int]) -> Any:
-    if not raw_words:
-        raise ValueError(f"missing_raw_words:{capability.key}")
-    raw_value = raw_words[0]
-    if capability.value_kind == "action":
-        return raw_value
-    if capability.value_kind == "u32":
-        return _decode_u32_words(capability, raw_words)
-    if capability.value_kind == "date_words":
-        return _decode_date_words(capability, raw_words)
-    if capability.value_kind == "time_words":
-        return _decode_time_words(capability, raw_words)
-    enum_map = capability.enum_value_map
-    if capability.value_kind == "bool":
-        if enum_map:
-            return enum_map.get(raw_value, bool(raw_value))
-        return bool(raw_value)
-    if enum_map:
-        return enum_map.get(raw_value, f"Unknown ({raw_value})")
-    if capability.divisor:
-        return round(raw_value / capability.divisor, decimals_for_divisor(capability.divisor))
-    return raw_value
-
-
-def _encode_enum_value(capability: WriteCapability, value: Any) -> int:
-    enum_map = capability.enum_value_map
-    if isinstance(value, int):
-        raw_value = value
-    else:
-        text = str(value).strip()
-        if text.isdigit():
-            raw_value = int(text)
-        else:
-            reverse_map = {label: key for key, label in enum_map.items()}
-            if text not in reverse_map:
-                raise ValueError(f"unsupported_enum_value:{capability.key}:{text}")
-            raw_value = reverse_map[text]
-
-    if raw_value not in enum_map:
-        raise ValueError(f"unsupported_enum_raw:{capability.key}:{raw_value}")
-    return raw_value
-
-
-def _encode_bool_value(capability: WriteCapability, value: Any) -> int:
-    enum_map = capability.enum_value_map
-    if isinstance(value, bool):
-        raw_value = 1 if value else 0
-    elif isinstance(value, int):
-        raw_value = value
-    else:
-        text = str(value).strip().lower()
-        truthy = {"1", "true", "on", "yes", "enable", "enabled"}
-        falsy = {"0", "false", "off", "no", "disable", "disabled"}
-        if text in truthy:
-            raw_value = 1
-        elif text in falsy:
-            raw_value = 0
-        else:
-            reverse_map = {label.lower(): key for key, label in enum_map.items()}
-            if text not in reverse_map:
-                raise ValueError(f"unsupported_bool_value:{capability.key}:{value}")
-            raw_value = reverse_map[text]
-
-    if raw_value not in {0, 1}:
-        raise ValueError(f"unsupported_bool_raw:{capability.key}:{raw_value}")
-    return raw_value
-
-
-def _encode_action_value(capability: WriteCapability, value: Any) -> int:
-    if value is None:
-        if capability.action_value is None:
-            raise ValueError(f"missing_action_value:{capability.key}")
-        return capability.action_value
-    try:
-        raw_value = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"invalid_action_value:{capability.key}:{value}") from exc
-    if capability.action_value is not None and raw_value != capability.action_value:
-        raise ValueError(f"unsupported_action_value:{capability.key}:{raw_value}")
-    return raw_value
-
-
-def _encode_scaled_u16_value(capability: WriteCapability, value: Any) -> int:
-    if capability.divisor is None:
-        raise ValueError(f"missing_divisor:{capability.key}")
-
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"invalid_numeric_value:{capability.key}:{value}") from exc
-
-    raw_value = int(round(numeric * capability.divisor))
-    _validate_range(capability, raw_value)
-    return raw_value
-
-
-def _encode_u16_value(capability: WriteCapability, value: Any) -> int:
-    try:
-        raw_value = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"invalid_integer_value:{capability.key}:{value}") from exc
-
-    _validate_range(capability, raw_value)
-    return raw_value
-
-
-def _encode_u32_words(capability: WriteCapability, value: Any) -> list[int]:
-    raw_value: int
-    if isinstance(value, str):
-        text = value.strip()
-        try:
-            raw_value = int(text, 0)
-        except ValueError as exc:
-            raise ValueError(f"invalid_integer_value:{capability.key}:{value}") from exc
-    else:
-        try:
-            raw_value = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"invalid_integer_value:{capability.key}:{value}") from exc
-
-    _validate_range(capability, raw_value)
-    if capability.word_count != 2:
-        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
-    if capability.combine != "u32_high_first":
-        raise ValueError(f"unsupported_combine:{capability.key}:{capability.combine}")
-    return [(raw_value >> 16) & 0xFFFF, raw_value & 0xFFFF]
-
-
-def _decode_u32_words(capability: WriteCapability, raw_words: list[int]) -> int:
-    if capability.word_count != 2:
-        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
-    if capability.combine != "u32_high_first":
-        raise ValueError(f"unsupported_combine:{capability.key}:{capability.combine}")
-    if len(raw_words) != 2:
-        raise ValueError(f"unexpected_word_length:{capability.key}:{len(raw_words)}")
-    return ((raw_words[0] & 0xFFFF) << 16) | (raw_words[1] & 0xFFFF)
-
-
-def _encode_date_words(capability: WriteCapability, value: Any) -> list[int]:
-    if capability.word_count != 3:
-        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        text = str(value).strip()
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            try:
-                parsed = datetime.strptime(text, "%Y-%m-%d")
-            except ValueError as exc:
-                raise ValueError(f"invalid_date_value:{capability.key}:{value}") from exc
-    return [parsed.year, parsed.month, parsed.day]
-
-
-def _decode_date_words(capability: WriteCapability, raw_words: list[int]) -> str:
-    if capability.word_count != 3:
-        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
-    if len(raw_words) != 3:
-        raise ValueError(f"unexpected_word_length:{capability.key}:{len(raw_words)}")
-    year, month, day = raw_words
-    datetime(year, month, day)
-    return f"{year:04d}-{month:02d}-{day:02d}"
-
-
-def _encode_time_words(capability: WriteCapability, value: Any) -> list[int]:
-    if capability.word_count != 3:
-        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        text = str(value).strip()
-        parsed = None
-        for time_format in ("%H:%M:%S", "%H:%M"):
-            try:
-                parsed = datetime.strptime(text, time_format)
-                break
-            except ValueError:
-                continue
-        if parsed is None:
-            raise ValueError(f"invalid_time_value:{capability.key}:{value}")
-    return [parsed.hour, parsed.minute, parsed.second]
-
-
-def _decode_time_words(capability: WriteCapability, raw_words: list[int]) -> str:
-    if capability.word_count != 3:
-        raise ValueError(f"unsupported_word_count:{capability.key}:{capability.word_count}")
-    if len(raw_words) != 3:
-        raise ValueError(f"unexpected_word_length:{capability.key}:{len(raw_words)}")
-    hour, minute, second = raw_words
-    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
-        raise ValueError(f"invalid_time_words:{capability.key}:{raw_words}")
-    return f"{hour:02d}:{minute:02d}:{second:02d}"
-
-
-def _validate_range(capability: WriteCapability, raw_value: int) -> None:
-    if capability.minimum is not None and raw_value < capability.minimum:
-        raise ValueError(f"value_below_minimum:{capability.key}:{raw_value}")
-    if capability.maximum is not None and raw_value > capability.maximum:
-        raise ValueError(f"value_above_maximum:{capability.key}:{raw_value}")
-
-
-_SMG_FAMILY_DISCOVERY_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
-    (171, 14),
-    (277, 5),
-    (338, 16),
-    (389, 3),
-    (607, 1),
-    (626, 8),
-    (644, 1),
-    (696, 9),
-)
-
-_SMG_PROTOCOL_1_DOCUMENTED_CAPTURE_RANGES: tuple[tuple[int, int], ...] = (
-    (700, 45),
-)
-
-_SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
-    "modbus_smg_anenji_anj_11kw_48v_wifi_p": (
-        (326, 2),
-        (338, 18),
-        (376, 18),
-        (414, 18),
-        (677, 18),
-        (707, 1),
-        (709, 1),
-        (858, 2),
-    ),
-}
-
-
-def _is_protocol_1_common_schema(schema) -> bool:
-    return (
-        schema.block("serial").start == 186
-        and schema.block("live").start == 201
-        and schema.block("config").start == 300
-        and schema.scalar_registers.get("rated_power_register", 0) == 643
-    )
+# Capability value encoding/decoding lives in capability_codec (shared with
+# the generic catalog driver); the aliases keep this module's call sites.
 
 
 def _support_capture_notes(schema_name: str | None = None) -> tuple[str, ...]:
-    default_binding = _smg_default_binding()
-    schema = load_register_schema(schema_name or default_binding.register_schema_name)
-
-    notes = [
-        "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
-    ]
-    if _is_protocol_1_common_schema(schema):
-        notes.append("Protocol-1 SMG layouts also include documented fault/log windows: 700-744.")
-    return tuple(notes)
+    return _support_capture_policy(schema_name).notes
 
 
 def _support_capture_ranges(schema_name: str | None = None) -> tuple[tuple[int, int], ...]:
@@ -1636,11 +1686,27 @@ def _support_capture_ranges(schema_name: str | None = None) -> tuple[tuple[int, 
         (register, 1)
         for register in sorted({value for value in schema.scalar_registers.values() if value > 0})
     )
-    planned.extend(_SMG_FAMILY_DISCOVERY_CAPTURE_RANGES)
-    if _is_protocol_1_common_schema(schema):
-        planned.extend(_SMG_PROTOCOL_1_DOCUMENTED_CAPTURE_RANGES)
-    planned.extend(_SMG_SCHEMA_DISCOVERY_CAPTURE_RANGES.get(schema.key, ()))
+    planned.extend(_support_capture_policy(schema_name).ranges)
     return _merge_capture_ranges(planned)
+
+
+def _support_capture_policy(
+    schema_name: str | None = None,
+) -> SupportCapturePolicy:
+    default_binding = _smg_default_binding()
+    resolved_schema_name = schema_name or default_binding.register_schema_name
+    policy = resolve_support_capture_policy(
+        driver_key="modbus_smg",
+        register_schema_name=resolved_schema_name,
+    )
+    if policy.ranges or policy.notes:
+        return policy
+    return resolve_support_capture_policy(
+        driver_key=default_binding.driver_key,
+        variant_key=default_binding.variant_key,
+        profile_name=default_binding.profile_name,
+        register_schema_name=default_binding.register_schema_name,
+    )
 
 
 def _schema_for_inverter(
@@ -1655,87 +1721,93 @@ def _schema_for_inverter(
     return load_register_schema(schema_name)
 
 
-def _smg_bindings():
-    catalog = load_driver_model_binding_catalog()
-    bindings = [binding for binding in catalog.bindings.values() if binding.driver_key == "modbus_smg"]
-    return tuple(sorted(bindings, key=_smg_binding_sort_key))
+def _runtime_probe_policy_for_binding(binding) -> RuntimeProbePolicy:
+    return resolve_runtime_probe_policy(
+        driver_key=str(getattr(binding, "driver_key", "modbus_smg") or "modbus_smg"),
+        variant_key=str(getattr(binding, "variant_key", "") or ""),
+        profile_name=str(getattr(binding, "profile_name", "") or ""),
+        register_schema_name=str(getattr(binding, "register_schema_name", "") or ""),
+    )
 
 
-def _smg_binding_sort_key(binding) -> tuple[int, str]:
-    if binding.variant_key == _SMG_FAMILY_FALLBACK_VARIANT:
-        return (2, binding.variant_key)
-    if binding.variant_key == "default":
-        return (1, binding.variant_key)
-    return (0, binding.variant_key)
+def _runtime_probe_policy_for_resolution(
+    candidate_keys: tuple[str, ...],
+    surface_key: str,
+    binding,
+) -> RuntimeProbePolicy:
+    source = load_device_catalog()
+    if len(candidate_keys) == 1:
+        entry = next(
+            (item for item in source.devices if item.entry_key == candidate_keys[0]),
+            None,
+        )
+        if entry is not None:
+            return entry.runtime_probe
+    family_default = next(
+        (item for item in source.family_defaults if item.surface_key == surface_key),
+        None,
+    )
+    if family_default is not None:
+        return family_default.runtime_probe
+    return _runtime_probe_policy_for_binding(binding)
 
 
-def _optional_probe_specs_for_variant(variant_key: str) -> tuple[RegisterValueSpec, ...]:
-    if variant_key == "default":
-        return _SMG_DEFAULT_OPTIONAL_PROBE_SPECS
-    if variant_key in _SMG_PROTOCOL_1_BASE_VARIANTS:
-        return _SMG_PROTOCOL_1_COMMON_OPTIONAL_PROBE_SPECS
-    return ()
+def _runtime_probe_policy_for_inverter(inverter: DetectedInverter) -> RuntimeProbePolicy:
+    return resolve_runtime_probe_policy(
+        driver_key=inverter.driver_key,
+        variant_key=inverter.variant_key,
+        profile_name=inverter.profile_name,
+        register_schema_name=inverter.register_schema_name,
+    )
 
 
-def _optional_ascii_probe_ranges_for_variant(
-    variant_key: str,
+def _optional_probe_specs_for_policy(
+    policy: RuntimeProbePolicy,
+) -> tuple[RegisterValueSpec, ...]:
+    return tuple(
+        RegisterValueSpec(
+            key=item.key,
+            register=item.register,
+            word_count=item.word_count,
+            signed=item.signed,
+            combine=item.combine,
+            divisor=item.divisor,
+        )
+        for item in policy.optional_registers
+    )
+
+
+def _optional_ascii_probe_ranges_for_policy(
+    policy: RuntimeProbePolicy,
 ) -> tuple[tuple[str, int, int], ...]:
-    if variant_key in _SMG_PROTOCOL_1_BASE_VARIANTS:
-        return _SMG_DEFAULT_OPTIONAL_ASCII_PROBE_RANGES
-    return ()
+    return tuple(
+        (item.key, item.register, item.word_count)
+        for item in policy.optional_ascii
+    )
 
 
 def _is_valid_smg_probe(
-    schema,
-    live_values: dict[str, Any],
     config_values: dict[str, Any],
-    variant_key: str,
+    policy: RuntimeProbePolicy,
     *,
     rated_power: int = 0,
 ) -> bool:
-    if live_values.get("operating_mode") not in schema.enum_map_for("mode_names").values():
-        return False
-    if config_values.get("output_rating_voltage", 0) <= 0:
-        return False
-    if config_values.get("output_rating_frequency", 0) <= 0:
-        return False
-
-    output_mode = config_values.get("output_mode")
-    if isinstance(output_mode, str) and output_mode.startswith("Unknown"):
-        return False
-
-    output_source_priority = config_values.get("output_source_priority")
-    if isinstance(output_source_priority, str) and output_source_priority.startswith("Unknown"):
-        return False
-
-    if variant_key == _SMG_ANENJI_4200_PROTOCOL_1_VARIANT:
-        if config_values.get("protocol_number") != 1:
+    values = dict(config_values)
+    values["rated_power"] = rated_power
+    for rule in policy.validation:
+        value = values.get(rule.key)
+        if rule.equals is not None and value != rule.equals:
             return False
-        if config_values.get("device_type") != 0x3501:
+        if rule.one_of and value not in rule.one_of:
             return False
-        if rated_power != 4200:
+        if rule.known_enum and not _is_known_enum_value(value):
             return False
-        if not _is_known_enum_value(config_values.get("turn_on_mode")):
-            return False
-        if not _is_known_enum_value(config_values.get("remote_switch")):
-            return False
-
-    if variant_key == "anenji_anj_11kw_48v_wifi_p":
-        if config_values.get("protocol_number") not in {3, 4, 5, 6}:
-            return False
-        if not _is_known_enum_value(config_values.get("turn_on_mode")):
-            return False
-        if not _is_known_enum_value(config_values.get("remote_switch")):
-            return False
-        pv_grid_connected_max_power = config_values.get("pv_grid_connected_max_power")
-        if not isinstance(pv_grid_connected_max_power, int):
-            return False
-        if not (200 <= pv_grid_connected_max_power <= 20000):
-            return False
-
-    if variant_key == "default" and rated_power not in _SMG_DEFAULT_RATED_POWERS:
-        return False
-
+        if rule.min_value is not None:
+            if not isinstance(value, (int, float)) or value < rule.min_value:
+                return False
+        if rule.max_value is not None:
+            if not isinstance(value, (int, float)) or value > rule.max_value:
+                return False
     return True
 
 
@@ -1753,16 +1825,16 @@ async def _read_rated_power(session: ModbusSession, schema) -> int:
         return 0
 
 
-def _smg_model_name(variant_key: str, rated_power: int) -> str:
-    if variant_key in _SMG_VARIANT_MODEL_NAMES:
-        return _SMG_VARIANT_MODEL_NAMES[variant_key]
+def _smg_model_name(catalog_model_name: str, rated_power: int) -> str:
+    if catalog_model_name:
+        return catalog_model_name
     return f"SMG {rated_power}" if rated_power else "SMG"
 
 
 def _smg_default_binding():
-    binding = resolve_driver_model_binding("modbus_smg")
+    binding = resolve_catalog_surface_binding("modbus_smg")
     if binding is None:
-        raise RuntimeError("missing_model_binding:modbus_smg")
+        raise RuntimeError("missing_default_surface:modbus_smg")
     return binding
 
 

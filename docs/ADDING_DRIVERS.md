@@ -8,8 +8,10 @@ The preferred workflow is:
 2. implement or extend driver detection
 3. add read-side register schema
 4. add declarative profile metadata
-5. validate offline first
-6. polish the Home Assistant UX only after the protocol path is stable
+5. update the commercial model catalog when support state changes
+6. preserve partial protocol knowledge in a durable, privacy-safe form
+7. validate offline first
+8. polish the Home Assistant UX only after the protocol path is stable
 
 ## Design Rule
 
@@ -17,8 +19,8 @@ Prefer the thinnest Python driver that can possibly work.
 
 When deciding where new logic belongs, use this order:
 
-1. `custom_components/eybond_local/profiles/` for capability groups, writable metadata, conditions, presets, and support annotations
-2. `custom_components/eybond_local/register_schemas/` for read-side layouts, fields, enums, bit labels, and model overlays
+1. `custom_components/eybond_local/protocol_catalogs/profiles/` for capability groups, writable metadata, conditions, presets, and support annotations
+2. `custom_components/eybond_local/protocol_catalogs/register_schemas/` for read-side layouts, fields, enums, bit labels, and model overlays
 3. `custom_components/eybond_local/payload/` for family-level framing and parse helpers
 4. `custom_components/eybond_local/drivers/` only for probe, read, write, and procedural derived logic
 
@@ -26,11 +28,16 @@ Do not add user-facing metadata to a Python driver if the same information can l
 
 ## Metadata Ownership Rule
 
-When one imported SmartESS asset and one runtime compatibility overlay both exist, keep them as separate metadata names.
+When imported SmartESS assets, runtime compatibility overlays, and dedicated
+local SmartESS runtime profiles all exist, keep their ownership explicit.
 
-- Raw imported SmartESS asset truth belongs under `custom_components/eybond_local/profiles/smartess_local/models/` and `custom_components/eybond_local/register_schemas/smartess_local/models/`.
-- Effective runtime compatibility overlays stay under the actual runtime family namespace, for example `pi30_ascii/models/smartess_0925_compat.json`.
-- Do not keep or introduce SmartESS-namespaced default aliases once the canonical runtime compatibility overlay exists.
+- Raw imported SmartESS asset truth belongs under `custom_components/eybond_local/protocol_catalogs/profiles/smartess_local/models/` and `custom_components/eybond_local/protocol_catalogs/register_schemas/smartess_local/models/`.
+- Effective compatibility overlays stay under the runtime family that consumes
+  them, for example `pi30_ascii/models/smartess_0925_compat.json`.
+- Dedicated local SmartESS runtime profiles stay under `smartess_local/` and
+  should not be treated as commercial model names.
+- Do not blur SmartESS asset ids, raw inverter model strings, and commercial
+  model names. Store commercial support conclusions in `catalog/inverter_models/`.
 
 ## Key Project Paths
 
@@ -39,8 +46,10 @@ Core integration code:
 - `custom_components/eybond_local/collector/`
 - `custom_components/eybond_local/payload/`
 - `custom_components/eybond_local/drivers/`
-- `custom_components/eybond_local/profiles/`
-- `custom_components/eybond_local/register_schemas/`
+- `custom_components/eybond_local/protocol_catalogs/inverter_catalog.json`
+- `custom_components/eybond_local/protocol_catalogs/profiles/`
+- `custom_components/eybond_local/protocol_catalogs/register_schemas/`
+- `catalog/inverter_models/`
 - `custom_components/eybond_local/runtime/`
 - `custom_components/eybond_local/canonical_telemetry.py`
 - `custom_components/eybond_local/config_flow.py`
@@ -63,17 +72,11 @@ Fixtures and tests:
 
 ### 1. Capture Or Import A Fixture
 
-If the device can be reached live, capture a stable snapshot first.
+Start from a Support Archive whenever possible. It already contains raw capture
+evidence and replay-compatible fixture data from the Home Assistant UI.
 
-Example for Modbus-family devices:
-
-```bash
-python3 tools/modbus_dump.py \
-  --server-ip <ha_host_ip> \
-  --collector-ip <collector_ip> \
-  --range <start:count> \
-  --fixture-out /tmp/new_device_fixture.json
-```
+If a maintainer needs a custom live capture, keep that workflow local-only and
+store the resulting fixture outside git.
 
 If the fixture will be shared, anonymize it:
 
@@ -111,7 +114,7 @@ Probe logic should:
 
 For a Modbus-like family:
 
-- add or extend declarative schema JSON under `custom_components/eybond_local/register_schemas/`
+- add or extend declarative schema JSON under `custom_components/eybond_local/protocol_catalogs/register_schemas/`
 - keep family-wide defaults in `base.json`
 - use `models/` overlays when differences are model-specific and data-only
 - keep block reads contiguous when the protocol requires full-block reads
@@ -120,7 +123,7 @@ Keep procedural derived runtime logic in the driver, not in HA entities or schem
 
 ### 4. Add Declarative Capability Metadata
 
-Create or extend a profile JSON under `custom_components/eybond_local/profiles/`.
+Create or extend a profile JSON under `custom_components/eybond_local/protocol_catalogs/profiles/`.
 
 Prefer shared family-level metadata plus model overlays over copy-pasting full profiles. If multiple variants reuse the same logical controls with different register locations, put the common capability shape into `capability_templates` in the family base and materialize the variant-specific entries from the overlay. If a device is clearly in the same protocol family but still lacks verified write semantics, add a separate read-only fallback profile instead of inheriting a writable default surface prematurely.
 
@@ -146,7 +149,44 @@ The Python driver should remain the place for:
 - derived procedural runtime logic
 - actual write-command encoding
 
-### 5. Validate Offline First
+### 5. Update The Model Catalog
+
+Runtime detection and commercial model administration are separate.
+
+When the work changes which commercial devices are known or supported:
+
+- add or update a model record under `catalog/inverter_models/models/`
+- add a sanitized source record under `catalog/inverter_models/sources/`
+- link each model variant to the relevant runtime `device_descriptor_keys`
+- keep raw private support archives, serial numbers, collector identifiers, IP addresses, and account details out of git
+- use durable opaque references (`project-issue:<id>`, `project-attachment:<token>`, `sha256:<hash>`, `fixture:<name>`, `private:<token>` for private conversations or local archives); raw public or private source URLs stay out of the public model catalog unless a record explicitly intends to publish one
+
+Then validate and refresh the journal:
+
+```bash
+python3 tools/model_catalog.py validate
+python3 tools/model_catalog.py render --output docs/generated/INVERTER_MODEL_CATALOG.generated.md
+```
+
+The generated journal is the public support surface. Do not recreate per-family support matrices when the information belongs in the model catalog or the runtime catalog.
+
+### 6. Preserve Partial Protocol Knowledge
+
+If a user provides a full register map, a partial register list, a third-party project mapping, or protocol documentation, store the maintained conclusion in the smallest durable place:
+
+- runtime-safe facts go into `protocol_catalogs/inverter_catalog.json`, profile JSON, register-schema JSON, or tests
+- model/support conclusions go into `catalog/inverter_models/`
+- private raw material stays local, with only a sanitized source summary committed
+- unresolved research notes should be captured only when they remain actionable and privacy-safe
+
+Current SMG-family open reverse-engineering candidates:
+
+- live block registers: `218`, `221`, `222`, `228`, `230`
+- config block registers: `304`, `311`, `312`, `317..319`, `328`, `330`, `339`, `340`
+
+These are not blockers for current Home Assistant functionality, but they remain known candidates for future schema work.
+
+### 7. Validate Offline First
 
 Before touching the Home Assistant UX, validate everything against fixtures:
 
@@ -158,7 +198,7 @@ python3 -m unittest discover -s tests -v
 
 If replay fails, fix the driver or metadata before doing HA-level work.
 
-### 6. Add Tests
+### 8. Add Tests
 
 Minimum expected coverage for a new family or profile:
 
@@ -167,11 +207,11 @@ Minimum expected coverage for a new family or profile:
 - runtime schema coverage
 - control policy coverage
 - support metadata coverage
-- generated-doc sync when the profile affects exported reports
+- model-catalog journal sync when the work changes commercial support records
 
 Use the existing tests in `tests/` as the baseline style.
 
-### 7. Polish The Home Assistant UX Last
+### 9. Polish The Home Assistant UX Last
 
 After the driver and metadata are stable:
 
@@ -192,7 +232,7 @@ Before considering a new driver usable, aim for:
 - read-only behavior is acceptable even if writes are not ready yet
 - profile validation passes
 - unit tests pass
-- public generated reports refresh cleanly
+- the public model-catalog journal refreshes cleanly when catalog records changed
 - local debug reports refresh cleanly if you use fixture-derived reports
 - support level and known limits are documented
 

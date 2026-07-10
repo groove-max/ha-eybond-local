@@ -1,0 +1,184 @@
+{
+  "extends": "../default.json",
+  "profile_key": "modbus_smg_6200",
+  "title": "SMG 6200",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capabilities": [
+    {
+      "key": "beeps_while_primary_source_interrupted",
+      "register": 304,
+      "value_kind": "bool",
+      "title": "Beeps While Primary Source Is Interrupted",
+      "group": "system",
+      "order": 118,
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on Sandisolar SD-HYM-4862HWP after SmartESS shadow-learning identified the register mapping on 2026-06-17/18.",
+      "change_summary": "Controls whether the inverter beeps when the primary source is interrupted.",
+      "note": "Register 304 mapping observed as SmartESS field sys_eybond_ctrl_52.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Beeps OFF",
+          "order": 0,
+          "description": "Do not beep when the primary source is interrupted."
+        },
+        {
+          "value": 1,
+          "label": "Beeps ON",
+          "order": 1,
+          "description": "Beep when the primary source is interrupted."
+        }
+      ]
+    },
+    {
+      "key": "battery_type",
+      "register": 322,
+      "value_kind": "enum",
+      "title": "Battery Type",
+      "group": "battery",
+      "order": 185,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on Sandisolar SD-HYM-4862HWP after SmartESS shadow-learning identified the register mapping on 2026-06-17/18. Editing remains guarded because battery profile changes affect charge-voltage behavior.",
+      "depends_on": [
+        "battery_connected",
+        "configuration_safe_mode"
+      ],
+      "editable_if": [
+        "battery_connected",
+        "safe_configuration_mode"
+      ],
+      "affects": [
+        "battery_bulk_voltage",
+        "battery_float_voltage",
+        "battery_under_voltage"
+      ],
+      "change_summary": "Changes the configured battery chemistry/profile.",
+      "note": "Register 322 mapping observed as SmartESS field bat_eybond_ctrl_66.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "AGM",
+          "order": 0,
+          "description": "AGM lead-acid battery profile."
+        },
+        {
+          "value": 1,
+          "label": "Flooded",
+          "order": 1,
+          "description": "Flooded lead-acid battery profile."
+        },
+        {
+          "value": 2,
+          "label": "User",
+          "order": 2,
+          "description": "User-defined battery profile."
+        },
+        {
+          "value": 3,
+          "label": "Li1",
+          "order": 3,
+          "description": "Lithium battery profile 1."
+        },
+        {
+          "value": 4,
+          "label": "Li2",
+          "order": 4,
+          "description": "Lithium battery profile 2."
+        },
+        {
+          "value": 5,
+          "label": "Li3",
+          "order": 5,
+          "description": "Lithium battery profile 3."
+        },
+        {
+          "value": 6,
+          "label": "Li4",
+          "order": 6,
+          "description": "Lithium battery profile 4."
+        }
+      ]
+    },
+    {
+      "key": "constant_voltage_to_float_time",
+      "register": 330,
+      "value_kind": "u16",
+      "title": "Time From C.V To Floating Charge",
+      "group": "battery",
+      "order": 245,
+      "unit": "min",
+      "minimum": 0,
+      "maximum": 900,
+      "advanced": true,
+      "requires_confirm": true,
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on Sandisolar SD-HYM-4862HWP after SmartESS shadow-learning identified the register mapping on 2026-06-17/18.",
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "change_summary": "Changes the delay from constant-voltage charging to floating charge.",
+      "note": "Register 330 mapping observed as SmartESS field bat_eybond_ctrl_74."
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "register": 338,
+      "value_kind": "bool",
+      "title": "Auto AC Output",
+      "group": "system",
+      "order": 175,
+      "advanced": true,
+      "requires_confirm": true,
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on Sandisolar SD-HYM-4862HWP after SmartESS shadow-learning identified the register mapping on 2026-06-17/18.",
+      "change_summary": "Controls whether AC output follows the inverter power switch state automatically.",
+      "note": "Register 338 mapping observed as SmartESS field sys_eybond_ctrl_82.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disable With Power Switch OFF",
+          "order": 0,
+          "description": "Disable automatic AC output when the power switch is off."
+        },
+        {
+          "value": 1,
+          "label": "Enable With Power Switch ON",
+          "order": 1,
+          "description": "Enable automatic AC output when the power switch is on."
+        }
+      ]
+    },
+    {
+      "key": "forced_equalization_charging",
+      "register": 425,
+      "value_kind": "action",
+      "action_value": 1,
+      "title": "Forced Equalization Charging",
+      "group": "battery",
+      "order": 440,
+      "advanced": true,
+      "requires_confirm": true,
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on Sandisolar SD-HYM-4862HWP after SmartESS shadow-learning identified the register mapping on 2026-06-17/18. Editing remains guarded because this is an explicit charge action.",
+      "depends_on": [
+        "battery_connected"
+      ],
+      "editable_if": [
+        "battery_connected"
+      ],
+      "change_summary": "Requests one forced battery equalization charging cycle.",
+      "note": "Write register 425 with value 1. Mapping observed as SmartESS field sys_forced_eq_charging."
+    }
+  ]
+}

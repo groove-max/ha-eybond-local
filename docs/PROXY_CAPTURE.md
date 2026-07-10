@@ -1,162 +1,90 @@
 # Collector Proxy Capture
 
-This guide explains EyeBond Local proxy mode from a user point of view: why you would use it, how to start it, how the timer works, what the saved result contains, and what to do if the collector does not restore its original server afterward.
+Proxy capture is an advanced support tool. Most users do not need it for normal monitoring or control.
 
-## What Proxy Mode Is For
+Use it only when a developer asks you to collect a temporary capture from the collector.
 
-Proxy mode is a diagnostic tool for the collector connection path.
+## What it is for
 
-Use it when you need to understand what the collector is sending and receiving during its cloud-facing session, or when you want extra evidence for troubleshooting, support, or protocol research.
+Proxy capture records a short communication session so a developer can understand why a collector or inverter behaves differently from expected.
 
-For normal day-to-day monitoring, most users do not need proxy mode.
+It can help when:
 
-## What Happens During A Proxy Session
+- the collector connects but the inverter is not identified;
+- the vendor app or cloud sees data but Home Assistant does not;
+- a model needs extra evidence before support can be added;
+- a developer asks for a capture in a GitHub issue.
 
-When proxy mode starts, Home Assistant begins accepting the collector traffic for a temporary capture session.
+For most problems, start with **Create support archive** first. Proxy capture is the next step only when the archive is not enough.
 
-If the collector is still pointing at its original external server, EyeBond Local temporarily switches that callback to Home Assistant, records the traffic, and then restores the original callback when the session ends.
+## Before you start
 
-If the collector is already using a Home Assistant-owned callback path, the session can start without that temporary server change.
+Make sure:
 
-The important practical idea is simple:
+- the collector has stable Wi-Fi;
+- Home Assistant can already reach the collector;
+- you are ready to keep the capture short;
+- you can check that the vendor app still works afterward if you use one.
 
-- proxy mode is temporary
-- the original upstream path is meant to be restored afterward
-- the saved result is separate from the normal Support Archive flow
+If you are not sure, stop and create a Support Archive instead.
 
-## Before You Start
+## How to start
 
-Proxy mode works best when:
+You can start proxy capture from the collector device page:
 
-- the collector is connected and stable on the network
-- Home Assistant can already communicate with it reliably
-- the collector has a known upstream callback endpoint that EyeBond Local can restore later
-
-If the collector needs a temporary callback redirect for the session, the current control policy must allow collector-side changes. In practice, that usually means using `Auto` or `Full Control` while you run the capture.
-
-## How To Start Proxy Mode
-
-You can start it from two places.
-
-### Option 1. Collector Settings On The Device Page
-
-Open the collector device in Home Assistant and use the collector-side entities there.
-
-The main items are:
-
-- **Collector Operation Mode** — normal collector ownership mode, not the proxy action itself
-- **Proxy Mode Duration** — the session length in minutes
-- **Start Traffic Capture** — starts the session
-- **Stop Traffic Capture** — stops the session early
-- **Restore SmartESS Access** — restores the remembered original server if a previous redirect was not fully rolled back
+1. Open the EyeBond collector device in Home Assistant.
+2. Set **Proxy Mode Duration** to the requested number of minutes.
+3. Press **Start Traffic Capture**.
+4. Reproduce the problem, or follow the developer’s instructions.
+5. Press **Stop Traffic Capture**, or wait for the timer to finish.
 
 <p align="center"><img src="images/proxy-capture-settings.png" alt="Collector settings with proxy mode controls" width="520"></p>
 
-This is the quickest path when you already know you want to start a capture and you only need the duration field plus the start and stop buttons.
+You can also open:
 
-### Option 2. Collector Configuration Menu
+1. **Settings → Devices & Services**
+2. **EyeBond Local**
+3. **Configure**
+4. **Diagnostics and service tools**
+5. **Collector traffic capture**
 
-Open:
-
-1. **Settings -> Devices & Services**
-2. Open the EyeBond Local entry
-3. Choose **Configure**
-4. Open **Diagnostics and service tools**
-5. Open **Advanced metadata tools**
-6. Choose **Collector traffic capture**
-
-That screen is better when you want to watch the live session, refresh the log, or download the saved result right after the capture ends.
-
-## What The Proxy Capture Menu Actions Do
-
-The capture screen can show these actions in the **What to do** menu:
-
-- **Start proxy capture** — starts a new capture session
-- **Refresh live log** — reloads the visible session log without changing the timer
-- **Stop proxy capture** — stops the session and finalizes the saved result
-- **Reset proxy timer** — extends the running session back to the full configured duration
-
-While the session is running, the live log view shows decoded events from the current capture.
+This screen is useful when you want to watch the live capture status or download the result immediately.
 
 <p align="center"><img src="images/proxy-capture-running.png" alt="Running proxy capture session with timer and live log" width="720"></p>
 
-## How The Proxy Timer Works
+## Timer behavior
 
-EyeBond Local treats proxy capture as a leased session.
+Proxy capture is temporary.
 
-### The Base Duration
+When the timer ends, Home Assistant stops the capture automatically and tries to restore the collector’s normal connection path.
 
-The **Proxy Mode Duration** number in collector settings is the base session length in minutes.
+You can:
 
-When you start a new capture, EyeBond Local uses that value to calculate the auto-stop deadline.
+- stop the capture early;
+- reset the timer if the developer asks for a longer capture;
+- change the duration while the capture is running.
 
-### Automatic Stop
+Refreshing the live log does not extend the timer.
 
-When the timer runs out, Home Assistant stops the capture automatically and then tries to restore the normal collector path.
+## Downloading the result
 
-This is the safe default so a forgotten capture does not keep the collector in proxy mode indefinitely.
-
-### Manual Extension
-
-You can extend a running session in two ways:
-
-1. In the **Collector traffic capture** screen, choose **Reset proxy timer**. This resets the countdown back to the full configured duration.
-2. Change the **Proxy Mode Duration** number while the session is still active. The new value is applied immediately as the new deadline for the running session.
-
-### What Does Not Extend The Session
-
-Refreshing the live log does **not** extend the timer. It only reloads the visible session output.
-
-## What You Get At The End
-
-After you stop the session, or after Home Assistant stops it automatically, the same capture screen shows a **Saved result** download link.
+After the capture finishes, the same screen shows a **Saved result** download link.
 
 <p align="center"><img src="images/proxy-capture-result.png" alt="Finished proxy capture session with saved result download" width="720"></p>
 
-The saved result is a standalone ZIP bundle for that one proxy session.
+Download the ZIP and attach it to the GitHub issue together with a short note about what you did during the capture.
 
-It contains:
+If the developer also asks for a normal Support Archive, create it separately from **Configure → Diagnostics and service tools → Create support archive**.
 
-- a manifest with session metadata and restore status
-- the captured proxy trace in JSONL form
-- directional raw transport dumps for collector-to-server and server-to-collector traffic
+## Restoring cloud/app access
 
-By default, the exported trace is anonymized for sharing.
+Normally, EyeBond Local restores the collector automatically after capture.
 
-This saved result is separate from the normal **Support Archive**. If you also need the broader developer package with runtime metadata, raw capture, replay fixtures, and optional SmartESS cloud evidence, run **Create support archive** separately.
+If the vendor app stops showing live data afterward:
 
-## When Restore Does Not Fully Happen
+1. Open the collector device page.
+2. Press the restore cloud/app access action shown for this collector.
+3. Wait a few minutes for the collector to reconnect.
+4. Check the vendor app again.
 
-In the normal path, stopping proxy mode restores the remembered original callback server automatically.
-
-In rare cases that restore may not finish cleanly. Typical examples are:
-
-- Home Assistant restarting during the session
-- the collector rebooting at the wrong moment
-- a network interruption while the callback is being switched back
-
-The most obvious symptom is that the collector keeps pointing at the local Home Assistant callback when it should have returned to the original SmartESS-facing path.
-
-## How To Restore The Original Server
-
-If that happens, open the collector device page and use **Restore SmartESS access**.
-
-That action tells EyeBond Local to put back the remembered original callback endpoint captured before the redirect.
-
-Use this sequence:
-
-1. Open the collector device
-2. Find **Restore SmartESS access**
-3. Run it once
-4. Give the collector a moment to reconnect normally
-5. Check whether the SmartESS app and the normal collector path return
-
-If the restore action is unavailable, EyeBond Local does not yet have a cached original endpoint for that collector. In that case, avoid repeated proxy retries until the collector is back in a known-good normal state.
-
-## When To Use Proxy Mode Vs Support Archive
-
-Use **Proxy mode** when you need one focused transport capture for the collector session itself.
-
-Use **Create support archive** when you need the broader developer package for a bug report or support request.
-
-They are complementary tools, not duplicates.
+If the restore action is unavailable or the collector still does not recover, do not repeat captures. Create a Support Archive and report the issue.

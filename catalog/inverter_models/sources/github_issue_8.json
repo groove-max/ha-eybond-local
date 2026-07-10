@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_8",
+  "kind": "github_issue",
+  "title": "Anenji ANJ-6200-48PL user report",
+  "reference": "project-issue:8",
+  "captured_at": "2026-06-15",
+  "visibility": "public",
+  "summary": "Device owner reported the commercial model name and output-priority behavior for the ANJ-6200-48PL.",
+  "assertions": [
+    "commercial_identity",
+    "control_behavior"
+  ]
+}

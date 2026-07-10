@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_7_esphome_yaml",
+  "kind": "register_map",
+  "title": "Aninerel 6.2KW ESPHome register map",
+  "reference": "project-attachment:issue-7-esphome-yaml",
+  "captured_at": "2026-06-20",
+  "visibility": "public",
+  "summary": "Owner-supplied ESPHome YAML register map for the issue #7 Aninerel 6.2KW device. The map covers SMG-style Modbus telemetry and settings, including live registers around 202-235, configuration registers around 300-352, PV daily energy at 443, remote switch at 420, battery type at 322, battery charging priority at register 331 with listed values 1-4, charging/current/voltage thresholds, SOC protection thresholds, automatic mains output enable at 338, lithium activation at 339, and OP2-related settings.",
+  "assertions": [
+    "register_map",
+    "control_behavior"
+  ]
+}

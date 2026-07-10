@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_anj_5kw_48v_wifi",
+  "manufacturer": "Anenji",
+  "model": "ANJ-5KW-48V-WIFI",
+  "aliases": [],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "layout11_model30977",
+      "label": "Anenji 5 kW Wi-Fi variant",
+      "device_descriptor_keys": [
+        "anenji_anj_5kw_48v_wifi"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "confirmed"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "hardware_confirmed",
+    "vendor_register_map": "documented",
+    "notes": [
+      "The unit is identified offline by the immutable SMG fingerprint: layout 11, model code 30977 (0x7901), rated power 5000.",
+      "A complete shadow-learning run matched all 77 SmartESS write attempts to local Modbus writes with no degraded, unknown-field, or unmatched writes; the matched control set is graduated into the built-in model profile as tested.",
+      "The model profile extends the SMG 6200 layout-11 family profile, whose register map is backed by the Anenji Protocol No. 3-10 documentation."
+    ]
+  },
+  "known_limitations": [
+    "Controls are graduated from cloud shadow-learning correlation on real hardware; Home Assistant writes reuse the same registers but have not been separately user-confirmed through the Home Assistant write path."
+  ],
+  "knowledge_summary": "Anenji ANJ-5KW-48V-WIFI resolves to a model-specific SMG layout-11 runtime surface (model code 0x7901, rated 5000 W) with the SmartESS-confirmed control set graduated into the built-in profile from a complete 77/77 shadow-learning run.",
+  "source_keys": [
+    "support_archive_anenji_anj_5kw_48v_wifi_20260709",
+    "documentation_anenji_protocol_3_10"
+  ]
+}

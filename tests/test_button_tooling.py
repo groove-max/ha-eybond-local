@@ -129,9 +129,10 @@ class _CoordinatorStub:
         self.control_mode = "full"
         self.controls_enabled = True
         self.controls_reason = "manual_full_override"
-        self.collector_callback_target_endpoint = "195.191.72.37,2223,TCP"
-        self.proxy_capture_target_endpoint = "195.191.72.37,18899,TCP"
+        self.collector_callback_target_endpoint = "203.0.113.7,2223,TCP"
+        self.proxy_capture_target_endpoint = "203.0.113.7,18899,TCP"
         self.collector_server_endpoint_rollback_target = "47.91.67.66,18899,TCP"
+        self.support_package_export_running = False
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.proxy_capture_overview = types.SimpleNamespace(
             can_start=True,
@@ -194,6 +195,10 @@ class _CoordinatorStub:
     async def async_request_refresh(self):
         self.calls.append(("request_refresh", {}))
 
+    async def async_export_support_package(self):
+        self.calls.append(("create_support_package", {}))
+        return "/config/eybond_local/support_packages/entry-1.zip"
+
 
 class ToolingButtonTests(unittest.TestCase):
     def test_collector_tooling_specs_are_enabled_by_default(self) -> None:
@@ -227,6 +232,62 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertNotIn("reload_local_metadata", specs)
         self.assertNotIn("create_local_profile_draft", specs)
         self.assertNotIn("create_local_schema_draft", specs)
+
+    def test_runtime_without_proxy_capture_skips_proxy_buttons(self) -> None:
+        specs = {
+            spec.key: spec
+            for spec in _tooling_button_specs_for_runtime(
+                set(),
+                "smg_modbus.json",
+                collector_proxy_capture_allowed=False,
+            )
+        }
+
+        self.assertIn("create_support_package", specs)
+        self.assertIn("reboot_collector", specs)
+        self.assertNotIn("start_proxy_capture", specs)
+        self.assertNotIn("stop_proxy_capture", specs)
+
+    def test_create_support_package_button_is_disabled_while_export_running(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.support_package_export_running = True
+        coordinator.data.values["support_package_export_running"] = True
+        coordinator.data.values["support_package_export_status"] = "running"
+        entity = EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(
+                key="create_support_package",
+                name="Create Support Archive",
+                icon="mdi:package-variant-closed",
+            ),
+        )
+
+        self.assertFalse(entity.available)
+        self.assertTrue(entity.extra_state_attributes["support_package_export_running"])
+        self.assertEqual(
+            entity.extra_state_attributes["support_package_export_status"],
+            "running",
+        )
+
+    def test_create_support_package_button_press_rejects_duplicate_export(self) -> None:
+        async def _run() -> None:
+            coordinator = _CoordinatorStub()
+            coordinator.support_package_export_running = True
+            entity = EybondToolingButton(
+                coordinator,
+                _ToolingButtonSpec(
+                    key="create_support_package",
+                    name="Create Support Archive",
+                    icon="mdi:package-variant-closed",
+                ),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "support_package_export_in_progress"):
+                await entity.async_press()
+
+            self.assertEqual(coordinator.calls, [])
+
+        asyncio.run(_run())
 
     def test_rediscover_collector_button_stays_available_while_waiting_for_reconnect(self) -> None:
         coordinator = _CoordinatorStub()
@@ -276,7 +337,7 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertFalse(entity.available)
         self.assertEqual(
             entity.extra_state_attributes["availability_reason"],
-            "Stop proxy capture before triggering collector re-discovery.",
+            "Stop proxy capture before requesting collector callback.",
         )
 
     def test_collector_tooling_button_routes_to_collector_device(self) -> None:
@@ -322,7 +383,7 @@ class ToolingButtonTests(unittest.TestCase):
 
     def test_bind_collector_button_reports_when_home_assistant_is_already_active_target(self) -> None:
         coordinator = _CoordinatorStub()
-        coordinator.data.values["collector_server_endpoint"] = "195.191.72.37,2223,TCP"
+        coordinator.data.values["collector_server_endpoint"] = "203.0.113.7,2223,TCP"
         entity = EybondToolingButton(
             coordinator,
             _ToolingButtonSpec(
@@ -383,7 +444,7 @@ class ToolingButtonTests(unittest.TestCase):
 
     def test_bind_collector_button_stays_available_when_proxy_target_is_active(self) -> None:
         coordinator = _CoordinatorStub()
-        coordinator.data.values["collector_server_endpoint"] = "195.191.72.37,18899,TCP"
+        coordinator.data.values["collector_server_endpoint"] = "203.0.113.7,18899,TCP"
         entity = EybondToolingButton(
             coordinator,
             _ToolingButtonSpec(
@@ -527,6 +588,51 @@ class ToolingButtonTests(unittest.TestCase):
             "Stop proxy capture before changing collector callback actions.",
         )
 
+    def test_reboot_collector_button_is_available_for_virtual_bridge_without_reboot_feature(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data = RuntimeSnapshot(
+            connected=True,
+            values={
+                **coordinator.data.values,
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+            },
+        )
+        entity = EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(
+                key="reboot_collector",
+                name="Restart Collector",
+                icon="mdi:restart",
+                entity_category="config",
+            ),
+        )
+
+        self.assertTrue(entity.available)
+
+    def test_reboot_collector_button_is_available_for_virtual_bridge(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data = RuntimeSnapshot(
+            connected=True,
+            values={
+                **coordinator.data.values,
+                "collector_virtual_bridge": True,
+                "collector_bridge_kind": "esp-collector",
+            },
+        )
+        entity = EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(
+                key="reboot_collector",
+                name="Restart Collector",
+                icon="mdi:restart",
+                entity_category="config",
+            ),
+        )
+
+        self.assertTrue(entity.available)
+        self.assertEqual(entity.extra_state_attributes["availability_reason"], "Ready")
+
     def test_apply_collector_changes_button_is_disabled_while_mode_change_applies(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.collector_configuration_lock_reason = lambda: (
@@ -595,7 +701,7 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertFalse(entity.available)
         self.assertEqual(
             entity.extra_state_attributes["availability_reason"],
-            "No upstream callback endpoint is available yet. Restore SmartESS access first or wait for one external callback endpoint to be detected.",
+            "No upstream callback endpoint is available yet. Restore cloud access first or wait for one external callback endpoint to be detected.",
         )
 
     def test_start_proxy_capture_button_is_disabled_while_mode_change_applies(self) -> None:

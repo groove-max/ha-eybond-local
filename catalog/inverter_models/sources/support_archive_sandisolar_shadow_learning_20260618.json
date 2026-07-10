@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_sandisolar_shadow_learning_20260618",
+  "kind": "support_archive",
+  "title": "Sandisolar SD-HYM-4862HWP cloud shadow-learning support archives",
+  "reference": "private:corpus-sandisolar-shadow-learning-20260618",
+  "captured_at": "2026-06-18",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Latest Sandisolar SD-HYM-4862HWP support archives include repeated cloud shadow-learning sessions for runtime descriptor smg_6200. The cloud profile exposed 39 settings; 34 map to already-known SMG registers or existing controls, five non-destructive controls were selected and verified on the maintainer's device (registers 304, 322, 330, 338, 425), and two destructive actions were intentionally excluded (registers 460 and 461).",
+  "assertions": [
+    "register_map",
+    "runtime_compatibility"
+  ]
+}

@@ -26,8 +26,8 @@ Anything that can live in JSON (capabilities, conditions, presets, register layo
 
 When deciding where new logic belongs, use this order:
 
-1. **`profiles/`** (JSON) — capability groups, writable metadata, conditions, presets, support annotations.
-2. **`register_schemas/`** (JSON) — read-side layouts, fields, enums, bit labels, model overlays.
+1. **`protocol_catalogs/profiles/`** (JSON) — capability groups, writable metadata, conditions, presets, support annotations.
+2. **`protocol_catalogs/register_schemas/`** (JSON) — read-side layouts, fields, enums, bit labels, model overlays.
 3. **`payload/`** (Python) — family-level framing and parse helpers.
 4. **`drivers/`** (Python) — probe, read, write, and procedural derived logic only.
 5. **HA entities** — purely presentational. No protocol or register knowledge.
@@ -59,16 +59,18 @@ custom_components/eybond_local/
 ├── runtime/                # coordinator, hub, transport orchestration
 ├── payload/                # protocol framing and parsing
 ├── drivers/                # probe + read + write orchestration
-├── profiles/               # capability metadata (JSON)
-├── register_schemas/       # register layouts (JSON)
-├── fixtures/               # offline replay helpers
+├── protocol_catalogs/
+│   ├── profiles/           # capability metadata (JSON)
+│   └── register_schemas/   # register layouts (JSON)
+├── fixtures/               # runtime fixture/replay helper package
 ├── support/                # support exports and evidence indexes
 ├── metadata/               # profile/schema loaders and local drafts
 └── *.py                    # entity platforms, config flow, services
 
 docs/                       # public docs and generated reports
+catalog/inverter_models/    # commercial model and sanitized source records
 tools/                      # CLI utilities, validation scripts, and release helpers
-.local/                     # maintainer-only local notes, fixtures, generated reports, and release scratch files (gitignored)
+.local/                     # maintainer-only notes, fixtures, design history, generated reports, and release scratch files (gitignored)
 tests/                      # unit and regression tests
 ```
 
@@ -90,11 +92,18 @@ To refresh generated documentation reports before running the quality gate:
 python3 tools/quality_gate.py --refresh-generated
 ```
 
+`pytest tests/` works too (`pytest.ini` disables the auto-plugins that
+conflict with the suite), and with `pytest-xdist` installed
+(`pip install pytest-xdist`) `pytest tests/ -n auto` runs it in parallel —
+that plugin is optional and not part of the base environment.
+
 The quality gate checks profile validity, unit tests, and public generated-doc freshness. PRs should leave it green.
 
 Fixture replay and fixture-derived reports are local-only workflows. Keep those artifacts under `.local/` and run them manually when you need debugging evidence.
 
-A complete reference of CLI tools (probing, local fixtures, validation, doc generation) is in [tools/README.md](tools/README.md).
+A short reference for supported validation, catalog, release, and contribution
+tools is in [tools/README.md](tools/README.md). Low-level hardware probes and
+local fixture workflows are maintainer-only notes under `.local/`.
 
 ---
 
@@ -107,7 +116,7 @@ These are the hard rules — don't cross them without discussion:
 - **Fixture-first over live debugging** when feasible — but keep those fixtures local unless you intentionally sanitize them for sharing.
 - **JSON-first over Python** for new family additions.
 - **Local fixtures and maintainer-only notes belong under `.local/`** and are not part of the public repository.
-- **`tools/` is public project tooling** used by CI, release validation, and generated-doc checks.
+- **`tools/` is supported project tooling** for CI, release validation, catalog validation, generated-doc checks, and sanitized contribution workflows.
 - **`.local/generated/`, `.local/release-notes/`, and raw research dumps** remain local-only artifacts and should stay out of git.
 
 ---

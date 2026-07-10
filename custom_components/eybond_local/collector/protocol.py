@@ -73,24 +73,6 @@ def decode_header(frame: bytes) -> EybondHeader:
     )
 
 
-def build_forward_to_device(
-    tid: int,
-    payload: bytes,
-    *,
-    devcode: int,
-    collector_addr: int,
-) -> bytes:
-    """Wrap a device payload in a collector FC=4 frame."""
-
-    return build_collector_request(
-        tid,
-        payload,
-        devcode=devcode,
-        collector_addr=collector_addr,
-        fcode=FC_FORWARD_TO_DEVICE,
-    )
-
-
 def build_collector_request(
     tid: int,
     payload: bytes,

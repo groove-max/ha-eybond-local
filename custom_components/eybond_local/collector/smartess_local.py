@@ -9,13 +9,16 @@ from .transport import CollectorTransport
 from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
 
 QUERY_COLLECTOR_VERSION = 5
+QUERY_HARDWARE_VERSION = 6
 QUERY_PROTOCOL_DESCRIPTOR = 14
 QUERY_REBOOT_REQUIRED = 30
+QUERY_SERIAL_BAUDRATE = 34
 QUERY_NETWORK_DIAGNOSTICS = 48
 QUERY_WIFI_SCAN_LIST = 49
 
 SET_SERVER_ENDPOINT = 21
 SET_REBOOT_OR_APPLY = 29
+SET_SERIAL_BAUDRATE = 34
 SET_TARGET_SSID = 41
 SET_TARGET_PASSWORD = 43
 
@@ -115,6 +118,12 @@ def resolve_protocol_descriptor(
 
     raw_id, _, suffix = descriptor.partition("#")
     raw_id = raw_id.strip()
+    if not raw_id:
+        raise SmartEssLocalError("protocol_descriptor_missing_id")
+
+    # Some collectors answer query 14 with a composite serial-protocol config
+    # string ("02FF,0,0,#0#"); the protocol id is the first comma field.
+    raw_id = raw_id.split(",", 1)[0].strip()
     if not raw_id:
         raise SmartEssLocalError("protocol_descriptor_missing_id")
 

@@ -119,8 +119,14 @@ from custom_components.eybond_local.sensor import EybondValueSensor  # noqa: E40
 class CollectorEntityScopeTests(unittest.TestCase):
     def test_is_collector_entity_key_matches_current_namespace_and_future_smartess_keys(self) -> None:
         self.assertTrue(is_collector_entity_key("collector_pn"))
+        self.assertTrue(is_collector_entity_key("collector_poll_utilization_percent"))
+        # Poll-debugging sensors live on the collector device, not the inverter.
+        self.assertTrue(is_collector_entity_key("runtime_refresh_phase_breakdown"))
+        self.assertTrue(is_collector_entity_key("driver_slow_requests"))
+        self.assertTrue(is_collector_entity_key("driver_unsupported_commands"))
         self.assertTrue(is_collector_entity_key("configured_collector_ip"))
         self.assertTrue(is_collector_entity_key("smartess_protocol_asset_id"))
+        self.assertTrue(is_collector_entity_key("runtime_driver_state"))
         self.assertFalse(is_collector_entity_key("model_name"))
         self.assertFalse(is_collector_entity_key("driver_key"))
 
@@ -129,7 +135,7 @@ class RuntimeSensorRoutingTests(unittest.TestCase):
     def test_runtime_sensor_uses_key_based_device_routing(self) -> None:
         coordinator = types.SimpleNamespace(
             config_entry=types.SimpleNamespace(entry_id="entry-1"),
-            data=RuntimeSnapshot(values={"collector_pn": "E5000025388419"}),
+            data=RuntimeSnapshot(values={"collector_pn": "E5000020000000"}),
             device_info_for_key=lambda key: {"scope": key},
         )
         description = MeasurementDescription(key="collector_pn", name="Collector PN", live=False)

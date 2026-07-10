@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "private_message_anenji_anj_11kw_validation",
+  "kind": "private_message",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P user control validation",
+  "reference": "private:forum-pm-anenji-anj-11kw-validation",
+  "captured_at": "2026-04-18",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Device owner confirmed the ANJ-11KW model-specific runtime path and writable control surface on real hardware after the donor captures.",
+  "assertions": [
+    "hardware_test",
+    "write_validation",
+    "control_behavior"
+  ]
+}

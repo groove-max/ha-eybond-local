@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "model_key": "must_pv18_3024",
+  "manufacturer": "MUST",
+  "model": "PV18-3024",
+  "aliases": [
+    "MUST PV18-3024",
+    "MUST PV1800",
+    "MUST PV/PH18"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "must_pv18",
+      "label": "MUST PV18 Modbus runtime with cloud/datasheet control surface",
+      "device_descriptor_keys": [
+        "must_pv18_3024"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "cloud_catalog",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Runtime support uses the MUST PH RS485 map (v1.4.3 and v1.4.15 xlsx, cross-checked against the third-party implementation), with per-control read-back over gap-free register blocks.",
+      "The control surface is cross-referenced from the SmartESS cloud device_settings field catalog and the vendor 1.4.15 register map: the 20 fields the cloud exposes ship tested (visible in the default control mode); datasheet-only settings absent from the cloud catalog (grid charging and the battery-equalization block) ship untested (full-control only).",
+      "The register map is documentary; hardware write confirmation is still pending a tester report. The inverter validates its own writes, so a register that is absent or locked self-disables via the write-failure block."
+    ]
+  },
+  "known_limitations": [
+    "Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.",
+    "Control writes are derived from the SmartESS cloud settings catalog and the vendor register map, not yet independently confirmed on hardware; setpoint windows are left wide because the documented ranges are battery-voltage-grade dependent and the inverter validates its own writes.",
+    "Telemetry map is based on a MUST PV/PH18 Modbus register map and still needs owner confirmation through a fresh support archive after integration update."
+  ],
+  "knowledge_summary": "MUST PV18-3024 support is based on issue #5 support archives and a MUST PV/PH18 Modbus register map (v1.4.3 and v1.4.15). The user archives showed Auto/PI30 probe timeouts, SmartESS protocol asset \"02FF,0,0,\" and collector serial baudrate 19200-8-1-0. The runtime accepts both the PV18 marker and a numeric PV1800 marker at Modbus register 20001, and binds a full MUST PV/PH18 Modbus surface using slave address 4. It exposes a writable control surface cross-referenced from the SmartESS cloud device_settings catalog and the 1.4.15 register map (output voltage/frequency, energy use mode, grid protection standard, charge-source priority, battery type, charge/discharge current limits, and battery voltage windows) with per-control read-back; hardware write confirmation is pending.",
+  "source_keys": [
+    "github_issue_5",
+    "private_must_pv_ph18_modbus_map",
+    "support_archive_issue_5_followup_private"
+  ]
+}

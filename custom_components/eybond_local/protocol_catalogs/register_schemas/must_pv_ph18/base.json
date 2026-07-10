@@ -1,0 +1,744 @@
+{
+  "schema_key": "must_pv_ph18_base",
+  "title": "MUST PV/PH18 Register Schema",
+  "driver_key": "must_pv_ph18",
+  "protocol_family": "must_pv_ph18",
+  "blocks": [
+    {
+      "key": "config",
+      "start": 10103,
+      "count": 1
+    },
+    {
+      "key": "static_battery_type",
+      "start": 10110,
+      "count": 1
+    },
+    {
+      "key": "status",
+      "start": 15201,
+      "count": 3
+    },
+    {
+      "key": "pv_voltage",
+      "start": 15205,
+      "count": 1
+    },
+    {
+      "key": "pv_power",
+      "start": 15207,
+      "count": 3
+    },
+    {
+      "key": "pv_relay",
+      "start": 15212,
+      "count": 1
+    },
+    {
+      "key": "pv_generation",
+      "start": 15217,
+      "count": 3
+    },
+    {
+      "key": "serial",
+      "start": 20000,
+      "count": 2
+    },
+    {
+      "key": "inverter_mode",
+      "start": 25201,
+      "count": 1
+    },
+    {
+      "key": "live",
+      "start": 25205,
+      "count": 12
+    },
+    {
+      "key": "inverter_frequency",
+      "start": 25225,
+      "count": 2
+    },
+    {
+      "key": "inverter_temperature",
+      "start": 25233,
+      "count": 2
+    },
+    {
+      "key": "battery_power",
+      "start": 25273,
+      "count": 2
+    },
+    {
+      "key": "charge_priority_config",
+      "start": 20143,
+      "count": 1
+    },
+    {
+      "key": "inverter_grid_config",
+      "start": 20108,
+      "count": 2
+    },
+    {
+      "key": "inverter_protect_config",
+      "start": 20111,
+      "count": 3
+    },
+    {
+      "key": "battery_stop_config",
+      "start": 20118,
+      "count": 2
+    },
+    {
+      "key": "pv_charge_config",
+      "start": 10108,
+      "count": 1
+    },
+    {
+      "key": "battery_ah_config",
+      "start": 10111,
+      "count": 1
+    },
+    {
+      "key": "battery_equalization_enable_config",
+      "start": 10118,
+      "count": 2
+    },
+    {
+      "key": "battery_equalization_timing_config",
+      "start": 10121,
+      "count": 3
+    },
+    {
+      "key": "inverter_settings",
+      "start": 20101,
+      "count": 4
+    },
+    {
+      "key": "grid_charge_enable_config",
+      "start": 20106,
+      "count": 1
+    },
+    {
+      "key": "grid_max_charge_config",
+      "start": 20125,
+      "count": 1
+    },
+    {
+      "key": "battery_range_config",
+      "start": 20127,
+      "count": 2
+    },
+    {
+      "key": "max_combined_charge_config",
+      "start": 20132,
+      "count": 1
+    },
+    {
+      "key": "absorption_config",
+      "start": 10104,
+      "count": 1
+    }
+  ],
+  "enum_tables": {
+    "pv_charger_workstate": {
+      "0": "Initialization",
+      "1": "Self Test",
+      "2": "Work",
+      "3": "Stop"
+    },
+    "pv_charger_mppt_state": {
+      "0": "Stop",
+      "1": "MPPT",
+      "2": "Current Limit"
+    },
+    "pv_charger_charge_state": {
+      "0": "Stop",
+      "1": "Absorb",
+      "2": "Float",
+      "3": "EQ"
+    },
+    "inverter_operation_mode": {
+      "0": "Power On",
+      "1": "Self Test",
+      "2": "Off-Grid",
+      "3": "Grid-Tie",
+      "4": "Bypass",
+      "5": "Stop",
+      "6": "Grid Charging"
+    },
+    "battery_type": {
+      "0": "No choose",
+      "1": "User defined",
+      "2": "Lithium",
+      "3": "Sealed Lead",
+      "4": "AGM",
+      "5": "GEL",
+      "6": "Flooded"
+    },
+    "charge_source_priority": {
+      "0": "Solar First",
+      "2": "Solar and Utility",
+      "3": "Only Solar"
+    },
+    "inverter_output_frequency": {
+      "5000": "50 Hz",
+      "6000": "60 Hz"
+    },
+    "energy_use_mode": {
+      "1": "SBU (Solar, Battery, Utility)",
+      "2": "SUB (Solar, Utility, Battery)",
+      "3": "UTI (Utility First)",
+      "4": "SOL (Solar First)"
+    },
+    "grid_protect_standard": {
+      "0": "VDE4105",
+      "1": "UPS",
+      "2": "Home",
+      "3": "GEN"
+    },
+    "solar_use_aim": {
+      "0": "LBU (Load, Battery, Utility)",
+      "1": "BLU (Battery, Load, Utility)"
+    }
+  },
+  "spec_sets": {
+    "runtime": [
+      {
+        "key": "battery_float_voltage",
+        "register": 10103,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_type",
+        "register": 10110,
+        "enum_table": "battery_type"
+      },
+      {
+        "key": "pv_charger_workstate",
+        "register": 15201,
+        "enum_table": "pv_charger_workstate"
+      },
+      {
+        "key": "pv_charger_mppt_state",
+        "register": 15202,
+        "enum_table": "pv_charger_mppt_state"
+      },
+      {
+        "key": "pv_charger_charge_state",
+        "register": 15203,
+        "enum_table": "pv_charger_charge_state"
+      },
+      {
+        "key": "pv_input_voltage",
+        "register": 15205,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_input_current",
+        "register": 15207,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_charging_power",
+        "register": 15208
+      },
+      {
+        "key": "mppt1_charger_temperature",
+        "register": 15209
+      },
+      {
+        "key": "pv_relay",
+        "register": 15212
+      },
+      {
+        "key": "pv_generation_sum_high",
+        "register": 15217
+      },
+      {
+        "key": "pv_generation_sum_low",
+        "register": 15218
+      },
+      {
+        "key": "pv_generation_day",
+        "register": 15219
+      },
+      {
+        "key": "model_prefix",
+        "register": 20000,
+        "combine": "ascii"
+      },
+      {
+        "key": "model_suffix",
+        "register": 20001
+      },
+      {
+        "key": "inverter_operation_mode",
+        "register": 25201,
+        "enum_table": "inverter_operation_mode"
+      },
+      {
+        "key": "battery_voltage",
+        "register": 25205,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_voltage",
+        "register": 25206,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_voltage",
+        "register": 25207,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_bus_voltage",
+        "register": 25208,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_current",
+        "register": 25210,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "ac_output_current",
+        "register": 25211,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_load_current",
+        "register": 25212,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_power",
+        "register": 25213
+      },
+      {
+        "key": "grid_power",
+        "register": 25214,
+        "signed": true
+      },
+      {
+        "key": "ac_output_power",
+        "register": 25215
+      },
+      {
+        "key": "load_percent",
+        "register": 25216,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "output_frequency",
+        "register": 25225,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_frequency",
+        "register": 25226,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "inverter_temperature",
+        "register": 25233
+      },
+      {
+        "key": "transformer_temperature",
+        "register": 25234
+      },
+      {
+        "key": "battery_current",
+        "register": 25274,
+        "signed": true
+      },
+      {
+        "key": "offgrid_output_enable",
+        "register": 20101
+      },
+      {
+        "key": "power_save_mode",
+        "register": 20104
+      },
+      {
+        "key": "grid_charge_enable",
+        "register": 20106
+      },
+      {
+        "key": "grid_max_charge_current",
+        "register": 20125,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "max_combined_charge_current",
+        "register": 20132,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "charge_source_priority",
+        "register": 20143,
+        "enum_table": "charge_source_priority"
+      },
+      {
+        "key": "battery_power",
+        "register": 25273,
+        "signed": true
+      },
+      {
+        "key": "inverter_output_voltage",
+        "register": 20102,
+        "divisor": 10
+      },
+      {
+        "key": "inverter_output_frequency",
+        "register": 20103,
+        "enum_table": "inverter_output_frequency"
+      },
+      {
+        "key": "discharge_to_grid_enable",
+        "register": 20108
+      },
+      {
+        "key": "energy_use_mode",
+        "register": 20109,
+        "enum_table": "energy_use_mode"
+      },
+      {
+        "key": "grid_protect_standard",
+        "register": 20111,
+        "enum_table": "grid_protect_standard"
+      },
+      {
+        "key": "solar_use_aim",
+        "register": 20112,
+        "enum_table": "solar_use_aim"
+      },
+      {
+        "key": "max_discharge_current",
+        "register": 20113,
+        "divisor": 10
+      },
+      {
+        "key": "battery_stop_discharge_voltage",
+        "register": 20118,
+        "divisor": 10
+      },
+      {
+        "key": "battery_stop_charge_voltage",
+        "register": 20119,
+        "divisor": 10
+      },
+      {
+        "key": "battery_low_voltage",
+        "register": 20127,
+        "divisor": 10
+      },
+      {
+        "key": "battery_high_voltage",
+        "register": 20128,
+        "divisor": 10
+      },
+      {
+        "key": "float_voltage",
+        "register": 10103,
+        "divisor": 10
+      },
+      {
+        "key": "absorption_voltage",
+        "register": 10104,
+        "divisor": 10
+      },
+      {
+        "key": "pv_max_charge_current",
+        "register": 10108,
+        "divisor": 10
+      },
+      {
+        "key": "battery_ah",
+        "register": 10111
+      },
+      {
+        "key": "battery_equalization_enable",
+        "register": 10118
+      },
+      {
+        "key": "battery_equalization_voltage",
+        "register": 10119,
+        "divisor": 10
+      },
+      {
+        "key": "battery_equalized_time",
+        "register": 10121
+      },
+      {
+        "key": "battery_equalized_timeout",
+        "register": 10122
+      },
+      {
+        "key": "battery_equalization_interval",
+        "register": 10123
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "model_number",
+      "name": "Model Number",
+      "icon": "mdi:identifier",
+      "diagnostic": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "icon": "mdi:battery-cog-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "battery_float_voltage",
+      "name": "Battery Float Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "pv_charger_workstate",
+      "name": "PV Charger Workstate",
+      "diagnostic": true
+    },
+    {
+      "key": "pv_charger_mppt_state",
+      "name": "PV Charger MPPT State",
+      "diagnostic": true
+    },
+    {
+      "key": "pv_charger_charge_state",
+      "name": "PV Charger Charge State",
+      "diagnostic": true
+    },
+    {
+      "key": "pv_input_voltage",
+      "name": "PV Input Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv_input_current",
+      "name": "PV Input Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv_charging_power",
+      "name": "PV Charging Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "mppt1_charger_temperature",
+      "name": "MPPT 1 Charger Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv_relay",
+      "name": "PV Relay",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "pv_generation_sum",
+      "name": "PV Generation Sum",
+      "unit": "Wh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "pv_generation_day",
+      "name": "PV Generation Day",
+      "unit": "Wh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "inverter_operation_mode",
+      "name": "Inverter Operation Mode",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_voltage",
+      "name": "Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_voltage",
+      "name": "Grid Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "inverter_bus_voltage",
+      "name": "Inverter Bus Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "output_current",
+      "name": "Output Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "ac_output_current",
+      "name": "AC Output Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "inverter_load_current",
+      "name": "Inverter Load Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_power",
+      "name": "Output Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_power",
+      "name": "Grid Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "ac_output_power",
+      "name": "AC Output Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_percent",
+      "name": "Load Percent",
+      "unit": "%",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_frequency",
+      "name": "Output Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_frequency",
+      "name": "Grid Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "inverter_temperature",
+      "name": "Inverter Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement"
+    },
+    {
+      "key": "transformer_temperature",
+      "name": "Transformer Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_current",
+      "name": "Battery Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "offgrid_output_enable",
+      "name": "Off-Grid Output Setting Raw",
+      "diagnostic": true
+    },
+    {
+      "key": "power_save_mode",
+      "name": "Power Save Setting Raw",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_charge_enable",
+      "name": "Grid Charging Setting Raw",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_max_charge_current",
+      "name": "Grid Max Charge Current Setting",
+      "unit": "A",
+      "device_class": "current",
+      "diagnostic": true
+    },
+    {
+      "key": "max_combined_charge_current",
+      "name": "Max Combined Charge Current Setting",
+      "unit": "A",
+      "device_class": "current",
+      "diagnostic": true
+    },
+    {
+      "key": "charge_source_priority",
+      "name": "Charge Source Priority",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_power",
+      "name": "Battery Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    }
+  ]
+}

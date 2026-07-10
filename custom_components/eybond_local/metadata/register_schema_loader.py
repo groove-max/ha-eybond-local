@@ -17,7 +17,9 @@ from ..models import (
 from .register_schema_models import RegisterBlockLayout, RegisterSchemaMetadata
 from ..const import BUILTIN_SCHEMA_PREFIX
 
-REGISTER_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "register_schemas"
+PROTOCOL_CATALOGS_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs"
+REGISTER_SCHEMAS_DIR = PROTOCOL_CATALOGS_DIR / "register_schemas"
+COMMAND_SCHEMAS_DIR = PROTOCOL_CATALOGS_DIR / "command_schemas"
 _EXTERNAL_REGISTER_SCHEMA_ROOTS: tuple[Path, ...] = ()
 
 
@@ -41,6 +43,16 @@ def load_register_schema(schema_name: str) -> RegisterSchemaMetadata:
         for key, value in raw.get("spec_sets", {}).items()
     }
     measurement_precisions = _build_measurement_display_precisions(spec_sets)
+    measurement_description_items = _description_items(
+        raw,
+        list_key="measurement_descriptions",
+        source_key="measurement_descriptions_from_command_schema",
+    )
+    binary_sensor_description_items = _description_items(
+        raw,
+        list_key="binary_sensor_descriptions",
+        source_key="binary_sensor_descriptions_from_command_schema",
+    )
 
     schema = RegisterSchemaMetadata(
         key=str(raw.get("schema_key", schema_path.stem)),
@@ -59,11 +71,11 @@ def load_register_schema(schema_name: str) -> RegisterSchemaMetadata:
         },
         measurement_descriptions=tuple(
             _parse_measurement_description(item, measurement_precisions)
-            for item in raw.get("measurement_descriptions", [])
+            for item in measurement_description_items
         ),
         binary_sensor_descriptions=tuple(
             _parse_binary_sensor_description(item)
-            for item in raw.get("binary_sensor_descriptions", [])
+            for item in binary_sensor_description_items
         ),
     )
     _validate_schema(schema)
@@ -86,6 +98,45 @@ def _load_raw_schema(schema_path: Path) -> dict[str, Any]:
     return _merge_raw_schema(parent_raw, raw)
 
 
+def _description_items(
+    raw: Mapping[str, Any],
+    *,
+    list_key: str,
+    source_key: str,
+) -> list[dict[str, Any]]:
+    source_ref = str(raw.get(source_key) or "").strip()
+    linked_items: list[dict[str, Any]] = []
+    if source_ref:
+        linked_items = _load_command_schema_description_items(source_ref, list_key=list_key)
+    local_items = [
+        dict(item)
+        for item in raw.get(list_key, [])
+        if isinstance(item, Mapping)
+    ]
+    if linked_items and local_items:
+        return _merge_keyed_list(linked_items, local_items, key_field="key")
+    if linked_items:
+        return linked_items
+    return local_items
+
+
+@lru_cache(maxsize=None)
+def _load_command_schema_description_items(
+    schema_name: str,
+    *,
+    list_key: str,
+) -> list[dict[str, Any]]:
+    schema_path = (COMMAND_SCHEMAS_DIR / schema_name).resolve()
+    if not _is_within_root(schema_path, COMMAND_SCHEMAS_DIR):
+        raise ValueError(f"command schema path escapes catalog root: {schema_name}")
+    raw = json.loads(schema_path.read_text(encoding="utf-8"))
+    return [
+        dict(item)
+        for item in raw.get(list_key, [])
+        if isinstance(item, Mapping)
+    ]
+
+
 def set_external_register_schema_roots(roots: tuple[Path, ...] | list[Path]) -> None:
     """Configure additional search roots for declarative register schemas."""
 
@@ -96,6 +147,7 @@ def set_external_register_schema_roots(roots: tuple[Path, ...] | list[Path]) -> 
     _EXTERNAL_REGISTER_SCHEMA_ROOTS = normalized
     load_register_schema.cache_clear()
     _load_raw_schema.cache_clear()
+    builtin_base_schema_name.cache_clear()
 
 
 def clear_register_schema_loader_cache() -> None:
@@ -103,6 +155,7 @@ def clear_register_schema_loader_cache() -> None:
 
     load_register_schema.cache_clear()
     _load_raw_schema.cache_clear()
+    builtin_base_schema_name.cache_clear()
 
 
 def _register_schema_search_dirs() -> tuple[Path, ...]:
@@ -130,6 +183,54 @@ def builtin_register_schema_path(schema_name: str) -> Path:
     """Return the built-in register schema path, bypassing external overrides."""
 
     return (REGISTER_SCHEMAS_DIR / schema_name).resolve()
+
+
+def load_register_schema_raw(schema_name: str) -> dict[str, Any]:
+    """Return the literal (un-merged) JSON mapping for one register schema name.
+
+    Unlike :func:`load_register_schema`, parent ``extends`` references are left
+    intact so callers can walk an overlay back to its built-in base.
+    """
+
+    schema_path = _resolve_schema_path(schema_name)
+    return json.loads(schema_path.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=None)
+def builtin_base_schema_name(schema_name: str) -> str:
+    """Return the built-in base schema name underlying ``schema_name``.
+
+    Local overlays (e.g. activated shadow-learning drafts) live in an external
+    root and ``extends`` a built-in schema. Discovery and draft tooling must
+    extend that built-in base, not the overlay itself -- re-wrapping an overlay
+    name in ``builtin:`` resolves to a non-existent install-dir path. Walk the
+    ``extends`` chain until the name resolves to a built-in (or absolute) schema.
+
+    Cached: an overlay name always resolves to the same base (overlay names
+    carry a session token, so a new overlay is a new key). This is reached from
+    metadata resolution on every coordinator refresh, so it must not stat +
+    json-load the extends chain in the event loop each time. The cache is
+    cleared whenever the external roots change.
+    """
+
+    current = str(schema_name or "").strip()
+    if current.startswith(BUILTIN_SCHEMA_PREFIX):
+        return current.removeprefix(BUILTIN_SCHEMA_PREFIX)
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            schema_path = _resolve_schema_path(current)
+        except FileNotFoundError:
+            break
+        if _register_schema_source_scope(schema_path) != "external":
+            return current
+        raw = json.loads(schema_path.read_text(encoding="utf-8"))
+        parent = str(raw.get("extends") or "").strip().removeprefix(BUILTIN_SCHEMA_PREFIX)
+        if not parent:
+            break
+        current = parent
+    return current
 
 
 def _resolve_relative_parent_schema_path(schema_path: Path, parent_ref: str) -> Path:
@@ -164,10 +265,14 @@ def _register_schema_source_scope(schema_path: Path) -> str:
 
 
 def _parse_block(raw: Mapping[str, Any]) -> RegisterBlockLayout:
+    function = int(raw.get("function", 3))
+    if function not in (3, 4):
+        raise ValueError(f"unsupported_block_function:{function}")
     return RegisterBlockLayout(
         key=str(raw["key"]),
         start=int(raw["start"]),
         count=int(raw["count"]),
+        function=function,
     )
 
 
@@ -189,9 +294,25 @@ def _parse_spec(
         signed=bool(raw.get("signed", False)),
         combine=str(raw.get("combine", "u16")),
         divisor=_optional_int(raw.get("divisor")),
+        multiplier=_optional_float(raw.get("multiplier")),
         decimals=_optional_int(raw.get("decimals")),
+        offset=_optional_int(raw.get("offset")),
         enum_map=enum_map,
+        function=_parse_read_function(raw.get("function", 3)),
     )
+
+
+def _parse_read_function(value: Any) -> int:
+    function = int(value)
+    if function not in (3, 4):
+        raise ValueError(f"unsupported_spec_function:{function}")
+    return function
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
 
 
 def _optional_int(value: Any) -> int | None:
@@ -418,10 +539,34 @@ def _validate_schema(schema: RegisterSchemaMetadata) -> None:
         schema_key=schema.key,
     )
 
-    required_blocks = {"status", "serial", "live", "config"}
-    missing_blocks = sorted(required_blocks - block_keys)
-    if missing_blocks:
-        raise ValueError(f"register_schema:{schema.key}:missing_blocks:{','.join(missing_blocks)}")
+    # The classic driver schemas share a fixed block naming convention that
+    # driver code addresses by name (schema.block("serial") etc.).  Catalog
+    # device packs are consumed generically — every block is read as-is — so
+    # they only need the block keys to be unique.
+    if schema.driver_key != "modbus_catalog":
+        required_blocks = {"status", "serial", "live", "config"}
+        missing_blocks = sorted(required_blocks - block_keys)
+        if missing_blocks:
+            raise ValueError(
+                f"register_schema:{schema.key}:missing_blocks:{','.join(missing_blocks)}"
+            )
+    else:
+        # Catalog packs are read exclusively through the generic block loop:
+        # a spec no block covers (same function, containing range) would be
+        # silent dead data, so fail at load time instead.
+        for spec_set_key, specs in schema.spec_sets.items():
+            for spec in specs:
+                covered = any(
+                    block.function == spec.function
+                    and block.start <= spec.register
+                    and spec.register + spec.word_count <= block.start + block.count
+                    for block in schema.blocks
+                )
+                if not covered:
+                    raise ValueError(
+                        f"register_schema:{schema.key}:uncovered_spec:"
+                        f"{spec_set_key}:{spec.key}:fc{spec.function}@{spec.register}"
+                    )
 
 
 def _unique_or_raise(*, items, kind: str, schema_key: str) -> set[str]:

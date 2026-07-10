@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "model_key": "srne_modbus_family",
+  "manufacturer": "SRNE-compatible",
+  "model": "Modbus family",
+  "aliases": [
+    "Anenji SRNE",
+    "SRNE Modbus"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "srne_family",
+      "label": "SRNE-compatible Modbus read-only family",
+      "device_descriptor_keys": [
+        "srne_modbus_family"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "none",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "not_applicable",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Runtime support is read-only and based on a private third-party SRNE-compatible Modbus map."
+    ]
+  },
+  "known_limitations": [
+    "Read-only first implementation; no write controls are exposed.",
+    "Requires collector serial settings compatible with Modbus RTU 9600 8N1 and inverter slave address 1.",
+    "Telemetry map is based on a third-party SRNE-compatible Modbus register map and still needs owner confirmation through a fresh support archive after integration update.",
+    "Detection relies on the product-info register block containing an SRNE-like marker; commercial model names may need follow-up catalog entries."
+  ],
+  "knowledge_summary": "SRNE-compatible Modbus support is based on a private third-party register map. The runtime adds a read-only surface using slave address 1, product-info detection at registers 53-72, and telemetry ranges for controller, fault, inverter, and optional phase data.",
+  "source_keys": [
+    "private_srne_modbus_register_map"
+  ]
+}

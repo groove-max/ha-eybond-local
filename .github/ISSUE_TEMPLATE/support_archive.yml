@@ -86,3 +86,20 @@ body:
       label: Extra context
       description: Include anything the archive does not capture well, such as screenshots, a known-good vendor app behavior, or a short reproduction note.
       placeholder: The vendor app shows values correctly; Home Assistant only gets collector metadata.
+  - type: dropdown
+    id: discovery_source
+    attributes:
+      label: Where did you hear about EyeBond Local?
+      description: Optional. Helps understand where the project is found.
+      options:
+        - Prefer not to say
+        - Search engine (Google, etc.)
+        - Home Assistant Community
+        - Reddit
+        - Telegram
+        - YouTube
+        - GitHub
+        - Friend / installer
+        - Other
+    validations:
+      required: false

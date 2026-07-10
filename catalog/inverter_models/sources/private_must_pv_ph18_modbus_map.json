@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "private_must_pv_ph18_modbus_map",
+  "kind": "register_map",
+  "title": "Third-party MUST PV/PH18 Modbus register map",
+  "reference": "private:must-pv-ph18-modbus-map",
+  "captured_at": "2026-06-19",
+  "visibility": "private",
+  "summary": "Private working notes capture a third-party MUST PV/PH18 Modbus RTU register map at baudrate 19200, slave address 4, with model registers 20000-20001 and read-side telemetry across 10103, 10110, 152xx, and 252xx ranges.",
+  "assertions": [
+    "register_map",
+    "runtime_compatibility"
+  ]
+}

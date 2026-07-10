@@ -60,8 +60,16 @@ class RegisterValueSpec:
     signed: bool = False
     combine: str = "u16"
     divisor: int | None = None
+    multiplier: float | None = None
     decimals: int | None = None
+    # Added to the raw register value before any scaling. Deye-style
+    # temperatures encode as (raw - 1000) * 0.1 degC -> offset -1000.
+    offset: int | None = None
     enum_map: dict[int | str, str] | None = None
+    # Modbus function the register lives under: 3 = holding, 4 = input.
+    # Input and holding registers are distinct address spaces, so specs are
+    # only decoded from blocks read with the same function.
+    function: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,15 +183,25 @@ class WriteCapability:
     register: int
     value_kind: str
     note: str
+    command: str = ""
+    command_map: dict[int, str] | None = None
     word_count: int = 1
     combine: str = "u16"
+    # When set, the capability owns ONLY these bits of a single shared 16-bit
+    # register: writes read-modify-write the register (other bits preserved),
+    # reads extract the masked field shifted down to bit 0. Example: OP2
+    # output enable = register 354, bitmask 0x0001.
+    bitmask: int | None = None
     tested: bool = False
+    provenance: str = "inferred"
     support_tier: str = ""
     support_notes: str = ""
     action_value: int | None = None
     divisor: int | None = None
     minimum: int | None = None
     maximum: int | None = None
+    command_width: int | None = None
+    command_precision: int | None = None
     enum_map: dict[int, str] | None = None
     choices: tuple[CapabilityChoice, ...] = ()
     recommendations: tuple[CapabilityRecommendation, ...] = ()
@@ -206,12 +224,26 @@ class WriteCapability:
     safe_operating_modes: tuple[str, ...] = ("Power On", "Standby", "Fault")
     visible_if: tuple["CapabilityCondition", ...] = ()
     editable_if: tuple["CapabilityCondition", ...] = ()
+    experimental: bool = False
+    metadata_scope: str = ""
+    # Modbus write function override: some firmwares only accept single-register
+    # writes (0x06) for their config registers. None keeps the driver default
+    # (multiple-register write, 0x10).
+    write_function: int | None = None
 
     @property
     def value_key(self) -> str:
         """Runtime value key used to read the current native value."""
 
         return self.read_key or self.key
+
+    @property
+    def bitmask_shift(self) -> int:
+        """Bit offset of the masked field (position of the mask's lowest set bit)."""
+
+        if not self.bitmask:
+            return 0
+        return (self.bitmask & -self.bitmask).bit_length() - 1
 
     @property
     def display_name(self) -> str:
@@ -248,6 +280,12 @@ class WriteCapability:
         return "tested" if self.tested else "untested"
 
     @property
+    def allows_runtime_write_without_local_proof(self) -> bool:
+        """Cloud hints are metadata only and never sufficient for runtime writes."""
+
+        return self.provenance != "cloud_hint"
+
+    @property
     def resolved_support_tier(self) -> str:
         """Return the effective support tier for runtime/docs export."""
 
@@ -256,6 +294,12 @@ class WriteCapability:
         if self.visible_if or self.editable_if or self.unsafe_while_running:
             return "conditional"
         return "standard"
+
+    @property
+    def is_device_scoped_experimental(self) -> bool:
+        """Return whether this capability belongs to a device-scoped experimental overlay."""
+
+        return self.experimental and self.metadata_scope == "device"
 
     @property
     def enum_options(self) -> list[str]:
@@ -296,9 +340,17 @@ class WriteCapability:
 
         _, visible_warnings = _evaluate_conditions(self.visible_if, values)
         _, editable_warnings = _evaluate_conditions(self.editable_if, values)
-        visible = True
-        editable = True
+        visible_ok = _conditions_met_for_effects(self.visible_if, values, {"hide", "block"})
+        editable_ok = _conditions_met_for_effects(self.editable_if, values, {"disable", "block"})
+        visible = visible_ok
+        editable = visible_ok and editable_ok
         runtime_reasons: list[str] = []
+
+        hidden_reason = values.get(f"capability_hidden_reason_{self.key}")
+        if hidden_reason:
+            visible = False
+            editable = False
+            runtime_reasons.append(str(hidden_reason))
 
         blocked_reason = values.get(f"capability_block_reason_{self.key}")
         blocked_action = values.get(f"capability_block_action_{self.key}")
@@ -331,6 +383,7 @@ class CapabilityCondition:
     operator: str = "eq"
     value: Any = True
     reason: str = ""
+    effect: str = "warning"
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +452,20 @@ class CollectorInfo:
     connection_replace_count: int = 0
     disconnect_count: int = 0
     pending_request_drop_count: int = 0
+    raw_request_count: int = 0
+    raw_response_count: int = 0
+    raw_timeout_count: int = 0
+    raw_unhandled_line_count: int = 0
+    raw_last_request_ascii: str = ""
+    raw_last_request_hex: str = ""
+    raw_last_response_ascii: str = ""
+    raw_last_response_hex: str = ""
+    raw_last_timeout_request_ascii: str = ""
+    raw_last_parser: str = ""
+    raw_last_frame_format: str = ""
+    raw_last_spacing_wait_ms: int = 0
+    raw_last_response_duration_ms: int = 0
+    raw_last_total_duration_ms: int = 0
     last_disconnect_reason: str = ""
     discovery_restart_count: int = 0
     last_discovery_reason: str = ""
@@ -425,6 +492,11 @@ class CollectorInfo:
     collector_cloud_family: str = ""
     collector_cloud_family_source: str = ""
     collector_cloud_family_confidence: str = ""
+    collector_server_endpoint: str = ""
+    collector_cloud_profile_key: str = ""
+    collector_cloud_profile_label: str = ""
+    collector_cloud_profile_source: str = ""
+    collector_cloud_profile_confidence: str = ""
     smartess_collector_version: str = ""
     smartess_protocol_raw_id: str = ""
     smartess_protocol_asset_id: str = ""
@@ -433,6 +505,9 @@ class CollectorInfo:
     smartess_protocol_profile_key: str = ""
     smartess_protocol_name: str = ""
     smartess_device_address: int | None = None
+    collector_virtual_bridge: bool = False
+    collector_bridge_kind: str = ""
+    collector_bridge_version: str = ""
 
 
 @dataclass(slots=True)
@@ -498,16 +573,29 @@ class DetectedInverter:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetDetectionEvidence:
+    """Structured evidence for one onboarding target probe."""
+
+    depth: str = "fast"
+    status: str = "unknown"
+    reason: str = ""
+    budget_exhausted: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class OnboardingResult:
     """Aggregated result of one onboarding detection attempt."""
 
     collector: CollectorCandidate | None = None
     match: DriverMatch | None = None
+    alternative_matches: tuple[DriverMatch, ...] = ()
     connection_type: str = "eybond"
     connection_mode: str = ""
     warnings: tuple[str, ...] = ()
     next_action: str = ""
     last_error: str | None = None
+    detection: TargetDetectionEvidence | None = None
 
     @property
     def confidence(self) -> str:
@@ -573,6 +661,20 @@ def _evaluate_conditions(
             continue
         reasons.append(condition.reason or _default_condition_reason(condition, actual))
     return (not reasons, tuple(reasons))
+
+
+def _conditions_met_for_effects(
+    conditions: tuple[CapabilityCondition, ...],
+    values: Mapping[str, Any],
+    effects: set[str],
+) -> bool:
+    for condition in conditions:
+        if condition.effect not in effects:
+            continue
+        actual = values.get(condition.key)
+        if not _match_condition(condition, actual):
+            return False
+    return True
 
 
 def _match_condition(condition: CapabilityCondition, actual: Any) -> bool:

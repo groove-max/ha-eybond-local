@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "private_srne_modbus_register_map",
+  "kind": "register_map",
+  "title": "Third-party SRNE-compatible Modbus register map",
+  "reference": "private:srne-modbus-register-map",
+  "captured_at": "2026-06-19",
+  "visibility": "private",
+  "summary": "Private working notes capture a SRNE-compatible Modbus RTU register map at baudrate 9600, slave address 1, with product-info registers 53-72 and read-side telemetry across 256, 516, 528, and 554 ranges.",
+  "assertions": [
+    "register_map",
+    "runtime_compatibility"
+  ]
+}

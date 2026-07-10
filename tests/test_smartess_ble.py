@@ -192,9 +192,9 @@ class SmartEssBleHelperTests(unittest.TestCase):
         self.assertEqual(select_ble_provision_branch("1.10"), SmartEssBleProvisionBranch.INTPARA)
 
     def test_is_smartess_ble_pn_accepts_14_and_18_char_formats(self) -> None:
-        self.assertTrue(is_smartess_ble_pn("E5000025388419"))
-        self.assertTrue(is_smartess_ble_pn("E50000253884199645"))
-        self.assertFalse(is_smartess_ble_pn("5000025388419"))
+        self.assertTrue(is_smartess_ble_pn("E5000020000000"))
+        self.assertTrue(is_smartess_ble_pn("E50000200000000001"))
+        self.assertFalse(is_smartess_ble_pn("5000020000000"))
 
     def test_parse_wifi_scan_response_extracts_networks(self) -> None:
         self.assertEqual(
@@ -208,12 +208,12 @@ class SmartEssBleHelperTests(unittest.TestCase):
     def test_parse_wifi_scan_response_accepts_raw_49_payload(self) -> None:
         self.assertEqual(
             parse_wifi_scan_response(
-                "49,[GRooVE,98],[WiFi OptoLAN,88],[optolan,88],[OBLIVION,32],"
+                "49,[HomeNet,98],[WiFi OptoLAN,88],[optolan,88],[OBLIVION,32],"
                 "[TP-Link_DE28,32],[Odessa WIFI,26],[WiFi OptoLAN (541),20],"
                 "[TP-LINK56,16],[Archer,12],"
             ),
             (
-                SmartEssBleWifiNetwork(ssid="GRooVE", signal=98),
+                SmartEssBleWifiNetwork(ssid="HomeNet", signal=98),
                 SmartEssBleWifiNetwork(ssid="WiFi OptoLAN", signal=88),
                 SmartEssBleWifiNetwork(ssid="optolan", signal=88),
                 SmartEssBleWifiNetwork(ssid="OBLIVION", signal=32),
@@ -245,14 +245,14 @@ class SmartEssBleHelperTests(unittest.TestCase):
             + bytes((0x08, 0x09))
             + b"DTU-Box"
             + bytes((0x13, 0xFF))
-            + b"E50000253884199645"
+            + b"E50000200000000001"
         )
 
         parsed = parse_ble_scan_record(payload)
 
         self.assertEqual(
             parsed,
-            SmartEssBleScanRecord(local_name="DTU-Box", local_pn="E50000253884199645", flags=0x06),
+            SmartEssBleScanRecord(local_name="DTU-Box", local_pn="E50000200000000001", flags=0x06),
         )
 
     def test_build_ble_candidate_requires_valid_pn(self) -> None:
@@ -260,7 +260,7 @@ class SmartEssBleHelperTests(unittest.TestCase):
             address="AA:BB:CC:DD:EE:FF",
             device_name="",
             local_name="Collector Box",
-            local_pn="E50000253884199645",
+            local_pn="E50000200000000001",
             service_uuids=[PROVISION_LAYOUT.service_uuid],
         )
 
@@ -268,7 +268,7 @@ class SmartEssBleHelperTests(unittest.TestCase):
             candidate,
             SmartEssBleCandidate(
                 address="AA:BB:CC:DD:EE:FF",
-                local_pn="E50000253884199645",
+                local_pn="E50000200000000001",
                 local_name="Collector Box",
                 device_name="",
                 service_uuids=(PROVISION_LAYOUT.service_uuid,),
@@ -285,26 +285,26 @@ class SmartEssBleHelperTests(unittest.TestCase):
     def test_normalize_discovered_candidate_accepts_device_name_pn(self) -> None:
         candidate = normalize_discovered_candidate(
             address="AA:BB:CC:DD:EE:FF",
-            device_name="E5000025388419",
+            device_name="E5000020000000",
             advertisement_local_name="\u200bCollector\ufeff",
             service_uuids=[VENDOR_LAYOUT.service_uuid],
         )
 
         assert candidate is not None
-        self.assertEqual(candidate.local_pn, "E5000025388419")
+        self.assertEqual(candidate.local_pn, "E5000020000000")
         self.assertEqual(candidate.local_name, "Collector")
         self.assertEqual(candidate.preferred_name, "Collector")
 
     def test_normalize_discovered_candidate_rebuilds_pn_from_manufacturer_id_prefix(self) -> None:
         candidate = normalize_discovered_candidate(
-            address="E8:88:6C:43:C2:47",
-            device_name="E8:88:6C:43:C2:47",
-            manufacturer_data={0x3545: b"0000253884199645"},
+            address="AA:BB:CC:DD:EE:47",
+            device_name="AA:BB:CC:DD:EE:47",
+            manufacturer_data={0x3545: b"0000200000000001"},
         )
 
         assert candidate is not None
-        self.assertEqual(candidate.local_pn, "E50000253884199645")
-        self.assertEqual(candidate.local_name, "E8:88:6C:43:C2:47")
+        self.assertEqual(candidate.local_pn, "E50000200000000001")
+        self.assertEqual(candidate.local_name, "AA:BB:CC:DD:EE:47")
 
     def test_choose_ble_uuid_layout_prefers_known_service_layouts(self) -> None:
         self.assertEqual(
@@ -368,7 +368,7 @@ class SmartEssBleHelperTests(unittest.TestCase):
                     _FakeAdvertisement(
                         local_name="Collector A",
                         service_uuids=[PROVISION_LAYOUT.service_uuid],
-                        manufacturer_data={1: b"E50000253884199645"},
+                        manufacturer_data={1: b"E50000200000000001"},
                     ),
                 ),
                 "AA:BB:CC:DD:EE:02": (
@@ -385,7 +385,7 @@ class SmartEssBleHelperTests(unittest.TestCase):
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0].address, "AA:BB:CC:DD:EE:01")
             self.assertEqual(candidates[0].local_name, "Collector A")
-            self.assertEqual(candidates[0].local_pn, "E50000253884199645")
+            self.assertEqual(candidates[0].local_pn, "E50000200000000001")
             self.assertEqual(candidates[0].service_uuids, (PROVISION_LAYOUT.service_uuid,))
             self.assertIs(candidates[0].device, discovered_device)
 

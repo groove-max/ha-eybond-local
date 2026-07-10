@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_4200_protocol_1",
+  "manufacturer": "Anenji",
+  "model": "ANJ-4000W-24V",
+  "aliases": [
+    "4200 (Protocol 1)",
+    "Anenji 4200 Protocol 1"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "layout1_model13569",
+      "label": "Anenji 4200 Protocol 1 variant",
+      "device_descriptor_keys": [
+        "anenji_4200"
+      ],
+      "known_firmware": [
+        "3501_A6251128v1"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "device_scoped_overlay",
+    "smartess_control_surface": "device_scoped_overlay",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "Base runtime profile exposes the standard ANJ-4200/SMG Protocol 1 surface.",
+      "Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied."
+    ]
+  },
+  "known_limitations": [
+    "Runtime telemetry is confirmed by user support archives.",
+    "Full shadow-learning completed and activated eight device-scoped learned controls; the learning proxy intentionally captured but did not apply cloud writes, so direct Home Assistant write/readback validation is still pending."
+  ],
+  "knowledge_summary": "Anenji 4200 Protocol 1 variant has user support captures from an ANJ-4000W-24V device. Runtime detection resolves exactly to the SMG Protocol 1 surface, read telemetry is confirmed, and a full shadow-learning run mapped the SmartESS 0925 write surface without leaking writes to the real inverter. Treat controls as partial until specific Home Assistant writes are user-validated.",
+  "source_keys": [
+    "note_anenji_4200_rule_migration",
+    "github_issue_9",
+    "support_archive_issue_9_20260619",
+    "support_archive_issue_9_20260619_followup",
+    "support_archive_issue_9_20260619_shadow_learning"
+  ]
+}

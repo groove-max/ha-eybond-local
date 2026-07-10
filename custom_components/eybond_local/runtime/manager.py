@@ -28,7 +28,16 @@ class RuntimeManager(Protocol):
     async def async_stop(self) -> None:
         ...
 
+    async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
+        ...
+
+    def listener_diagnostics(self) -> dict[str, object]:
+        ...
+
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
+        ...
+
+    def invalidate_collector_runtime_values(self) -> None:
         ...
 
     async def async_write_capability(self, capability_key: str, value: Any) -> Any:
@@ -62,20 +71,64 @@ class RuntimeManager(Protocol):
     async def async_start_proxy_capture_route(
         self,
         *,
+        owner_id: str = "",
+        entry_id: str = "",
         collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
         output_path: Any,
         masked_endpoint: str = "",
         restore_trigger_path: Any = None,
+        async_open_output: Any = None,
+        async_close_output: Any = None,
     ) -> None:
         ...
 
-    async def async_stop_proxy_capture_route(self) -> None:
+    async def async_stop_proxy_capture_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
         ...
 
     def proxy_capture_route_running(self) -> bool:
+        ...
+
+    async def async_start_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        entry_id: str = "",
+        collector_ip: str,
+        collector_pn: str = "",
+        collector_session_protocol: str = "",
+        listen_port: int,
+        upstream_host: str,
+        upstream_port: int,
+        output_path: Any,
+        seed: Any,
+    ) -> None:
+        ...
+
+    async def async_stop_shadow_learning_route(
+        self,
+        *,
+        owner_id: str = "",
+        force: bool = False,
+    ) -> None:
+        ...
+
+    def shadow_learning_route_running(self) -> bool:
+        ...
+
+    def shadow_learning_route_ready(self) -> bool:
+        ...
+
+    def shadow_learning_route_status(self) -> dict[str, object]:
         ...
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:

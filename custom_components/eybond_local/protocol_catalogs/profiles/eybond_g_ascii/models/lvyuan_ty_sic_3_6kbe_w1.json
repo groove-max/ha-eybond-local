@@ -1,0 +1,429 @@
+{
+  "extends": "../base.json",
+  "profile_key": "eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1",
+  "title": "LVYUAN TY-SIC-3.6KBE-W1",
+  "driver_key": "eybond_g_ascii",
+  "protocol_family": "eybond_g_ascii",
+  "capability_defaults": {
+    "tested": true,
+    "provenance": "inferred",
+    "support_tier": "conditional",
+    "enabled_default": true,
+    "requires_confirm": true,
+    "support_notes": "Built-in LVYUAN EyeBond G-ASCII control surface for a locally identified 220V/16A/24V/50Hz, SVFW 4.003 device. Model controls were verified on user hardware with SmartValue shadow-learning and follow-up user validation in July 2026."
+  },
+  "groups": [
+    {
+      "key": "output",
+      "title": "Output",
+      "order": 100,
+      "description": "Output mode, output priority, nominal output voltage, and remote output state.",
+      "icon": "mdi:transmission-tower-export"
+    },
+    {
+      "key": "charging",
+      "title": "Charging",
+      "order": 200,
+      "description": "Battery type and charge-source priority.",
+      "icon": "mdi:battery-charging"
+    },
+    {
+      "key": "battery",
+      "title": "Battery",
+      "order": 300,
+      "description": "Battery protection, BMS communication, and equalization behavior.",
+      "icon": "mdi:battery-cog"
+    },
+    {
+      "key": "system",
+      "title": "System",
+      "order": 400,
+      "description": "General inverter feature toggles.",
+      "icon": "mdi:cog-outline"
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "bms_communication",
+      "title": "BMS Communication",
+      "group": "battery",
+      "order": 100,
+      "register": -1,
+      "value_kind": "bool",
+      "command_map": {
+        "0": "TDS",
+        "1": "TES"
+      },
+      "enum_map": {
+        "0": "Disabled",
+        "1": "Enabled"
+      },
+      "read_key": "g_ascii_setting_bms_communication",
+      "visible_if": [
+        {
+          "key": "g_ascii_bms_available",
+          "operator": "truthy",
+          "effect": "hide",
+          "reason": "BMS telemetry is not available on this device."
+        }
+      ],
+      "change_summary": "Enables or disables BMS communication."
+    },
+    {
+      "key": "energy_saving_mode",
+      "title": "Battery Energy-Saving Mode",
+      "group": "system",
+      "order": 110,
+      "register": -1,
+      "value_kind": "bool",
+      "command_map": {
+        "0": "TDI",
+        "1": "TEI"
+      },
+      "enum_map": {
+        "0": "Disabled",
+        "1": "Enabled"
+      },
+      "read_key": "g_ascii_setting_energy_saving_mode",
+      "change_summary": "Enables or disables battery energy-saving behavior."
+    },
+    {
+      "key": "battery_equalization_mode",
+      "title": "Battery Equalization",
+      "group": "battery",
+      "order": 120,
+      "advanced": true,
+      "register": -1,
+      "value_kind": "bool",
+      "command_map": {
+        "0": "TDQ",
+        "1": "TEQ"
+      },
+      "enum_map": {
+        "0": "Disabled",
+        "1": "Enabled"
+      },
+      "read_key": "g_ascii_setting_equalization_mode",
+      "change_summary": "Enables or disables battery equalization mode."
+    },
+    {
+      "key": "battery_type",
+      "title": "Battery Type",
+      "group": "charging",
+      "order": 130,
+      "register": -1,
+      "value_kind": "enum",
+      "command": "TBAT",
+      "command_map": {
+        "48": "TBAT0",
+        "49": "TBAT1",
+        "50": "TBAT2",
+        "51": "TBAT3"
+      },
+      "enum_map": {
+        "48": "Lead-acid",
+        "49": "Flooded / water-filled",
+        "50": "Lithium",
+        "51": "Custom"
+      },
+      "read_key": "g_ascii_setting_battery_type",
+      "change_summary": "Changes the battery chemistry/profile used by the inverter."
+    },
+    {
+      "key": "battery_not_connected_alarm",
+      "title": "Battery-Not-Connected Alarm",
+      "group": "battery",
+      "order": 140,
+      "advanced": true,
+      "register": -1,
+      "value_kind": "bool",
+      "command_map": {
+        "0": "TDL",
+        "1": "TEL"
+      },
+      "enum_map": {
+        "0": "Disabled",
+        "1": "Enabled"
+      },
+      "read_key": "g_ascii_setting_battery_not_connected_alarm",
+      "change_summary": "Enables or disables the alarm for missing battery connection."
+    },
+    {
+      "key": "buzzer_silent_mode",
+      "title": "Buzzer Silent Mode",
+      "group": "system",
+      "order": 150,
+      "register": -1,
+      "value_kind": "bool",
+      "command_map": {
+        "0": "TDO",
+        "1": "TEO"
+      },
+      "enum_map": {
+        "0": "Disabled",
+        "1": "Enabled"
+      },
+      "read_key": "g_ascii_setting_buzzer_silent_mode",
+      "change_summary": "Enables or disables buzzer silent mode."
+    },
+    {
+      "key": "charging_priority",
+      "title": "Charging Priority",
+      "group": "charging",
+      "order": 160,
+      "register": -1,
+      "value_kind": "enum",
+      "command": "CPR",
+      "command_map": {
+        "12336": "CPR00",
+        "12337": "CPR01",
+        "12338": "CPR02",
+        "12339": "CPR03"
+      },
+      "enum_map": {
+        "12336": "Utility first",
+        "12337": "PV first",
+        "12338": "Utility + PV",
+        "12339": "PV only"
+      },
+      "read_key": "g_ascii_setting_charging_priority",
+      "change_summary": "Changes which source has priority for battery charging."
+    },
+    {
+      "key": "inverter_soft_start_relay",
+      "title": "Inverter Soft-Start Relay",
+      "group": "system",
+      "order": 170,
+      "advanced": true,
+      "register": -1,
+      "value_kind": "bool",
+      "command_map": {
+        "0": "TDY",
+        "1": "TEY"
+      },
+      "enum_map": {
+        "0": "Disabled",
+        "1": "Enabled"
+      },
+      "read_key": "g_ascii_setting_inverter_soft_start_relay",
+      "change_summary": "Enables or disables the inverter soft-start relay behavior."
+    },
+    {
+      "key": "output_mode",
+      "title": "Output Mode",
+      "group": "output",
+      "order": 180,
+      "register": -1,
+      "value_kind": "enum",
+      "command": "OPM",
+      "command_map": {
+        "12336": "OPM00",
+        "12337": "OPM01"
+      },
+      "enum_map": {
+        "12336": "Appliance mode",
+        "12337": "UPS mode"
+      },
+      "read_key": "g_ascii_setting_output_mode",
+      "change_summary": "Changes the inverter output/input tolerance mode."
+    },
+    {
+      "key": "output_priority",
+      "title": "Output Priority",
+      "group": "output",
+      "order": 190,
+      "register": -1,
+      "value_kind": "enum",
+      "command": "OPR",
+      "command_map": {
+        "12336": "OPR00",
+        "12337": "OPR01",
+        "12338": "OPR02"
+      },
+      "enum_map": {
+        "12336": "Utility first",
+        "12337": "PV first",
+        "12338": "PV > Battery > Utility"
+      },
+      "read_key": "g_ascii_setting_output_priority",
+      "change_summary": "Changes how the inverter prioritizes utility, PV, and battery for output."
+    },
+    {
+      "key": "output_voltage_setting",
+      "title": "Output Voltage Setting",
+      "group": "output",
+      "order": 200,
+      "register": -1,
+      "value_kind": "enum",
+      "command": "V",
+      "unit": "V",
+      "device_class": "voltage",
+      "enum_map": {
+        "100": "100 V display",
+        "110": "110 V display",
+        "115": "115 V display",
+        "120": "120 V display",
+        "127": "127 V display",
+        "208": "208 V",
+        "220": "220 V",
+        "230": "230 V",
+        "240": "240 V"
+      },
+      "read_key": "g_ascii_setting_output_voltage",
+      "change_summary": "Changes the nominal AC output voltage target."
+    },
+    {
+      "key": "remote_inverter_switch",
+      "title": "Remote Inverter Switch",
+      "group": "output",
+      "order": 210,
+      "advanced": true,
+      "register": -1,
+      "value_kind": "enum",
+      "command_map": {
+        "0": "SON",
+        "1": "SOFF"
+      },
+      "enum_map": {
+        "0": "Turn on / cancel remote shutdown",
+        "1": "Remote shutdown"
+      },
+      "enabled_default": false,
+      "requires_confirm": true,
+      "change_summary": "Sends the inverter remote turn-on or remote-shutdown command. No local readback command is currently known for this setting."
+    },
+    {
+      "key": "max_charging_current_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "max_utility_charging_current_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "charging_method",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "constant_voltage_charging_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "float_charging_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_charging_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "constant_voltage_charging_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_charging_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_timeout_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "equalization_interval_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_discharge_cutoff_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_discharge_alarm_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "low_power_discharge_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_to_grid_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "grid_to_battery_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "battery_overvoltage_protection_voltage_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "grid_overvoltage_protection_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "grid_undervoltage_protection_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "constant_current_charging_max_time_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model."
+    },
+    {
+      "key": "bms_low_soc_shutdown_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model; runtime visibility still depends on live BMS telemetry."
+    },
+    {
+      "key": "bms_low_soc_switch_to_grid_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model; runtime visibility still depends on live BMS telemetry."
+    },
+    {
+      "key": "bms_high_soc_switch_to_battery_setting",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "Verified on LVYUAN TY-SIC-3.6KBE-W1 user hardware in July 2026. The inherited JSDSOLAR command mapping is confirmed for this model; runtime visibility still depends on live BMS telemetry."
+    }
+  ],
+  "presets": []
+}

@@ -39,7 +39,7 @@ class ProxyTraceTests(unittest.TestCase):
             source="collector_proxy_capture",
             trace_path="/config/eybond_local/proxy_traces/session.jsonl",
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             anonymized=True,
             session={"restore_required": True},
             summary={"at_messages": 3},
@@ -47,7 +47,7 @@ class ProxyTraceTests(unittest.TestCase):
 
         self.assertEqual(manifest["source"], "collector_proxy_capture")
         self.assertEqual(manifest["match"]["entry_id"], "entry-1")
-        self.assertEqual(manifest["match"]["collector_pn"], "E5000025388419")
+        self.assertEqual(manifest["match"]["collector_pn"], "E5000020000000")
         self.assertEqual(manifest["trace"]["path"], "/config/eybond_local/proxy_traces/session.jsonl")
         self.assertTrue(manifest["trace"]["anonymized"])
         self.assertEqual(manifest["session"]["restore_required"], True)
@@ -60,7 +60,7 @@ class ProxyTraceTests(unittest.TestCase):
                 source="collector_proxy_capture",
                 trace_path="/config/eybond_local/proxy_traces/session.jsonl",
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
             )
 
             exported = export_proxy_trace_manifest(config_dir=config_dir, manifest=manifest)
@@ -82,14 +82,14 @@ class ProxyTraceTests(unittest.TestCase):
             trace_path = proxy_trace_root(config_dir) / "session.jsonl"
             trace_path.parent.mkdir(parents=True, exist_ok=True)
             trace_path.write_text(
-                '{"kind": "chunk", "direction": "collector_to_cloud", "remote": "192.168.1.55:40000", "chunk_hex": "41542b445455504e3d4535303030303235333838343139393634350d0a", "chunk_ascii": "AT+DTUPN=E50000253884199645\\r\\n"}\n',
+                '{"kind": "chunk", "direction": "collector_to_cloud", "remote": "192.168.1.55:40000", "chunk_hex": "41542b445455504e3d4535303030303230303030303030303030310d0a", "chunk_ascii": "AT+DTUPN=E50000200000000001\\r\\n"}\n',
                 encoding="utf-8",
             )
             manifest = build_proxy_trace_manifest(
                 source="collector_proxy_capture",
                 trace_path=str(trace_path),
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
             )
             manifest_path = export_proxy_trace_manifest(config_dir=config_dir, manifest=manifest)
 
@@ -112,10 +112,10 @@ class ProxyTraceTests(unittest.TestCase):
                 },
             )
             self.assertIn('"remote": "192.168.1.55:40000"', anonymized_text)
-            self.assertIn('"chunk_ascii": "AT+DTUPN=E500**********9645\\r\\n"', anonymized_text)
-            self.assertNotIn("E50000253884199645", anonymized_text)
-            self.assertNotIn("E5000025388419", manifest_text)
-            self.assertIn("453530302a2a2a2a2a2a2a2a2a2a39363435", collector_dump)
+            self.assertIn('"chunk_ascii": "AT+DTUPN=E500**********0001\\r\\n"', anonymized_text)
+            self.assertNotIn("E50000200000000001", anonymized_text)
+            self.assertNotIn("E5000020000000", manifest_text)
+            self.assertIn("453530302a2a2a2a2a2a2a2a2a2a30303031", collector_dump)
             self.assertEqual(server_dump, "")
 
     def test_export_proxy_trace_bundle_can_include_raw_trace(self) -> None:
@@ -132,7 +132,7 @@ class ProxyTraceTests(unittest.TestCase):
                 source="collector_proxy_capture",
                 trace_path=str(trace_path),
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 anonymized=False,
             )
             manifest_path = export_proxy_trace_manifest(config_dir=config_dir, manifest=manifest)
@@ -161,23 +161,23 @@ class ProxyTraceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             trace_path = Path(tmpdir) / "session.jsonl"
             trace_path.write_text(
-                '{"kind": "restore_inject_response", "client": "192.168.1.55:40000", "response_value": "E50000253884199645", "payload_ascii": "AT+DTUPN:E50000253884199645"}\n',
+                '{"kind": "restore_inject_response", "client": "192.168.1.55:40000", "response_value": "E50000200000000001", "payload_ascii": "AT+DTUPN:E50000200000000001"}\n',
                 encoding="utf-8",
             )
 
             anonymized = anonymize_proxy_trace_text(trace_path)
 
         self.assertIn('"client": "192.168.1.55:40000"', anonymized)
-        self.assertIn('"response_value": "E500**********9645"', anonymized)
-        self.assertIn('"payload_ascii": "AT+DTUPN:E500**********9645"', anonymized)
-        self.assertNotIn("E50000253884199645", anonymized)
+        self.assertIn('"response_value": "E500**********0001"', anonymized)
+        self.assertIn('"payload_ascii": "AT+DTUPN:E500**********0001"', anonymized)
+        self.assertNotIn("E50000200000000001", anonymized)
 
     def test_save_load_and_clear_proxy_capture_session_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir)
             state = build_proxy_capture_session_state(
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 trace_path="/config/eybond_local/proxy_traces/session.jsonl",
                 original_endpoint="collector-cloud.smartess.example,18899,TCP",
                 proxy_endpoint="192.168.1.50,18899,TCP",
@@ -205,7 +205,7 @@ class ProxyTraceTests(unittest.TestCase):
     def test_refresh_proxy_capture_session_lease_updates_deadline(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="/config/eybond_local/proxy_traces/session.jsonl",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -234,7 +234,7 @@ class ProxyTraceTests(unittest.TestCase):
     def test_proxy_capture_session_expiry_uses_expires_at_deadline(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -261,7 +261,7 @@ class ProxyTraceTests(unittest.TestCase):
     def test_proxy_capture_restore_guard_blocks_manual_endpoint_changes(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="",
             original_endpoint="47.91.67.66,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",

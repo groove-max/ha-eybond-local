@@ -1,0 +1,31 @@
+{
+  "extends": "../base.json",
+  "schema_key": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
+  "title": "Aninerel ANL-4200T-24L-W-PRO Register Schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "enum_tables": {
+    "output_source_priority": {
+      "0": "Utility First (UTI)",
+      "1": "Solar First (SOL)",
+      "2": "Solar-Battery-Utility (SBU)",
+      "3": "Solar-Utility-Battery (SUB)",
+      "4": "SUF"
+    },
+    "charge_source_priority": {
+      "1": "Solar First (CSO)",
+      "2": "Solar and Utility (SNU)",
+      "3": "Only Solar (OSO)"
+    },
+    "battery_type_base": {
+      "0": "AGM",
+      "1": "Flooded",
+      "2": "User",
+      "3": "Li1",
+      "4": "Li2",
+      "5": "Li3",
+      "6": "Li4",
+      "8": "LiB"
+    }
+  }
+}

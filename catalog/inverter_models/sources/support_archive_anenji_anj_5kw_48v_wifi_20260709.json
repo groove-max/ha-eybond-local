@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_anenji_anj_5kw_48v_wifi_20260709",
+  "kind": "support_archive",
+  "title": "ANENJI ANJ-5KW-48V-WIFI support archive with complete shadow learning",
+  "reference": "private:support-archive-anenji-anj-5kw-48v-wifi-20260709",
+  "captured_at": "2026-07-09",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private support archive 01KX3F9JYQRS1DHKX1ZGC252GD (2026-07-09) for an ANENJI ANJ-5KW-48V-WIFI unit. The runtime resolves to descriptor anenji_anj_5kw_48v_wifi with layout 11, model code 30977 (0x7901), rated power 5000, and live SMG telemetry. The archive includes a complete shadow-learning run: all 77 SmartESS write attempts matched local Modbus writes with no degraded, unknown-field, or unmatched writes, and the matched control set was graduated into the built-in model profile.",
+  "assertions": [
+    "fingerprint",
+    "telemetry_validation",
+    "runtime_compatibility",
+    "write_validation",
+    "control_behavior"
+  ]
+}

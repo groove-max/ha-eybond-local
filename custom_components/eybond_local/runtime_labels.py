@@ -7,6 +7,8 @@ from typing import Final
 
 _RUNTIME_PATH_LABELS: Final[dict[str, str]] = {
     "modbus_smg": "SMG-family runtime",
+    "srne_modbus": "SRNE-compatible Modbus runtime",
+    "must_pv_ph18": "MUST PV/PH18 runtime",
     "pi18": "PI18-family runtime",
     "pi30": "PI30-family runtime",
     "smartess_local": "SmartESS-local runtime",
@@ -20,7 +22,9 @@ _RUNTIME_PROFILE_LABELS: Final[dict[str, str]] = {
     "pi30_ascii": "PI30-family runtime profile",
     "pi30_ascii_default": "PI30-family default runtime profile",
     "pi30_ascii_smartess_0925_compat": "PI30-family SmartESS 0925 compatibility runtime profile",
+    "smartess_0925": "SmartESS 0925 local Modbus runtime profile",
     "smg_modbus": "SMG-family default runtime profile",
+    "modbus_smg_6200": "SMG 6200 runtime profile",
 }
 
 

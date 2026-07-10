@@ -25,6 +25,7 @@ _COLLECTOR_ONLY_TOOLING_KEYS = (
 )
 _CLOCK_SYNC_PROFILE_NAMES = frozenset({"modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"})
 _CLOCK_SYNC_CAPABILITY_KEYS = frozenset({"inverter_date_write", "inverter_time_write"})
+_PROXY_CAPTURE_TOOLING_KEYS = frozenset({"start_proxy_capture", "stop_proxy_capture"})
 
 
 def supports_clock_sync(capability_keys: Collection[str], profile_name: str = "") -> bool:
@@ -39,10 +40,13 @@ def tooling_button_keys_for_runtime(
     capability_keys: Collection[str],
     profile_name: str = "",
     has_inverter_identity: bool = True,
+    collector_proxy_capture_allowed: bool = True,
 ) -> tuple[str, ...]:
     """Return integration-level tooling buttons that belong to the current runtime."""
 
     keys = list(_ALWAYS_AVAILABLE_TOOLING_KEYS if has_inverter_identity else _COLLECTOR_ONLY_TOOLING_KEYS)
+    if not collector_proxy_capture_allowed:
+        keys = [key for key in keys if key not in _PROXY_CAPTURE_TOOLING_KEYS]
     if supports_clock_sync(capability_keys, profile_name):
         keys.append("sync_inverter_clock")
     return tuple(keys)
@@ -52,6 +56,7 @@ def default_enabled_tooling_button_keys_for_runtime(
     capability_keys: Collection[str],
     profile_name: str = "",
     has_inverter_identity: bool = True,
+    collector_proxy_capture_allowed: bool = True,
 ) -> tuple[str, ...]:
     """Return tooling buttons that should be enabled by default for the current runtime."""
 
@@ -63,6 +68,8 @@ def default_enabled_tooling_button_keys_for_runtime(
         "start_proxy_capture",
         "stop_proxy_capture",
     ]
+    if not collector_proxy_capture_allowed:
+        keys = [key for key in keys if key not in _PROXY_CAPTURE_TOOLING_KEYS]
     if supports_clock_sync(capability_keys, profile_name):
         keys.append("sync_inverter_clock")
     return tuple(keys)

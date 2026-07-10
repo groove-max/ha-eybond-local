@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_7",
+  "kind": "github_issue",
+  "title": "Aninerel 6.2KW user report",
+  "reference": "project-issue:7",
+  "captured_at": "2026-06-20",
+  "visibility": "public",
+  "summary": "Device owner reported an Aninerel 6.2KW inverter and provided a fresh support archive from the current integration build plus an ESPHome YAML register map used with an esp32-anenji setup.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility",
+    "register_map"
+  ]
+}

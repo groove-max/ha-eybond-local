@@ -23,3 +23,14 @@ class EybondLinkRoute(LinkRoute):
         object.__setattr__(self, "family", "eybond")
         object.__setattr__(self, "devcode", int(devcode))
         object.__setattr__(self, "collector_addr", int(collector_addr))
+
+
+@dataclass(frozen=True, slots=True)
+class RawSerialLinkRoute(LinkRoute):
+    """Raw serial passthrough route with no collector tunnel envelope."""
+
+    protocol: str
+
+    def __init__(self, *, protocol: str = "") -> None:
+        object.__setattr__(self, "family", "raw_serial")
+        object.__setattr__(self, "protocol", str(protocol or "").strip())

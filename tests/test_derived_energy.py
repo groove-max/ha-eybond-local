@@ -17,6 +17,7 @@ from custom_components.eybond_local.derived_energy import (
     derived_energy_descriptions_for_keys,
     derived_energy_entity_descriptions_for_keys,
 )
+from custom_components.eybond_local.drivers.registry import measurements_for_runtime
 
 
 class DerivedEnergyTests(unittest.TestCase):
@@ -368,6 +369,41 @@ class DerivedEnergyTests(unittest.TestCase):
         }
 
         self.assertNotIn("estimated_grid_export_energy_daily", descriptions)
+
+    def test_eybond_g_ascii_runtime_exposes_card_daily_energy_helpers(self) -> None:
+        measurement_keys = {
+            description.key
+            for description in measurements_for_runtime(
+                driver_key="eybond_g_ascii",
+                register_schema_name="eybond_g_ascii/base.json",
+            )
+        }
+        source_keys = {
+            description.key
+            for description in derived_energy_descriptions_for_keys(measurement_keys)
+        }
+        daily_keys = {
+            description.key
+            for description in derived_energy_cycle_descriptions_for_keys(
+                measurement_keys | source_keys
+            )
+        }
+
+        self.assertIn("output_power", measurement_keys)
+        self.assertIn("load_percent", measurement_keys)
+        self.assertIn("battery_percent", measurement_keys)
+        self.assertIn("battery_power", measurement_keys)
+        self.assertIn("pv_to_home_power", measurement_keys)
+        self.assertIn("grid_to_battery_power", measurement_keys)
+        self.assertIn("estimated_load_energy_daily", daily_keys)
+        self.assertIn("estimated_pv_energy_daily", daily_keys)
+        self.assertIn("estimated_battery_charge_energy_daily", daily_keys)
+        self.assertIn("estimated_battery_discharge_energy_daily", daily_keys)
+        self.assertIn("estimated_pv_to_home_energy_daily", daily_keys)
+        self.assertIn("estimated_battery_to_home_energy_daily", daily_keys)
+        self.assertIn("estimated_grid_to_home_energy_daily", daily_keys)
+        self.assertIn("estimated_grid_import_energy_daily", daily_keys)
+        self.assertIn("estimated_grid_export_energy_daily", daily_keys)
 
     def test_grid_export_daily_helper_appears_for_signed_grid_power_fallback(self) -> None:
         descriptions = {

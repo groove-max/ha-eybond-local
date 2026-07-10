@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_valuecloud_lvyuan_shadow_learning_20260629",
+  "kind": "support_archive",
+  "title": "SmartValue LVYUAN G-ASCII shadow-learning support archive",
+  "reference": "sha256:9f3dc1f999b947ac907f5f759267a261cf7978d3f77352c842299bed589ded43",
+  "captured_at": "2026-06-29",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private support archive captured the local EyeBond G-ASCII fingerprint F=220V/16A/24V/50Hz with SVFW 4.003 and SmartValue shadow-learning evidence. The evidence correlated cloud-known setting writes to local G-ASCII commands without applying the writes to the inverter during learning.",
+  "assertions": [
+    "fingerprint",
+    "control_behavior",
+    "runtime_compatibility"
+  ]
+}

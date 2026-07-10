@@ -135,7 +135,7 @@ class _CoordinatorStub:
             },
         )
         self.control_mode = "full"
-        self.collector_callback_target_endpoint = "195.191.72.37,2223,TCP"
+        self.collector_callback_target_endpoint = "203.0.113.7,2223,TCP"
         self.calls: list[dict[str, object]] = []
 
     def collector_device_info(self):
@@ -167,6 +167,12 @@ class CollectorTextTests(unittest.TestCase):
         self.assertTrue(entity._attr_entity_registry_enabled_default)
         self.assertTrue(entity.available)
         self.assertEqual(entity.native_value, "192.168.1.193,18899,TCP")
+        self.assertEqual(
+            entity.extra_state_attributes["current_callback_endpoint"],
+            "192.168.1.193,18899,TCP",
+        )
+        self.assertIsNone(entity.extra_state_attributes["pending_callback_endpoint"])
+        self.assertFalse(entity.extra_state_attributes["pending_apply_required"])
         self.assertTrue(entity.extra_state_attributes["apply_required"])
         self.assertTrue(entity.extra_state_attributes["expert_action"])
         self.assertFalse(entity.extra_state_attributes["read_only"])
@@ -297,6 +303,32 @@ class CollectorTextTests(unittest.TestCase):
             )
 
         asyncio.run(_run())
+
+    def test_collector_text_shows_pending_endpoint_override(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data.values["collector_callback_endpoint_pending"] = "10.0.0.25,18899"
+        coordinator.data.values["collector_callback_endpoint_pending_apply_required"] = True
+        entity = EybondCollectorText(
+            coordinator,
+            _CollectorTextSpec(
+                key="collector_callback_endpoint",
+                translation_key="collector_callback_endpoint",
+                name="Collector Callback Endpoint",
+                icon="mdi:lan-pending",
+                enabled_default=True,
+            ),
+        )
+
+        self.assertEqual(entity.native_value, "10.0.0.25,18899")
+        self.assertEqual(
+            entity.extra_state_attributes["current_callback_endpoint"],
+            "192.168.1.193,18899,TCP",
+        )
+        self.assertEqual(
+            entity.extra_state_attributes["pending_callback_endpoint"],
+            "10.0.0.25,18899",
+        )
+        self.assertTrue(entity.extra_state_attributes["pending_apply_required"])
 
 
 if __name__ == "__main__":

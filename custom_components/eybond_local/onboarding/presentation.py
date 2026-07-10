@@ -62,12 +62,16 @@ def scan_result_status_code(result: OnboardingResult, already_added: bool = Fals
     """Return the UI status code for one onboarding result."""
 
     collector = result.collector
-    if already_added:
+    if already_added or result.last_error == "already_configured":
         return "already_added"
+    if result.match is not None and result.alternative_matches:
+        return "driver_choice"
     if result.match is not None and result.confidence == "high":
         return "ready"
     if result.match is not None:
         return "review"
+    if result.detection is not None and result.detection.budget_exhausted:
+        return "detection_timeout"
     if collector is not None and collector.connected and has_smartess_collector_hint(result):
         return "smartess_hint"
     if collector is not None and collector.connected:
@@ -85,6 +89,8 @@ def scan_result_status_label(result: OnboardingResult, already_added: bool = Fal
         "ready": "Ready",
         "review": "Review",
         "already_added": "Already added",
+        "driver_choice": "Driver choice",
+        "detection_timeout": "Detection ran out of time",
         "smartess_hint": "SmartESS hint",
         "collector_only": "Collector only",
         "collector_replied": "Collector replied",
@@ -102,12 +108,14 @@ def scan_result_sort_key(
     status_code = scan_result_status_code(result, already_added)
     status_rank = {
         "ready": 0,
-        "review": 1,
-        "already_added": 2,
-        "smartess_hint": 3,
-        "collector_only": 4,
-        "collector_replied": 5,
-        "unknown": 6,
+        "driver_choice": 1,
+        "review": 2,
+        "already_added": 3,
+        "detection_timeout": 4,
+        "smartess_hint": 5,
+        "collector_only": 6,
+        "collector_replied": 7,
+        "unknown": 8,
     }.get(status_code, 99)
     collector_ip = result.collector.ip if result.collector is not None else ""
     model_name = result.match.model_name if result.match is not None else ""
@@ -201,7 +209,7 @@ def build_scan_results_placeholders(
             f"can be added now, but local inverter matching is still pending."
         )
         next_hint = (
-            "Choose **Add detected device** to save the Pending Device now, or use **Refresh scan** "
+            "Pick a device below to save the Pending Device now, or use **Refresh scan** "
             "or **Manual setup** to retry the local match."
         )
     else:
@@ -210,7 +218,7 @@ def build_scan_results_placeholders(
             f"Found **{detected_count}** device candidate(s). **{available_count}** can be added now, "
             f"**{already_added_count}** already configured. Ready now: {ready_summary}."
         )
-        next_hint = "Choose **Add detected device** to pick which inverter to add."
+        next_hint = "Pick the inverter you want to add from the list below."
 
     return {
         "scan_summary": scan_summary,
@@ -245,25 +253,31 @@ def build_scan_result_line(
     collector_pn = collector_info.collector_pn if collector_info is not None else ""
     status_label = scan_result_status_label(result, existing_entry_title is not None)
 
+    status_code = scan_result_status_code(result, existing_entry_title is not None)
     if result.match is not None:
+        confidence = confidence_label(result.confidence)
         parts = [
-            result.match.model_name,
-            f"serial {result.match.serial_number or 'unknown'}",
+            result.match.model_name or display.unconfirmed_inverter_label,
             f"{display.peer_label} {collector_ip}",
-            confidence_label(result.confidence),
         ]
+        if result.match.serial_number:
+            parts.append(f"serial {result.match.serial_number}")
+        parts.append(confidence[:1].lower() + confidence[1:])
     else:
-        parts = [
-            display.unconfirmed_inverter_label,
-            f"{display.peer_label} {collector_ip}",
-        ]
+        # The status chip already names the situation: details carry only
+        # what the chip does not say.
+        parts = [f"{display.peer_label} {collector_ip}"]
         if collector_pn:
             parts.append(f"PN {collector_pn}")
-        if has_smartess_collector_hint(result):
+        if status_code not in ("smartess_hint", "already_added") and has_smartess_collector_hint(result):
             parts.append("SmartESS metadata")
-        if collector is not None and collector.connected:
+        if (
+            status_code in ("detection_timeout", "unknown")
+            and collector is not None
+            and collector.connected
+        ):
             parts.append(f"{display.peer_label} connected")
-        elif collector is not None and collector.udp_reply:
+        elif status_code == "unknown" and collector is not None and collector.udp_reply:
             parts.append(f"{display.peer_label} replied, waiting for reverse connection")
 
     line = f"{index}. **{status_label}** — " + " · ".join(parts)

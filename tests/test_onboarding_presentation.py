@@ -17,6 +17,7 @@ from custom_components.eybond_local.models import (
     DriverMatch,
     OnboardingResult,
     ProbeTarget,
+    TargetDetectionEvidence,
 )
 from custom_components.eybond_local.onboarding.presentation import (
     build_choose_placeholders,
@@ -83,10 +84,52 @@ class OnboardingPresentationTests(unittest.TestCase):
     def test_status_code_and_label_follow_result_shape(self) -> None:
         self.assertEqual(scan_result_status_code(self._matched_result()), "ready")
         self.assertEqual(scan_result_status_code(self._matched_result(confidence="medium")), "review")
+        ambiguous = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="autodetect",
+                ip="192.168.1.55",
+                connected=True,
+            ),
+            match=DriverMatch(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model_name="PowMr 4.2kW",
+                serial_number="ABC123",
+                probe_target=ProbeTarget(devcode=0x0994, collector_addr=255, device_addr=0),
+            ),
+            alternative_matches=(
+                DriverMatch(
+                    driver_key="modbus_smg",
+                    protocol_family="modbus_smg",
+                    model_name="SMG-compatible",
+                    serial_number="ABC123",
+                    probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
+                ),
+            ),
+        )
+        self.assertEqual(scan_result_status_code(ambiguous), "driver_choice")
+        self.assertEqual(scan_result_status_label(ambiguous), "Driver choice")
         self.assertTrue(has_smartess_collector_hint(self._smartess_hint_result()))
         self.assertEqual(scan_result_status_code(self._smartess_hint_result()), "smartess_hint")
         self.assertEqual(scan_result_status_code(self._collector_only_result()), "collector_only")
         self.assertEqual(scan_result_status_code(self._collector_only_result(replied=True)), "collector_replied")
+        timed_out = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.58",
+                source="deep_scan",
+                ip="192.168.1.58",
+                connected=True,
+            ),
+            detection=TargetDetectionEvidence(
+                depth="deep",
+                status="target_timeout",
+                reason="deadline_exhausted",
+                budget_exhausted=True,
+            ),
+        )
+        self.assertEqual(scan_result_status_code(timed_out), "detection_timeout")
+        self.assertEqual(scan_result_status_label(timed_out), "Detection ran out of time")
         self.assertEqual(scan_result_status_label(self._smartess_hint_result()), "SmartESS hint")
         self.assertEqual(scan_result_status_label(self._matched_result()), "Ready")
         self.assertEqual(scan_result_status_label(self._matched_result(), already_added=True), "Already added")
@@ -133,7 +176,7 @@ class OnboardingPresentationTests(unittest.TestCase):
         self.assertIn("No reachable collectors or inverters", empty["scan_summary"])
         self.assertIn("2", ready["scan_summary"])
         self.assertIn("SMG 6200, PowMr 4.2kW", ready["scan_summary"])
-        self.assertIn("Choose **Add detected device**", ready["scan_next_hint"])
+        self.assertIn("Pick the inverter you want to add", ready["scan_next_hint"])
 
     def test_scan_results_placeholders_cover_pending_smartess_state(self) -> None:
         pending = build_scan_results_placeholders(
@@ -164,13 +207,30 @@ class OnboardingPresentationTests(unittest.TestCase):
             display=EYBOND_CONNECTION_DISPLAY_METADATA,
         )
         self.assertIn("SmartESS hint", smartess_line)
-        self.assertIn("SmartESS metadata", smartess_line)
+        # The chip already says it: the details must not repeat it.
+        self.assertNotIn("SmartESS metadata", smartess_line)
+        self.assertNotIn("connected", smartess_line)
 
     def test_simple_choose_and_confidence_helpers(self) -> None:
         placeholders = build_choose_placeholders(4)
         self.assertIn("4", placeholders["choose_summary"])
         self.assertEqual(confidence_label("high"), "High confidence")
         self.assertEqual(default_control_summary("high"), "Tested controls will be enabled automatically.")
+
+
+class AlreadyConfiguredStatusTests(unittest.TestCase):
+    def test_already_configured_result_maps_to_already_added_status(self) -> None:
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.14",
+                source="subnet_unicast",
+                ip="192.168.1.14",
+            ),
+            last_error="already_configured",
+        )
+
+        self.assertEqual(scan_result_status_code(result), "already_added")
+        self.assertEqual(scan_result_status_label(result), "Already added")
 
 
 if __name__ == "__main__":

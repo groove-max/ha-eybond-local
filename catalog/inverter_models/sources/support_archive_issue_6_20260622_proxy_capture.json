@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_6_20260622_proxy_capture",
+  "kind": "support_archive",
+  "title": "Yingfa YF6.2K-2K-LEL-IF proxy capture",
+  "reference": "private:support-archive-issue-6-20260622-proxy-capture",
+  "captured_at": "2026-06-22",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private proxy capture 01KVRFV6VETJ4B7MQ54DB5RDFF_20260622T211305079147Z.zip shows a SmartESS DTU AT collector using endpoint dtu_ess.eybond.com,18899,TCP and UART 2400,8,1,NONE. The cloud sends raw PI30 ASCII commands directly on the AT callback stream: QPI, QID, QSID, QVFW, QVFW2, QPIRI, QFLAG, QPIGS, QPIGS2, QMODI, QPIWS, QDI, QMCHGCR, QMUCHGCR, and QOPM. QPI returns PI30; QPIRI returns a 28-field 6200W/48V rating; QPIGS returns a 21-field live telemetry frame.",
+  "assertions": [
+    "runtime_compatibility",
+    "telemetry_validation",
+    "control_behavior"
+  ]
+}

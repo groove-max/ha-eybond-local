@@ -59,37 +59,3 @@ def build_profile_support_matrix(profile: DriverProfileMetadata) -> dict[str, An
         },
         "capabilities": capabilities,
     }
-
-
-def render_support_matrix_markdown(matrix: dict[str, Any]) -> str:
-    """Render a compact Markdown table from one support matrix payload."""
-
-    lines = [
-        f"# Support Matrix: {matrix['title']}",
-        "",
-        "> Generated from declarative profile metadata. This is an implementation-level runtime report, not a commercial device name. Do not edit this export manually.",
-        "",
-        f"- `profile_key`: `{matrix['profile_key']}`",
-        f"- capabilities: `{matrix['summary']['capabilities']}`",
-        f"- validation states: `{matrix['summary']['validation_state_counts']}`",
-        f"- support tiers: `{matrix['summary']['support_tier_counts']}`",
-        "",
-        "| Capability | Register | Group | Validation | Tier | Notes |",
-        "|---|---:|---|---|---|---|",
-    ]
-
-    for capability in matrix["capabilities"]:
-        notes = str(capability["support_notes"] or "").replace("\n", " ").strip()
-        lines.append(
-            "| `{key}` | `{register}` | `{group}` | `{validation}` | `{tier}` | {notes} |".format(
-                key=capability["key"],
-                register=capability["register"],
-                group=capability["group"],
-                validation=capability["validation_state"],
-                tier=capability["support_tier"],
-                notes=notes or "",
-            )
-        )
-
-    lines.append("")
-    return "\n".join(lines)

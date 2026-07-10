@@ -1,0 +1,63 @@
+{
+  "profiles": [
+    {
+      "family": "legacy_binary",
+      "provider": "smartess",
+      "label": "SmartESS legacy ESS",
+      "default_host": "ess.eybond.com",
+      "default_port": 502,
+      "default_protocol": "TCP",
+      "known_hosts": ["ess.eybond.com"],
+      "known_ports": [502],
+      "endpoint_write_format": "host_only",
+      "session_protocol": "eybond_framed",
+      "identity_strategy": "framed_heartbeat_then_fc2_pn"
+    },
+    {
+      "family": "smartess_at",
+      "provider": "smartess",
+      "label": "SmartESS DTU ESS",
+      "default_host": "dtu_ess.eybond.com",
+      "default_port": 18899,
+      "default_protocol": "TCP",
+      "known_hosts": ["dtu_ess.eybond.com"],
+      "known_ports": [18899, 38899],
+      "endpoint_write_format": "host_port_protocol",
+      "session_protocol": "at_text",
+      "identity_strategy": "at_dtupn",
+      "raw_passthrough_bootstrap": "uart_write_same_value",
+      "raw_passthrough_frame_format": "transparent"
+    },
+    {
+      "family": "smartvalue_at",
+      "provider": "smartvalue",
+      "label": "SmartValue AT",
+      "default_host": "m2m.eybond.com",
+      "default_port": 18899,
+      "default_protocol": "TCP",
+      "known_hosts": ["m2m.eybond.com"],
+      "known_ports": [],
+      "endpoint_write_format": "host_port_protocol",
+      "session_protocol": "at_text",
+      "identity_strategy": "at_dtupn",
+      "raw_passthrough_bootstrap": "uart_write_same_value",
+      "raw_passthrough_frame_format": "transparent"
+    },
+    {
+      "family": "valuecloud_at",
+      "provider": "valuecloud",
+      "label": "SmartValue iot.eybond.com AT",
+      "default_host": "iot.eybond.com",
+      "default_port": 18899,
+      "default_protocol": "TCP",
+      "known_hosts": ["iot.eybond.com"],
+      "known_ports": [],
+      "endpoint_write_format": "host_port_protocol",
+      "session_protocol": "at_text",
+      "identity_strategy": "at_dtupn",
+      "raw_passthrough_bootstrap": "none",
+      "raw_passthrough_frame_format": "plain_line",
+      "raw_passthrough_min_interval_ms": 0
+    }
+  ]
+}

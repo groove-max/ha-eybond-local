@@ -154,7 +154,11 @@ class EybondCollectorText(CoordinatorEntity[EybondLocalCoordinator], TextEntity)
 
     @property
     def native_value(self) -> str:
-        value = self.coordinator.data.values.get("collector_server_endpoint")
+        values = self.coordinator.data.values
+        value = (
+            values.get("collector_callback_endpoint_pending")
+            or values.get("collector_server_endpoint")
+        )
         return str(value or "")
 
     @property
@@ -169,6 +173,11 @@ class EybondCollectorText(CoordinatorEntity[EybondLocalCoordinator], TextEntity)
             "requires_control_mode": "full_for_write",
             "expert_action": True,
             "control_surface": "raw_parameter_21_override",
+            "current_callback_endpoint": values.get("collector_server_endpoint"),
+            "pending_callback_endpoint": values.get("collector_callback_endpoint_pending"),
+            "pending_apply_required": bool(
+                values.get("collector_callback_endpoint_pending_apply_required")
+            ),
             "target_callback_endpoint": self.coordinator.collector_callback_target_endpoint,
             "collector_cloud_family": getattr(
                 self.coordinator,

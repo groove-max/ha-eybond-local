@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "corpus_aninerel_anl_4200t",
+  "kind": "support_archive",
+  "title": "Aninerel ANL-4200T donor captures",
+  "reference": "private:corpus-aninerel-anl-4200t",
+  "captured_at": "2026-06-15",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Donor captures (layout 11, model code 30723, rated 4200) resolved to the SMG read-only family surface.",
+  "assertions": [
+    "fingerprint"
+  ]
+}

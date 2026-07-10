@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -13,14 +14,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
-    CONTROL_MODE_AUTO,
-    CONTROL_MODE_FULL,
-    CONTROL_MODE_READ_ONLY,
 )
 from .runtime.coordinator import EybondLocalCoordinator
 from .models import WriteCapability
 from .platform_context import entity_setup_context
 from .schema import serialize_capability
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +53,8 @@ def default_enabled_runtime_select_keys_for_runtime(
 
 
 def _runtime_select_specs(*, has_inverter_identity: bool = True) -> tuple[_RuntimeSelectSpec, ...]:
-    specs = [
+    del has_inverter_identity
+    return (
         _RuntimeSelectSpec(
             key="collector_operation_mode",
             translation_key="collector_operation_mode",
@@ -64,22 +65,7 @@ def _runtime_select_specs(*, has_inverter_identity: bool = True) -> tuple[_Runti
             ),
             device_scope="collector",
         ),
-    ]
-    if has_inverter_identity:
-        specs.append(
-            _RuntimeSelectSpec(
-                key="control_mode",
-                translation_key="control_mode",
-                name="Control Mode",
-                options=(
-                    CONTROL_MODE_AUTO,
-                    CONTROL_MODE_READ_ONLY,
-                    CONTROL_MODE_FULL,
-                ),
-                device_scope="inverter",
-            )
-        )
-    return tuple(specs)
+    )
 
 
 async def async_setup_entry(
@@ -91,20 +77,68 @@ async def async_setup_entry(
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
     driver, inverter, has_inverter_identity = entity_setup_context(entry, coordinator)
+    # Without an inverter identity, capability selects would describe a
+    # phantom inverter on the collector device (manual driver hint, nothing
+    # attached yet). The entry reloads once detection persists an identity.
     capabilities = (
-        inverter.capabilities if inverter is not None else (driver.write_capabilities if driver is not None else ())
+        (
+            inverter.capabilities
+            if inverter is not None
+            else (driver.write_capabilities if driver is not None else ())
+        )
+        if has_inverter_identity
+        else ()
     )
+    collector_capabilities = coordinator.collector_capabilities
+    runtime_specs = tuple(
+        spec
+        for spec in _runtime_select_specs(has_inverter_identity=has_inverter_identity)
+        if not (
+            spec.key == "collector_operation_mode"
+            and collector_capabilities.ha_only_required
+        )
+    )
+    exposable_capabilities = tuple(
+        capability
+        for capability in capabilities
+        if capability.value_kind == "enum" and capability.enum_value_map
+        if coordinator.can_expose_capability(capability)
+    )
+    if has_inverter_identity and not exposable_capabilities:
+        enum_capabilities = tuple(
+            capability
+            for capability in capabilities
+            if capability.value_kind == "enum" and capability.enum_value_map
+        )
+        exposure_context = {}
+        context_getter = getattr(coordinator, "_write_exposure_context", None)
+        if callable(context_getter):
+            try:
+                exposure_context = context_getter()
+            except Exception as exc:  # pragma: no cover - diagnostic only
+                exposure_context = {"error": f"{type(exc).__name__}:{exc}"}
+        _LOGGER.debug(
+            "EyeBond select setup has inverter identity but no enum controls: entry=%s driver=%s inverter=%s capabilities=%d enum_capabilities=%d controls_enabled=%s reason=%s context=%s first_enum=%s first_enum_allowed=%s",
+            entry.entry_id,
+            getattr(driver, "key", None),
+            getattr(inverter, "model_name", None),
+            len(tuple(capabilities or ())),
+            len(enum_capabilities),
+            getattr(coordinator, "controls_enabled", None),
+            getattr(coordinator, "controls_reason", None),
+            exposure_context,
+            getattr(enum_capabilities[0], "key", None) if enum_capabilities else None,
+            coordinator.can_expose_capability(enum_capabilities[0]) if enum_capabilities else None,
+        )
     async_add_entities(
         [
             *[
                 EybondRuntimeSettingSelect(coordinator, spec)
-                for spec in _runtime_select_specs(has_inverter_identity=has_inverter_identity)
+                for spec in runtime_specs
             ],
             *[
                 EybondCapabilitySelect(coordinator, capability)
-                for capability in capabilities
-                if capability.value_kind == "enum" and capability.enum_value_map
-                if coordinator.can_expose_capability(capability)
+                for capability in exposable_capabilities
             ],
         ]
     )
@@ -219,7 +253,9 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_select_{capability.key}"
         self._attr_name = capability.display_name
         self._attr_options = capability.enum_options
-        self._attr_entity_registry_enabled_default = capability.enabled_default
+        self._attr_entity_registry_enabled_default = coordinator.capability_enabled_by_default(
+            capability
+        )
 
     @property
     def device_info(self):

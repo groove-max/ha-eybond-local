@@ -44,6 +44,20 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         self.assertFalse(overview.can_start)
         self.assertTrue(overview.redirect_required)
 
+    def test_blocks_when_collector_has_no_proxy_capture_capability(self) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_proxy_capture_allowed=False,
+            collector_connected=True,
+            current_endpoint="192.168.1.50,18899,TCP",
+            upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+        )
+
+        self.assertEqual(overview.status, "blocked")
+        self.assertEqual(overview.blocking_reason, "collector_proxy_capture_unavailable")
+        self.assertFalse(overview.can_start)
+
     def test_ready_when_no_redirect_is_required(self) -> None:
         overview = build_proxy_capture_overview(
             control_mode="auto",
@@ -64,7 +78,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
     def test_running_state_blocks_start_and_can_stop(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="/config/eybond_local/proxy_traces/current_session.jsonl",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -95,7 +109,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
     def test_running_state_hides_previous_manifest_and_prefers_active_trace(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             trace_path="/config/eybond_local/proxy_traces/current_session.jsonl",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
@@ -125,7 +139,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
     def test_critical_phase_disables_stop(self) -> None:
         state = build_proxy_capture_session_state(
             entry_id="entry-1",
-            collector_pn="E5000025388419",
+            collector_pn="E5000020000000",
             original_endpoint="collector-cloud.smartess.example,18899,TCP",
             proxy_endpoint="192.168.1.50,18899,TCP",
             restore_required=True,

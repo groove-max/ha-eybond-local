@@ -12,6 +12,50 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+def _install_voluptuous_stub() -> None:
+    """Provide the voluptuous module for local pure-unit runs without HA deps."""
+
+    if "voluptuous" in sys.modules:
+        return
+
+    import types
+
+    voluptuous_module = types.ModuleType("voluptuous")
+
+    class Schema:
+        def __init__(self, schema):
+            self.schema = schema
+
+        def __call__(self, value):
+            return value
+
+    def Required(key, default=None):
+        return key
+
+    def Optional(key, default=None):
+        return key
+
+    def All(*validators):
+        return validators
+
+    def Range(**kwargs):
+        return kwargs
+
+    def In(container):
+        return container
+
+    voluptuous_module.Schema = Schema
+    voluptuous_module.Required = Required
+    voluptuous_module.Optional = Optional
+    voluptuous_module.All = All
+    voluptuous_module.Range = Range
+    voluptuous_module.In = In
+    sys.modules["voluptuous"] = voluptuous_module
+
+
+_install_voluptuous_stub()
+
+
 from custom_components.eybond_local.const import DOMAIN
 from custom_components.eybond_local.services import (
     _async_handle_apply_collector_changes,

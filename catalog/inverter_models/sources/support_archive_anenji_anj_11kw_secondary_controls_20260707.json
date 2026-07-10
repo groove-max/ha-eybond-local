@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_anenji_anj_11kw_secondary_controls_20260707",
+  "kind": "support_archive",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P support archive with secondary-control shadow learning",
+  "reference": "private:support-archive-anenji-anj-11kw-secondary-controls-20260707",
+  "captured_at": "2026-07-07",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private support archive 01KPGTNHHQ4VXCR6ZV5JYCW7ER (2026-07-07) for an Anenji ANJ-11KW-48V-WIFI-P unit. The existing model-specific runtime binding was confirmed, and shadow-learning evidence matched the missing writable control registers 608, 633, 639, 642, and 649 for OP2 overload alarm, secondary charging priority, constant-voltage to float-charge wait time, maximum discharge-current protection, and OP1 off-grid SOC protection.",
+  "assertions": [
+    "runtime_compatibility",
+    "write_validation",
+    "control_behavior"
+  ]
+}

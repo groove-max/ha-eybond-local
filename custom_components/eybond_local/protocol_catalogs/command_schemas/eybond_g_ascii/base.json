@@ -1,0 +1,1839 @@
+{
+  "schema_version": 1,
+  "schema_key": "eybond_g_ascii_base",
+  "protocol_id": "EYBOND_G_ASCII",
+  "title": "EyeBond/JsdSolar G-command ASCII command schema",
+  "notes": [
+    "This schema describes read-only/query commands used for runtime decoding and support-package evidence capture.",
+    "Write/control commands are intentionally excluded until hardware write behavior is validated.",
+    "Indexed sweeps are bounded in the schema so support-package captures remain predictable."
+  ],
+  "commands": [
+    {
+      "command": "GMOD",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Operating mode",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "eybond_g_ascii_operating_mode_code",
+          "kind": "status"
+        }
+      ]
+    },
+    {
+      "command": "GPDAT0",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Parallel/live aggregate data",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 5,
+          "key": "inverter_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 6,
+          "key": "inverter_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 7,
+          "key": "grid_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 8,
+          "key": "grid_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 9,
+          "key": "output_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 10,
+          "key": "output_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 11,
+          "key": "output_current",
+          "unit": "A"
+        },
+        {
+          "index": 12,
+          "key": "battery_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 13,
+          "key": "battery_current",
+          "unit": "A"
+        },
+        {
+          "index": 14,
+          "key": "output_load_percentage",
+          "unit": "%"
+        },
+        {
+          "index": 15,
+          "key": "output_apparent_power",
+          "unit": "VA"
+        },
+        {
+          "index": 16,
+          "key": "output_active_power",
+          "unit": "W"
+        },
+        {
+          "index": 17,
+          "key": "battery_capacity",
+          "unit": "%"
+        },
+        {
+          "index": 18,
+          "key": "pv_input_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 19,
+          "key": "pv_charging_current",
+          "unit": "A"
+        },
+        {
+          "index": 20,
+          "key": "pv_power",
+          "unit": "W"
+        },
+        {
+          "index": 21,
+          "key": "mainboard_temperature",
+          "unit": "°C"
+        }
+      ]
+    },
+    {
+      "command": "GPV",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "PV telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "pv_input_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "battery_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 2,
+          "key": "pv_charging_current",
+          "unit": "A"
+        },
+        {
+          "index": 3,
+          "key": "pv_current",
+          "unit": "A"
+        },
+        {
+          "index": 4,
+          "key": "pv_power",
+          "unit": "W"
+        },
+        {
+          "index": 5,
+          "key": "pv_tracking_status",
+          "kind": "status"
+        },
+        {
+          "index": 6,
+          "key": "pv_chargeable_status",
+          "kind": "status"
+        },
+        {
+          "index": 20,
+          "key": "pv_energy_today",
+          "unit": "kWh",
+          "divisor": 100
+        },
+        {
+          "index": [
+            21,
+            22
+          ],
+          "key": "pv_energy_total",
+          "unit": "kWh",
+          "divisor": 100
+        },
+        {
+          "index": 23,
+          "key": "warning_status_1",
+          "kind": "status"
+        }
+      ]
+    },
+    {
+      "command": "GBAT",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Battery telemetry/settings",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "battery_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "battery_current",
+          "unit": "A"
+        },
+        {
+          "index": 2,
+          "key": "battery_cell_count"
+        },
+        {
+          "index": 3,
+          "key": "battery_discharge_cutoff_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 4,
+          "key": "battery_discharge_alarm_voltage",
+          "unit": "V"
+        }
+      ]
+    },
+    {
+      "command": "F",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Rated inverter information",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "rated_output_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "rated_output_current",
+          "unit": "A"
+        },
+        {
+          "index": 2,
+          "key": "rated_battery_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 3,
+          "key": "rated_frequency",
+          "unit": "Hz"
+        }
+      ]
+    },
+    {
+      "command": "SVFW",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Software version",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "eybond_g_ascii_software_version"
+        },
+        {
+          "index": 1,
+          "key": "eybond_g_ascii_software_date"
+        }
+      ]
+    },
+    {
+      "command": "GTMP",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Temperature telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "pv_side_temperature",
+          "unit": "°C"
+        },
+        {
+          "index": 1,
+          "key": "charger_temperature",
+          "unit": "°C"
+        },
+        {
+          "index": 2,
+          "key": "ambient_temperature",
+          "unit": "°C"
+        },
+        {
+          "index": 3,
+          "key": "low_voltage_mppt_temperature_1",
+          "unit": "°C"
+        },
+        {
+          "index": 4,
+          "key": "low_voltage_mppt_temperature_2",
+          "unit": "°C"
+        }
+      ]
+    },
+    {
+      "command": "GLINE",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Grid/line telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "grid_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "grid_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 2,
+          "key": "grid_loss_high_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 3,
+          "key": "grid_loss_low_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 4,
+          "key": "grid_restore_high_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 5,
+          "key": "grid_restore_low_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 6,
+          "key": "grid_loss_high_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 7,
+          "key": "grid_loss_low_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 9,
+          "key": "output_load_percentage",
+          "unit": "%"
+        },
+        {
+          "index": 10,
+          "key": "grid_energy_today",
+          "unit": "kWh",
+          "divisor": 100
+        },
+        {
+          "index": [
+            11,
+            12
+          ],
+          "key": "grid_energy_total",
+          "unit": "kWh",
+          "divisor": 100
+        }
+      ]
+    },
+    {
+      "command": "GBUS",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Bus telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "bus_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "bus_reference_start_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 2,
+          "key": "bus_reference_voltage",
+          "unit": "V"
+        }
+      ]
+    },
+    {
+      "command": "GCHG",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Charging telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "bus_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "charging_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 2,
+          "key": "battery_cell_count"
+        },
+        {
+          "index": 3,
+          "key": "charging_current",
+          "unit": "A"
+        },
+        {
+          "index": 6,
+          "key": "constant_voltage_charging_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 7,
+          "key": "float_charging_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 8,
+          "key": "equalization_charging_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 9,
+          "key": "max_charging_current",
+          "unit": "A"
+        },
+        {
+          "index": 10,
+          "key": "constant_voltage_charging_time",
+          "unit": "min"
+        },
+        {
+          "index": 11,
+          "key": "equalization_charging_time",
+          "unit": "min"
+        },
+        {
+          "index": 12,
+          "key": "equalization_timeout",
+          "unit": "min"
+        },
+        {
+          "index": 13,
+          "key": "equalization_interval",
+          "unit": "d"
+        },
+        {
+          "index": 14,
+          "key": "equalization_enabled",
+          "kind": "flag"
+        },
+        {
+          "index": 15,
+          "key": "battery_type_code",
+          "kind": "status"
+        },
+        {
+          "index": 16,
+          "key": "low_power_discharge_time",
+          "unit": "h"
+        },
+        {
+          "index": 17,
+          "key": "charging_mode_code",
+          "kind": "status"
+        }
+      ]
+    },
+    {
+      "command": "GOP",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Output telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "output_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "output_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 2,
+          "key": "output_current",
+          "unit": "A"
+        },
+        {
+          "index": 3,
+          "key": "output_low_current",
+          "unit": "A"
+        },
+        {
+          "index": 4,
+          "key": "output_active_power",
+          "unit": "W"
+        },
+        {
+          "index": 6,
+          "key": "output_apparent_power",
+          "unit": "VA"
+        },
+        {
+          "index": 7,
+          "key": "output_low_current_power",
+          "unit": "W"
+        },
+        {
+          "index": 8,
+          "key": "output_half_wave_apparent_power",
+          "unit": "VA"
+        },
+        {
+          "index": 9,
+          "key": "output_load_percentage",
+          "unit": "%"
+        },
+        {
+          "index": 12,
+          "key": "output_energy_today",
+          "unit": "kWh",
+          "divisor": 100
+        },
+        {
+          "index": [
+            13,
+            14
+          ],
+          "key": "output_energy_total",
+          "unit": "kWh",
+          "divisor": 100
+        }
+      ]
+    },
+    {
+      "command": "GINV",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Inverter telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "inverter_voltage",
+          "unit": "V"
+        },
+        {
+          "index": 1,
+          "key": "inverter_frequency",
+          "unit": "Hz"
+        },
+        {
+          "index": 2,
+          "key": "inverter_current",
+          "unit": "A"
+        }
+      ]
+    },
+    {
+      "command": "GWS",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Fault/warning status",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "fault_code"
+        },
+        {
+          "index": 1,
+          "key": "warning_status_1"
+        },
+        {
+          "index": 2,
+          "key": "warning_status_2"
+        }
+      ]
+    },
+    {
+      "command": "BL",
+      "access": "read",
+      "source": "runtime_known",
+      "description": "Battery level",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "battery_capacity",
+          "unit": "%"
+        }
+      ]
+    },
+    {
+      "command": "FAN???",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Fan telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "fan_speed_percentage",
+          "unit": "%"
+        },
+        {
+          "index": 1,
+          "key": "fan1_speed_detected"
+        },
+        {
+          "index": 2,
+          "key": "fan2_speed_detected"
+        },
+        {
+          "index": 3,
+          "key": "fan1_stopped",
+          "kind": "flag"
+        },
+        {
+          "index": 4,
+          "key": "fan2_stopped",
+          "kind": "flag"
+        }
+      ]
+    },
+    {
+      "command": "TCQN????",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Equalization interval timer",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "equalization_elapsed_hours",
+          "unit": "h"
+        }
+      ]
+    },
+    {
+      "command": "DATE??????",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Date query",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "inverter_date_year_offset_2000"
+        },
+        {
+          "index": 1,
+          "key": "inverter_date_month"
+        },
+        {
+          "index": 2,
+          "key": "inverter_date_day"
+        }
+      ]
+    },
+    {
+      "command": "TIME??????",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Time query",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "inverter_time_hour"
+        },
+        {
+          "index": 1,
+          "key": "inverter_time_minute"
+        },
+        {
+          "index": 2,
+          "key": "inverter_time_second"
+        }
+      ]
+    },
+    {
+      "command": "GFAIL",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Failure context",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GBMS",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "BMS telemetry",
+      "support_probe_enabled": true,
+      "fields": [
+        {
+          "index": 0,
+          "key": "bms_communication_status_code",
+          "kind": "status"
+        },
+        {
+          "index": 1,
+          "key": "bms_status_code",
+          "kind": "status"
+        },
+        {
+          "index": 2,
+          "key": "bms_voltage",
+          "unit": "V",
+          "divisor": 10
+        },
+        {
+          "index": 3,
+          "key": "bms_current",
+          "unit": "A",
+          "divisor": 100
+        },
+        {
+          "index": 4,
+          "key": "bms_temperature",
+          "unit": "°C",
+          "divisor": 10
+        },
+        {
+          "index": 5,
+          "key": "bms_soc_raw"
+        },
+        {
+          "index": 6,
+          "key": "bms_remaining_capacity",
+          "unit": "Ah",
+          "divisor": 10
+        },
+        {
+          "index": 7,
+          "key": "bms_rated_capacity",
+          "unit": "Ah",
+          "divisor": 10
+        },
+        {
+          "index": 8,
+          "key": "bms_fault_code",
+          "kind": "status"
+        },
+        {
+          "index": 9,
+          "key": "bms_warning_code",
+          "kind": "status"
+        },
+        {
+          "index": 10,
+          "key": "bms_max_charging_current",
+          "unit": "A",
+          "divisor": 100
+        },
+        {
+          "index": 11,
+          "key": "bms_constant_voltage_point",
+          "unit": "V",
+          "divisor": 10
+        }
+      ]
+    },
+    {
+      "command": "I",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "CFG",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Configuration query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPPV",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "PV query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "TE?",
+      "access": "read",
+      "source": "proxy_capture_valuecloud",
+      "description": "Feature flag query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "TD?",
+      "access": "read",
+      "source": "documentation_jsdsolar",
+      "description": "Setting query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "Q1",
+      "access": "read",
+      "source": "proxy_capture_valuecloud",
+      "description": "Legacy observed query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT1",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT2",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT3",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT4",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT5",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT6",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT7",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT8",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPDAT9",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel/live data query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID0",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID1",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID2",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID3",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID4",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID5",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID6",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID7",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID8",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    },
+    {
+      "command": "GPID9",
+      "access": "read",
+      "source": "documentation_jsdsolar_indexed",
+      "description": "Indexed parallel system identity query",
+      "support_probe_enabled": true,
+      "fields": []
+    }
+  ],
+  "measurement_descriptions": [
+    {
+      "key": "eybond_g_ascii_operating_mode_code",
+      "name": "EyeBond G-ASCII Operating Mode",
+      "icon": "mdi:state-machine",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "operating_mode",
+      "name": "Operating Mode",
+      "icon": "mdi:state-machine"
+    },
+    {
+      "key": "gdat0_communication_status_code",
+      "name": "GPDAT0 Communication Status Code",
+      "icon": "mdi:lan-check",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "gdat0_operating_mode_code",
+      "name": "GPDAT0 Operating Mode Code",
+      "icon": "mdi:state-machine",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "grid_voltage",
+      "name": "Grid Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "grid_frequency",
+      "name": "Grid Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "inverter_voltage",
+      "name": "Inverter Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "inverter_frequency",
+      "name": "Inverter Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "inverter_current",
+      "name": "Inverter Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "output_voltage",
+      "name": "Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "output_frequency",
+      "name": "Output Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "mains_input_voltage",
+      "name": "Mains Input Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "mains_frequency",
+      "name": "Mains Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "output_current",
+      "name": "Output Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "output_load_percentage",
+      "name": "Output Load Percentage",
+      "unit": "%",
+      "state_class": "measurement",
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "output_active_power",
+      "name": "Output Active Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "output_apparent_power",
+      "name": "Output Apparent Power",
+      "unit": "VA",
+      "device_class": "apparent_power",
+      "state_class": "measurement",
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "battery_current",
+      "name": "Battery Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "battery_capacity",
+      "name": "Battery Capacity",
+      "unit": "%",
+      "device_class": "battery",
+      "state_class": "measurement",
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "battery_cell_count",
+      "name": "Battery Cell Count",
+      "icon": "mdi:battery-cog-outline",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_discharge_cutoff_voltage",
+      "name": "Battery Discharge Cut-Off Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "battery_discharge_alarm_voltage",
+      "name": "Battery Discharge Alarm Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "pv_input_voltage",
+      "name": "PV Input Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "pv_charging_current",
+      "name": "PV Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "pv_current",
+      "name": "PV Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "pv_power",
+      "name": "PV Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "pv_tracking_status",
+      "name": "PV Tracking Status",
+      "icon": "mdi:solar-power",
+      "diagnostic": true
+    },
+    {
+      "key": "pv_chargeable_status",
+      "name": "PV Chargeable Status",
+      "icon": "mdi:battery-charging",
+      "diagnostic": true
+    },
+    {
+      "key": "pv_energy_today",
+      "name": "PV Energy Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "pv_energy_total",
+      "name": "Total PV Energy",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "inverter_temperature",
+      "name": "Inverter Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "mainboard_temperature",
+      "name": "Mainboard Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "pv_side_temperature",
+      "name": "PV Side Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "charger_temperature",
+      "name": "Charger Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "ambient_temperature",
+      "name": "Ambient Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "low_voltage_mppt_temperature_1",
+      "name": "Low-Voltage MPPT Temperature 1",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "low_voltage_mppt_temperature_2",
+      "name": "Low-Voltage MPPT Temperature 2",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bus_voltage",
+      "name": "Bus Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bus_reference_start_voltage",
+      "name": "Bus Reference Start Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bus_reference_voltage",
+      "name": "Bus Reference Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "charging_voltage",
+      "name": "Charging Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "charging_current",
+      "name": "Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "constant_voltage_charging_voltage",
+      "name": "Constant-Voltage Charging Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "float_charging_voltage",
+      "name": "Float Charging Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "equalization_charging_voltage",
+      "name": "Equalization Charging Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "max_charging_current",
+      "name": "Maximum Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "constant_voltage_charging_time",
+      "name": "Constant-Voltage Charging Time",
+      "unit": "min",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "equalization_charging_time",
+      "name": "Equalization Charging Time",
+      "unit": "min",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "equalization_timeout",
+      "name": "Equalization Timeout",
+      "unit": "min",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "equalization_interval",
+      "name": "Equalization Interval",
+      "unit": "d",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "equalization_elapsed_hours",
+      "name": "Equalization Elapsed Time",
+      "unit": "h",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "battery_type_code",
+      "name": "Battery Type Code",
+      "icon": "mdi:battery-cog-outline",
+      "diagnostic": true
+    },
+    {
+      "key": "low_power_discharge_time",
+      "name": "Low-Power Discharge Time",
+      "unit": "h",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "charging_mode_code",
+      "name": "Charging Mode Code",
+      "icon": "mdi:battery-charging-outline",
+      "diagnostic": true
+    },
+    {
+      "key": "fan_speed_percentage",
+      "name": "Fan Speed",
+      "unit": "%",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "fan1_speed_detected",
+      "name": "Fan 1 Speed Detection",
+      "icon": "mdi:fan",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "fan2_speed_detected",
+      "name": "Fan 2 Speed Detection",
+      "icon": "mdi:fan",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "inverter_date",
+      "name": "Inverter Date",
+      "icon": "mdi:calendar",
+      "diagnostic": true
+    },
+    {
+      "key": "inverter_time",
+      "name": "Inverter Time",
+      "icon": "mdi:clock-outline",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_energy_today",
+      "name": "Grid Energy Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "grid_energy_total",
+      "name": "Total Grid Energy",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "grid_loss_high_voltage",
+      "name": "Grid Loss High Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "grid_loss_low_voltage",
+      "name": "Grid Loss Low Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "grid_restore_high_voltage",
+      "name": "Grid Restore High Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "grid_restore_low_voltage",
+      "name": "Grid Restore Low Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "grid_loss_high_frequency",
+      "name": "Grid Loss High Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "grid_loss_low_frequency",
+      "name": "Grid Loss Low Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "output_energy_today",
+      "name": "Output Energy Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "output_energy_total",
+      "name": "Total Output Energy",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "output_low_current",
+      "name": "Output Low Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "output_low_current_power",
+      "name": "Output Low-Current Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "output_half_wave_apparent_power",
+      "name": "Output Half-Wave Apparent Power",
+      "unit": "VA",
+      "device_class": "apparent_power",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "bms_communication_status_code",
+      "name": "BMS Communication Status Code",
+      "icon": "mdi:battery-sync-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_status_code",
+      "name": "BMS Status Code",
+      "icon": "mdi:battery-heart-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_voltage",
+      "name": "BMS Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bms_current",
+      "name": "BMS Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "bms_temperature",
+      "name": "BMS Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bms_soc_raw",
+      "name": "BMS SOC Raw",
+      "icon": "mdi:battery-medium",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_remaining_capacity",
+      "name": "BMS Remaining Capacity",
+      "unit": "Ah",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bms_rated_capacity",
+      "name": "BMS Rated Capacity",
+      "unit": "Ah",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "bms_fault_code",
+      "name": "BMS Fault Code",
+      "icon": "mdi:battery-alert",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_warning_code",
+      "name": "BMS Warning Code",
+      "icon": "mdi:battery-alert-variant-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "bms_max_charging_current",
+      "name": "BMS Maximum Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 2
+    },
+    {
+      "key": "bms_constant_voltage_point",
+      "name": "BMS Constant-Voltage Point",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "rated_output_voltage",
+      "name": "Rated Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "live": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "rated_output_current",
+      "name": "Rated Output Current",
+      "unit": "A",
+      "device_class": "current",
+      "diagnostic": true,
+      "live": false,
+      "suggested_display_precision": 0
+    },
+    {
+      "key": "rated_battery_voltage",
+      "name": "Rated Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "live": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "rated_frequency",
+      "name": "Rated Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "diagnostic": true,
+      "live": false,
+      "suggested_display_precision": 1
+    },
+    {
+      "key": "eybond_g_ascii_software_version",
+      "name": "EyeBond G-ASCII Software Version",
+      "icon": "mdi:chip",
+      "diagnostic": true,
+      "live": false
+    },
+    {
+      "key": "eybond_g_ascii_software_date",
+      "name": "EyeBond G-ASCII Software Date",
+      "icon": "mdi:calendar",
+      "diagnostic": true,
+      "live": false
+    },
+    {
+      "key": "fault_code",
+      "name": "Fault Code",
+      "icon": "mdi:alert-circle-outline",
+      "diagnostic": true
+    },
+    {
+      "key": "warning_status_1",
+      "name": "Warning Status 1",
+      "icon": "mdi:alert-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "warning_status_2",
+      "name": "Warning Status 2",
+      "icon": "mdi:alert-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "dcdc_control_status",
+      "name": "DCDC Control Status",
+      "icon": "mdi:transfer",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gdat0_fields",
+      "name": "EyeBond GPDAT0 Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gpv_fields",
+      "name": "EyeBond GPV Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gbat_fields",
+      "name": "EyeBond GBAT Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gline_fields",
+      "name": "EyeBond GLINE Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gop_fields",
+      "name": "EyeBond GOP Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gchg_fields",
+      "name": "EyeBond GCHG Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gws_fields",
+      "name": "EyeBond GWS Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_fan_fields",
+      "name": "EyeBond FAN Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "eybond_g_ascii_gbms_fields",
+      "name": "EyeBond GBMS Fields",
+      "icon": "mdi:format-list-numbered",
+      "diagnostic": true,
+      "enabled_default": false
+    }
+  ],
+  "binary_sensor_descriptions": [
+    {
+      "key": "fan1_stopped",
+      "name": "Fan 1 Stopped",
+      "device_class": "problem",
+      "icon": "mdi:fan-alert",
+      "diagnostic": true
+    },
+    {
+      "key": "fan2_stopped",
+      "name": "Fan 2 Stopped",
+      "device_class": "problem",
+      "icon": "mdi:fan-alert",
+      "diagnostic": true
+    },
+    {
+      "key": "equalization_enabled",
+      "name": "Equalization Enabled",
+      "icon": "mdi:battery-sync-outline",
+      "diagnostic": true
+    }
+  ]
+}

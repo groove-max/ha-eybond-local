@@ -19,9 +19,14 @@ from custom_components.eybond_local.connection.models import (
 from custom_components.eybond_local.const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
+    CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+    CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
     CONF_DISCOVERY_TARGET,
+    CONF_DRIVER_HINT,
     CONF_HEARTBEAT_INTERVAL,
     CONF_SERVER_IP,
     CONF_TCP_PORT,
@@ -75,6 +80,8 @@ class ConnectionModelsTests(unittest.TestCase):
                 CONF_ADVERTISED_TCP_PORT: 9889,
                 CONF_UDP_PORT: 58899,
                 CONF_COLLECTOR_IP: "192.168.1.14",
+                CONF_COLLECTOR_PN: "E5000020000000",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
                 CONF_DISCOVERY_TARGET: "192.168.1.255",
                 CONF_HEARTBEAT_INTERVAL: 60,
             },
@@ -84,8 +91,97 @@ class ConnectionModelsTests(unittest.TestCase):
         self.assertIsInstance(spec, EybondConnectionSpec)
         self.assertEqual(spec.type, "eybond")
         self.assertEqual(spec.server_ip, "192.168.1.50")
+        self.assertEqual(spec.collector_pn, "E5000020000000")
+        self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_session_protocol, "at_text")
+        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
         self.assertEqual(spec.effective_advertised_server_ip, "203.0.113.10")
         self.assertEqual(spec.effective_advertised_tcp_port, 9889)
+
+    def test_build_connection_spec_uses_framed_callback_for_smg_runtime_on_dtu_endpoint(self) -> None:
+        spec = build_connection_spec(
+            {
+                CONF_SERVER_IP: "192.168.1.50",
+                CONF_TCP_PORT: 8899,
+                CONF_UDP_PORT: 58899,
+                CONF_COLLECTOR_IP: "192.168.1.55",
+                CONF_COLLECTOR_PN: "E50000200000009777",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
+                CONF_DRIVER_HINT: "modbus_smg",
+                CONF_DISCOVERY_TARGET: "192.168.1.255",
+                CONF_HEARTBEAT_INTERVAL: 60,
+            },
+            {},
+        )
+
+        self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_session_protocol, "eybond_framed")
+        self.assertEqual(
+            spec.collector_identity_strategy,
+            "framed_heartbeat_then_fc2_pn",
+        )
+
+    def test_build_connection_spec_recovers_cloud_family_from_remembered_endpoint_options(self) -> None:
+        spec = build_connection_spec(
+            {
+                CONF_SERVER_IP: "192.168.1.98",
+                CONF_TCP_PORT: 8899,
+                CONF_UDP_PORT: 58899,
+                CONF_COLLECTOR_IP: "192.168.2.209",
+                CONF_COLLECTOR_PN: "A0000000000001",
+                CONF_DRIVER_HINT: "auto",
+                CONF_DISCOVERY_TARGET: "192.168.1.255",
+                CONF_HEARTBEAT_INTERVAL: 60,
+            },
+            {
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "dtu_ess.eybond.com,18899,TCP",
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: "smartess_at",
+            },
+        )
+
+        self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_session_protocol, "at_text")
+        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+
+    def test_build_connection_spec_uses_framed_callback_from_effective_metadata_snapshot(self) -> None:
+        spec = build_connection_spec(
+            {
+                CONF_SERVER_IP: "192.168.1.50",
+                CONF_TCP_PORT: 8899,
+                CONF_UDP_PORT: 58899,
+                CONF_COLLECTOR_IP: "192.168.1.55",
+                CONF_COLLECTOR_PN: "E50000200000009777",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
+                CONF_DRIVER_HINT: "auto",
+                "effective_metadata_snapshot": {
+                    "effective_owner_key": "modbus_smg",
+                },
+                CONF_DISCOVERY_TARGET: "192.168.1.255",
+                CONF_HEARTBEAT_INTERVAL: 60,
+            },
+            {},
+        )
+
+        self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_session_protocol, "eybond_framed")
+
+    def test_build_connection_spec_keeps_data_driver_when_options_driver_is_auto(self) -> None:
+        spec = build_connection_spec(
+            {
+                CONF_SERVER_IP: "192.168.1.50",
+                CONF_TCP_PORT: 8899,
+                CONF_UDP_PORT: 58899,
+                CONF_COLLECTOR_IP: "192.168.1.55",
+                CONF_COLLECTOR_PN: "E50000200000009777",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
+                CONF_DRIVER_HINT: "modbus_smg",
+                CONF_DISCOVERY_TARGET: "192.168.1.255",
+                CONF_HEARTBEAT_INTERVAL: 60,
+            },
+            {CONF_DRIVER_HINT: "auto"},
+        )
+
+        self.assertEqual(spec.collector_session_protocol, "eybond_framed")
 
     def test_resolve_connection_type_reads_explicit_type(self) -> None:
         connection_type = resolve_connection_type({CONF_CONNECTION_TYPE: "eybond"})

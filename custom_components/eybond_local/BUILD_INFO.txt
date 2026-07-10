@@ -1,0 +1,6 @@
+eybond_local build
+manifest_version: 0.3.0-beta.1
+git_describe:     v0.2.0-beta.1-140-g17ffd30-dirty
+git_commit:       17ffd30
+commit_date:      2026-07-06
+built_at:         20260707T014916Z

@@ -6,6 +6,14 @@ from dataclasses import dataclass
 import ipaddress
 import re
 
+from .metadata.collector_cloud_profile_catalog_loader import (
+    load_collector_cloud_profile_catalog,
+    resolve_collector_cloud_default_port,
+    resolve_collector_cloud_default_protocol,
+    resolve_collector_cloud_endpoint_write_format,
+    resolve_collector_cloud_family_by_host,
+)
+
 _HOSTNAME_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?$")
 
 DEFAULT_COLLECTOR_SERVER_PORT = 18899
@@ -92,9 +100,26 @@ def validate_collector_server_protocol(
 def default_collector_server_port(*, cloud_family: str = "") -> int:
     """Return the semantic default callback port for one collector cloud family."""
 
-    if str(cloud_family or "").strip().lower() == "legacy_binary":
+    normalized_family = str(cloud_family or "").strip().lower()
+    if normalized_family:
+        default_port = resolve_collector_cloud_default_port(normalized_family)
+        if default_port:
+            return default_port
+
+    if normalized_family == "legacy_binary":
         return LEGACY_BINARY_COLLECTOR_SERVER_PORT
     return DEFAULT_COLLECTOR_SERVER_PORT
+
+
+def default_collector_server_protocol(*, cloud_family: str = "") -> str:
+    """Return the semantic default callback protocol for one collector cloud family."""
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    if normalized_family:
+        default_protocol = resolve_collector_cloud_default_protocol(normalized_family)
+        if default_protocol:
+            return default_protocol
+    return DEFAULT_COLLECTOR_SERVER_PROTOCOL
 
 
 def format_collector_server_endpoint(
@@ -118,6 +143,82 @@ def format_collector_server_endpoint(
     return f"{host},{port},{protocol}"
 
 
+def format_collector_server_endpoint_for_cloud_profile(
+    *,
+    server_host: str,
+    cloud_family: str = "",
+    server_port: int | None = None,
+    server_protocol: str | None = None,
+    template_endpoint: str = "",
+    require_tcp: bool = False,
+) -> str:
+    """Return one endpoint string using the cloud profile's CLDSRVHOST1 shape.
+
+    If ``cloud_family`` is unknown, the function keeps the template endpoint
+    shape when available and otherwise falls back to the canonical
+    host,port,protocol representation.
+    """
+
+    normalized_family = str(cloud_family or "").strip().lower()
+    parsed_template: CollectorServerEndpointParts | None = None
+    if template_endpoint:
+        try:
+            parsed_template = inspect_collector_server_endpoint(
+                template_endpoint,
+                require_explicit_port=False,
+                require_explicit_protocol=False,
+                require_tcp=require_tcp,
+            )
+        except ValueError:
+            parsed_template = None
+
+    if not normalized_family and parsed_template is not None:
+        normalized_family = resolve_collector_cloud_family_by_host(
+            str(parsed_template.host or "").strip().lower()
+        )
+
+    write_format = resolve_collector_cloud_endpoint_write_format(normalized_family)
+
+    if server_port is None:
+        if parsed_template is not None:
+            server_port = parsed_template.port
+        else:
+            server_port = default_collector_server_port(cloud_family=normalized_family)
+
+    if server_protocol is None:
+        if parsed_template is not None:
+            server_protocol = parsed_template.protocol
+        else:
+            server_protocol = default_collector_server_protocol(
+                cloud_family=normalized_family,
+            )
+
+    if write_format == "host_only":
+        include_port = False
+        include_protocol = False
+    elif write_format == "host_port":
+        include_port = True
+        include_protocol = False
+    elif write_format == "host_port_protocol":
+        include_port = True
+        include_protocol = True
+    elif parsed_template is not None:
+        include_port = parsed_template.has_explicit_port
+        include_protocol = parsed_template.has_explicit_protocol
+    else:
+        include_port = True
+        include_protocol = True
+
+    return format_collector_server_endpoint(
+        server_host=server_host,
+        server_port=server_port,
+        server_protocol=server_protocol,
+        include_port=include_port,
+        include_protocol=include_protocol,
+        require_tcp=require_tcp,
+    )
+
+
 def inspect_collector_server_endpoint(
     endpoint: str,
     *,
@@ -132,7 +233,6 @@ def inspect_collector_server_endpoint(
         if require_explicit_port or not raw_parts[0]:
             raise ValueError("collector_server_endpoint_invalid")
         host = raw_parts[0]
-        port_text = DEFAULT_COLLECTOR_SERVER_PORT
         protocol_text = DEFAULT_COLLECTOR_SERVER_PROTOCOL
         has_explicit_port = False
         has_explicit_protocol = False
@@ -155,7 +255,13 @@ def inspect_collector_server_endpoint(
         raise ValueError("collector_server_endpoint_invalid")
 
     normalized_host = validate_collector_server_host(host)
-    normalized_port = validate_collector_server_port(port_text)
+    if has_explicit_port:
+        normalized_port = validate_collector_server_port(port_text)
+    else:
+        catalog = load_collector_cloud_profile_catalog()
+        normalized_port = default_collector_server_port(
+            cloud_family=catalog.families_by_host.get(normalized_host.lower(), "")
+        )
     normalized_protocol = validate_collector_server_protocol(
         protocol_text,
         require_tcp=require_tcp,
@@ -185,6 +291,62 @@ def parse_collector_server_endpoint(
         require_tcp=require_tcp,
     )
     return parsed.host, parsed.port, parsed.protocol
+
+
+def home_assistant_callback_endpoint(
+    *,
+    server_host: str,
+    listener_port: int,
+    template_endpoint: str = "",
+    cloud_family: str = "",
+) -> str:
+    """Build THE Home Assistant callback endpoint for a collector.
+
+    Single owner of the rule that shipped broken from two call sites: the
+    callback target always carries this entry's LISTENER port. The
+    collector-reported endpoint template only shapes the protocol/format —
+    its port is the vendor cloud (or proxy-capture) port and must never be
+    inherited. With no usable listener port the cloud-family default applies
+    as a last resort.
+    """
+
+    normalized_template = str(template_endpoint or "").strip()
+    normalized_family = str(cloud_family or "").strip().lower()
+    server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
+    if normalized_template:
+        if not normalized_family:
+            # Lazy import: cloud_family imports this module for parsing.
+            from .collector.cloud_family import (
+                collector_cloud_family_observation_from_endpoint,
+            )
+
+            observed = collector_cloud_family_observation_from_endpoint(
+                normalized_template
+            ).family
+            if observed and observed != "unknown":
+                normalized_family = observed
+        try:
+            _host, _template_port, server_protocol = resolve_collector_server_endpoint(
+                normalized_template,
+                require_explicit_port=False,
+                require_explicit_protocol=False,
+                cloud_family=normalized_family,
+            )
+        except ValueError:
+            server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
+    server_port = (
+        int(listener_port)
+        if int(listener_port or 0) > 0
+        else default_collector_server_port(cloud_family=normalized_family)
+    )
+    return format_collector_server_endpoint_for_cloud_profile(
+        server_host=server_host,
+        cloud_family=normalized_family,
+        server_port=server_port,
+        server_protocol=server_protocol,
+        template_endpoint=normalized_template,
+        require_tcp=True,
+    )
 
 
 def resolve_collector_server_endpoint(

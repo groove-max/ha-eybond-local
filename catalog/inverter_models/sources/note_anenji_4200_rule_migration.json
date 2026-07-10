@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "note_anenji_4200_rule_migration",
+  "kind": "documentation",
+  "title": "Anenji 4200 (Protocol 1) rule migration note",
+  "reference": "private:note-anenji-4200-rule-migration",
+  "captured_at": "2026-04-01",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Anenji 4200 (Protocol 1) variant originally migrated from legacy detection rules before later user capture evidence was added.",
+  "assertions": [
+    "runtime_compatibility"
+  ]
+}

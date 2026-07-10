@@ -42,7 +42,7 @@ class FixtureUtilsTests(unittest.TestCase):
             "name": "pi30_support_capture",
             "collector": {
                 "remote_ip": "192.168.1.14",
-                "collector_pn": "Q0033482254531",
+                "collector_pn": "Q0000000000001",
             },
             "probe_target": {
                 "devcode": 2452,

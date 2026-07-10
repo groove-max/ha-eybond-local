@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 
 from .collector.signal import is_legacy_disabled_signal_entity_key
 from .runtime.coordinator import EybondLocalCoordinator
+from .device_scoped_overlay import filter_learned_read_measurements_for_activation
 from .derived_energy import (
     DerivedEnergyCycleDescription,
     DerivedEnergyDescription,
@@ -145,6 +146,16 @@ _SUMMARY_ATTRIBUTE_MAP: dict[str, tuple[tuple[str, str], ...]] = {
         ("protocol_profile_key", "smartess_protocol_profile_key"),
         ("collector_firmware", "smartess_collector_version"),
     ),
+    "collector_callback_identity_status": (
+        ("summary", "collector_callback_identity_summary"),
+        ("pending_sessions", "collector_callback_pending_session_count"),
+        ("recent_sessions", "collector_callback_recent_session_count"),
+        ("identified_sessions", "collector_callback_identified_session_count"),
+        ("unresolved_sessions", "collector_callback_unresolved_session_count"),
+        ("duplicate_peer_ips", "collector_callback_duplicate_peer_ip_count"),
+        ("session_protocol", "collector_callback_session_protocol"),
+        ("identity_strategy", "collector_callback_identity_strategy"),
+    ),
 }
 
 
@@ -193,9 +204,15 @@ async def async_setup_entry(
     measurement_descriptions = measurements_for_runtime(
         driver_key=driver_key,
         register_schema_name=register_schema_name,
+        variant_key=(getattr(inverter, "variant_key", "") or None) if inverter is not None else None,
         write_capabilities=write_capabilities,
         include_all_drivers_when_unknown=False,
         collector_only_mode=not has_inverter_identity,
+    )
+    measurement_descriptions = filter_learned_read_measurements_for_activation(
+        measurement_descriptions,
+        entry_data=entry.data,
+        entry_options=entry.options,
     )
     measurement_descriptions = tuple(
         description
@@ -206,6 +223,7 @@ async def async_setup_entry(
         driver_key=driver_key,
         register_schema_name=register_schema_name,
         include_all_drivers_when_unknown=False,
+        collector_only_mode=not has_inverter_identity,
     )
     measurement_keys = {description.key for description in measurement_descriptions}
     runtime_keys = measurement_keys | {

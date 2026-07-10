@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_anenji_protocol_3_10",
+  "kind": "documentation",
+  "title": "Anenji Protocol No. 3-10 Modbus register documentation",
+  "reference": "sha256:eb5b77107c2f31369883cfcf5b7156ca49162eb2386f72c86dbc327832b99177",
+  "captured_at": "2026-06-19",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private local copy of Communication.Protocol.No.3-10.pdf, a 20-page Modbus RTU register document covering protocol numbers 3, 4, 5, and 6 for the ANJ-11KW runtime family.",
+  "assertions": [
+    "register_map",
+    "runtime_compatibility"
+  ]
+}

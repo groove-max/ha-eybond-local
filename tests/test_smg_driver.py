@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,8 +16,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
+    _apply_capability_read_back,
+    _decode_block,
     _support_capture_ranges,
 )
+from custom_components.eybond_local.models import RegisterValueSpec  # noqa: E402
 from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
@@ -47,6 +52,7 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
                 (389, 3),
                 (406, 1),
                 (420, 1),
+                (425, 1),
                 (607, 1),
                 (626, 8),
                 (643, 2),
@@ -135,7 +141,7 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
             driver_key="modbus_smg",
             protocol_family="modbus_smg",
             model_name="SMG 11000",
-            serial_number="92632511100118",
+            serial_number="92632500000001",
             probe_target=target,
             register_schema_name="modbus_smg/models/smg_6200.json",
         )
@@ -220,7 +226,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
     def _anenji_registers(self) -> dict[int, int]:
         registers: dict[int, int] = {
             register: 0
-            for start, stop in ((100, 110), (198, 232), (600, 657), (696, 705))
+            for start, stop in ((100, 110), (171, 185), (198, 232), (600, 657), (696, 705))
             for register in range(start, stop)
         }
         for offset, value in _ascii_words("ANJ11KW240001", word_count=12).items():
@@ -232,7 +238,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 101: 0,
                 104: 0,
                 105: 0,
-                171: 1,
+                171: 32768,
                 184: 4,
                 198: 1,
                 201: 3,
@@ -349,9 +355,14 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
         )
         self.assertEqual(len(inverter.capability_groups), 4)
-        self.assertEqual(len(inverter.capabilities), 47)
+        self.assertEqual(len(inverter.capabilities), 52)
         self.assertEqual(inverter.get_capability("output_mode").register, 600)
+        self.assertEqual(inverter.get_capability("op2_overload_warning_percent").register, 608)
         self.assertEqual(inverter.get_capability("charge_source_priority").register, 632)
+        self.assertEqual(inverter.get_capability("secondary_charge_source_priority").register, 633)
+        self.assertEqual(inverter.get_capability("float_charge_wait_time").register, 639)
+        self.assertEqual(inverter.get_capability("max_discharge_current_protection").register, 642)
+        self.assertEqual(inverter.get_capability("op1_offgrid_soc_protection").register, 649)
         self.assertEqual(inverter.get_capability("force_eq_charge").register, 656)
         self.assertEqual(inverter.get_capability("input_mode").register, 677)
         self.assertEqual(inverter.get_capability("warning_mask_i").register, 687)
@@ -373,12 +384,13 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 for capability in inverter.capabilities
             )
         )
-        self.assertEqual(inverter.details["device_type"], 1)
+        self.assertEqual(inverter.details["device_type"], 32768)
+        self.assertEqual(inverter.details["device_catalog"]["model_code"], 32768)
         self.assertEqual(inverter.details["protocol_number"], 4)
         self.assertNotIn("device_name", inverter.details)
         self.assertNotIn("program_version", inverter.details)
         self.assertNotIn("rated_cell_count", inverter.details)
-        self.assertNotIn("max_discharge_current_protection", inverter.details)
+        self.assertEqual(inverter.details["max_discharge_current_protection"], 0)
         self.assertEqual(inverter.details["output_mode"], "Split-Phase-P1")
 
     async def test_probe_rejects_anenji_variant_when_variant_anchor_fields_are_invalid(self) -> None:
@@ -535,6 +547,92 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         values = await driver.async_read_values(transport, inverter)
         self.assertEqual(values["warning_mask_i"], 0x12345678)
 
+    def _op2_inverter(self, target: ProbeTarget) -> DetectedInverter:
+        from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+
+        profile = load_driver_profile("modbus_smg/models/anenji_op2_6200.json")
+        return DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="Aninerel 6200 (dual output)",
+            serial_number="99632600000002",
+            probe_target=target,
+            variant_key="default",
+            profile_name="modbus_smg/models/anenji_op2_6200.json",
+            register_schema_name="modbus_smg/models/anenji_op2_6200.json",
+            capabilities=profile.capabilities,
+        )
+
+    async def test_write_bitmask_capability_preserves_other_register_bits(self) -> None:
+        # OP2 enable is bit 0 of register 354; the other 15 bits belong to
+        # unknown settings and MUST survive a write (read-modify-write).
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = self._op2_inverter(target)
+        transport = FixtureTransport(
+            registers={354: 0xABCE},
+            command_responses=None,
+            probe_target=target,
+        )
+
+        written = await driver.async_write_capability(transport, inverter, "output2_enable", True)
+        self.assertEqual(written, "On")
+        self.assertEqual(transport._registers[354], 0xABCF)
+
+        written = await driver.async_write_capability(transport, inverter, "output2_enable", False)
+        self.assertEqual(written, "Off")
+        self.assertEqual(transport._registers[354], 0xABCE)
+
+    async def test_bitmask_pre_write_read_modbus_error_is_not_a_write_rejection(self) -> None:
+        # A Modbus exception on the read-modify-write PRE-READ (reg 354) must
+        # surface as CapabilityPreWriteReadError, not a Modbus write rejection —
+        # otherwise the hub records a persistent 'unsupported_or_locked' blocker
+        # for a control nothing was ever written to. No write is attempted.
+        from custom_components.eybond_local.drivers.smg import (
+            CapabilityPreWriteReadError,
+        )
+        from custom_components.eybond_local.payload.modbus import ModbusError
+
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = self._op2_inverter(target)
+
+        class _ReadFailSession:
+            def __init__(self) -> None:
+                self.writes: list[tuple[int, list[int]]] = []
+
+            async def read_holding(self, register: int, count: int) -> list[int]:
+                raise ModbusError("exception_code:7")
+
+            async def write_holding(self, register: int, values: list[int]) -> None:
+                self.writes.append((register, list(values)))
+
+        session = _ReadFailSession()
+        with patch.object(
+            SmgModbusDriver, "_session", staticmethod(lambda *a, **k: session)
+        ):
+            with self.assertRaises(CapabilityPreWriteReadError):
+                await driver.async_write_capability(
+                    object(), inverter, "output2_enable", True
+                )
+        self.assertEqual(session.writes, [])
+
+    def test_capability_read_back_extracts_bitmask_field(self) -> None:
+        from custom_components.eybond_local.drivers.smg import _apply_capability_read_back
+        from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+
+        capability = load_driver_profile(
+            "modbus_smg/models/anenji_op2_6200.json"
+        ).get_capability("output2_enable")
+
+        values: dict[str, object] = {}
+        _apply_capability_read_back(values, (capability,), ((354, [0xABCF]),))
+        self.assertEqual(values["output2_enable"], 1)
+
+        values = {}
+        _apply_capability_read_back(values, (capability,), ((354, [0xABCE]),))
+        self.assertEqual(values["output2_enable"], 0)
+
     async def test_write_inverter_clock_capabilities_updates_date_and_time_words(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
@@ -590,6 +688,15 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _force_patch = patch(
+            "custom_components.eybond_local.metadata.device_catalog_loader."
+            "FORCE_UNSUPPORTED_MODELS",
+            False,
+        )
+        _force_patch.start()
+        self.addCleanup(_force_patch.stop)
+
     def _smg_family_registers(
         self,
         *,
@@ -698,7 +805,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "default")
         self.assertEqual(inverter.model_name, "SMG 6200")
-        self.assertEqual(inverter.profile_name, "smg_modbus.json")
+        self.assertEqual(inverter.profile_name, "modbus_smg/models/smg_6200.json")
         self.assertEqual(inverter.register_schema_name, "modbus_smg/models/smg_6200.json")
         self.assertGreater(len(inverter.capabilities), 0)
         self.assertEqual(inverter.details["protocol_number"], 1)
@@ -708,6 +815,163 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["rated_cell_count"], 16)
         self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
         self.assertEqual(inverter.details["rated_power"], 6200)
+
+    async def test_probe_detects_6200_despite_out_of_enum_settings_and_state(self) -> None:
+        # Regression for the real incident: a leaked shadow-learning write pushed
+        # output_source_priority out of its enum, and detection then rejected an obvious SMG
+        # 6200 (-> no_supported_driver_matched, all entities unavailable). Identity must rest on
+        # immutable anchors (rated_power), NEVER on user settings (output_source_priority,
+        # output_mode) or runtime state (operating_mode). All three are forced out of range here.
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._smg_family_registers(rated_power=6200)
+        registers[301] = 3   # output_source_priority: enum only defines 0..2
+        registers[300] = 7   # output_mode: enum only defines 0..4
+        registers[201] = 99  # operating_mode: mode_names only defines 0..6
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertEqual(inverter.model_name, "SMG 6200")
+        self.assertEqual(inverter.details["rated_power"], 6200)
+
+    def test_capability_read_back_fills_learned_register_state(self) -> None:
+        # Learned-overlay controls have a register but no decode spec, so without read-back the
+        # switch toggles yet shows no state. The driver reads the raw register from the polled
+        # blocks into values[value_key], WITHOUT touching register_schema_name (which would
+        # break write-exposure for every control). Already-decoded keys are never overwritten,
+        # and registers outside the polled blocks are skipped.
+        values: dict[str, object] = {"buzzer_mode": "Beeps ON"}
+        config = [0] * 44  # config block 300..343
+        config[304 - 300] = 1  # Beeps -> on
+        config[338 - 300] = 0  # Auto AC Output -> off
+        caps = (
+            SimpleNamespace(value_key="learned_beeps_304", key="learned_beeps_304", register=304),
+            SimpleNamespace(value_key="learned_auto_338", key="learned_auto_338", register=338),
+            SimpleNamespace(value_key="buzzer_mode", key="buzzer_mode", register=303),  # already decoded
+            SimpleNamespace(value_key="learned_eq_999", key="learned_eq_999", register=999),  # not polled
+        )
+
+        _apply_capability_read_back(values, caps, ((300, config),))
+
+        self.assertEqual(values["learned_beeps_304"], 1)
+        self.assertEqual(values["learned_auto_338"], 0)
+        self.assertEqual(values["buzzer_mode"], "Beeps ON")  # spec value not clobbered
+        self.assertNotIn("learned_eq_999", values)  # outside polled blocks -> skipped
+
+    def test_capability_read_back_scales_by_divisor(self) -> None:
+        # A learned scaled number (divisor 10): raw register 560 -> native 56.0, so the number
+        # entity shows the displayed value, consistent with its native_min/max and write encode.
+        values: dict[str, object] = {}
+        config = [0] * 44
+        config[320 - 300] = 560
+        caps = (
+            SimpleNamespace(value_key="learned_v_320", key="learned_v_320", register=320, divisor=10),
+        )
+        _apply_capability_read_back(values, caps, ((300, config),))
+        self.assertEqual(values["learned_v_320"], 56.0)
+
+    async def test_read_out_of_block_capability_registers(self) -> None:
+        # Out-of-block controls (Boot method 406, Output control 420) are read directly; in-block
+        # controls and momentary actions are skipped.
+        from custom_components.eybond_local.drivers.smg import (
+            _read_out_of_block_capability_registers,
+        )
+
+        reads: list[int] = []
+
+        class _Session:
+            async def read_holding(self, register: int, count: int):
+                reads.append(register)
+                return [{406: 1, 420: 0}.get(register, 0)]
+
+        caps = (
+            SimpleNamespace(value_key="boot_406", key="boot_406", register=406, value_kind="enum"),
+            SimpleNamespace(value_key="output_420", key="output_420", register=420, value_kind="bool"),
+            SimpleNamespace(value_key="in_block_304", key="in_block_304", register=304, value_kind="bool"),
+            SimpleNamespace(value_key="action_460", key="action_460", register=460, value_kind="action"),
+        )
+        extra = await _read_out_of_block_capability_registers(
+            _Session(), caps, ((300, [0] * 44),)
+        )
+
+        self.assertEqual(sorted(reads), [406, 420])  # 304 in-block, 460 action -> not read
+        self.assertIn((406, [1]), extra)
+        self.assertIn((420, [0]), extra)
+
+    async def test_probe_uses_bounded_identity_reads_before_selected_full_probe(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class ProbeReadTrackingTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self.read_requests: list[tuple[int, int]] = []
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                self.read_requests.append((address, count))
+                return super()._handle_read_holding(payload)
+
+        transport = ProbeReadTrackingTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        # Identification = the catalog identity window, read before anything else.
+        self.assertEqual(transport.read_requests[0], (171, 14))
+        self.assertIn((186, 12), transport.read_requests[:3])
+        self.assertIn((643, 1), transport.read_requests)
+        # Full-schema probing happens once, for the catalog-selected binding.
+        self.assertIn((406, 1), transport.read_requests)
+        self.assertIn((420, 1), transport.read_requests)
+        self.assertNotIn((186, 46), transport.read_requests)
+        self.assertNotIn((600, 57), transport.read_requests)
+        self.assertNotIn((677, 18), transport.read_requests)
+
+    async def test_probe_abstains_when_identity_window_is_unreadable(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class IdentityFailureOnceTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self.failed_identity_read = False
+                self.read_requests: list[tuple[int, int]] = []
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                self.read_requests.append((address, count))
+                if not self.failed_identity_read and address == 171 and count == 14:
+                    self.failed_identity_read = True
+                    raise RuntimeError("identity read failed")
+                return super()._handle_read_holding(payload)
+
+        transport = IdentityFailureOnceTransport(
+            registers=self._smg_family_registers(rated_power=6200),
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        self.assertIsNone(inverter)
+        self.assertTrue(transport.failed_identity_read)
+        self.assertNotIn((600, 57), transport.read_requests)
+        self.assertNotIn((677, 18), transport.read_requests)
 
     async def test_probe_omits_placeholder_default_device_name(self) -> None:
         driver = SmgModbusDriver()
@@ -780,7 +1044,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             serial_number="SMG11K240001",
             probe_target=target,
             variant_key="default",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/models/smg_6200.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
             details={
                 "device_type": 0x1E00,
@@ -822,7 +1086,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             serial_number="SMG11K240001",
             probe_target=target,
             variant_key="default",
-            profile_name="smg_modbus.json",
+            profile_name="modbus_smg/models/smg_6200.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
             details={
                 "rated_power": 6200,
@@ -907,12 +1171,67 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "family_fallback")
         self.assertEqual(inverter.model_name, "SMG Family (Unverified Variant)")
-        self.assertEqual(inverter.profile_name, "modbus_smg/family_fallback.json")
+        # Family tier is structurally read-only: NO profile attaches at all.
+        self.assertEqual(inverter.profile_name, "")
         self.assertEqual(inverter.register_schema_name, "modbus_smg/base.json")
         self.assertEqual(len(inverter.capabilities), 0)
         self.assertEqual(len(inverter.capability_presets), 0)
-        self.assertEqual(len(inverter.capability_groups), 4)
+        self.assertEqual(len(inverter.capability_groups), 0)
         self.assertEqual(inverter.details["rated_power"], 11000)
+        catalog_details = inverter.details["device_catalog"]
+        self.assertEqual(catalog_details["kind"], "family")
+        self.assertEqual(catalog_details["tier"], "partial")
+        descriptor_decision = catalog_details["descriptor_decision"]
+        self.assertEqual(descriptor_decision["kind"], "descriptor_decision_shadow")
+        self.assertEqual(descriptor_decision["agreement"], "match")
+        self.assertEqual(
+            descriptor_decision["evaluation"]["resolved_key"],
+            "modbus_smg.family_fallback",
+        )
+        self.assertEqual(
+            inverter.details["descriptor_decision_shadow"],
+            descriptor_decision,
+        )
+        self.assertEqual(
+            descriptor_decision["selection"]["source"],
+            "compiled_catalog_runtime_fallback",
+        )
+        self.assertTrue(descriptor_decision["selection"]["safe_switch_active"])
+
+
+class DecodeUnavailableSentinelTests(unittest.TestCase):
+    """An all-ones UNSIGNED register decodes as unavailable, not 65535."""
+
+    def test_unsigned_all_ones_is_unavailable(self) -> None:
+        specs = (RegisterValueSpec(key="output_power", register=10),)
+        decoded = _decode_block(10, [0xFFFF], specs)
+        self.assertIsNone(decoded["output_power"])
+
+    def test_unsigned_all_ones_with_divisor_is_unavailable(self) -> None:
+        specs = (RegisterValueSpec(key="grid_voltage", register=10, divisor=10),)
+        decoded = _decode_block(10, [0xFFFF], specs)
+        self.assertIsNone(decoded["grid_voltage"])
+
+    def test_u32_all_ones_is_unavailable(self) -> None:
+        specs = (
+            RegisterValueSpec(
+                key="energy", register=10, word_count=2, combine="u32_high_first"
+            ),
+        )
+        decoded = _decode_block(10, [0xFFFF, 0xFFFF], specs)
+        self.assertIsNone(decoded["energy"])
+
+    def test_signed_minus_one_is_kept(self) -> None:
+        # On a signed register 0xFFFF == -1 is a legitimate reading (e.g. a
+        # small reverse current) and must NOT be treated as unavailable.
+        specs = (RegisterValueSpec(key="battery_current", register=10, signed=True),)
+        decoded = _decode_block(10, [0xFFFF], specs)
+        self.assertEqual(decoded["battery_current"], -1)
+
+    def test_normal_unsigned_value_is_unchanged(self) -> None:
+        specs = (RegisterValueSpec(key="output_power", register=10),)
+        decoded = _decode_block(10, [4200], specs)
+        self.assertEqual(decoded["output_power"], 4200)
 
 
 if __name__ == "__main__":

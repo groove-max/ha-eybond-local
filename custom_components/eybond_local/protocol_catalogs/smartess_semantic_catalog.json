@@ -1,0 +1,1313 @@
+{
+  "catalog_version": 1,
+  "description": "Canonical SmartESS semantic alias and binding catalog shared by cloud evidence tooling and SMG bridge tooling.",
+  "cloud_id_semantics": "SmartESS `cloud_field_ids` are identifiers from SmartESS cloud `device_settings` payloads. They are not local Modbus register ids. `asset_registers` are SmartESS asset hints only and must not be treated as local Modbus addresses.",
+  "entries": [
+    {
+      "semantic_key": "output_mode",
+      "canonical_title": "Output Mode",
+      "smartess_cloud": {
+        "bucket": "probable_0925",
+        "source": "pi30_family_surface",
+        "reason": "Matches the PI30-family output-mode vocabulary, but no direct 0925 write register has been proven yet."
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "output_mode"
+        ],
+        "measurement_keys": [
+          "output_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "output_priority",
+      "canonical_title": "Output Priority",
+      "title_aliases": [
+        "Main Output Priority"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4537
+        ],
+        "cloud_field_ids": [
+          "los_output_source_priority"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for output source priority.",
+        "profile_keys": [
+          "output_source_priority"
+        ],
+        "register_keys": [
+          "output_source_priority"
+        ],
+        "title_aliases": [
+          "Main Output Priority"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "output_source_priority"
+        ],
+        "measurement_keys": [
+          "output_source_priority"
+        ]
+      }
+    },
+    {
+      "semantic_key": "input_voltage_range",
+      "canonical_title": "Input Voltage Range",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4538
+        ],
+        "cloud_field_ids": [
+          "grd_ac_input_range"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for AC input range.",
+        "profile_keys": [
+          "input_voltage_range"
+        ],
+        "register_keys": [
+          "input_voltage_range"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "input_voltage_range"
+        ],
+        "measurement_keys": [
+          "input_voltage_range"
+        ]
+      }
+    },
+    {
+      "semantic_key": "input_mode",
+      "canonical_title": "Input Mode",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "input_mode"
+        ],
+        "measurement_keys": [
+          "input_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_type",
+      "canonical_title": "Battery Type",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4539
+        ],
+        "cloud_field_ids": [
+          "bat_battery_type"
+        ],
+        "profile_keys": [
+          "battery_type"
+        ],
+        "register_keys": [
+          "battery_type"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for battery type."
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_type"
+        ],
+        "measurement_keys": [
+          "battery_type"
+        ]
+      }
+    },
+    {
+      "semantic_key": "buzzer_mode",
+      "canonical_title": "Buzzer Mode",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5002
+        ],
+        "cloud_field_ids": [
+          "cts_buzzer_alarm"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for the buzzer alarm toggle.",
+        "profile_keys": [
+          "buzzer_enabled"
+        ],
+        "register_keys": [
+          "buzzer_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "buzzer_mode"
+        ],
+        "measurement_keys": [
+          "buzzer_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "primary_source_interrupt_alarm",
+      "canonical_title": "Beeps While Primary Source Is Interrupted",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5007
+        ],
+        "cloud_field_ids": [
+          "cts_beeps_while_primary_source_interupt"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for the primary-source interrupt beeper toggle.",
+        "profile_keys": [
+          "primary_source_interrupt_alarm_enabled"
+        ],
+        "register_keys": [
+          "primary_source_interrupt_alarm_enabled"
+        ]
+      },
+      "smg_bridge": {}
+    },
+    {
+      "semantic_key": "backlight_control",
+      "canonical_title": "Backlight Control",
+      "title_aliases": [
+        "LCD Backlight"
+      ],
+      "notes": "Cloud normalization binds to a boolean enable key, while the SMG bridge binds to the current mode/readback surface.",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5004
+        ],
+        "cloud_field_ids": [
+          "cts_lcd_backlight"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for LCD backlight control.",
+        "profile_keys": [
+          "lcd_backlight_enabled"
+        ],
+        "register_keys": [
+          "lcd_backlight_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "lcd_backlight_mode"
+        ],
+        "measurement_keys": [
+          "lcd_backlight_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "lcd_auto_return",
+      "canonical_title": "Auto Return To Default Display Screen",
+      "title_aliases": [
+        "LCD Automatically Returns To The Home Page",
+        "LCD Automatically Returns To The Homepage"
+      ],
+      "notes": "Cloud normalization uses the proven 0925 enable key; the SMG bridge uses the local mode/readback surface.",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5008
+        ],
+        "cloud_field_ids": [
+          "cts_return_to_the_main_page"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for LCD auto-return behavior.",
+        "profile_keys": [
+          "lcd_reset_to_default_enabled"
+        ],
+        "register_keys": [
+          "lcd_reset_to_default_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "lcd_auto_return_mode"
+        ],
+        "measurement_keys": [
+          "lcd_auto_return_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "power_saving_mode",
+      "canonical_title": "Power Saving Mode",
+      "title_aliases": [
+        "Energy-saving Mode Switch"
+      ],
+      "notes": "Cloud normalization currently binds to a boolean enable key, while the SMG bridge binds to a mode/readback key.",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5003
+        ],
+        "cloud_field_ids": [
+          "cts_power_saving_mode"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for power-saving mode.",
+        "profile_keys": [
+          "power_saving_enabled"
+        ],
+        "register_keys": [
+          "power_saving_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "power_saving_mode"
+        ],
+        "measurement_keys": [
+          "power_saving_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "overload_restart",
+      "canonical_title": "Auto Restart When Overload Occurs",
+      "title_aliases": [
+        "Overload Automatic Restart"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5005
+        ],
+        "cloud_field_ids": [
+          "los_overload_auto_restart"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for overload auto-restart.",
+        "profile_keys": [
+          "overload_restart_enabled"
+        ],
+        "register_keys": [
+          "overload_restart_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "overload_restart_mode"
+        ],
+        "measurement_keys": [
+          "overload_restart_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "over_temperature_restart",
+      "canonical_title": "Auto Restart When Over Temperature Occurs",
+      "title_aliases": [
+        "Automatic Restart When Over Temperature"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5006
+        ],
+        "cloud_field_ids": [
+          "cts_over_temperature_auto_restart"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for over-temperature auto-restart.",
+        "profile_keys": [
+          "over_temperature_restart_enabled"
+        ],
+        "register_keys": [
+          "over_temperature_restart_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "over_temperature_restart_mode"
+        ],
+        "measurement_keys": [
+          "over_temperature_restart_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "overload_bypass",
+      "canonical_title": "Overload Bypass",
+      "title_aliases": [
+        "Overload Transfer To Bypass Enable"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5009
+        ],
+        "cloud_field_ids": [
+          "los_transfer_to_bypass_overload"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for overload bypass behavior.",
+        "profile_keys": [
+          "overload_bypass_enabled"
+        ],
+        "register_keys": [
+          "overload_bypass_enabled"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "overload_bypass_mode"
+        ],
+        "measurement_keys": [
+          "overload_bypass_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_equalization_mode",
+      "canonical_title": "Battery EQ Mode",
+      "title_aliases": [
+        "Battery EQ Mode Enable"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5011
+        ],
+        "cloud_field_ids": [
+          "bat_battery_equalization"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for battery equalization enablement.",
+        "profile_keys": [
+          "battery_equalization_mode"
+        ],
+        "register_keys": [
+          "battery_equalization_mode"
+        ],
+        "title_aliases": [
+          "Battery EQ Mode Enable"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_equalization_mode"
+        ],
+        "measurement_keys": [
+          "battery_equalization_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "output_voltage_setting",
+      "canonical_title": "Output Voltage",
+      "title_aliases": [
+        "Output Voltage Setting"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4542
+        ],
+        "cloud_field_ids": [
+          "los_output_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for configured output voltage.",
+        "profile_keys": [
+          "configured_output_voltage"
+        ],
+        "register_keys": [
+          "configured_output_voltage"
+        ],
+        "title_aliases": [
+          "Output Voltage Setting"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "output_rating_voltage"
+        ],
+        "measurement_keys": [
+          "output_rating_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "output_frequency_setting",
+      "canonical_title": "Output Frequency",
+      "title_aliases": [
+        "Output Frequency Setting"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4540
+        ],
+        "cloud_field_ids": [
+          "los_output_frequency"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for configured output frequency.",
+        "profile_keys": [
+          "configured_output_frequency"
+        ],
+        "register_keys": [
+          "configured_output_frequency"
+        ],
+        "title_aliases": [
+          "Output Frequency Setting"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "output_rating_frequency"
+        ],
+        "measurement_keys": [
+          "output_rating_frequency"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_overvoltage_protection",
+      "canonical_title": "High DC Protection Voltage",
+      "title_aliases": [
+        "Battery Overvoltage Protection Point"
+      ],
+      "smartess_cloud": {
+        "bucket": "probable_0925",
+        "source": "pi30_family_surface",
+        "reason": "Looks like the same PI30-family battery-threshold cluster, but no exact 0925 root-map register has been confirmed.",
+        "profile_keys": [
+          "battery_overvoltage_protection_voltage"
+        ],
+        "register_keys": [
+          "battery_overvoltage_protection_voltage"
+        ],
+        "title_aliases": [
+          "Battery Overvoltage Protection Point"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_overvoltage_protection_voltage"
+        ],
+        "measurement_keys": [
+          "battery_overvoltage_protection_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "bulk_charging_voltage",
+      "canonical_title": "Bulk Charging Voltage (C.V Voltage)",
+      "title_aliases": [
+        "Maximum Charging Voltage"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4546
+        ],
+        "cloud_field_ids": [
+          "bat_sp_bulk_charging_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for bulk charging voltage.",
+        "profile_keys": [
+          "bulk_charging_voltage"
+        ],
+        "register_keys": [
+          "bulk_charging_voltage"
+        ],
+        "title_aliases": [
+          "Maximum Charging Voltage"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_bulk_voltage"
+        ],
+        "measurement_keys": [
+          "battery_bulk_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "floating_charging_voltage",
+      "canonical_title": "Floating Charging Voltage",
+      "title_aliases": [
+        "Floating Charge Voltage"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4547
+        ],
+        "cloud_field_ids": [
+          "bat_sp_floting_charging_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for floating charging voltage.",
+        "profile_keys": [
+          "floating_charging_voltage"
+        ],
+        "register_keys": [
+          "floating_charging_voltage"
+        ],
+        "title_aliases": [
+          "Floating Charge Voltage"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_float_voltage"
+        ],
+        "measurement_keys": [
+          "battery_float_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_low_voltage_protection_mains_mode",
+      "canonical_title": "Low DC Protection Voltage In Mains Mode",
+      "title_aliases": [
+        "Mains Mode Battery Low Voltage Protection Point"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4548
+        ],
+        "cloud_field_ids": [
+          "bat_sp_low_battery_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for low-DC protection in mains mode.",
+        "profile_keys": [
+          "low_battery_cutoff_voltage"
+        ],
+        "register_keys": [
+          "low_battery_cutoff_voltage"
+        ],
+        "title_aliases": [
+          "Mains Mode Battery Low Voltage Protection Point"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_under_voltage"
+        ],
+        "measurement_keys": [
+          "battery_under_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_low_voltage_protection_off_grid_mode",
+      "canonical_title": "Low DC Protection Voltage In Off-grid Mode",
+      "title_aliases": [
+        "Off-grid Mode Battery Low Voltage Protection Point"
+      ],
+      "smartess_cloud": {
+        "bucket": "probable_0925",
+        "source": "pi30_family_surface",
+        "reason": "Looks like the off-grid counterpart to the proven 0925 mains-mode cut-off, but the local 0925 register has not been confirmed.",
+        "title_aliases": [
+          "Off-grid Mode Battery Low Voltage Protection Point"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_under_voltage_off_grid"
+        ],
+        "measurement_keys": [
+          "battery_under_voltage_off_grid"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_discharge_recovery_mains_mode",
+      "canonical_title": "Mains Mode Battery Discharge Recovery Point",
+      "notes": "Cloud normalization currently binds the PI30-family SBU battery return key; the SMG bridge uses the local redischarge readback surface.",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4545
+        ],
+        "cloud_field_ids": [
+          "bat_sp_battery_mode_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for the SBU battery return threshold.",
+        "profile_keys": [
+          "battery_return_voltage_sbu"
+        ],
+        "register_keys": [
+          "battery_return_voltage_sbu"
+        ],
+        "titles": [
+          "SOC Recovery Value Of Battery Discharge In Mains Mode"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_redischarge_voltage"
+        ],
+        "measurement_keys": [
+          "battery_redischarge_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "recovery_voltage_back_to_mains_mode",
+      "canonical_title": "Recovery Voltage Back To Mains Mode",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4544
+        ],
+        "cloud_field_ids": [
+          "bat_sp_utility_mode_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for the SBU return-to-mains threshold.",
+        "profile_keys": [
+          "utility_return_voltage_sbu"
+        ],
+        "register_keys": [
+          "utility_return_voltage_sbu"
+        ]
+      },
+      "smg_bridge": {}
+    },
+    {
+      "semantic_key": "charger_source_priority",
+      "canonical_title": "Charger Source Priority",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4536
+        ],
+        "cloud_field_ids": [
+          "bat_charger_source_priority"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for charger source priority.",
+        "profile_keys": [
+          "charger_source_priority"
+        ],
+        "register_keys": [
+          "charger_source_priority"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "charge_source_priority"
+        ],
+        "measurement_keys": [
+          "charge_source_priority"
+        ]
+      }
+    },
+    {
+      "semantic_key": "maximum_charging_current",
+      "canonical_title": "Max.Charging Current",
+      "title_aliases": [
+        "Maximum Charging Current"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4541
+        ],
+        "cloud_field_ids": [
+          "bat_max_total_charge_current"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for maximum total charge current.",
+        "profile_keys": [
+          "max_total_charge_current"
+        ],
+        "register_keys": [
+          "max_total_charge_current"
+        ],
+        "title_aliases": [
+          "Maximum Charging Current"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "max_charge_current"
+        ],
+        "measurement_keys": [
+          "max_charge_current"
+        ]
+      }
+    },
+    {
+      "semantic_key": "maximum_mains_charging_current",
+      "canonical_title": "Max.AC.Charging Current",
+      "title_aliases": [
+        "Maximum Mains Charging Current"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4543
+        ],
+        "cloud_field_ids": [
+          "bat_max_utility_charge_current"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for maximum AC charge current.",
+        "profile_keys": [
+          "max_utility_charge_current"
+        ],
+        "register_keys": [
+          "max_utility_charge_current"
+        ],
+        "title_aliases": [
+          "Maximum Mains Charging Current"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "max_ac_charge_current"
+        ],
+        "measurement_keys": [
+          "max_ac_charge_current"
+        ]
+      }
+    },
+    {
+      "semantic_key": "equalization_voltage",
+      "canonical_title": "EQ Charing Voltage",
+      "title_aliases": [
+        "EQ Charging Voltage"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4549
+        ],
+        "cloud_field_ids": [
+          "bat_sp_battery_equalization_voltage"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for equalization voltage.",
+        "profile_keys": [
+          "battery_equalization_voltage"
+        ],
+        "register_keys": [
+          "battery_equalization_voltage"
+        ],
+        "title_aliases": [
+          "EQ Charging Voltage"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_equalization_voltage"
+        ],
+        "measurement_keys": [
+          "battery_equalization_voltage"
+        ]
+      }
+    },
+    {
+      "semantic_key": "equalization_time",
+      "canonical_title": "EQ Charing Time",
+      "title_aliases": [
+        "Bat EQ Time"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4550
+        ],
+        "cloud_field_ids": [
+          "bat_sp_battery_equalized_time"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for equalization time.",
+        "profile_keys": [
+          "battery_equalized_time"
+        ],
+        "register_keys": [
+          "battery_equalized_time"
+        ],
+        "title_aliases": [
+          "Bat EQ Time",
+          "bat_eq_time"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_equalization_time"
+        ],
+        "measurement_keys": [
+          "battery_equalization_time"
+        ]
+      }
+    },
+    {
+      "semantic_key": "equalization_timeout",
+      "canonical_title": "EQ Timeout Exit Time",
+      "title_aliases": [
+        "EQ Timeout Exit"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4551
+        ],
+        "cloud_field_ids": [
+          "bat_sp_battery_equalized_timeout"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for equalization timeout.",
+        "profile_keys": [
+          "battery_equalized_timeout"
+        ],
+        "register_keys": [
+          "battery_equalized_timeout"
+        ],
+        "title_aliases": [
+          "EQ Timeout Exit"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_equalization_timeout"
+        ],
+        "measurement_keys": [
+          "battery_equalization_timeout"
+        ]
+      }
+    },
+    {
+      "semantic_key": "equalization_interval",
+      "canonical_title": "EQ Interval Time",
+      "title_aliases": [
+        "EQ Charging Interval"
+      ],
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          4552
+        ],
+        "cloud_field_ids": [
+          "bat_sp_battery_equalization_interval"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for equalization interval.",
+        "profile_keys": [
+          "battery_equalization_interval"
+        ],
+        "register_keys": [
+          "battery_equalization_interval"
+        ],
+        "title_aliases": [
+          "EQ Charging Interval"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "battery_equalization_interval"
+        ],
+        "measurement_keys": [
+          "battery_equalization_interval"
+        ]
+      }
+    },
+    {
+      "semantic_key": "time_from_cv_to_floating_charge",
+      "canonical_title": "Time From C.V To Floating Charge",
+      "smartess_cloud": {
+        "bucket": "probable_0925",
+        "source": "pi30_family_surface",
+        "reason": "Fits the PI30-family battery-charge timing surface, but there is no direct 0925 root-map proof yet."
+      },
+      "smg_bridge": {}
+    },
+    {
+      "semantic_key": "low_dc_protection_soc_grid_mode",
+      "canonical_title": "Low DC Protection SOC In Grid Mode",
+      "title_aliases": [
+        "Low DC Protection SOC In AC Mode"
+      ],
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "low_dc_protection_soc_grid_mode"
+        ],
+        "measurement_keys": [
+          "low_dc_protection_soc_grid_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "low_dc_recovery_soc_ac_mode",
+      "canonical_title": "Low DC Recovery SOC In AC Mode",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "solar_battery_utility_return_soc_threshold"
+        ],
+        "measurement_keys": [
+          "solar_battery_utility_return_soc_threshold"
+        ]
+      }
+    },
+    {
+      "semantic_key": "battery_low_cutoff_soc",
+      "canonical_title": "Battery Low Cut Off SOC",
+      "title_aliases": [
+        "Off Grid Mode Battery Discharge SOC Protection Value"
+      ],
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "low_dc_cutoff_soc"
+        ],
+        "measurement_keys": [
+          "low_dc_cutoff_soc"
+        ]
+      }
+    },
+    {
+      "semantic_key": "boot_method",
+      "canonical_title": "Boot Method",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "turn_on_mode"
+        ],
+        "measurement_keys": [
+          "turn_on_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "remote_switch",
+      "canonical_title": "Remote Switch",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "measurement_keys": [
+          "remote_switch"
+        ]
+      }
+    },
+    {
+      "semantic_key": "equalization_activated_immediately",
+      "canonical_title": "Forced EQ Charging",
+      "title_aliases": [
+        "Equalization Activated Immediately"
+      ],
+      "notes": "Cloud normalization binds to the SmartESS action semantics; the SMG bridge maps the same cloud title onto the local one-shot equalization control.",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5012
+        ],
+        "cloud_field_ids": [
+          "bat_battery_equalization_activated_immediately"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for forced one-shot equalization.",
+        "profile_keys": [
+          "force_battery_equalization"
+        ],
+        "register_keys": [
+          "force_battery_equalization"
+        ],
+        "title_aliases": [
+          "Equalization Activated Immediately"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "force_eq_charge"
+        ]
+      }
+    },
+    {
+      "semantic_key": "clear_generation_history",
+      "canonical_title": "Clear Record",
+      "title_aliases": [
+        "Clean Generation Power"
+      ],
+      "notes": "The cloud action is a history-clearing action; the SMG bridge uses the existing local clear-generation control as the closest compatible binding.",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5001
+        ],
+        "cloud_field_ids": [
+          "pvs_clear_all_generation"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Matches the 0925 clear-history action in the root map.",
+        "profile_keys": [
+          "clear_power_history"
+        ],
+        "register_keys": [
+          "clear_power_history"
+        ],
+        "title_aliases": [
+          "Clean Generation Power"
+        ]
+      },
+      "smg_bridge": {
+        "profile_keys": [
+          "clear_generation_data"
+        ]
+      }
+    },
+    {
+      "semantic_key": "reset_user_settings",
+      "canonical_title": "Reset User Settings",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5016
+        ],
+        "cloud_field_ids": [
+          "cts_restore_defaults"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Matches the 0925 restore-defaults action in the root map.",
+        "profile_keys": [
+          "restore_defaults"
+        ],
+        "register_keys": [
+          "restore_defaults"
+        ]
+      },
+      "smg_bridge": {}
+    },
+    {
+      "semantic_key": "record_fault_code",
+      "canonical_title": "Record Fault Code",
+      "smartess_cloud": {
+        "asset_ids": [
+          "0925"
+        ],
+        "asset_registers": [
+          5010
+        ],
+        "cloud_field_ids": [
+          "cts_record_fault_code"
+        ],
+        "bucket": "exact_0925",
+        "source": "root_map_0925",
+        "reason": "Direct 0925 root-map match for the fault-code recording toggle.",
+        "profile_keys": [
+          "record_fault_code_enabled"
+        ],
+        "register_keys": [
+          "record_fault_code_enabled"
+        ]
+      },
+      "smg_bridge": {}
+    },
+    {
+      "semantic_key": "dry_contact_mode",
+      "canonical_title": "Dry Contact",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "dry_contact_mode"
+        ],
+        "measurement_keys": [
+          "dry_contact_mode"
+        ]
+      }
+    },
+    {
+      "semantic_key": "automatic_mains_output_enable",
+      "canonical_title": "Automatic Mains Output Enable",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "automatic_mains_output_enabled"
+        ],
+        "measurement_keys": [
+          "automatic_mains_output_enabled"
+        ]
+      }
+    },
+    {
+      "semantic_key": "pv_grid_connected_max_power",
+      "canonical_title": "PV Grid-connected Maximum Power",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "pv_grid_connected_max_power"
+        ],
+        "measurement_keys": [
+          "pv_grid_connected_max_power"
+        ]
+      }
+    },
+    {
+      "semantic_key": "island_detection_enabled",
+      "canonical_title": "Island Detection Enabled",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "island_detection_enabled"
+        ],
+        "measurement_keys": [
+          "island_detection_enabled"
+        ]
+      }
+    },
+    {
+      "semantic_key": "inverter_date",
+      "canonical_title": "Inverter Date",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "measurement_keys": [
+          "inverter_date"
+        ]
+      }
+    },
+    {
+      "semantic_key": "ground_relay_enable",
+      "canonical_title": "Ground Relay Enable",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "ground_relay_enabled"
+        ],
+        "measurement_keys": [
+          "ground_relay_enabled"
+        ]
+      }
+    },
+    {
+      "semantic_key": "lithium_battery_activation_time",
+      "canonical_title": "Lithium Battery Activation Time",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "lithium_battery_activation_time"
+        ],
+        "measurement_keys": [
+          "lithium_battery_activation_time"
+        ]
+      }
+    },
+    {
+      "semantic_key": "exit_fault_mode",
+      "canonical_title": "Exit Fault Mode",
+      "smartess_cloud": {},
+      "smg_bridge": {
+        "profile_keys": [
+          "exit_fault_mode"
+        ],
+        "measurement_keys": [
+          "exit_fault_mode"
+        ]
+      }
+    }
+  ]
+}

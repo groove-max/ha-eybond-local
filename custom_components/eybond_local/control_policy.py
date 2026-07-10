@@ -38,8 +38,12 @@ def controls_enabled(
     *,
     control_mode: str = DEFAULT_CONTROL_MODE,
     detection_confidence: str | None = None,
+    write_capability_count: int | None = None,
 ) -> bool:
     """Return whether writes are globally enabled for this entry."""
+
+    if write_capability_count is not None and write_capability_count <= 0:
+        return False
 
     confidence = normalize_confidence(detection_confidence)
     if control_mode == CONTROL_MODE_FULL:
@@ -53,8 +57,12 @@ def controls_reason(
     *,
     control_mode: str = DEFAULT_CONTROL_MODE,
     detection_confidence: str | None = None,
+    write_capability_count: int | None = None,
 ) -> str:
     """Return a user-facing reason for the current access policy."""
+
+    if write_capability_count is not None and write_capability_count <= 0:
+        return "no_write_capabilities"
 
     confidence = normalize_confidence(detection_confidence)
     if control_mode == CONTROL_MODE_FULL:
@@ -72,8 +80,12 @@ def controls_summary(
     *,
     control_mode: str = DEFAULT_CONTROL_MODE,
     detection_confidence: str | None = None,
+    write_capability_count: int | None = None,
 ) -> str:
     """Return a short human-readable summary of the current access policy."""
+
+    if write_capability_count is not None and write_capability_count <= 0:
+        return "Monitoring only. This runtime profile does not expose writable controls."
 
     confidence = normalize_confidence(detection_confidence)
     if control_mode == CONTROL_MODE_FULL:

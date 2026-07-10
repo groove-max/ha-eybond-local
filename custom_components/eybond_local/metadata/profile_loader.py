@@ -20,8 +20,14 @@ from ..models import (
     WriteCapability,
 )
 
-PROFILES_DIR = Path(__file__).resolve().parents[1] / "profiles"
+PROFILES_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs" / "profiles"
 _EXTERNAL_PROFILE_ROOTS: tuple[Path, ...] = ()
+_BUILTIN_PROFILE_ALIASES = {
+    "smg_modbus.json": "modbus_smg/default.json",
+}
+_ALLOWED_CAPABILITY_PROVENANCE: frozenset[str] = frozenset(
+    {"verified", "doc_backed", "inferred", "cloud_hint"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,13 @@ class DriverProfileMetadata:
         """Return the effective enum map for one capability."""
 
         return self.get_capability(capability_key).enum_value_map
+
+
+def canonical_driver_profile_name(profile_name: str) -> str:
+    """Return the canonical built-in profile name for persisted metadata."""
+
+    normalized = str(profile_name or "").strip()
+    return _BUILTIN_PROFILE_ALIASES.get(normalized, normalized)
 
 
 @lru_cache(maxsize=None)
@@ -136,6 +149,7 @@ def set_external_profile_roots(roots: tuple[Path, ...] | list[Path]) -> None:
     _EXTERNAL_PROFILE_ROOTS = normalized
     load_driver_profile.cache_clear()
     _load_raw_profile.cache_clear()
+    builtin_base_profile_name.cache_clear()
 
 
 def clear_profile_loader_cache() -> None:
@@ -143,6 +157,7 @@ def clear_profile_loader_cache() -> None:
 
     load_driver_profile.cache_clear()
     _load_raw_profile.cache_clear()
+    builtin_base_profile_name.cache_clear()
 
 
 def _profile_search_dirs() -> tuple[Path, ...]:
@@ -160,13 +175,50 @@ def _resolve_profile_path(profile_name: str) -> Path:
             continue
         if candidate.is_file():
             return candidate
+    alias = _BUILTIN_PROFILE_ALIASES.get(str(profile_name))
+    if alias:
+        return (PROFILES_DIR / alias).resolve()
     raise FileNotFoundError(f"profile_not_found:{profile_name}")
 
 
 def builtin_profile_path(profile_name: str) -> Path:
     """Return the built-in profile path, bypassing external overrides."""
 
-    return (PROFILES_DIR / profile_name).resolve()
+    resolved_name = _BUILTIN_PROFILE_ALIASES.get(profile_name, profile_name)
+    return (PROFILES_DIR / resolved_name).resolve()
+
+
+@lru_cache(maxsize=None)
+def builtin_base_profile_name(profile_name: str) -> str:
+    """Return the built-in base profile name underlying ``profile_name``.
+
+    Local overlays (e.g. activated shadow-learning drafts) live in an external
+    root and ``extends`` a built-in profile. Tooling that derives a new draft must
+    start from that built-in base, not the overlay -- otherwise output names and
+    parent references accumulate the overlay's own session token. Walk the
+    ``extends``/``draft_of`` chain until the name resolves to a built-in profile.
+
+    Cached for the same reason as builtin_base_schema_name: it is reached from
+    metadata resolution on every coordinator refresh and must not walk the
+    extends chain on disk in the event loop each time. Cleared on root changes.
+    """
+
+    current = str(profile_name or "").strip()
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        try:
+            profile_path = _resolve_profile_path(current)
+        except FileNotFoundError:
+            break
+        if _profile_source_scope(profile_path) != "external":
+            return current
+        raw = json.loads(profile_path.read_text(encoding="utf-8"))
+        parent = str(raw.get("extends") or raw.get("draft_of") or "").strip()
+        if not parent:
+            break
+        current = parent
+    return current
 
 
 def _resolve_relative_parent_profile_path(profile_path: Path, parent_ref: str) -> Path:
@@ -218,24 +270,43 @@ def _parse_capability(
     capability_templates: Mapping[str, Mapping[str, Any]],
 ) -> WriteCapability:
     resolved_raw = _resolve_capability_raw(raw, capability_defaults, capability_templates)
+    learned_provenance = resolved_raw.get("learned_provenance")
+    learned_scope = ""
+    if isinstance(learned_provenance, Mapping):
+        learned_scope = str(learned_provenance.get("scope") or "").strip()
+    metadata_scope = str(resolved_raw.get("metadata_scope") or learned_scope or "").strip()
+    experimental = bool(resolved_raw.get("experimental", False) or bool(learned_scope))
     choices = tuple(_parse_choice(item) for item in raw.get("choices", []))
     if not choices:
         choices = tuple(_parse_choice(item) for item in resolved_raw.get("choices", []))
     enum_map = _parse_enum_map(resolved_raw.get("enum_map"))
+    command_map = _parse_command_map(resolved_raw.get("command_map"))
+    tested = bool(resolved_raw.get("tested", False))
+    provenance = _parse_capability_provenance(resolved_raw.get("provenance"), tested=tested)
     return WriteCapability(
         key=str(resolved_raw["key"]),
-        register=int(resolved_raw["register"]),
+        register=int(resolved_raw.get("register", -1)),
         value_kind=str(resolved_raw["value_kind"]),
         note=str(resolved_raw.get("note", "")),
+        command=str(resolved_raw.get("command", "")),
+        command_map=command_map,
         word_count=int(resolved_raw.get("word_count", 1)),
         combine=str(resolved_raw.get("combine", "u16")),
-        tested=bool(resolved_raw.get("tested", False)),
+        bitmask=_optional_bitmask(
+            resolved_raw.get("bitmask"),
+            capability_key=str(resolved_raw["key"]),
+            word_count=int(resolved_raw.get("word_count", 1)),
+        ),
+        tested=tested,
+        provenance=provenance,
         support_tier=str(resolved_raw.get("support_tier", "")),
         support_notes=str(resolved_raw.get("support_notes", "")),
         action_value=_optional_int(resolved_raw.get("action_value")),
         divisor=_optional_int(resolved_raw.get("divisor")),
         minimum=_optional_int(resolved_raw.get("minimum")),
         maximum=_optional_int(resolved_raw.get("maximum")),
+        command_width=_optional_int(resolved_raw.get("command_width")),
+        command_precision=_optional_int(resolved_raw.get("command_precision")),
         enum_map=enum_map,
         choices=choices,
         recommendations=tuple(
@@ -264,6 +335,9 @@ def _parse_capability(
         ),
         visible_if=_resolve_conditions(resolved_raw.get("visible_if", []), named_conditions),
         editable_if=_resolve_conditions(resolved_raw.get("editable_if", []), named_conditions),
+        experimental=experimental,
+        metadata_scope=metadata_scope,
+        write_function=_optional_int(resolved_raw.get("write_function")),
     )
 
 
@@ -317,6 +391,18 @@ def _parse_choice(raw: Mapping[str, Any]) -> CapabilityChoice:
         order=int(raw.get("order", 1000)),
         advanced=bool(raw.get("advanced", False)),
     )
+
+
+def _parse_command_map(raw: Any) -> dict[int, str] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    parsed: dict[int, str] = {}
+    for key, value in raw.items():
+        command = str(value or "").strip().upper()
+        if not command:
+            continue
+        parsed[int(key)] = command
+    return parsed or None
 
 
 def _parse_recommendation(
@@ -383,6 +469,7 @@ def _parse_condition(raw: Mapping[str, Any]) -> CapabilityCondition:
         operator=str(raw.get("operator", "eq")),
         value=raw.get("value", True),
         reason=str(raw.get("reason", "")),
+        effect=str(raw.get("effect", "warning")),
     )
 
 
@@ -392,10 +479,33 @@ def _parse_enum_map(raw: Any) -> dict[int, str] | None:
     return {int(key): str(value) for key, value in raw.items()}
 
 
+def _parse_capability_provenance(value: Any, *, tested: bool) -> str:
+    if value is None or value == "":
+        return "verified" if tested else "inferred"
+
+    parsed = str(value).strip().lower()
+    if parsed not in _ALLOWED_CAPABILITY_PROVENANCE:
+        raise ValueError(f"invalid_capability_provenance:{value}")
+    return parsed
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _optional_bitmask(value: Any, *, capability_key: str, word_count: int) -> int | None:
+    """Parse one capability bitmask (int, or hex string like "0x0001")."""
+
+    if value is None or value == "":
+        return None
+    mask = int(value.strip(), 0) if isinstance(value, str) else int(value)
+    if not 1 <= mask <= 0xFFFF:
+        raise ValueError(f"invalid_capability_bitmask:{capability_key}:{value}")
+    if word_count != 1:
+        raise ValueError(f"bitmask_requires_single_word:{capability_key}")
+    return mask
 
 
 def _optional_float(value: Any) -> float | None:
@@ -531,6 +641,10 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
             raise ValueError(
                 f"profile:{profile.key}:unknown_group_for_capability:"
                 f"{capability.key}:{capability.group}"
+            )
+        if capability.register < 0 and not capability.command and not capability.command_map:
+            raise ValueError(
+                f"profile:{profile.key}:capability_requires_register_or_command:{capability.key}"
             )
         if capability.word_count < 1:
             raise ValueError(

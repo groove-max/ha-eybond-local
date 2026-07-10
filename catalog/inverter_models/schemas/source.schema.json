@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Catalog source record",
+  "description": "Minimum sanitized context required to understand why catalog information was added. Raw private conversations, credentials, serial numbers, collector identifiers, IP addresses, and account identifiers must not be committed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_key",
+    "kind",
+    "title",
+    "reference",
+    "captured_at",
+    "visibility",
+    "summary",
+    "assertions"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "source_key": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "kind": {
+      "type": "string",
+      "enum": [
+        "support_archive",
+        "github_issue",
+        "github_comment",
+        "forum_post",
+        "private_message",
+        "documentation",
+        "third_party_impl",
+        "register_map",
+        "maintainer_test"
+      ]
+    },
+    "title": {"type": "string", "minLength": 1},
+    "reference": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Durable maintainer identity such as project-issue:<id>, project-attachment:<token>, sha256:<hash>, private:<token>, or fixture:<name>. Public URLs should not be committed to the public model catalog."
+    },
+    "captured_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "format": "date"},
+    "visibility": {"type": "string", "enum": ["public", "private"]},
+    "summary": {"type": "string", "minLength": 1},
+    "summary_publishable": {
+      "type": "boolean",
+      "description": "Whether the sanitized summary of a PRIVATE source may be rendered in the generated journal. Public sources are always publishable. Defaults to false."
+    },
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "commercial_identity",
+          "fingerprint",
+          "runtime_compatibility",
+          "telemetry_validation",
+          "write_validation",
+          "control_behavior",
+          "register_map",
+          "hardware_test"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_9_20260619_shadow_learning",
+  "kind": "support_archive",
+  "title": "Anenji ANJ-4000W-24V full shadow-learning support archive",
+  "reference": "private:support-archive-issue-9-20260619-shadow-learning",
+  "captured_at": "2026-06-19",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Full private shadow-learning support archive for the issue #9 ANJ-4000W-24V device. The run planned and correlated 77 cloud write attempts with 77 local FC16 Modbus writes, with zero unmatched, degraded, leaked, or unknown-field attempts. The safety proxy captured but did not apply the writes to the real inverter. The generated device-scoped overlay selected eight learned controls at registers 304, 322, 330, 338, 341, 342, 343, and 425, and excluded destructive actions at registers 460 and 461.",
+  "assertions": [
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation",
+    "control_behavior"
+  ]
+}

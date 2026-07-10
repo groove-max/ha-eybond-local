@@ -16,28 +16,20 @@
       },
       "collector_network": {
         "title": "Collector Network Setup",
-        "description": "At this stage the collector should already be connected to the same network as Home Assistant. If it is, simply choose the first option below.\n\nIf not, you have several paths: use the original SmartESS app, connect the collector manually, or, for compatible models, send Wi-Fi settings over Bluetooth.\n\nThe SmartESS path is usually the simplest. The manual path, however, does not validate the collector's SmartESS server binding and does not require access to the SmartESS account that already owns the collector.\n\nTwo practical manual options are available right now:\n- **Over Wi-Fi.** This is the broader compatibility path and can still be used while the collector is operating as an access point.\n- **Over Bluetooth.** This is simpler because it usually completes in one pass and does not require switching Home Assistant onto the collector's Wi-Fi first. However, it works only on newer collectors and requires Bluetooth hardware on the Home Assistant side. Home Assistant Bluetooth Proxy, for example via ESPHome, is also supported.\n\nFor the Wi-Fi path, connect Home Assistant itself to the access point broadcast by the collector. The SSID usually includes the collector PN, and the default password is often `12345678`.\n\nAfter that connection is established, return to this screen and choose **\"Yes, the collector is already on my network\"**.\n\nAfter the device is added to the integration, you can open the device settings and enter your normal Wi-Fi SSID and password to move the collector into client mode.\n\nAfter changing network parameters or switching the access point, it is recommended to remove the device from the integration and add it again.",
+        "description": "Is the collector already on the same network as Home Assistant? If yes, choose the first option.\n\nIf not, two ways to get it online:\n- **Bluetooth** (second option) — the easiest path on newer collectors. Needs Bluetooth on the Home Assistant side: a local adapter or an ESPHome Bluetooth Proxy near the collector.\n- **The collector's own Wi-Fi** — connect the Home Assistant host to the access point the collector broadcasts (the SSID contains the collector PN, the password is usually `12345678`), then choose the first option.\n\nAfter the device is added, you can move the collector onto your normal Wi-Fi from the integration settings.",
         "menu_options": {
           "auto": "Yes, the collector is already on my network",
           "bluetooth_setup": "No, connect the collector to Wi-Fi using Bluetooth first"
-        },
-        "data": {
-          "collector_network_status": "Collector network status"
-        },
-        "data_description": {
-          "collector_network_status": "Choose Bluetooth Wi-Fi setup only when the collector still needs to join your network. This path is still in test mode and works only for collectors with Bluetooth support. It can use either a local Bluetooth adapter or a Home Assistant Bluetooth proxy, such as ESPHome, near the collector."
         }
       },
       "auto": {
         "title": "Choose Scan Interface",
-        "description": "Choose the Home Assistant interface below, then decide whether to start a quick auto-scan now, switch to a deeper full-network scan, or open manual setup.",
+        "description": "Choose the Home Assistant network interface (the one on the same subnet as your inverter), then start the scan.",
         "data": {
-          "server_ip": "Home Assistant interface",
-          "setup_mode": "Next step"
+          "server_ip": "Home Assistant interface"
         },
         "data_description": {
-          "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter.",
-          "setup_mode": "Start a quick auto-scan, switch to a deeper full-network scan, or skip straight to manual setup."
+          "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter."
         }
       },
       "bluetooth_setup": {
@@ -74,10 +66,14 @@
         "description": "**Scan interface:** {selected_scan_interface}\n\n{scan_summary}\n\n{candidate_list}\n\n{scan_next_hint}",
         "menu_options": {
           "choose": "Add detected device",
-          "deep_scan": "Run deep scan",
-          "change_scan_interface": "Change scan interface",
           "refresh_scan": "Refresh scan results",
-          "manual": "Manual setup"
+          "advanced_setup": "Device not found? Advanced setup"
+        },
+        "data": {
+          "result_key": "Device or action"
+        },
+        "data_description": {
+          "result_key": "Pick a found device to add it, or pick a follow-up action."
         }
       },
       "change_scan_interface": {
@@ -100,61 +96,65 @@
           "result_key": "Choose the inverter you want to add to Home Assistant."
         }
       },
-      "collector_operation": {
-        "title": "Collector Operating Mode",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
+      "driver_choice": {
+        "title": "Choose Inverter Driver",
+        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
         "data": {
-          "collector_operation_mode": "Collector operating mode"
+          "driver_match_key": "Driver / protocol"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener."
+          "driver_match_key": "If you are not sure, keep the recommended option."
         }
       },
-      "collector_endpoint_confirm": {
-        "title": "Confirm Collector Callback Change",
-        "description": "{collector_confirm_table}\n\n**Current collector server:** `{current_collector_server_endpoint}`\n**New Home Assistant server:** `{target_collector_server_endpoint}`\n\n{collector_endpoint_originality_hint}\n\nChanging this value detaches the collector from its current callback server after the collector applies the change. There is not yet a 100% guarantee that the original endpoint is identical for every collector model.\n\n**Last endpoint error:** {collector_endpoint_last_error}",
-        "data": {
-          "confirm_collector_endpoint_risk": "I recorded the current endpoint and accept the risk"
-        },
-        "data_description": {
-          "confirm_collector_endpoint_risk": "Required before EyeBond Local writes the Home Assistant callback endpoint to the collector."
+      "detection_summary": {
+        "title": "Detection result",
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}",
+        "menu_options": {
+          "confirm": "Add this device",
+          "smartess_cloud_assist": "Refine identification via SmartESS cloud"
         }
       },
       "confirm": {
         "title": "Confirm Detection",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Collector operating mode",
+          "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
           "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
+          "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
       "confirm_without_cloud_assist": {
         "title": "Confirm Detection",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Collector operating mode",
+          "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
           "collector_operation_mode": "SmartESS cloud + Home Assistant keeps the existing collector server setting. Home Assistant only changes the collector callback endpoint to this Home Assistant listener.",
+          "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
-      "smartess_cloud_assist_choice": {
-        "title": "Refine With SmartESS Cloud",
-        "description": "{smartess_cloud_offer_summary}\n\n**Collector PN:** {collector_pn}\n**Last cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
-        "menu_options": {
-          "smartess_cloud_assist": "Use SmartESS cloud assist",
-          "confirm_without_cloud_assist": "Continue without cloud assist"
+      "confirm_poll_interval": {
+        "title": "Manual refresh interval",
+        "description": "Manual refresh mode uses the exact interval below.",
+        "data": {
+          "poll_interval": "Poll interval"
+        },
+        "data_description": {
+          "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval."
         }
       },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
-        "description": "The integration will authenticate against SmartESS cloud, resolve the device identity for collector `{collector_pn}`, and store reusable onboarding cloud evidence.\n\n{smartess_cloud_offer_summary}\n\n**Last cloud evidence:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "description": "Sign in with your SmartESS account to confirm the device identity for collector `{collector_pn}`. The login is used once for this step; the result is saved as reusable onboarding evidence.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
         "data": {
           "username": "SmartESS username",
           "password": "SmartESS password"
@@ -174,7 +174,7 @@
       },
       "manual": {
         "title": "Manual Setup",
-        "description": "Use this if auto-detection cannot find your device, if the collector is remote, or if callback traffic must go through VPN / NAT.\n\nWhen you continue, the integration will probe these settings before creating the entry. If the probe does not confirm the device, you can edit the values and try again from the next screen.",
+        "description": "For setups the auto-scan cannot reach: a remote collector, VPN/NAT, or a known fixed address. The settings are probed first — if the device is not confirmed, you can adjust them and retry on the next screen.",
         "data": {
           "server_ip": "Local listener IP",
           "collector_ip": "Collector IP",
@@ -188,7 +188,7 @@
         "sections": {
           "advanced_connection": {
             "name": "Advanced connection settings",
-            "description": "Port numbers, discovery, heartbeat tuning, and optional remote callback overrides. Leave the advertised callback fields empty for normal local setups.",
+            "description": "Only needed for remote, VPN, or NAT setups. For a normal home network the defaults are correct — you can leave everything here untouched.",
             "data": {
               "tcp_port": "Local TCP port",
               "advertised_server_ip": "Advertised callback IP",
@@ -200,12 +200,12 @@
             },
             "data_description": {
               "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
-              "advertised_server_ip": "IPv4 address announced inside set>server=. Leave empty to advertise the local listener IP above. Override this only for VPN, NAT, or public callback routing.",
-              "advertised_tcp_port": "TCP port announced inside set>server=. Leave empty to advertise the local TCP port above. Override this only when the forwarded external port differs from the local listener port.",
-              "udp_port": "UDP port used by collector discovery redirects. Default: 58899.",
+              "advertised_server_ip": "Public or forwarded IP the collector should call back to. Leave empty for normal home networks (the local address above is used).",
+              "advertised_tcp_port": "Forwarded external port for the callback. Leave empty unless your router forwards a different external port.",
+              "udp_port": "Port used to discover the collector on the network. Default: 58899 — change only if instructed.",
               "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
               "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
-              "heartbeat_interval": "How often to send keep-alive packets after the collector connects."
+              "heartbeat_interval": "How often Home Assistant pings the collector to keep the connection alive."
             }
           }
         }
@@ -219,10 +219,21 @@
           "manual_smartess_cloud_assist": "Refine via SmartESS cloud",
           "manual_create_pending": "Save Pending Device"
         }
+      },
+      "advanced_setup": {
+        "title": "Advanced setup",
+        "description": "Use these only if the automatic scan did not find your inverter.",
+        "menu_options": {
+          "deep_scan": "Deep scan (whole subnet)",
+          "change_scan_interface": "Change network interface",
+          "manual": "Enter address manually",
+          "refresh_scan": "Scan again"
+        }
       }
     },
     "progress": {
-      "scanning_network": "Scanning the local network for EyeBond collectors…"
+      "scanning_network": "Scanning the local network for EyeBond collectors…",
+      "shadow_learning": "{control_discovery_hint}"
     },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",
@@ -233,14 +244,13 @@
       "ble_address_invalid": "Enter the collector Bluetooth address.",
       "ble_wifi_ssid_invalid": "Enter the Wi-Fi network name to send over Bluetooth.",
       "ble_wifi_password_invalid": "Enter the Wi-Fi password to send over Bluetooth.",
-      "ble_wifi_scan_failed": "The collector was found over Bluetooth, but Home Assistant could not read its Wi-Fi network list. The Bluetooth link is likely unstable; move the collector or Bluetooth adapter closer, or place an ESPHome Bluetooth Proxy near the collector, and try again.",
+      "ble_wifi_scan_failed": "Found the collector over Bluetooth, but could not read its Wi-Fi list — the Bluetooth link is probably weak. Move the collector or the adapter closer (or place an ESPHome Bluetooth Proxy nearby) and try again.",
       "ble_provision_failed": "Bluetooth provisioning did not complete successfully. Check the collector, adapter permissions, and Wi-Fi credentials, then try again.",
-      "collector_endpoint_read_failed": "Could not read the current collector callback endpoint.",
       "collector_endpoint_write_failed": "Could not write the Home Assistant callback endpoint to the collector.",
-      "collector_endpoint_risk_not_confirmed": "Confirm that you recorded the current endpoint before continuing.",
       "invalid_selection": "The selected detection result is no longer available.",
       "already_added_candidate": "This detected device is already configured and cannot be added again.",
-      "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again."
+      "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again.",
+      "inverter_link_down": "The collector responded, but the inverter link is down (identity registers read as zeros). Check the inverter power and the collector cable, then rescan."
     },
     "abort": {
       "already_configured": "This collector or inverter is already configured."
@@ -257,15 +267,27 @@
       "collector_wifi_password_required": "Enter the Wi-Fi password.",
       "collector_wifi_password_not_ascii": "This collector accepts only ASCII Wi-Fi passwords on the local management path.",
       "collector_wifi_apply_not_confirmed": "Confirm that applying Wi-Fi settings may temporarily disconnect the collector.",
-      "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details."
+      "collector_uart_read_failed": "Could not read UART settings from the collector.",
+      "collector_uart_write_failed": "Could not write UART settings to the collector.",
+      "collector_uart_baudrate_invalid": "Choose a supported UART speed.",
+      "collector_uart_apply_not_confirmed": "Confirm that changing the UART speed may temporarily stop inverter communication.",
+      "collector_uart_runtime_unavailable": "This collector hardware cannot change UART speed at runtime.",
+      "proxy_capture_action_failed": "The capture action failed. Check the Home Assistant log for details.",
+      "diagnostic_commands_required": "Paste at least one diagnostic command.",
+      "diagnostic_commands_unavailable": "The integration runtime is not loaded, so diagnostic commands cannot run.",
+      "diagnostic_commands_failed": "The diagnostic scenario failed unexpectedly. Check the Home Assistant log.",
+      "shadow_learning_failed": "Control discovery action failed. Check details and confirmations, then try again.",
+      "invalid_selection": "The selected option is no longer available."
     },
     "step": {
       "init": {
         "title": "EyeBond Local Options",
-        "description": "Choose what you want to manage for this entry.",
+        "description": "Choose what you want to manage for this entry.{bridge_note}",
         "menu_options": {
           "runtime": "Connection and polling",
+          "shadow_learning": "Expand device support",
           "collector_wifi": "Change collector Wi-Fi",
+          "collector_uart": "Change inverter UART speed",
           "diagnostics": "Diagnostics and service tools"
         }
       },
@@ -283,23 +305,38 @@
           "confirm_collector_wifi_apply": "After changing the network settings, it is recommended to remove this device from Home Assistant and add it again so the collector reconnects using its new IP address."
         }
       },
+      "collector_uart": {
+        "title": "Change inverter UART speed",
+        "description": "**Current status**\nCollector: {collector_ip}\nHardware: {hardware_version}\nCurrent UART: {current_uart}\n\nChoose the UART speed expected by the inverter, then apply it. This setting is available only for ESP EyeBond Collector bridges.{runtime_unavailable_note}{status_updates}",
+        "data": {
+          "collector_uart_baudrate": "UART speed",
+          "collector_uart_action": "What to do",
+          "confirm_collector_uart_apply": "I understand that changing the UART speed may temporarily stop inverter communication"
+        },
+        "data_description": {
+          "collector_uart_baudrate": "The bridge keeps the current framing and changes only the baud rate. PI30/Voltronic devices commonly use 2400; SMG/Modbus devices commonly use 9600.",
+          "confirm_collector_uart_apply": "If the speed is wrong, Home Assistant may keep seeing the collector but stop receiving inverter data until the speed is corrected."
+        }
+      },
       "runtime": {
         "title": "Runtime Settings",
-        "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}",
+        "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
           "collector_operation_mode": "Collector operation mode",
           "control_mode": "Control mode"
         },
         "data_description": {
-          "poll_interval": "How often to read sensor values from the inverter.",
+          "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
+          "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
           "collector_operation_mode": "SmartESS + HA keeps the collector visible in the SmartESS app while Home Assistant also talks to it locally. Home Assistant only makes that collector reconnect to Home Assistant.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
         },
         "sections": {
           "connection": {
             "name": "Connection settings",
-            "description": "Network transport settings, including optional remote callback overrides. Leave advertised callback fields empty for normal local setups.",
+            "description": "Only needed for remote, VPN, or NAT setups. For a normal home network the defaults are correct — you can leave everything here untouched.",
             "data": {
               "server_ip": "Local listener IP",
               "collector_ip": "Collector IP",
@@ -316,40 +353,92 @@
               "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener.",
               "collector_ip": "Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
               "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
-              "advertised_server_ip": "IPv4 address announced inside set>server=. Leave empty to advertise the local listener IP above.",
-              "advertised_tcp_port": "TCP port announced inside set>server=. Leave empty to advertise the local TCP port above.",
-              "udp_port": "UDP port used by collector discovery redirects. Default: 58899.",
+              "advertised_server_ip": "Public or forwarded IP the collector should call back to. Leave empty for normal home networks (the local address above is used).",
+              "advertised_tcp_port": "Forwarded external port for the callback. Leave empty unless your router forwards a different external port.",
+              "udp_port": "Port used to discover the collector on the network. Default: 58899 — change only if instructed.",
               "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
               "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
-              "heartbeat_interval": "Keep-alive interval after the collector connects.",
+              "heartbeat_interval": "How often Home Assistant pings the collector to keep the connection alive.",
               "driver_hint": "Auto-detect works for most inverters."
             }
           }
         }
       },
-      "diagnostics": {
-        "title": "Diagnostics And Experimental Metadata",
-        "description": "**Need to share diagnostics?** Choose **{support_archive_action_label}** below. It creates one ZIP with runtime data, raw capture evidence, an anonymized replay fixture, and matching SmartESS cloud evidence when available.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Primary action for the current state:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Recommended next:** {support_workflow_next_action}\n\n{smartess_cloud_diagnostics_hint}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}\n**Last cloud evidence:** {cloud_evidence_path}",
-        "menu_options": {
-          "create_support_package": "Create support archive",
-          "reload_local_metadata": "Reload local metadata",
-          "rollback_local_metadata": "Rollback local metadata",
-          "advanced_metadata": "Advanced metadata tools"
+      "runtime_poll_interval": {
+        "title": "Manual refresh interval",
+        "description": "Manual refresh mode uses the exact interval below.",
+        "data": {
+          "poll_interval": "Poll interval"
+        },
+        "data_description": {
+          "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval."
         }
       },
-      "advanced_metadata": {
-        "title": "Advanced Metadata Tools",
-        "description": "**Use this screen for draft generation and raw JSON export.**\n\n**Support status:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Internal runtime path:** {effective_owner_name} (`{effective_owner_key}`){smartess_family_line}\n\n| Metadata | Built-in | Source | Override |\n|---|---|---|---|\n| Profile | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Schema | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Suggested draft names:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Last cloud evidence:** {cloud_evidence_path}\n**Last profile draft:** {local_profile_draft_path}\n**Last schema draft:** {local_schema_draft_path}\n**Status:** {local_metadata_status}",
+      "diagnostics": {
+        "title": "Diagnostics And Experimental Metadata",
+        "description": "**{support_archive_action_label}** builds one ZIP with everything needed to help: runtime data, capture evidence, an anonymized replay fixture, and saved cloud evidence.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}",
         "menu_options": {
-          "export_smartess_cloud_evidence": "Export SmartESS cloud evidence",
-          "proxy_capture": "Collector traffic capture",
-          "create_smartess_smg_bridge": "Create SmartESS SMG bridge",
-          "create_smartess_draft": "Create SmartESS draft",
-          "create_profile_draft": "Create local profile draft",
-          "create_schema_draft": "Create local register schema draft",
+          "create_support_package": "Create support archive",
+          "diagnostic_commands": "Run diagnostic commands",
           "reload_local_metadata": "Reload local metadata",
           "rollback_local_metadata": "Rollback local metadata",
-          "create_support_package": "Create support archive"
+          "proxy_capture": "Collector traffic capture"
+        }
+      },
+      "diagnostic_commands": {
+        "title": "Diagnostic Commands",
+        "description": "Paste the diagnostic scenario provided by the developer. Commands are executed directly on the device through the current collector connection and write commands can change inverter settings.\n\n**Local result:** `{diagnostic_result_path}`\n**Shareable result:** {diagnostic_download_markdown}",
+        "data": {
+          "diagnostic_commands": "Commands",
+          "diagnostic_stop_on_error": "Stop after the first error",
+          "diagnostic_confirm_write": "Confirm device writes",
+          "diagnostic_publish_download_copy": "Create shareable download link",
+          "diagnostic_result": "Result"
+        },
+        "data_description": {
+          "diagnostic_commands": "Paste the complete multiline scenario, including driver or address overrides when provided.",
+          "diagnostic_stop_on_error": "Disable this only when later commands should still run after a failed command.",
+          "diagnostic_publish_download_copy": "Copies the redacted shareable result to Home Assistant /local. Leave disabled unless you intend to download or share it.",
+          "diagnostic_result": "Read-only output from the latest run. Copy it or use the shareable download link above."
+        }
+      },
+      "shadow_learning": {
+        "title": "Expand support for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "shadow_learning_confirm_cloud_write": "Yes, briefly check which extra sensors and controls this device supports"
+        },
+        "data_description": {
+          "shadow_learning_confirm_cloud_write": "Home Assistant briefly checks this device through its cloud service to discover extra controls and sensor evidence. The device's settings are not changed."
+        }
+      },
+      "shadow_learning_credentials": {
+        "title": "Expand support for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "username": "Cloud username",
+          "password": "Cloud password"
+        },
+        "data_description": {
+          "username": "Used only for the current device-support discovery action.",
+          "password": "Used only for the current device-support discovery action."
+        }
+      },
+      "shadow_learning_review": {
+        "title": "Expand support for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "enabled_controls": "Extra controls to add"
+        },
+        "data_description": {
+          "enabled_controls": "Tick the extra controls you want in Home Assistant. Risky ones are left off by default."
+        }
+      },
+      "shadow_learning_result": {
+        "title": "Expand support for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "result_action": "What would you like to do?"
         }
       },
       "proxy_capture": {
@@ -367,90 +456,29 @@
       },
       "create_support_package": {
         "title": "Create Support Archive",
-        "description": "This step builds the support archive in one flow. If matching SmartESS cloud evidence is already saved, it will be included automatically. If you need a fresh SmartESS cloud bundle, choose **{refresh_mode_label}** below and enter the credentials here instead of leaving this screen first.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
+        "description": "Builds the support archive in one step. Saved cloud evidence is included automatically; choose **{refresh_mode_label}** to fetch a fresh copy with your cloud account login.\n\n| Detail | Value |\n|---|---|\n| Collector PN | {collector_pn} |\n| Current cloud evidence | {cloud_evidence_path} |\n| Archive plan | {smartess_archive_plan_summary} |",
         "data": {
-          "smartess_cloud_mode": "SmartESS cloud evidence",
-          "username": "SmartESS username",
-          "password": "SmartESS password"
+          "smartess_cloud_mode": "Cloud evidence",
+          "username": "Cloud account username",
+          "password": "Cloud account password"
         },
         "data_description": {
-          "smartess_cloud_mode": "Choose whether to use saved SmartESS cloud evidence, refresh it now inside this step, or build the archive without it.",
-          "username": "Only needed when fetching or refreshing SmartESS cloud evidence in this step.",
-          "password": "Only needed when fetching or refreshing SmartESS cloud evidence in this step. It is used only for this live action."
+          "smartess_cloud_mode": "Choose whether to use saved cloud evidence, refresh it now inside this step, or build the archive without it.",
+          "username": "Only needed when fetching or refreshing cloud evidence in this step.",
+          "password": "Only needed when fetching or refreshing cloud evidence in this step. It is used only for this live action."
         }
       },
       "rollback_local_metadata": {
         "title": "Rollback Local Metadata",
-        "description": "The active managed local metadata override files below will be removed and the entry will be reloaded onto the built-in metadata again.\n\n| Detail | Value |\n|---|---|\n| Active override files | {rollback_target_count} |\n| Profile override | {rollback_profile_path} |\n| Schema override | {rollback_schema_path} |\n\nOnly the currently active overrides inside `/config/eybond_local/` are touched. Inactive drafts and cloud evidence are left unchanged."
-      },
-      "export_smartess_cloud_evidence": {
-        "title": "Export SmartESS Cloud Evidence",
-        "description": "The integration will authenticate against SmartESS cloud, resolve the device identity for collector `{collector_pn}`, and store a reusable cloud evidence bundle under `/config/eybond_local/cloud_evidence/`. Use this standalone step when you need the cloud evidence itself for Advanced metadata tools or for review without creating a support archive yet.\n\n**Last cloud evidence:** {cloud_evidence_path}",
-        "data": {
-          "username": "SmartESS username",
-          "password": "SmartESS password"
-        },
-        "data_description": {
-          "username": "The SmartESS account name used by the mobile app.",
-          "password": "The SmartESS account password. It is used only for this live export step."
-        }
-      },
-      "create_smartess_smg_bridge": {
-        "title": "Create SmartESS SMG Bridge",
-        "description": "A local SmartESS-backed SMG bridge draft will be generated from the latest matching cloud evidence without changing the active runtime owner.\n\n| Detail | Value |\n|---|---|\n| Bridge | {bridge_label} |\n| Reason | {reason} |\n| Matched controls | {matched_controls} |\n| Matched readbacks | {matched_readbacks} |\n| Blocked fields left unchanged | {blocked_fields} |\n| Unmapped cloud fields | {skipped_fields} |\n| Source profile | {source_profile} |\n| Source schema | {source_schema} |\n| Cloud evidence | {cloud_evidence_path} |\n| Profile override | {profile_override} |\n| Schema override | {schema_override} |",
-        "data": {
-          "output_profile": "Output profile file name",
-          "output_schema": "Output schema file path",
-          "overwrite": "Overwrite existing files"
-        },
-        "data_description": {
-          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
-          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
-          "overwrite": "Replace the files if they already exist."
-        }
-      },
-      "create_smartess_draft": {
-        "title": "Create SmartESS Draft",
-        "description": "A local SmartESS draft will be generated from the latest matching cloud evidence.\n\n| Detail | Value |\n|---|---|\n| Recognized family | {driver_label} |\n| Reason | {reason} |\n| Source profile | {source_profile} |\n| Source schema | {source_schema} |\n| Cloud evidence | {cloud_evidence_path} |\n| Profile override | {profile_override} |\n| Schema override | {schema_override} |",
-        "data": {
-          "output_profile": "Output profile file name",
-          "output_schema": "Output schema file path",
-          "overwrite": "Overwrite existing files"
-        },
-        "data_description": {
-          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
-          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
-          "overwrite": "Replace the files if they already exist."
-        }
-      },
-      "create_profile_draft": {
-        "title": "Create Local Profile Draft",
-        "description": "A local experimental profile will be created under `/config/eybond_local/profiles/`.\n\n| Detail | Value |\n|---|---|\n| Source profile | {source_profile} |\n| Suggested name | {suggested_output} |\n| Current override | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_profile": "Output profile file name",
-          "overwrite": "Overwrite existing file"
-        },
-        "data_description": {
-          "output_profile": "Leave unchanged to override the built-in profile automatically after reload.",
-          "overwrite": "Replace the file if it already exists."
-        }
-      },
-      "create_schema_draft": {
-        "title": "Create Local Register Schema Draft",
-        "description": "A local experimental register schema will be created under `/config/eybond_local/register_schemas/`.\n\n| Detail | Value |\n|---|---|\n| Source schema | {source_schema} |\n| Suggested name | {suggested_output} |\n| Current override | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_schema": "Output schema file path",
-          "overwrite": "Overwrite existing file"
-        },
-        "data_description": {
-          "output_schema": "Leave unchanged to override the built-in schema automatically after reload.",
-          "overwrite": "Replace the file if it already exists."
-        }
+        "description": "Removes the active local override files below and reloads the device on built-in metadata. Inactive drafts and saved evidence are not touched.\n\n| Detail | Value |\n|---|---|\n| Active override files | {rollback_target_count} |\n| Profile override | {rollback_profile_path} |\n| Schema override | {rollback_schema_path} |"
       },
       "diagnostics_result": {
         "title": "Diagnostics Result",
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
       }
+    },
+    "progress": {
+      "shadow_learning": "{control_discovery_hint}"
     }
   },
   "entity": {
@@ -487,6 +515,29 @@
         "state": {
           "smartess_cloud_home_assistant": "SmartESS + HA",
           "home_assistant_only": "Home Assistant only"
+        }
+      },
+      "collector_poll_mode": {
+        "name": "Poll mode",
+        "state": {
+          "auto": "Automatic",
+          "manual": "Manual"
+        }
+      },
+      "collector_poll_context": {
+        "name": "Poll context",
+        "state": {
+          "runtime": "Runtime polling",
+          "detection": "Inverter detection",
+          "collector": "Collector connection"
+        }
+      },
+      "runtime_driver_state": {
+        "name": "Runtime driver state",
+        "state": {
+          "driver_bound": "Driver bound",
+          "driver_unbound": "Driver not detected",
+          "collector_offline": "Collector offline"
         }
       },
       "collector_signal_quality": {
@@ -647,7 +698,13 @@
       "options": {
         "auto": "Auto",
         "modbus_smg": "SMG / Modbus",
-        "pi30": "PI30"
+        "srne_modbus": "SRNE / Modbus",
+        "must_pv_ph18": "MUST PV/PH18",
+        "modbus_catalog": "Device Catalog / Modbus (Aohai FSA…)",
+        "smartess_local": "SmartESS 0925 / Modbus",
+        "pi30": "PI30",
+        "eybond_g_ascii": "EyeBond G-ASCII",
+        "pi18": "PI18"
       }
     },
     "control_mode": {
@@ -655,6 +712,12 @@
         "auto": "Auto",
         "read_only": "Read only",
         "full": "Full control"
+      }
+    },
+    "poll_mode": {
+      "options": {
+        "auto": "Automatic",
+        "manual": "Manual"
       }
     }
   }

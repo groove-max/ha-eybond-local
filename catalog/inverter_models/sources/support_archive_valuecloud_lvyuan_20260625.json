@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_valuecloud_lvyuan_20260625",
+  "kind": "support_archive",
+  "title": "SmartValue LVYUAN G-ASCII support archive",
+  "reference": "sha256:d84ec0bb57f402325bc62a0dcd66808f260e6029c38faf061acae033ba5d9b55",
+  "captured_at": "2026-06-25",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Private support archive captured a SmartValue endpoint profile, 9600 8N1 collector serial settings, and read-only G-command telemetry. The archive was produced before the protocol was renamed from a provisional SmartValue-specific runtime name to EyeBond G-ASCII, so old runtime key names in this archive are historical evidence only.",
+  "assertions": [
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

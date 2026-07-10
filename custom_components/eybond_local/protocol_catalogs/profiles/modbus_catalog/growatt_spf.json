@@ -1,0 +1,228 @@
+{
+  "profile_key": "modbus_catalog/growatt_spf.json",
+  "title": "Growatt SPF Off-Grid (untested controls)",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "growatt_spf",
+  "groups": [
+    {
+      "key": "priorities",
+      "title": "Priorities",
+      "order": 100,
+      "description": "Output and charge source priorities.",
+      "icon": "mdi:swap-vertical"
+    },
+    {
+      "key": "grid",
+      "title": "Grid",
+      "order": 200,
+      "description": "Utility input acceptance settings.",
+      "icon": "mdi:transmission-tower"
+    },
+    {
+      "key": "battery",
+      "title": "Battery",
+      "order": 300,
+      "description": "Battery charging limits.",
+      "icon": "mdi:battery-cog"
+    },
+    {
+      "key": "protection",
+      "title": "Protection",
+      "order": 400,
+      "description": "Overload and overtemperature recovery behavior.",
+      "icon": "mdi:shield-outline"
+    },
+    {
+      "key": "system",
+      "title": "System",
+      "order": 500,
+      "description": "Buzzer and other system toggles.",
+      "icon": "mdi:cog-outline"
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "output_source_priority",
+      "title": "Output Source Priority",
+      "register": 1,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "priorities",
+      "note": "Growatt SPF holding register 1; single-register write (FC 0x06).",
+      "change_summary": "Changes which source powers the load first.",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Battery First",
+          "order": 0,
+          "description": "Prefer battery, fall back to PV and utility."
+        },
+        {
+          "value": 1,
+          "label": "PV First",
+          "order": 1,
+          "description": "Prefer PV, fall back to battery and utility."
+        },
+        {
+          "value": 2,
+          "label": "Utility First",
+          "order": 2,
+          "description": "Prefer utility, fall back to PV and battery."
+        }
+      ],
+      "enabled_default": true
+    },
+    {
+      "key": "charge_source_priority",
+      "title": "Charge Source Priority",
+      "register": 2,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "priorities",
+      "note": "Growatt SPF holding register 2; single-register write (FC 0x06).",
+      "change_summary": "Changes which source charges the battery.",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "PV First",
+          "order": 0,
+          "description": "Charge from PV first, utility assists."
+        },
+        {
+          "value": 1,
+          "label": "PV and Utility",
+          "order": 1,
+          "description": "Charge from PV and utility together."
+        },
+        {
+          "value": 2,
+          "label": "PV Only",
+          "order": 2,
+          "description": "Charge from PV only."
+        }
+      ],
+      "enabled_default": true
+    },
+    {
+      "key": "ac_input_mode",
+      "title": "AC Input Mode",
+      "register": 8,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "grid",
+      "note": "Growatt SPF holding register 8; single-register write (FC 0x06).",
+      "change_summary": "Changes the accepted utility voltage window (appliance vs UPS).",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "APL (90-280 VAC)",
+          "order": 0,
+          "description": "Wide appliance input window."
+        },
+        {
+          "value": 1,
+          "label": "UPS (170-280 VAC)",
+          "order": 1,
+          "description": "Narrow UPS input window."
+        }
+      ],
+      "enabled_default": true
+    },
+    {
+      "key": "overload_restart_mode",
+      "title": "Overload Restart",
+      "register": 20,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "protection",
+      "note": "Growatt SPF holding register 20; single-register write (FC 0x06).",
+      "change_summary": "Changes how the inverter recovers from an overload trip.",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Restart",
+          "order": 0,
+          "description": "Auto-restart after overload."
+        },
+        {
+          "value": 1,
+          "label": "No Restart",
+          "order": 1,
+          "description": "Stay off after overload."
+        },
+        {
+          "value": 2,
+          "label": "Switch to Utility",
+          "order": 2,
+          "description": "Hand the load to utility after overload."
+        }
+      ],
+      "enabled_default": true
+    },
+    {
+      "key": "overtemp_restart_mode",
+      "title": "Overtemperature Restart",
+      "register": 21,
+      "value_kind": "enum",
+      "write_function": 6,
+      "group": "protection",
+      "note": "Growatt SPF holding register 21; single-register write (FC 0x06).",
+      "change_summary": "Changes how the inverter recovers from an overtemperature trip.",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Restart",
+          "order": 0,
+          "description": "Auto-restart after cooling down."
+        },
+        {
+          "value": 1,
+          "label": "No Restart",
+          "order": 1,
+          "description": "Stay off after an overtemperature trip."
+        }
+      ],
+      "enabled_default": true
+    },
+    {
+      "key": "buzzer_enabled",
+      "title": "Buzzer",
+      "register": 22,
+      "value_kind": "bool",
+      "write_function": 6,
+      "group": "system",
+      "note": "Growatt SPF holding register 22; single-register write (FC 0x06).",
+      "change_summary": "Enables or disables the audible buzzer.",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "enabled_default": true
+    },
+    {
+      "key": "max_charge_current",
+      "title": "Max Charge Current",
+      "register": 34,
+      "value_kind": "u16",
+      "write_function": 6,
+      "group": "battery",
+      "unit": "A",
+      "minimum": 10,
+      "maximum": 130,
+      "step": 10,
+      "note": "Growatt SPF holding register 34 (10-130 A, utility + PV combined).",
+      "change_summary": "Limits the total battery charge current.",
+      "provenance": "doc_backed",
+      "support_notes": "From GrowattModBusProtocol.pdf V0.11; not yet confirmed on hardware.",
+      "enabled_default": true
+    }
+  ]
+}

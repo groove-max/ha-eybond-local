@@ -163,6 +163,7 @@ def build_support_workflow_state(
     if is_read_only_unverified_smg_family(
         variant_key=normalized_variant_key,
         profile_name=profile_name,
+        effective_owner_key=effective_owner_key,
     ):
         return _workflow_state(
             level="family_fallback",

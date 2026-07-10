@@ -11,7 +11,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.payload.modbus import ModbusError, ModbusSession
+from custom_components.eybond_local.payload.modbus import (
+    ModbusError,
+    ModbusSession,
+    merge_register_bit,
+    merge_register_field,
+)
 
 
 class _TimeoutTransport:
@@ -38,6 +43,61 @@ class ModbusPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(str(ctx.exception), "request_timeout")
         self.assertEqual(transport.calls, 2)
+
+
+class MergeRegisterBitTests(unittest.TestCase):
+    def test_set_each_boundary_bit_preserves_other_bits(self) -> None:
+        for bit_index in (0, 15):
+            mask = 1 << bit_index
+            merged = merge_register_bit(0x0000, bit_index, 1)
+            self.assertEqual(merged, mask)
+            # All other 15 bits stay zero.
+            self.assertEqual(merged & ~mask, 0)
+
+    def test_clear_each_boundary_bit_preserves_other_bits(self) -> None:
+        for bit_index in (0, 15):
+            mask = 1 << bit_index
+            merged = merge_register_bit(0xFFFF, bit_index, 0)
+            self.assertEqual(merged, 0xFFFF & ~mask)
+            # All other 15 bits stay set.
+            self.assertEqual(merged | mask, 0xFFFF)
+
+    def test_set_bit_keeps_surrounding_bits(self) -> None:
+        # 0xABCE has bit 0 == 0; setting it yields 0xABCF and touches nothing else.
+        self.assertEqual(merge_register_bit(0xABCE, 0, 1), 0xABCF)
+        # Setting an already-set bit is a no-op.
+        self.assertEqual(merge_register_bit(0xABCF, 0, 1), 0xABCF)
+
+    def test_clear_bit_keeps_surrounding_bits(self) -> None:
+        self.assertEqual(merge_register_bit(0xABCF, 0, 1), 0xABCF)
+        self.assertEqual(merge_register_bit(0xABCF, 0, 0), 0xABCE)
+
+    def test_result_is_clamped_to_16_bits(self) -> None:
+        self.assertLessEqual(merge_register_bit(0xFFFF, 15, 1), 0xFFFF)
+
+
+class MergeRegisterFieldTests(unittest.TestCase):
+    def test_replaces_only_masked_field(self) -> None:
+        # Mask bits 4..7; write 0xA0 into them, keep the rest of 0x1234.
+        merged = merge_register_field(0x1234, 0x00F0, 0x00A0)
+        self.assertEqual(merged, 0x12A4)
+
+    def test_field_bits_outside_mask_are_ignored(self) -> None:
+        # field carries stray high bits; only masked bits land.
+        merged = merge_register_field(0x0000, 0x000F, 0xFFF5)
+        self.assertEqual(merged, 0x0005)
+
+    def test_single_bit_field_matches_merge_register_bit(self) -> None:
+        for bit_index in range(16):
+            mask = 1 << bit_index
+            self.assertEqual(
+                merge_register_field(0x5555, mask, mask),
+                merge_register_bit(0x5555, bit_index, 1),
+            )
+            self.assertEqual(
+                merge_register_field(0x5555, mask, 0),
+                merge_register_bit(0x5555, bit_index, 0),
+            )
 
 
 if __name__ == "__main__":

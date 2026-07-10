@@ -118,6 +118,35 @@ class RegistryTests(unittest.TestCase):
         self.assertNotIn("support_package_path", descriptions)
         self.assertNotIn("local_metadata_status", descriptions)
 
+    def test_collector_only_mode_suppresses_driver_measurements(self) -> None:
+        # Field report: a manual "modbus_catalog" driver hint on a collector
+        # with no inverter attached materialized the whole Aohai schema as
+        # unavailable sensors on the collector device.
+        descriptions = {
+            description.key
+            for description in measurements_for_runtime(
+                driver_key="modbus_catalog",
+                include_all_drivers_when_unknown=False,
+                collector_only_mode=True,
+            )
+        }
+
+        self.assertIn("collector_pn", descriptions)
+        self.assertNotIn("battery_percent", descriptions)
+        self.assertNotIn("output_power", descriptions)
+        self.assertNotIn("inverter_operation_mode", descriptions)
+
+    def test_collector_only_mode_suppresses_schema_binary_sensors(self) -> None:
+        descriptions = binary_sensors_for_runtime(
+            driver_key="modbus_smg",
+            register_schema_name="modbus_smg/base.json",
+            include_all_drivers_when_unknown=False,
+            collector_only_mode=True,
+        )
+
+        schema_keys = {description.key for description in descriptions}
+        self.assertNotIn("power_flow_pv_connection_state", schema_keys)
+
     def test_binary_sensors_for_unknown_runtime_can_stay_base_only(self) -> None:
         descriptions = binary_sensors_for_runtime(
             include_all_drivers_when_unknown=False,

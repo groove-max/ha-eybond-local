@@ -69,6 +69,22 @@ class SupportWorkflowTests(unittest.TestCase):
         self.assertIn("support archive", workflow["next_action"])
         self.assertIn("unverified", workflow["advanced_hint"])
 
+    def test_eybond_g_ascii_family_does_not_use_smg_specific_marker(self) -> None:
+        workflow = build_support_workflow_state(
+            has_inverter=True,
+            variant_key="g_ascii_family",
+            profile_name="",
+            effective_owner_key="eybond_g_ascii",
+            effective_owner_name="EyeBond G-ASCII",
+            detection_confidence="high",
+            profile_source_scope="builtin",
+            schema_source_scope="builtin",
+        )
+
+        self.assertEqual(workflow["level"], "builtin")
+        self.assertEqual(workflow["level_label"], "Built-in support")
+        self.assertNotIn("SMG", workflow["summary"])
+
     def test_non_fallback_read_only_smg_profile_variant_has_same_explicit_marker(self) -> None:
         workflow = build_support_workflow_state(
             has_inverter=True,

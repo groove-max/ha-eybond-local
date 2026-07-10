@@ -91,6 +91,49 @@ class EntityDescriptionsTests(unittest.TestCase):
         self.assertFalse(description.diagnostic)
         self.assertTrue(description.enabled_default)
 
+    def test_collector_listener_status_is_enabled_diagnostic_sensor(self) -> None:
+        description = next(
+            item for item in BASE_SENSOR_DESCRIPTIONS if item.key == "collector_listener_status"
+        )
+
+        self.assertTrue(description.diagnostic)
+        self.assertTrue(description.enabled_default)
+
+    def test_collector_callback_identity_status_is_enabled_diagnostic_sensor(self) -> None:
+        description = next(
+            item
+            for item in BASE_SENSOR_DESCRIPTIONS
+            if item.key == "collector_callback_identity_status"
+        )
+
+        self.assertTrue(description.diagnostic)
+        self.assertTrue(description.enabled_default)
+
+        summary = next(
+            item
+            for item in BASE_SENSOR_DESCRIPTIONS
+            if item.key == "collector_callback_identity_summary"
+        )
+        self.assertTrue(summary.diagnostic)
+        self.assertFalse(summary.enabled_default)
+
+    def test_collector_listener_details_are_hidden_diagnostic_sensors(self) -> None:
+        hidden_keys = {
+            "collector_listener_bind_host",
+            "collector_listener_bind_endpoint",
+            "collector_listener_effective_host",
+            "collector_listener_advertised_endpoint",
+            "collector_listener_rebind_count",
+            "collector_listener_last_error",
+        }
+        descriptions = {
+            item.key: item for item in BASE_SENSOR_DESCRIPTIONS if item.key in hidden_keys
+        }
+        self.assertEqual(set(descriptions), hidden_keys)
+        for item in descriptions.values():
+            self.assertTrue(item.diagnostic)
+            self.assertFalse(item.enabled_default)
+
     def test_at_only_collector_entities_are_diagnostic_and_disabled_by_default(self) -> None:
         for key in (
             "collector_type",

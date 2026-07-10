@@ -27,6 +27,7 @@ class ProxyCaptureSessionState:
     """One persisted active proxy capture session state."""
 
     entry_id: str
+    route_owner_id: str
     collector_pn: str
     trace_path: str
     original_endpoint: str
@@ -304,6 +305,7 @@ def load_latest_proxy_trace_manifest(
 def build_proxy_capture_session_state(
     *,
     entry_id: str,
+    route_owner_id: str = "",
     collector_pn: str,
     trace_path: str = "",
     original_endpoint: str,
@@ -318,6 +320,7 @@ def build_proxy_capture_session_state(
 
     return ProxyCaptureSessionState(
         entry_id=str(entry_id or "").strip(),
+        route_owner_id=str(route_owner_id or "").strip(),
         collector_pn=str(collector_pn or "").strip(),
         trace_path=str(trace_path or "").strip(),
         original_endpoint=str(original_endpoint or "").strip(),
@@ -361,6 +364,7 @@ def refresh_proxy_capture_session_lease(
 
     return build_proxy_capture_session_state(
         entry_id=state.entry_id,
+        route_owner_id=state.route_owner_id,
         collector_pn=state.collector_pn,
         trace_path=state.trace_path,
         original_endpoint=state.original_endpoint,
@@ -442,6 +446,7 @@ def save_proxy_capture_session_state(
     path = active_proxy_capture_state_path(config_dir)
     payload = {
         "entry_id": state.entry_id,
+        "route_owner_id": state.route_owner_id,
         "collector_pn": state.collector_pn,
         "trace_path": state.trace_path,
         "original_endpoint": state.original_endpoint,
@@ -470,6 +475,7 @@ def load_proxy_capture_session_state(config_dir: Path) -> ProxyCaptureSessionSta
         return None
     return build_proxy_capture_session_state(
         entry_id=str(payload.get("entry_id") or ""),
+        route_owner_id=str(payload.get("route_owner_id") or ""),
         collector_pn=str(payload.get("collector_pn") or ""),
         trace_path=str(payload.get("trace_path") or ""),
         original_endpoint=str(payload.get("original_endpoint") or ""),

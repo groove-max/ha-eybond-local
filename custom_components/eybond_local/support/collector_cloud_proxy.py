@@ -25,6 +25,7 @@ from custom_components.eybond_local.collector.protocol import (  # noqa: E402
     build_collector_request,
     decode_header,
 )
+from custom_components.eybond_local.collector.discovery import DiscoveryAnnouncer  # noqa: E402
 from custom_components.eybond_local.collector.at import (  # noqa: E402
     build_at_response,
     build_at_write,
@@ -254,8 +255,11 @@ class JsonLineWriter:
     async def write(self, payload: dict[str, object]) -> None:
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         async with self._lock:
-            self._output.write(line + "\n")
-            self._output.flush()
+            await asyncio.to_thread(self._write_line, line)
+
+    def _write_line(self, line: str) -> None:
+        self._output.write(line + "\n")
+        self._output.flush()
 
 
 def parse_restore_target(value: str) -> RestoreTarget:
@@ -896,6 +900,69 @@ async def _handle_client(
             pass
 
 
+async def _handle_passive_client(
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    *,
+    frame_writer: JsonLineWriter,
+) -> None:
+    """Record one collector connection without opening any cloud upstream.
+
+    This is intentionally receive-only from the collector side: it logs chunks
+    and decoded EyeBond frames, but it does not forward traffic to SmartESS and
+    does not synthesize responses back to the collector.
+    """
+
+    client_peer = client_writer.get_extra_info("peername") or ("", 0)
+    client_ip = client_peer[0] or ""
+    client_port = client_peer[1] or 0
+    remote_label = f"{client_ip}:{client_port}"
+
+    await frame_writer.write(
+        {
+            "kind": "passive_connect",
+            "timestamp": _utc_timestamp(),
+            "client": remote_label,
+        }
+    )
+    extractor = FrameExtractor(
+        direction="collector_to_local",
+        remote=remote_label,
+        writer=frame_writer,
+    )
+    try:
+        while True:
+            chunk = await client_reader.read(4096)
+            if not chunk:
+                break
+            await frame_writer.write(
+                {
+                    "kind": "chunk",
+                    "timestamp": _utc_timestamp(),
+                    "direction": "collector_to_local",
+                    "remote": remote_label,
+                    "chunk_len": len(chunk),
+                    "chunk_hex": chunk.hex(),
+                    "chunk_ascii": _safe_ascii(chunk),
+                }
+            )
+            await extractor.feed(chunk)
+    finally:
+        await extractor.flush_tail()
+        await frame_writer.write(
+            {
+                "kind": "passive_disconnect",
+                "timestamp": _utc_timestamp(),
+                "client": remote_label,
+            }
+        )
+        try:
+            client_writer.close()
+            await client_writer.wait_closed()
+        except Exception:
+            pass
+
+
 async def handle_proxy_client(
     client_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
@@ -936,18 +1003,38 @@ async def _run(args: argparse.Namespace) -> int:
 
     frame_writer = JsonLineWriter(output_handle)
     restore_target = parse_restore_target(args.restore_endpoint) if args.restore_endpoint else None
+    no_upstream = bool(args.no_upstream)
+    announcer: DiscoveryAnnouncer | None = None
+
+    if not no_upstream and not args.upstream_host:
+        raise SystemExit("--upstream-host is required unless --no-upstream is used")
+    if args.announce_collector:
+        if not no_upstream:
+            raise SystemExit("--announce-collector is only available with --no-upstream")
+        if not args.collector_ip:
+            raise SystemExit("--collector-ip is required with --announce-collector")
+        if not args.advertise_host:
+            raise SystemExit("--advertise-host is required with --announce-collector")
 
     server = await asyncio.start_server(
-        lambda reader, writer: _handle_client(
-            reader,
-            writer,
-            upstream_host=args.upstream_host,
-            upstream_port=args.upstream_port,
-            frame_writer=frame_writer,
-            restore_target=restore_target,
-            restore_after=args.restore_after,
-            restore_at_followup=args.restore_at_followup,
-            restore_trigger_file=Path(args.restore_trigger_file) if args.restore_trigger_file else None,
+        (
+            (lambda reader, writer: _handle_passive_client(
+                reader,
+                writer,
+                frame_writer=frame_writer,
+            ))
+            if no_upstream
+            else (lambda reader, writer: _handle_client(
+                reader,
+                writer,
+                upstream_host=args.upstream_host,
+                upstream_port=args.upstream_port,
+                frame_writer=frame_writer,
+                restore_target=restore_target,
+                restore_after=args.restore_after,
+                restore_at_followup=args.restore_at_followup,
+                restore_trigger_file=Path(args.restore_trigger_file) if args.restore_trigger_file else None,
+            ))
         ),
         args.listen_host,
         args.listen_port,
@@ -955,15 +1042,49 @@ async def _run(args: argparse.Namespace) -> int:
 
     sockets = server.sockets or []
     bound = ", ".join(str(sock.getsockname()) for sock in sockets)
-    LOGGER.info("Cloud proxy listening on %s -> %s:%d", bound, args.upstream_host, args.upstream_port)
+    if no_upstream:
+        LOGGER.info("Passive collector capture listening on %s with no upstream", bound)
+    else:
+        LOGGER.info("Cloud proxy listening on %s -> %s:%d", bound, args.upstream_host, args.upstream_port)
 
     try:
+        if args.announce_collector:
+            announcer = DiscoveryAnnouncer(
+                bind_ip=args.advertise_host,
+                advertised_server_ip=args.advertise_host,
+                advertised_server_port=args.listen_port,
+                target_ip=args.collector_ip,
+                udp_port=args.udp_port,
+                interval=args.announce_interval,
+            )
+            await frame_writer.write(
+                {
+                    "kind": "passive_discovery_started",
+                    "timestamp": _utc_timestamp(),
+                    "collector_ip": args.collector_ip,
+                    "advertised_server_ip": args.advertise_host,
+                    "advertised_server_port": args.listen_port,
+                    "udp_port": args.udp_port,
+                    "interval": args.announce_interval,
+                }
+            )
+            await announcer.start()
         if args.duration > 0:
             await asyncio.sleep(args.duration)
         else:
             async with server:
                 await server.serve_forever()
     finally:
+        if announcer is not None:
+            await announcer.stop()
+            await frame_writer.write(
+                {
+                    "kind": "passive_discovery_stopped",
+                    "timestamp": _utc_timestamp(),
+                    "last_reply": announcer.last_reply,
+                    "last_reply_from": announcer.last_reply_from,
+                }
+            )
         server.close()
         await server.wait_closed()
         if close_output:
@@ -975,8 +1096,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--listen-host", default="0.0.0.0")
     parser.add_argument("--listen-port", type=int, default=18899)
-    parser.add_argument("--upstream-host", required=True)
+    parser.add_argument("--upstream-host", default="")
     parser.add_argument("--upstream-port", type=int, default=18899)
+    parser.add_argument(
+        "--no-upstream",
+        action="store_true",
+        help="passively record collector traffic without connecting to or forwarding to an upstream cloud server",
+    )
+    parser.add_argument(
+        "--announce-collector",
+        action="store_true",
+        help="with --no-upstream, periodically announce the passive listener to one HA-only collector via UDP discovery",
+    )
+    parser.add_argument("--collector-ip", default="", help="collector IP used by --announce-collector")
+    parser.add_argument("--advertise-host", default="", help="local IPv4 address to advertise in set>server=...")
+    parser.add_argument("--udp-port", type=int, default=58899)
+    parser.add_argument("--announce-interval", type=float, default=2.0)
     parser.add_argument("--duration", type=int, default=0, help="seconds to run; 0 means forever")
     parser.add_argument(
         "--restore-endpoint",
@@ -1008,10 +1143,11 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    try:
-        socket.gethostbyname(args.upstream_host)
-    except OSError as exc:
-        raise SystemExit(f"cannot resolve upstream host {args.upstream_host}: {exc}") from exc
+    if not args.no_upstream:
+        try:
+            socket.gethostbyname(args.upstream_host)
+        except OSError as exc:
+            raise SystemExit(f"cannot resolve upstream host {args.upstream_host}: {exc}") from exc
 
     return asyncio.run(_run(args))
 

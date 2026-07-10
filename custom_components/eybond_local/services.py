@@ -19,6 +19,7 @@ from .const import (
     SERVICE_REBOOT_COLLECTOR,
     SERVICE_RELOAD_LOCAL_METADATA,
     SERVICE_ROLLBACK_COLLECTOR_SERVER_ENDPOINT,
+    SERVICE_RUN_DIAGNOSTIC_COMMANDS,
     SERVICE_SET_COLLECTOR_SERVER_ENDPOINT,
     SERVICE_START_PROXY_CAPTURE,
     SERVICE_STOP_PROXY_CAPTURE,
@@ -83,6 +84,19 @@ _STOP_PROXY_CAPTURE_SCHEMA = vol.Schema(
         vol.Required("entry_id"): str,
     }
 )
+_RUN_DIAGNOSTIC_COMMANDS_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): str,
+        vol.Required("commands"): str,
+        vol.Optional("stop_on_error", default=True): bool,
+        # Required to be true before a scenario containing write/write_bit runs;
+        # read-only scenarios ignore it.
+        vol.Optional("confirm_write", default=False): bool,
+        # Positivity is enforced in the handler so the schema stays within the
+        # validator subset shared with the test stubs.
+        vol.Optional("operation_timeout"): vol.All(vol.Range(min=0)),
+    }
+)
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:
@@ -143,6 +157,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         call: ServiceCall,
     ) -> dict[str, object]:
         return await _async_handle_stop_proxy_capture(hass, call)
+
+    async def handle_run_diagnostic_commands(
+        call: ServiceCall,
+    ) -> dict[str, object]:
+        return await _async_handle_run_diagnostic_commands(hass, call)
 
     hass.services.async_register(
         DOMAIN,
@@ -209,6 +228,13 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_STOP_PROXY_CAPTURE,
         handle_stop_proxy_capture,
         schema=_STOP_PROXY_CAPTURE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RUN_DIAGNOSTIC_COMMANDS,
+        handle_run_diagnostic_commands,
+        schema=_RUN_DIAGNOSTIC_COMMANDS_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     domain_data[_SERVICES_READY_KEY] = True
@@ -335,6 +361,33 @@ async def _async_handle_stop_proxy_capture(
 ) -> dict[str, object]:
     coordinator = _resolve_entry_coordinator(hass, call)
     return await coordinator.async_stop_proxy_capture()
+
+
+async def _async_handle_run_diagnostic_commands(
+    hass: HomeAssistant,
+    call: ServiceCall,
+) -> dict[str, object]:
+    coordinator = _resolve_entry_coordinator(hass, call)
+    integration_version = ""
+    with suppress(Exception):
+        from homeassistant.loader import async_get_integration
+
+        integration = await async_get_integration(hass, DOMAIN)
+        integration_version = str(getattr(integration, "version", "") or "")
+    operation_timeout = call.data.get("operation_timeout")
+    resolved_timeout: float | None = None
+    if operation_timeout is not None:
+        resolved_timeout = float(operation_timeout)
+        if resolved_timeout <= 0:
+            raise ValueError("operation_timeout_must_be_positive")
+    return await coordinator.async_run_diagnostic_commands(
+        commands=str(call.data.get("commands") or ""),
+        stop_on_error=bool(call.data.get("stop_on_error", True)),
+        operation_timeout=resolved_timeout,
+        integration_version=integration_version,
+        confirm_write=bool(call.data.get("confirm_write", False)),
+        publish_download_copy=bool(call.data.get("publish_download_copy", False)),
+    )
 
 
 def _resolve_entry_coordinator(hass: HomeAssistant, call: ServiceCall):

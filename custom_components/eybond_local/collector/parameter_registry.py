@@ -67,14 +67,17 @@ def _decode_protocol_descriptor(response: CollectorQueryResponse) -> dict[str, o
     descriptor = resolve_protocol_descriptor(response)
     values: dict[str, object] = {
         "smartess_protocol_raw_id": descriptor.raw_id,
-        "smartess_protocol_asset_id": descriptor.asset_id,
-        "smartess_protocol_asset_name": descriptor.asset_name,
     }
     if descriptor.suffix:
         values["smartess_protocol_suffix"] = descriptor.suffix
 
     known_protocol = load_smartess_protocol_catalog().protocols.get(descriptor.asset_id)
     if known_protocol is not None:
+        # Claim an asset id from parameter 14 only when the catalog knows it:
+        # otherwise a raw serial-protocol config id would fight the asset id
+        # the bound driver reports, flip-flopping the sensor every cycle.
+        values["smartess_protocol_asset_id"] = descriptor.asset_id
+        values["smartess_protocol_asset_name"] = descriptor.asset_name
         values["smartess_protocol_profile_key"] = known_protocol.profile_key
         if known_protocol.proto_name:
             values["smartess_protocol_name"] = known_protocol.proto_name

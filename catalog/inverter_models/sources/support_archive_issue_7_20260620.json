@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_7_20260620",
+  "kind": "support_archive",
+  "title": "Aninerel 6.2KW current-runtime support archive",
+  "reference": "private:support-archive-issue-7-20260620",
+  "captured_at": "2026-06-20",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Fresh private support archive 01KVJEVE5C9B45C3TX4CVM4KED_20260620T131647450494Z.zip for the issue #7 Aninerel 6.2KW device. The runtime resolves exactly to descriptor anenji_op2_6200 with layout 11, model code 30979, rated power 6200, firmware 7903_A6260126v1, profile modbus_smg/models/anenji_op2_6200.json, and confirmed live telemetry. The archive includes a device-scoped shadow-learning overlay activated on top of the OP2 profile; 71 cloud write attempts matched local Modbus writes with zero unmatched attempts or writes.",
+  "assertions": [
+    "fingerprint",
+    "telemetry_validation",
+    "runtime_compatibility",
+    "control_behavior"
+  ]
+}

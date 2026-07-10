@@ -27,7 +27,7 @@ class ProxySessionTests(unittest.TestCase):
             path = build_proxy_capture_trace_path(
                 config_dir=Path(tmpdir),
                 entry_id="entry-1",
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 timestamp="20260428T120000000000Z",
             )
 
@@ -97,6 +97,20 @@ class ProxySessionTests(unittest.TestCase):
         self.assertEqual(summary["kind_counts"]["frame"], 1)
         self.assertEqual(summary["invalid_lines"], 1)
 
+    def test_summarize_proxy_capture_trace_counts_g_ascii_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_path = Path(tmpdir) / "session.jsonl"
+            trace_path.write_text(
+                "{\"kind\": \"chunk\", \"chunk_hex\": \"4750444154300d\"}\n"
+                "{\"kind\": \"chunk\", \"chunk_hex\": \"283138332e31203032372e360d\"}\n",
+                encoding="utf-8",
+            )
+
+            summary = summarize_proxy_capture_trace(trace_path)
+
+        self.assertEqual(summary["g_ascii_command_counts"], {"GPDAT0": 1})
+        self.assertEqual(summary["g_ascii_response_counts"], {"data": 1})
+
     def test_inspect_proxy_capture_trace_returns_recent_kinds_and_last_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             trace_path = Path(tmpdir) / "session.jsonl"
@@ -133,6 +147,20 @@ class ProxySessionTests(unittest.TestCase):
         self.assertIn("RTU read request slave=1 fc=0x03 addr=0x0064 count=3", inspection["live_log"])
         self.assertIn("unrecognized binary 4 bytes hex=de ad be ef", inspection["live_log"])
         self.assertEqual(inspection["recent_kinds"], "frame -> tail")
+
+    def test_inspect_proxy_capture_trace_labels_g_ascii_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace_path = Path(tmpdir) / "session.jsonl"
+            trace_path.write_text(
+                "{\"kind\": \"chunk\", \"timestamp\": \"2026-06-25T12:00:01Z\", \"direction\": \"cloud_to_collector\", \"chunk_hex\": \"4750560d\"}\n"
+                "{\"kind\": \"chunk\", \"timestamp\": \"2026-06-25T12:00:02Z\", \"direction\": \"collector_to_cloud\", \"chunk_hex\": \"283138332e31203032372e360d\"}\n",
+                encoding="utf-8",
+            )
+
+            inspection = inspect_proxy_capture_trace(trace_path, recent_limit=2)
+
+        self.assertIn("G-ASCII command GPV", inspection["live_log"])
+        self.assertIn("G-ASCII response", inspection["live_log"])
 
 
 if __name__ == "__main__":

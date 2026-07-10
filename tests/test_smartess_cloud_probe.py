@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-_PROBE_PATH = REPO_ROOT / "tools" / "smartess_cloud_probe.py"
+_PROBE_PATH = REPO_ROOT / ".local" / "tools" / "smartess_cloud_probe.py"
 if not _PROBE_PATH.is_file():
     raise unittest.SkipTest(f"smartess_cloud_probe not present at {_PROBE_PATH}")
 _spec = importlib.util.spec_from_file_location(
@@ -39,9 +39,9 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 "--secret",
                 "secret123456789",
                 "--pn",
-                "E50000253884199645",
+                "E50000200000000001",
                 "--sn",
-                "E50000253884199645094801",
+                "E50000200000000001000001",
                 "--devcode",
                 "0x0948",
                 "--devaddr",
@@ -52,6 +52,142 @@ class SmartEssCloudProbeTests(unittest.TestCase):
         self.assertEqual(args.command, "device-bundle")
         self.assertEqual(args.pagesize, 50)
         self.assertIs(args.func, smartess_cloud_probe._run_device_bundle)
+
+    def test_parser_accepts_learn_settings_command(self) -> None:
+        parser = smartess_cloud_probe._build_parser()
+
+        args = parser.parse_args(
+            [
+                "learn-settings",
+                "--token",
+                "token123456789",
+                "--secret",
+                "secret123456789",
+                "--pn",
+                "E50000200000000001",
+                "--sn",
+                "E50000200000000001000001",
+                "--devcode",
+                "2376",
+                "--devaddr",
+                "1",
+                "--field-id",
+                "sys_eybond_ctrl_53",
+                "--dry-run",
+            ]
+        )
+
+        self.assertEqual(args.command, "learn-settings")
+        self.assertEqual(args.field_id, ["sys_eybond_ctrl_53"])
+        self.assertIs(args.func, smartess_cloud_probe._run_learn_settings)
+
+    def test_build_device_control_action_uses_ctrl_device_fields(self) -> None:
+        action = smartess_cloud_probe.build_device_control_action(
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            field_id="sys_eybond_ctrl_53",
+            value="1",
+        )
+
+        self.assertEqual(
+            action,
+            (
+                "&action=ctrlDevice"
+                "&pn=E50000200000000001"
+                "&sn=E50000200000000001000001"
+                "&devcode=2376"
+                "&devaddr=1"
+                "&id=sys_eybond_ctrl_53"
+                "&val=1"
+            ),
+        )
+
+    def test_learn_settings_dry_run_plans_choice_fields(self) -> None:
+        args = argparse.Namespace(
+            username="",
+            password="",
+            token="token123456789",
+            secret="secret123456789",
+            base_url=smartess_cloud_probe.DEFAULT_BASE_URL,
+            language=smartess_cloud_probe.DEFAULT_LANGUAGE,
+            app_id=smartess_cloud_probe.DEFAULT_APP_ID,
+            app_version=smartess_cloud_probe.DEFAULT_APP_VERSION,
+            company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
+            timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            field_id=[],
+            include_numeric=False,
+            numeric_value=smartess_cloud_probe.DEFAULT_LEARN_NUMERIC_VALUE,
+            all_choice_values=False,
+            max_fields=0,
+            delay_seconds=0,
+            output="",
+            dry_run=True,
+            confirm_cloud_write=False,
+            continue_on_error=True,
+        )
+        settings_envelope = smartess_cloud_probe.ApiEnvelope(
+            err=0,
+            desc="ok",
+            dat={
+                "field": [
+                    {
+                        "id": "sys_eybond_ctrl_53",
+                        "name": "Backlight Control",
+                        "item": [
+                            {"key": "0", "val": "Backlight Timing Off"},
+                            {"key": "1", "val": "Backlight On"},
+                        ],
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_76",
+                        "name": "Max.Charging Current",
+                        "unit": "A",
+                    },
+                ],
+                "two_tier": {},
+            },
+            raw={},
+        )
+
+        with patch.object(
+            smartess_cloud_probe,
+            "fetch_signed_action",
+            return_value=settings_envelope,
+        ) as fetch:
+            payload = smartess_cloud_probe._run_learn_settings(args)
+
+        self.assertEqual(fetch.call_count, 1)
+        normalized = payload["normalized"]
+        self.assertEqual(normalized["planned_write_count"], 1)
+        self.assertEqual(normalized["results"][0]["field_id"], "sys_eybond_ctrl_53")
+        self.assertEqual(normalized["results"][0]["value"], "0")
+        self.assertEqual(normalized["results"][0]["status"], "planned")
+
+    def test_learn_settings_requires_confirm_for_live_writes(self) -> None:
+        args = argparse.Namespace(
+            username="",
+            password="",
+            token="token123456789",
+            secret="secret123456789",
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=False,
+        )
+
+        with self.assertRaisesRegex(
+            smartess_cloud_probe.SmartEssCloudError,
+            "requires_confirm_cloud_write",
+        ):
+            smartess_cloud_probe._run_learn_settings(args)
 
     def test_device_bundle_collects_all_cloud_payloads(self) -> None:
         args = argparse.Namespace(
@@ -66,8 +202,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
             company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
             timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
             device_type=smartess_cloud_probe.DEFAULT_DEVICE_TYPE,
-            pn="E50000253884199645",
-            sn="E50000253884199645094801",
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
             devcode=0x0948,
             devaddr=0x01,
             search="",
@@ -376,6 +512,151 @@ class SmartEssCloudProbeTests(unittest.TestCase):
         self.assertEqual(fields[10]["bucket"], "exact_0925")
         self.assertEqual(fields[10]["binding"]["register"], 5012)
 
+    def test_normalize_device_settings_keeps_bridge_only_aliases_cloud_only(self) -> None:
+        normalized = smartess_cloud_probe.normalize_device_settings(
+            {
+                "field": [
+                    {
+                        "id": "bse_eybond_ctrl_main_output_priority",
+                        "name": "Main Output Priority",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_battery_type",
+                        "name": "Battery Type",
+                    },
+                    {
+                        "id": "bat_eybond_ctrl_soc_recovery",
+                        "name": "SOC recovery value of battery discharge in mains mode",
+                    },
+                    {
+                        "id": "sys_eybond_read_lcd_backlight",
+                        "name": "LCD backlight",
+                    },
+                    {
+                        "id": "sys_eybond_read_lcd_homepage",
+                        "name": "LCD automatically returns to the homepage",
+                    },
+                    {
+                        "id": "sys_eybond_read_overload_restart",
+                        "name": "Overload automatic restart",
+                    },
+                    {
+                        "id": "sys_eybond_read_overtemp_restart",
+                        "name": "Automatic restart when over temperature",
+                    },
+                    {
+                        "id": "sys_eybond_read_overload_bypass",
+                        "name": "Overload transfer to bypass enable",
+                    },
+                ],
+                "two_tier": {},
+            }
+        )
+
+        assert normalized is not None
+        self.assertEqual(normalized["mapped_field_count"], 3)
+        self.assertEqual(normalized["exact_0925_field_count"], 3)
+        self.assertEqual(normalized["cloud_only_field_count"], 5)
+
+        fields_by_title = {
+            str(field["title"]).lower(): field
+            for field in normalized["fields"]
+        }
+        self.assertEqual(fields_by_title["main output priority"]["binding"]["register"], 4537)
+        self.assertEqual(fields_by_title["battery type"]["binding"]["register"], 4539)
+        self.assertEqual(
+            fields_by_title["soc recovery value of battery discharge in mains mode"]["binding"]["register"],
+            4545,
+        )
+        for title in (
+            "lcd backlight",
+            "lcd automatically returns to the homepage",
+            "overload automatic restart",
+            "automatic restart when over temperature",
+            "overload transfer to bypass enable",
+        ):
+            self.assertEqual(fields_by_title[title]["bucket"], "cloud_only")
+            self.assertNotIn("binding", fields_by_title[title])
+
+    def test_normalize_device_settings_maps_0925_valuecloud_field_ids(self) -> None:
+        field_ids_and_names = [
+            ("grd_ac_input_range", "AC Input Range"),
+            ("los_output_source_priority", "Output Source Priority"),
+            ("bat_charger_source_priority", "Charger Source Priority"),
+            ("los_output_voltage", "Output Voltage"),
+            ("los_output_frequency", "Output Frequency"),
+            ("bat_max_total_charge_current", "Max Total Charge Current"),
+            ("bat_max_utility_charge_current", "Max Utility Charge Current"),
+            ("bat_battery_type", "Battery Type"),
+            ("bat_sp_bulk_charging_voltage", "Bulk Charging Voltage"),
+            ("bat_sp_floting_charging_voltage", "Floating Charging Voltage"),
+            ("bat_sp_low_battery_voltage", "Low Battery Cut-off Voltage"),
+            (
+                "bat_sp_utility_mode_voltage",
+                "Comeback utility mode voltage point (SBU priority)",
+            ),
+            (
+                "bat_sp_battery_mode_voltage",
+                "Comeback battery mode voltage point (SBU priority)",
+            ),
+            ("bat_battery_equalization", "Battery Equalization"),
+            (
+                "bat_sp_battery_equalization_voltage",
+                "Battery Equalization Voltage",
+            ),
+            ("bat_sp_battery_equalized_time", "Battery Equalized Time"),
+            ("bat_sp_battery_equalized_timeout", "Battery Equalized Timeout"),
+            (
+                "bat_sp_battery_equalization_interval",
+                "Battery Equalization Interval",
+            ),
+            (
+                "bat_battery_equalization_activated_immediately",
+                "Battery Equalization Activated Immediately",
+            ),
+            ("pvs_clear_all_generation", "Clear All Historical Power Generation"),
+            ("cts_buzzer_alarm", "Buzzer Alarm"),
+            (
+                "cts_beeps_while_primary_source_interupt",
+                "Beeps While Primary Source Interrupt",
+            ),
+            ("cts_lcd_backlight", "LCD Backlight"),
+            ("cts_return_to_the_main_page", "Return To The Main LCD Page"),
+            ("los_overload_auto_restart", "Overload Auto Restart"),
+            ("cts_over_temperature_auto_restart", "Over Temperature Auto Restart"),
+            ("los_transfer_to_bypass_overload", "Transfer To Bypass Overload"),
+            ("sys_system_time", "system time"),
+            ("cts_record_fault_code", "Record Fault Code"),
+            ("cts_restore_defaults", "Restore Defaults"),
+        ]
+
+        normalized = smartess_cloud_probe.normalize_device_settings(
+            {
+                "field": [
+                    {
+                        "id": field_id,
+                        "name": name,
+                        "item": [{"key": "0", "val": "Off"}, {"key": "1", "val": "On"}],
+                    }
+                    for field_id, name in field_ids_and_names
+                ],
+                "two_tier": {},
+            }
+        )
+
+        assert normalized is not None
+        self.assertEqual(normalized["field_count"], 30)
+        self.assertEqual(normalized["mapped_field_count"], 29)
+        self.assertEqual(normalized["exact_0925_field_count"], 29)
+        self.assertEqual(normalized["cloud_only_field_count"], 1)
+
+        by_id = {field["cloud_id"]: field for field in normalized["fields"]}
+        self.assertEqual(by_id["los_output_source_priority"]["binding"]["register"], 4537)
+        self.assertEqual(by_id["grd_ac_input_range"]["binding"]["register"], 4538)
+        self.assertEqual(by_id["cts_buzzer_alarm"]["binding"]["register"], 5002)
+        self.assertEqual(by_id["cts_restore_defaults"]["binding"]["register"], 5016)
+        self.assertEqual(by_id["sys_system_time"]["bucket"], "cloud_only")
+
     def test_device_bundle_exports_cloud_evidence_into_ha_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             args = argparse.Namespace(
@@ -390,8 +671,8 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 company_key=smartess_cloud_probe.DEFAULT_COMPANY_KEY,
                 timeout=smartess_cloud_probe.DEFAULT_TIMEOUT,
                 device_type=smartess_cloud_probe.DEFAULT_DEVICE_TYPE,
-                pn="E50000253884199645",
-                sn="E50000253884199645094801",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
                 devcode=0x0948,
                 devaddr=0x01,
                 search="",
@@ -400,7 +681,7 @@ class SmartEssCloudProbeTests(unittest.TestCase):
                 order_by="",
                 page=0,
                 pagesize=50,
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 cloud_evidence_config_dir=temp_dir,
                 cloud_evidence_entry_id="entry123",
             )
@@ -439,7 +720,7 @@ class SmartEssCloudProbeTests(unittest.TestCase):
 
             raw = json.loads(evidence_path.read_text(encoding="utf-8"))
             self.assertEqual(raw["match"]["entry_id"], "entry123")
-            self.assertEqual(raw["match"]["collector_pn"], "E5000025388419")
+            self.assertEqual(raw["match"]["collector_pn"], "E5000020000000")
             self.assertEqual(raw["device_identity"]["devcode"], 2376)
             self.assertEqual(raw["summary"]["actions"], ["device_list", "device_detail", "device_settings", "energy_flow"])
             self.assertEqual(raw["summary"]["settings_field_count"], 0)

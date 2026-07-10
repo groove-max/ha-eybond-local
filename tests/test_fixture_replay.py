@@ -71,7 +71,7 @@ class FixtureReplayTests(unittest.TestCase):
         self.assertEqual(context.inverter.model_name, "SMG 6200")
         self.assertEqual(values["operating_mode"], "Off-Grid")
         self.assertEqual(values["charge_source_priority"], "PV Only")
-        self.assertEqual(values["output_source_priority"], "PV-Battery-Utility")
+        self.assertEqual(values["output_source_priority"], "Solar-Battery-Utility (SBU)")
         self.assertEqual(values["warning_code"], 65)
         self.assertEqual(values["warning_count"], 2)
         self.assertIn("PV Low Voltage", values["warning_descriptions"])

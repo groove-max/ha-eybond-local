@@ -1,0 +1,2511 @@
+{
+ "schema_version": 2,
+ "catalog_version": "2026.06.4",
+ "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
+ "protocols": [
+  {
+   "key": "modbus_smg",
+   "transport_key": "eybond_modbus",
+   "probe_timeout": 18.0,
+   "probe_targets": [
+    {
+     "devcode": 1,
+     "collector_addr": 255,
+     "device_addr": 1
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "modbus_smg.identity.171",
+     "kind": "modbus_read",
+     "register": 171,
+     "count": 14,
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "fingerprint.model_code",
+       "source_key": "model_code",
+       "register": 171
+      },
+      {
+       "key": "fingerprint.layout_code",
+       "source_key": "layout_code",
+       "register": 184
+      }
+     ]
+    },
+    {
+     "key": "modbus_smg.identity.186",
+     "kind": "modbus_read",
+     "register": 186,
+     "count": 12,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.serial_ascii",
+       "source_key": "serial_ascii",
+       "register": 186,
+       "words": 12,
+       "decoder": "ascii"
+      }
+     ]
+    },
+    {
+     "key": "modbus_smg.identity.643",
+     "kind": "modbus_read",
+     "register": 643,
+     "count": 2,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "fingerprint.rated_power",
+       "source_key": "rated_power",
+       "register": 643
+      }
+     ]
+    }
+   ],
+   "layouts": [
+    {
+     "key": "smg",
+     "layout_codes": [
+      1,
+      2,
+      11
+     ],
+     "rated_power_register_valid": true,
+     "base_schema": "modbus_smg/base.json"
+    },
+    {
+     "key": "anenji_11k",
+     "layout_codes": [
+      3,
+      4,
+      5,
+      6
+     ],
+     "rated_power_register_valid": false,
+     "base_schema": ""
+    }
+   ],
+   "link_hints": {
+    "baud": [
+     9600
+    ]
+   }
+  },
+  {
+   "key": "pi30",
+   "transport_key": "eybond_ascii",
+   "probe_timeout": 12.0,
+   "signature_timeout": 4.0,
+   "probe_targets": [
+    {
+     "devcode": 2452,
+     "collector_addr": 255,
+     "device_addr": 0
+    },
+    {
+     "devcode": 2452,
+     "collector_addr": 1,
+     "device_addr": 0
+    },
+    {
+     "devcode": 258,
+     "collector_addr": 255,
+     "device_addr": 0
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "pi30.qpi",
+     "kind": "ascii_command",
+     "command": "QPI",
+     "parser_key": "pi30.protocol_id",
+     "cost": 1,
+     "optional": false,
+     "timeout": 2.0,
+     "evidence_fields": [
+      {
+       "key": "protocol.protocol_id",
+       "source_key": "protocol_id"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qid",
+     "kind": "ascii_command",
+     "command": "QID",
+     "parser_key": "pi30.serial_number",
+     "cost": 1,
+     "optional": false,
+     "timeout": 4.0,
+     "evidence_fields": [
+      {
+       "key": "identity.serial_number",
+       "source_key": "serial_number"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qpiri",
+     "kind": "ascii_command",
+     "command": "QPIRI",
+     "parser_key": "pi30.qpiri",
+     "cost": 2,
+     "optional": false,
+     "timeout": 3.0,
+     "evidence_fields": [
+      {
+       "key": "identity.rated_power",
+       "source_key": "output_rating_active_power"
+      },
+      {
+       "key": "shape.qpiri_field_count",
+       "source_key": "qpiri_field_count"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qmn",
+     "kind": "ascii_command",
+     "command": "QMN",
+     "parser_key": "pi30.model_number",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.0,
+     "evidence_fields": [
+      {
+       "key": "identity.model_number",
+       "source_key": "model_number"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qflag",
+     "kind": "ascii_command",
+     "command": "QFLAG",
+     "parser_key": "pi30.qflag",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.0,
+     "evidence_fields": [
+      {
+       "key": "shape.capability_flags",
+       "source_key": "capability_flags_all"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qmod",
+     "kind": "ascii_command",
+     "command": "QMOD",
+     "parser_key": "pi30.qmod",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.0,
+     "evidence_fields": [
+      {
+       "key": "runtime.operating_mode_code",
+       "source_key": "operating_mode_code"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qpiws",
+     "kind": "ascii_command",
+     "command": "QPIWS",
+     "parser_key": "pi30.qpiws",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.5,
+     "evidence_fields": [
+      {
+       "key": "shape.qpiws_bit_count",
+       "source_key": "qpiws_bit_count"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qpigs",
+     "kind": "ascii_command",
+     "command": "QPIGS",
+     "parser_key": "pi30.qpigs",
+     "cost": 2,
+     "optional": true,
+     "timeout": 2.5,
+     "evidence_fields": [
+      {
+       "key": "shape.qpigs_field_count",
+       "source_key": "qpigs_field_count"
+      }
+     ]
+    },
+    {
+     "key": "pi30.qvfw",
+     "kind": "ascii_command",
+     "command": "QVFW",
+     "parser_key": "pi30.main_firmware",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.0,
+     "evidence_fields": []
+    },
+    {
+     "key": "pi30.qvfw2",
+     "kind": "ascii_command",
+     "command": "QVFW2",
+     "parser_key": "pi30.secondary_firmware",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.0,
+     "evidence_fields": []
+    },
+    {
+     "key": "pi30.qvfw3",
+     "kind": "ascii_command",
+     "command": "QVFW3",
+     "parser_key": "pi30.tertiary_firmware",
+     "cost": 1,
+     "optional": true,
+     "timeout": 2.0,
+     "evidence_fields": []
+    },
+    {
+     "key": "pi30.collector.smartess",
+     "kind": "collector_metadata",
+     "cost": 0,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "collector.smartess_protocol_asset_id",
+       "source_key": "smartess_protocol_asset_id"
+      }
+     ]
+    },
+    {
+     "key": "pi30.smartess.asset",
+     "kind": "smartess_query",
+     "parser_key": "smartess.protocol_asset",
+     "cost": 10,
+     "optional": true,
+     "timeout": 1.5,
+     "evidence_fields": [
+      {
+       "key": "smartess.protocol_asset_id",
+       "source_key": "protocol_asset_id"
+      }
+     ]
+    }
+   ],
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     2400
+    ]
+   }
+  },
+  {
+   "key": "pi18",
+   "transport_key": "eybond_ascii",
+   "probe_targets": [
+    {
+     "devcode": 2452,
+     "collector_addr": 1,
+     "device_addr": 0
+    },
+    {
+     "devcode": 2452,
+     "collector_addr": 255,
+     "device_addr": 0
+    },
+    {
+     "devcode": 258,
+     "collector_addr": 255,
+     "device_addr": 0
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "pi18.pi",
+     "kind": "ascii_command",
+     "command": "^P005PI",
+     "parser_key": "pi18.protocol_id",
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "protocol.protocol_id",
+       "source_key": "protocol_id"
+      }
+     ]
+    },
+    {
+     "key": "pi18.id",
+     "kind": "ascii_command",
+     "command": "^P005ID",
+     "parser_key": "pi18.serial_number",
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "identity.serial_number",
+       "source_key": "serial_number"
+      }
+     ]
+    },
+    {
+     "key": "pi18.piri",
+     "kind": "ascii_command",
+     "command": "^P007PIRI",
+     "parser_key": "pi18.qpiri",
+     "cost": 2,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "identity.rated_power",
+       "source_key": "output_rating_active_power"
+      },
+      {
+       "key": "shape.qpiri_field_count",
+       "source_key": "qpiri_field_count"
+      }
+     ]
+    },
+    {
+     "key": "pi18.vfw",
+     "kind": "ascii_command",
+     "command": "^P006VFW",
+     "parser_key": "pi18.firmware_versions",
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": []
+    }
+   ],
+   "layouts": []
+  },
+  {
+   "key": "srne_modbus",
+   "transport_key": "eybond_modbus",
+   "probe_timeout": 12.0,
+   "probe_targets": [
+    {
+     "devcode": 1,
+     "collector_addr": 255,
+     "device_addr": 1
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "srne_modbus.product_info",
+     "kind": "modbus_read",
+     "register": 53,
+     "count": 20,
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "identity.product_info",
+       "source_key": "product_info",
+       "register": 53,
+       "words": 20,
+       "decoder": "ascii_low_byte"
+      }
+     ]
+    }
+   ],
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     9600
+    ]
+   }
+  },
+  {
+   "key": "must_pv_ph18",
+   "transport_key": "eybond_modbus",
+   "probe_timeout": 12.0,
+   "probe_targets": [
+    {
+     "devcode": 1,
+     "collector_addr": 255,
+     "device_addr": 4
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "must_pv_ph18.model",
+     "kind": "modbus_read",
+     "register": 20000,
+     "count": 2,
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "identity.model_prefix",
+       "source_key": "model_prefix",
+       "register": 20000,
+       "decoder": "ascii"
+      },
+      {
+       "key": "identity.model_suffix",
+       "source_key": "model_suffix",
+       "register": 20001
+      }
+     ]
+    },
+    {
+     "key": "must_pv_ph18.collector.smartess",
+     "kind": "collector_metadata",
+     "cost": 0,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "collector.smartess_protocol_asset_id",
+       "source_key": "smartess_protocol_asset_id"
+      },
+      {
+       "key": "collector.serial_baudrate",
+       "source_key": "collector_serial_baudrate"
+      }
+     ]
+    }
+   ],
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     19200
+    ]
+   }
+  },
+  {
+   "key": "eybond_g_ascii",
+   "transport_key": "eybond_g_ascii",
+   "probe_timeout": 12.0,
+   "signature_timeout": 4.0,
+   "probe_targets": [
+    {
+     "devcode": 2452,
+     "collector_addr": 255,
+     "device_addr": 0
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "eybond_g_ascii.gdat0",
+     "kind": "ascii_command",
+     "command": "GPDAT0",
+     "parser_key": "eybond_g_ascii.gdat0",
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "protocol.protocol_id",
+       "source_key": "protocol_id"
+      },
+      {
+       "key": "shape.gdat0_field_count",
+       "source_key": "gdat0_field_count"
+      },
+      {
+       "key": "fingerprint.gdat0_model_code",
+       "source_key": "gdat0_model_code"
+      }
+     ]
+    },
+    {
+     "key": "eybond_g_ascii.gpv",
+     "kind": "ascii_command",
+     "command": "GPV",
+     "parser_key": "eybond_g_ascii.gpv",
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
+      {
+       "key": "shape.gpv_field_count",
+       "source_key": "gpv_field_count"
+      }
+     ]
+    }
+   ],
+   "layouts": []
+  },
+  {
+   "key": "modbus_catalog",
+   "transport_key": "eybond_modbus",
+   "probe_timeout": 6.0,
+   "probe_targets": [
+    {
+     "devcode": 1,
+     "collector_addr": 255,
+     "device_addr": 1
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "modbus_catalog.aohai_identity_battery",
+     "kind": "modbus_read",
+     "register": 127,
+     "count": 2,
+     "function": 4,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.aohai_battery_voltage_raw",
+       "source_key": "aohai_battery_voltage_raw",
+       "register": 127,
+       "words": 1
+      },
+      {
+       "key": "identity.aohai_battery_percent_raw",
+       "source_key": "aohai_battery_percent_raw",
+       "register": 128,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.aohai_identity_status",
+     "kind": "modbus_read",
+     "register": 0,
+     "count": 1,
+     "function": 4,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.aohai_status_raw",
+       "source_key": "aohai_status_raw",
+       "register": 0,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.aohai_identity_rated_power",
+     "kind": "modbus_read",
+     "register": 63,
+     "count": 2,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.aohai_rated_power_raw",
+       "source_key": "aohai_rated_power_raw",
+       "register": 63,
+       "words": 2,
+       "decoder": "u32_high_first"
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.growatt_identity_dtc",
+     "kind": "modbus_read",
+     "register": 43,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.growatt_device_type_code_raw",
+       "source_key": "growatt_device_type_code_raw",
+       "register": 43,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.growatt_identity_rated_power",
+     "kind": "modbus_read",
+     "register": 76,
+     "count": 2,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.growatt_rated_power_raw",
+       "source_key": "growatt_rated_power_raw",
+       "register": 76,
+       "words": 2,
+       "decoder": "u32_high_first"
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.solis_identity_model_definition",
+     "kind": "modbus_read",
+     "register": 35000,
+     "count": 1,
+     "function": 4,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.solis_model_definition_raw",
+       "source_key": "solis_model_definition_raw",
+       "register": 35000,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.solis_identity_battery_soc",
+     "kind": "modbus_read",
+     "register": 33139,
+     "count": 1,
+     "function": 4,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.solis_battery_soc_raw",
+       "source_key": "solis_battery_soc_raw",
+       "register": 33139,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.deye_identity_device_type",
+     "kind": "modbus_read",
+     "register": 0,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.deye_device_type_raw",
+       "source_key": "deye_device_type_raw",
+       "register": 0,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.deye_identity_rated_power",
+     "kind": "modbus_read",
+     "register": 16,
+     "count": 1,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.deye_rated_power_low_raw",
+       "source_key": "deye_rated_power_low_raw",
+       "register": 16,
+       "words": 1
+      }
+     ]
+    }
+   ],
+   "layouts": [],
+   "link_hints": {
+    "baud": [
+     9600
+    ]
+   }
+  }
+ ],
+ "support_capture_policies": {
+  "smg_protocol_1": {
+   "ranges": [
+    [
+     171,
+     14
+    ],
+    [
+     277,
+     5
+    ],
+    [
+     338,
+     16
+    ],
+    [
+     389,
+     3
+    ],
+    [
+     607,
+     1
+    ],
+    [
+     626,
+     8
+    ],
+    [
+     644,
+     1
+    ],
+    [
+     696,
+     9
+    ],
+    [
+     700,
+     45
+    ]
+   ],
+   "notes": [
+    "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+    "Protocol-1 SMG layouts also include documented fault/log windows: 700-744."
+   ]
+  },
+  "smg_anenji_11k": {
+   "ranges": [
+    [
+     171,
+     14
+    ],
+    [
+     277,
+     5
+    ],
+    [
+     338,
+     16
+    ],
+    [
+     389,
+     3
+    ],
+    [
+     607,
+     1
+    ],
+    [
+     626,
+     8
+    ],
+    [
+     644,
+     1
+    ],
+    [
+     696,
+     9
+    ],
+    [
+     326,
+     2
+    ],
+    [
+     338,
+     18
+    ],
+    [
+     376,
+     18
+    ],
+    [
+     414,
+     18
+    ],
+    [
+     677,
+     18
+    ],
+    [
+     707,
+     1
+    ],
+    [
+     709,
+     1
+    ],
+    [
+     858,
+     2
+    ]
+   ],
+   "notes": [
+    "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704."
+   ]
+  },
+  "pi_ascii": {
+   "ranges": [],
+   "notes": []
+  },
+  "srne_modbus": {
+   "ranges": [
+    [
+     53,
+     20
+    ],
+    [
+     256,
+     18
+    ],
+    [
+     516,
+     4
+    ],
+    [
+     528,
+     18
+    ],
+    [
+     554,
+     14
+    ]
+   ],
+   "notes": [
+    "SRNE-compatible support is read-only. Devices are expected to use Modbus RTU 9600 8N1 and slave address 1."
+   ]
+  },
+  "must_pv_ph18": {
+   "ranges": [
+    [
+     10001,
+     8
+    ],
+    [
+     10103,
+     1
+    ],
+    [
+     10101,
+     12
+    ],
+    [
+     10110,
+     1
+    ],
+    [
+     15201,
+     3
+    ],
+    [
+     15201,
+     21
+    ],
+    [
+     15205,
+     1
+    ],
+    [
+     15207,
+     3
+    ],
+    [
+     15212,
+     1
+    ],
+    [
+     15217,
+     3
+    ],
+    [
+     20000,
+     2
+    ],
+    [
+     20001,
+     16
+    ],
+    [
+     20101,
+     32
+    ],
+    [
+     20142,
+     2
+    ],
+    [
+     20213,
+     2
+    ],
+    [
+     25201,
+     1
+    ],
+    [
+     25201,
+     74
+    ],
+    [
+     25205,
+     12
+    ],
+    [
+     25225,
+     2
+    ],
+    [
+     25233,
+     2
+    ],
+    [
+     25274,
+     1
+    ]
+   ],
+   "notes": [
+    "MUST PV/PH18 uses Modbus RTU 19200 8N1 and slave address 4. Runtime exposes telemetry and a partial writable control surface; hardware write confirmation is still pending.",
+    "Support capture includes extra read-only ranges observed in SmartESS cloud proxy traffic; these ranges are diagnostic evidence only and are not part of normal runtime polling."
+   ]
+  },
+  "eybond_g_ascii": {
+   "ranges": [],
+   "notes": [
+    "EyeBond/JsdSolar G-ASCII support is read-only. Current evidence comes from SmartValue proxy/support captures and a matching local protocol document covering GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL responses.",
+    "Support capture uses protocol_catalogs/command_schemas/eybond_g_ascii/base.json as the schema-driven read-only command probe plan. Captured unknown fields are maintainer evidence only until the schema/driver decoder is explicitly updated."
+   ]
+  },
+  "aohai_fsa": {
+   "ranges": [
+    [
+     0,
+     14
+    ],
+    [
+     32,
+     2
+    ],
+    [
+     42,
+     15
+    ],
+    [
+     64,
+     2
+    ],
+    [
+     96,
+     13
+    ],
+    [
+     127,
+     2
+    ],
+    [
+     141,
+     12
+    ],
+    [
+     284,
+     6
+    ],
+    [
+     320,
+     12
+    ],
+    [
+     379,
+     12
+    ]
+   ],
+   "notes": [
+    "Aohai FSA support is read-only. Runtime telemetry lives in input registers (function 4); rated power is holding 63-64. Modbus RTU 9600 8N1, slave address 1."
+   ]
+  },
+  "growatt_spf": {
+   "ranges": [
+    [
+     0,
+     45
+    ],
+    [
+     48,
+     35
+    ],
+    [
+     93,
+     1
+    ]
+   ],
+   "notes": [
+    "Growatt SPF telemetry lives in input registers (function 4); identity/serial/config in holding registers. Reads must stay inside 45-register aligned blocks and respect the 850 ms inter-command period. Modbus RTU 9600 8N1, slave address 1."
+   ]
+  },
+  "solis_esinv": {
+   "ranges": [
+    [
+     35000,
+     1
+    ],
+    [
+     33000,
+     49
+    ],
+    [
+     33049,
+     47
+    ],
+    [
+     33115,
+     7
+    ],
+    [
+     33132,
+     50
+    ]
+   ],
+   "notes": [
+    "Solis/Ginlong ESINV energy-storage telemetry is all input registers (function 4) in the 33xxx area; 35000 is the model/protocol definition word. Fixed 9600 8N1, >300 ms inter-frame gap, max 50 registers per read. The protocol document is the read-only ESINV-33000ID translation."
+   ]
+  },
+  "deye_lv": {
+   "ranges": [
+    [
+     0,
+     20
+    ],
+    [
+     59,
+     50
+    ],
+    [
+     109,
+     8
+    ],
+    [
+     150,
+     47
+    ],
+    [
+     312,
+     12
+    ]
+   ],
+   "notes": [
+    "Deye single-phase LV storage/hybrid map: everything is holding registers (function 3 only; writes use function 16). 32-bit counters are low-word-first; temperatures are (raw-1000)*0.1 degC. Registers 150-218 are the STORAGE meaning of an address space that string inverters reuse differently — device type (register 0) must be 0x0300. Modbus RTU 9600, slave address in register 1 (default 1)."
+   ]
+  }
+ },
+ "surfaces": [
+  {
+   "key": "smg_6200_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "default",
+   "profile_name": "modbus_smg/models/smg_6200.json",
+   "register_schema_name": "modbus_smg/models/smg_6200.json",
+   "tier": "full",
+   "read_only": false,
+   "default_for_driver": true,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "anenji_4200_protocol_1_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_4200_protocol_1",
+   "profile_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+   "register_schema_name": "modbus_smg/models/anenji_4200_protocol_1.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "aninerel_anl_4200t_24l_w_pro_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "aninerel_anl_4200t_24l_w_pro",
+   "profile_name": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
+   "register_schema_name": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "smg_base_partial",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "default",
+   "profile_name": "",
+   "register_schema_name": "modbus_smg/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "smg_variant_4200_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "smg_variant_4200",
+   "profile_name": "modbus_smg/models/smg_variant_4200.json",
+   "register_schema_name": "modbus_smg/models/smg_variant_4200.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "anenji_anj_5kw_48v_wifi_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_anj_5kw_48v_wifi",
+   "profile_name": "modbus_smg/models/anenji_anj_5kw_48v_wifi.json",
+   "register_schema_name": "modbus_smg/models/anenji_anj_5kw_48v_wifi.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "anenji_anj_11kw_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_anj_11kw_48v_wifi_p",
+   "profile_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+   "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
+   "key": "anenji_op2_6200_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "default",
+   "profile_name": "modbus_smg/models/anenji_op2_6200.json",
+   "register_schema_name": "modbus_smg/models/anenji_op2_6200.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "smg_base_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "default",
+   "profile_name": "modbus_smg/default.json",
+   "register_schema_name": "modbus_smg/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "smg_family_read_only",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "family_fallback",
+   "profile_name": "",
+   "register_schema_name": "modbus_smg/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "pi30_default_full",
+   "protocol_key": "pi30",
+   "driver_key": "pi30",
+   "variant_key": "default",
+   "profile_name": "pi30_ascii/models/smartess_0925_compat.json",
+   "register_schema_name": "pi30_ascii/models/smartess_0925_compat.json",
+   "tier": "full",
+   "read_only": false,
+   "default_for_driver": true,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
+   "key": "pi30_vmii_full",
+   "protocol_key": "pi30",
+   "driver_key": "pi30",
+   "variant_key": "vmii_nxpw5kw",
+   "profile_name": "pi30_ascii/models/vmii_nxpw5kw.json",
+   "register_schema_name": "pi30_ascii/models/vmii_nxpw5kw.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
+   "key": "pi30_max_full",
+   "protocol_key": "pi30",
+   "driver_key": "pi30",
+   "variant_key": "pi30_max",
+   "profile_name": "pi30_ascii/models/pi30_max.json",
+   "register_schema_name": "pi30_ascii/models/pi30_max.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
+   "key": "pi30_pip_gk_full",
+   "protocol_key": "pi30",
+   "driver_key": "pi30",
+   "variant_key": "pi30_pip_gk",
+   "profile_name": "pi30_ascii/models/pi30_pip_gk.json",
+   "register_schema_name": "pi30_ascii/models/pi30_pip_gk.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
+   "key": "pi41_full",
+   "protocol_key": "pi30",
+   "driver_key": "pi30",
+   "variant_key": "pi41",
+   "profile_name": "pi30_ascii/models/pi41.json",
+   "register_schema_name": "pi30_ascii/models/pi41.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
+   "key": "pi18_read_only",
+   "protocol_key": "pi18",
+   "driver_key": "pi18",
+   "variant_key": "default",
+   "profile_name": "",
+   "register_schema_name": "pi18_ascii/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "default_for_driver": true,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
+   "key": "srne_modbus_read_only",
+   "protocol_key": "srne_modbus",
+   "driver_key": "srne_modbus",
+   "variant_key": "srne_family",
+   "profile_name": "",
+   "register_schema_name": "srne_modbus/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "default_for_driver": true,
+   "support_capture_policy": "srne_modbus"
+  },
+  {
+   "key": "must_pv_ph18_full",
+   "protocol_key": "must_pv_ph18",
+   "driver_key": "must_pv_ph18",
+   "variant_key": "pv_ph18",
+   "profile_name": "must_pv_ph18/base.json",
+   "register_schema_name": "must_pv_ph18/base.json",
+   "tier": "full",
+   "read_only": false,
+   "default_for_driver": true,
+   "support_capture_policy": "must_pv_ph18"
+  },
+  {
+   "key": "eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1",
+   "protocol_key": "eybond_g_ascii",
+   "driver_key": "eybond_g_ascii",
+   "variant_key": "lvyuan_ty_sic_3_6kbe_w1",
+   "profile_name": "eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json",
+   "register_schema_name": "eybond_g_ascii/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "eybond_g_ascii"
+  },
+  {
+   "key": "eybond_g_ascii_read_only",
+   "protocol_key": "eybond_g_ascii",
+   "driver_key": "eybond_g_ascii",
+   "variant_key": "g_ascii_family",
+   "profile_name": "",
+   "register_schema_name": "eybond_g_ascii/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "default_for_driver": true,
+   "support_capture_policy": "eybond_g_ascii"
+  },
+  {
+   "key": "aohai_fsa_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "aohai_fsa",
+   "profile_name": "",
+   "register_schema_name": "aohai_fsa/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "default_for_driver": true,
+   "support_capture_policy": "aohai_fsa"
+  },
+  {
+   "key": "growatt_spf_untested",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "growatt_spf",
+   "profile_name": "modbus_catalog/growatt_spf.json",
+   "register_schema_name": "growatt_spf/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "growatt_spf"
+  },
+  {
+   "key": "solis_esinv_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "solis_esinv",
+   "profile_name": "",
+   "register_schema_name": "solis_esinv/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "solis_esinv"
+  },
+  {
+   "key": "deye_lv_untested",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "deye_lv",
+   "profile_name": "modbus_catalog/deye_lv.json",
+   "register_schema_name": "deye_lv/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "deye_lv"
+  }
+ ],
+ "devices": [
+  {
+   "entry_key": "smg_6200",
+   "fingerprint": {
+    "layout_code": 1,
+    "model_code": 7680,
+    "rated_power_one_of": [
+     6200
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "SMG 6200",
+   "surface_key": "smg_6200_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       6200
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     },
+     {
+      "key": "max_discharge_current_protection",
+      "register": 351
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": [
+     2376
+    ]
+   },
+   "provenance": {
+    "sources": [
+     "corpus:own-device …9645 (16 captures, 2026-04..06)",
+     "identity anchors: reg171 device_type/model_code=0x1E00, reg184 protocol/layout=1, reg643 rated_power=6200",
+     "commercial name Sandisolar SD-HYM-4862HWP is source-backed; local SMG registers expose only the generic fingerprint"
+    ],
+    "confidence": "verified-on-hardware"
+   }
+  },
+  {
+   "entry_key": "anenji_4200",
+   "fingerprint": {
+    "layout_code": 1,
+    "model_code": 13569,
+    "rated_power_one_of": [
+     4200
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Anenji 4200 (Protocol 1)",
+   "surface_key": "anenji_4200_protocol_1_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "equals": 1
+     },
+     {
+      "key": "device_type",
+      "equals": 13569
+     },
+     {
+      "key": "rated_power",
+      "equals": 4200
+     },
+     {
+      "key": "turn_on_mode",
+      "known_enum": true
+     },
+     {
+      "key": "remote_switch",
+      "known_enum": true
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "catalog-migration:anenji_4200_protocol_1"
+    ],
+    "confidence": "rule-migrated"
+   }
+  },
+  {
+   "entry_key": "smg_variant_4200",
+   "fingerprint": {
+    "layout_code": 11,
+    "model_code": 30721
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "SMG family 4200 variant",
+   "surface_key": "smg_variant_4200_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       4200
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": [
+     6514
+    ]
+   },
+   "provenance": {
+    "sources": [
+     "corpus:donor …5865 (5 captures)"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_anj_5kw_48v_wifi",
+   "fingerprint": {
+    "layout_code": 11,
+    "model_code": 30977,
+    "rated_power_one_of": [
+     5000
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "ANENJI ANJ-5KW-48V-WIFI",
+   "surface_key": "anenji_anj_5kw_48v_wifi_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       5000
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "support archive 01KX3F9JYQRS1DHKX1ZGC252GD (2026-07-09): ANENJI ANJ-5KW-48V-WIFI, layout_code=11, model_code=0x7901, rated_power=5000",
+     "shadow-learning run in the same archive: 77/77 SmartESS write attempts matched local Modbus writes with no degraded, unknown-field, or unmatched writes"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_anj_11kw",
+   "fingerprint": {
+    "layout_code": 4,
+    "model_code": 32768
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Anenji ANJ-11KW-48V-WIFI-P",
+   "surface_key": "anenji_anj_11kw_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       3,
+       4,
+       5,
+       6
+      ]
+     },
+     {
+      "key": "turn_on_mode",
+      "known_enum": true
+     },
+     {
+      "key": "remote_switch",
+      "known_enum": true
+     },
+     {
+      "key": "pv_grid_connected_max_power",
+      "min": 200,
+      "max": 20000
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": [
+     6544
+    ]
+   },
+   "provenance": {
+    "sources": [
+     "corpus:donor …4544 (3 captures)",
+     "catalog-migration:anenji_anj_11kw_48v_wifi_p",
+     "support archive 01KPGTNHHQ4VXCR6ZV5JYCW7ER (2026-07-07): Anenji ANJ-11KW-48V-WIFI-P shadow-learning matched missing control registers 608/633/639/642/649 for OP2 overload, secondary charging priority, float-charge wait time, max discharge current protection, and OP1 off-grid SOC protection"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_op2_6200",
+   "fingerprint": {
+    "layout_code": 11,
+    "model_code": 30979,
+    "rated_power_one_of": [
+     6200
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Aninerel 6200 (dual output)",
+   "surface_key": "anenji_op2_6200_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       6200
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     },
+     {
+      "key": "max_discharge_current_protection",
+      "register": 351
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": [
+     6514
+    ]
+   },
+   "provenance": {
+    "sources": [
+     "corpus:aninerel.zip (dual-output capture, 2026-06-12)",
+     "user:esphome OP2 register list (239/240/243/244 live, 344/353 config, 354 write, 420 remote switch)",
+     "fw 7903_A6260126v1 (reg626 hex == model_code 30979)",
+     "donor ran smg_modbus.json profile bound as SMG 6200 before the built-in OP2 surface existed; full SMG control set read back correct values (developer-witnessed 2026-06-12)",
+     "output2_enable @354 bit0 from owner ESPHome config (bitmask 0x0001, use_write_multiple) -> model profile adds it as a bitmask RMW capability"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_6200",
+   "fingerprint": {
+    "layout_code": 1,
+    "model_code": 14080,
+    "rated_power_one_of": [
+     6200
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Anenji 6200",
+   "surface_key": "smg_base_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       6200
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     },
+     {
+      "key": "max_discharge_current_protection",
+      "register": 351
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "corpus:donor …5481 (single-output capture, 2026-06-12)",
+     "fw 3700_A6250424v1 (reg626 hex == model_code 14080)",
+     "donor ran smg_modbus.json profile bound as SMG 6200 (same layout 1 as the verified smg_6200): full SMG control set read back correct values (developer-witnessed 2026-06-12)"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "aninerel_anl_4200t_24l_w_pro",
+   "fingerprint": {
+    "layout_code": 11,
+    "model_code": 30723,
+    "rated_power_one_of": [
+     4200
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Aninerel ANL-4200T-24L-W-PRO",
+   "surface_key": "aninerel_anl_4200t_24l_w_pro_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       4200
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "github:issue#3 Aninerel ANL-4200T-24L-W-PRO",
+     "corpus:donor …GVB2 (3 captures, 2026-06-15)",
+     "fingerprint layout=11 model_code=30723 rated_power=4200"
+    ],
+    "confidence": "capture-derived-partial"
+   }
+  },
+  {
+   "entry_key": "anenji_anj_6200_48pl",
+   "fingerprint": {
+    "layout_code": 2,
+    "model_code": 8960,
+    "rated_power_one_of": [
+     6200
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Anenji ANJ-6200-48PL",
+   "surface_key": "smg_6200_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       6200
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     },
+     {
+      "key": "max_discharge_current_protection",
+      "register": 351
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "github:issue#8 Anenji ANJ-6200-48PL",
+     "corpus:donor …57E (capture, 2026-06-15)",
+     "fingerprint layout=2 model_code=8960 rated_power=6200",
+     "support archive runtime bound successfully to SMG 6200 register schema/profile"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "pi41_family",
+   "surface_key": "pi41_full",
+   "model_name": "PI41",
+   "priority": 220,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI41"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "catalog-migration:pi_family.pi41"
+    ],
+    "confidence": "rule-migrated"
+   }
+  },
+  {
+   "entry_key": "pi30_vmii_nxpw5kw",
+   "surface_key": "pi30_vmii_full",
+   "model_name": "PowMr 4.2kW",
+   "priority": 220,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "identity.model_number",
+     "equals": "VMII-NXPW5KW"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "fixture:pi30-vmii-nxpw5kw-live-capture"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "pi30_pip_gk",
+   "surface_key": "pi30_pip_gk_full",
+   "model_name": "PI30",
+   "priority": 210,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "shape.qpiri_field_count",
+     "min": 25
+    },
+    {
+     "key": "shape.qpigs_field_count",
+     "min": 21
+    },
+    {
+     "key": "shape.qpiws_bit_count",
+     "min": 36
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "catalog-migration:pi_family.pi30_pip_gk"
+    ],
+    "confidence": "rule-migrated"
+   }
+  },
+  {
+   "entry_key": "pi30_max_qpiri",
+   "surface_key": "pi30_max_full",
+   "model_name": "PI30",
+   "priority": 200,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "shape.qpiri_field_count",
+     "min": 28
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "catalog-migration:pi_family.pi30_max.qpiri"
+    ],
+    "confidence": "rule-migrated"
+   }
+  },
+  {
+   "entry_key": "pi30_max_qflag",
+   "surface_key": "pi30_max_full",
+   "model_name": "PI30",
+   "priority": 200,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "shape.capability_flags",
+     "contains_any": [
+      "d"
+     ]
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "catalog-migration:pi_family.pi30_max.qflag"
+    ],
+    "confidence": "rule-migrated"
+   }
+  },
+  {
+   "entry_key": "pi30_smartess_0925_compatible",
+   "surface_key": "pi30_default_full",
+   "model_name": "PI30",
+   "priority": 20,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "collector.smartess_protocol_asset_id",
+     "equals": "0925"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "smartess-protocol-asset:0925"
+    ],
+    "confidence": "supporting-evidence"
+   }
+  },
+  {
+   "entry_key": "pi30_smartess_query_0925_compatible",
+   "surface_key": "pi30_default_full",
+   "model_name": "PI30",
+   "priority": 20,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "smartess.protocol_asset_id",
+     "equals": "0925"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "smartess-query-protocol-asset:0925"
+    ],
+    "confidence": "supporting-evidence"
+   }
+  },
+  {
+   "entry_key": "pi30_family",
+   "surface_key": "pi30_default_full",
+   "model_name": "PI30",
+   "priority": 10,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "catalog-migration:pi30-default"
+    ],
+    "confidence": "family-compatible"
+   }
+  },
+  {
+   "entry_key": "pi18_family",
+   "surface_key": "pi18_read_only",
+   "model_name": "PI18",
+   "priority": 10,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI18"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "protocol-family:PI18"
+    ],
+    "confidence": "family-compatible"
+   }
+  },
+  {
+   "entry_key": "must_pv18_3024",
+   "surface_key": "must_pv_ph18_full",
+   "model_name": "MUST PV18-3024",
+   "priority": 220,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "MUST_PV_PH18"
+    },
+    {
+     "key": "identity.model_number",
+     "one_of": [
+      "PV18",
+      "PV1800"
+     ]
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "github:issue#5 MUST PV18-3024 user report",
+     "support archives 2026-06-13/14: SmartESS protocol asset 02FF,0,0, and collector serial baudrate 19200-8-1-0",
+     "private follow-up support archive: numeric PV1800 marker and framed EyeBond runtime path",
+     "third-party MUST PV/PH18 Modbus register map"
+    ],
+    "confidence": "third-party-map-with-support-archive"
+   }
+  },
+  {
+   "entry_key": "srne_modbus_family",
+   "surface_key": "srne_modbus_read_only",
+   "model_name": "SRNE-compatible Modbus family",
+   "priority": 120,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "SRNE_MODBUS"
+    },
+    {
+     "key": "identity.product_info",
+     "contains_any": [
+      "sr"
+     ]
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "private register map: SRNE-compatible Modbus product-info and telemetry ranges"
+    ],
+    "confidence": "third-party-map-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "lvyuan_ty_sic_3_6kbe_w1",
+   "surface_key": "eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1",
+   "model_name": "LVYUAN TY-SIC-3.6KBE-W1",
+   "priority": 120,
+   "family_fallback": false,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "EYBOND_G_ASCII"
+    },
+    {
+     "key": "rating.output_voltage",
+     "equals": 220
+    },
+    {
+     "key": "rating.output_current",
+     "equals": 16
+    },
+    {
+     "key": "rating.battery_voltage",
+     "equals": 24
+    },
+    {
+     "key": "rating.frequency",
+     "equals": 50
+    },
+    {
+     "key": "firmware.software_version",
+     "equals": "4.003"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "Private SmartValue support archive 01KW4GB9F4A7W81NCMKJK46EBB_20260629T213351481467Z.zip: local G-ASCII F/SVFW fingerprint 220V/16A/24V/50Hz + SVFW 4.003; commercial model name is user-reported.",
+     "SmartValue shadow-learning evidence from the same device correlated 36 cloud write attempts to 12 local G-ASCII setting commands without applying them to the inverter."
+    ],
+    "confidence": "offline-fingerprint-user-reported-model"
+   }
+  },
+  {
+   "entry_key": "eybond_g_ascii_family",
+   "surface_key": "eybond_g_ascii_read_only",
+   "model_name": "EyeBond G-ASCII family",
+   "priority": 40,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "EYBOND_G_ASCII"
+    },
+    {
+     "key": "shape.gdat0_field_count",
+     "min": 20,
+     "required": false
+    },
+    {
+     "key": "shape.gpv_field_count",
+     "min": 20,
+     "required": false
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "SmartValue proxy/support captures: GPDAT0, GPV, GBAT, GMOD, SVFW, GTMP, GLINE, GBUS, GCHG, GOP, GINV command family",
+     "local protocol document protocol.JSDSOLAR.docx: JsdSolar G-command ASCII read-only telemetry layout",
+     "external JsdSolar SmartESS G-command discussion: confirms the same GPDAT0/GPV/GBAT/GMOD command family exists outside this capture"
+    ],
+    "confidence": "documented-read-only"
+   }
+  },
+  {
+   "entry_key": "aohai_fsa_family",
+   "surface_key": "aohai_fsa_read_only",
+   "model_name": "Sandi Aohai FSA (Modbus)",
+   "priority": 110,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.aohai_status_raw",
+     "min": 0,
+     "max": 7,
+     "cost": 1
+    },
+    {
+     "key": "identity.aohai_battery_percent_raw",
+     "min": 0,
+     "max": 100,
+     "cost": 1
+    },
+    {
+     "key": "identity.aohai_battery_voltage_raw",
+     "min": 80,
+     "max": 700,
+     "cost": 1
+    },
+    {
+     "key": "identity.aohai_rated_power_raw",
+     "min": 10000,
+     "max": 160000,
+     "cost": 2
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "community ESPHome map: Sandisolar-Aohai-FSA-Series-Home-Assistant-integration-via-RS485 (Modbus RTU 9600 8N1, slave 1)"
+    ],
+    "confidence": "third-party-map-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "growatt_spf_family",
+   "surface_key": "growatt_spf_untested",
+   "model_name": "Growatt SPF Off-Grid (Modbus)",
+   "priority": 112,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.growatt_device_type_code_raw",
+     "min": 3400,
+     "max": 3499,
+     "cost": 1
+    },
+    {
+     "key": "identity.growatt_rated_power_raw",
+     "min": 10000,
+     "max": 160000,
+     "cost": 2
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "GrowattModBusProtocol.pdf V0.11 (OffGrid SPF3-5K RTU, 9600 8N1, slave 1; DTC 034xx = OffGrid SPF 3-5K)"
+    ],
+    "confidence": "datasheet-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "solis_esinv_family",
+   "surface_key": "solis_esinv_read_only",
+   "model_name": "Solis Hybrid (ESINV Modbus)",
+   "priority": 114,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.solis_model_definition_raw",
+     "one_of": [
+      8240,
+      8241,
+      8256,
+      8272,
+      8288,
+      2030,
+      2031,
+      2040,
+      2050,
+      2060
+     ],
+     "cost": 1
+    },
+    {
+     "key": "identity.solis_battery_soc_raw",
+     "min": 0,
+     "max": 100,
+     "cost": 1
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "ESINV-33000ID hybrid RS485 Modbus RTU protocol V002B000D01B (read-only translation, 2020-09-15; fixed 9600 8N1). Model-definition word 35000 documents hybrid variants as hex 2030/2031/2040/2050/2060; the anchor accepts both the hex-decoded and literal-decimal readings until hardware confirms which the firmware reports."
+    ],
+    "confidence": "datasheet-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "deye_lv_family",
+   "surface_key": "deye_lv_untested",
+   "model_name": "Deye Single-Phase LV Hybrid (Modbus)",
+   "priority": 116,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.deye_device_type_raw",
+     "equals": 768,
+     "cost": 1
+    },
+    {
+     "key": "identity.deye_rated_power_low_raw",
+     "min": 10000,
+     "max": 65535,
+     "cost": 2
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "Deye Modbus RTU protocol V1.18 (storage/string/micro) and V1.19 (one-phase) — same register map; SUN-xK-SG04LP1-class single-phase LV hybrids. Device type 0x0300 (768) selects the storage meaning of the overloaded 150-218 register area; rated power anchor reads the low word of the 0.1 W u32 (covers units up to 6.5 kW)."
+    ],
+    "confidence": "datasheet-unconfirmed"
+   }
+  }
+ ],
+ "family_defaults": [
+  {
+   "when_layout_codes": [
+    1,
+    2,
+    11
+   ],
+   "model_name": "SMG Family (Unverified Variant)",
+   "surface_key": "smg_family_read_only",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "note": "Known SMG layout, unknown model: base reads only; writes require learning."
+  }
+ ]
+}

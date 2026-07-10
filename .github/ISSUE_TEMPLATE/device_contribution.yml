@@ -1,0 +1,57 @@
+name: Device Contribution
+description: Share a learned device so it can be added to the built-in catalog.
+title: "device: "
+labels:
+  - device-contribution
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping support more inverters! This is for devices that the
+        integration identified as **partial** or **did not recognize**, where you
+        ran **learning** to discover the sensors and controls.
+
+        Before submitting:
+
+        1. In the integration options, run **Add controls (device learning)** to discover
+           the device's sensors and controls.
+        2. Create a **Support Archive**: *Configure → Diagnostics and service tools →
+           Create support archive*.
+        3. Attach the downloaded Support Archive (a `.zip`) to this issue.
+
+        The archive carries the device fingerprint, register map, and label correlations,
+        with **no** part number, serial number, IP, or account — those are stripped on your
+        device before the file is written. A maintainer turns the archive into a catalog
+        contribution.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I ran device learning on this device.
+          required: true
+        - label: I will attach the Support Archive (.zip) to this issue.
+          required: true
+        - label: I searched existing issues first.
+          required: true
+  - type: input
+    id: model
+    attributes:
+      label: Inverter model (as printed on the unit)
+      placeholder: e.g. SMG II 4200 / Anenji ANJ-11KW-48V
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything unusual about the device, or sensors/controls you expected but did not get.
+    validations:
+      required: false

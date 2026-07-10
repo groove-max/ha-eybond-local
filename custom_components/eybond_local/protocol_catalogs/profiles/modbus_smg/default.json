@@ -1,0 +1,140 @@
+{
+  "extends": "modbus_smg/base.json",
+  "profile_key": "smg_modbus",
+  "title": "SMG / Modbus",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capabilities": [
+    {
+      "key": "output_source_priority",
+      "tested": true
+    },
+    {
+      "key": "input_voltage_range",
+      "tested": true
+    },
+    {
+      "key": "buzzer_mode",
+      "tested": true
+    },
+    {
+      "key": "lcd_backlight_mode",
+      "tested": true
+    },
+    {
+      "key": "lcd_auto_return_mode",
+      "tested": true
+    },
+    {
+      "key": "overload_restart_mode",
+      "tested": true
+    },
+    {
+      "key": "over_temperature_restart_mode",
+      "tested": true
+    },
+    {
+      "key": "battery_equalization_mode",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "turn_on_mode",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_bulk_voltage",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_overvoltage_protection_voltage",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_float_voltage",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_redischarge_voltage",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_under_voltage",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_under_voltage_off_grid",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "charge_source_priority",
+      "tested": true
+    },
+    {
+      "key": "max_charge_current",
+      "tested": true
+    },
+    {
+      "key": "max_ac_charge_current",
+      "tested": true
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalization_time",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalization_timeout",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "battery_equalization_interval",
+      "tested": true,
+      "enabled_default": true
+    },
+    {
+      "key": "low_dc_protection_soc_grid_mode",
+      "template": "low_dc_protection_soc_grid_mode",
+      "register": 341,
+      "tested": true,
+      "note": "Reverse-engineered from live SMG app changes. Raw unsigned percent threshold."
+    },
+    {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "template": "solar_battery_utility_return_soc_threshold",
+      "register": 342,
+      "tested": true,
+      "note": "Reverse-engineered from live SMG app changes. Raw unsigned percent threshold."
+    },
+    {
+      "key": "low_dc_cutoff_soc",
+      "template": "low_dc_cutoff_soc",
+      "register": 343,
+      "tested": true,
+      "note": "Reverse-engineered from live SMG app changes. Raw unsigned percent threshold."
+    },
+    {
+      "key": "power_saving_mode",
+      "support_tier": "blocked",
+      "support_notes": "Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts."
+    },
+    {
+      "key": "overload_bypass_mode",
+      "support_tier": "blocked",
+      "support_notes": "Observed on the real Sandisolar SD-HYM-4862HWP (reported generically as SMG 6200) to return Modbus exception_code:7 during write attempts."
+    }
+  ]
+}

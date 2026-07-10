@@ -1,0 +1,30 @@
+{
+  "schema_key": "eybond_g_ascii_base",
+  "title": "EyeBond G-ASCII Read-Only Telemetry Schema",
+  "driver_key": "eybond_g_ascii",
+  "protocol_family": "eybond_g_ascii",
+  "blocks": [
+    {
+      "key": "status",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "serial",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "live",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "config",
+      "start": 0,
+      "count": 0
+    }
+  ],
+  "measurement_descriptions_from_command_schema": "eybond_g_ascii/base.json",
+  "binary_sensor_descriptions_from_command_schema": "eybond_g_ascii/base.json"
+}

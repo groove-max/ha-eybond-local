@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Commercial inverter model record",
+  "description": "One commercial inverter model, not one runtime descriptor. Runtime-derived values (protocol, fingerprint, surface, driver, profile, schema, read-only state, capability counts) are NOT stored here; they are resolved from the runtime inverter catalog.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "model_key",
+    "manufacturer",
+    "model",
+    "lifecycle",
+    "variants",
+    "validation",
+    "coverage",
+    "knowledge_summary",
+    "source_keys"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "model_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "description": "Stable technical identifier. Recommended form <manufacturer>_<commercial-model>. Not renamed for branding or alias changes."
+    },
+    "manufacturer": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "aliases": {"type": "array", "items": {"type": "string"}},
+    "lifecycle": {
+      "type": "string",
+      "enum": ["research", "experimental", "supported", "deprecated"]
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["variant_key", "label", "device_descriptor_keys"],
+        "properties": {
+          "variant_key": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+          "label": {"type": "string", "minLength": 1},
+          "device_descriptor_keys": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"},
+            "description": "Keys of devices[] entries in the runtime inverter catalog."
+          },
+          "known_firmware": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hardware", "telemetry", "controls"],
+      "properties": {
+        "hardware": {"type": "string", "enum": ["none", "reported", "captured", "confirmed"]},
+        "telemetry": {"type": "string", "enum": ["unknown", "partial", "confirmed"]},
+        "controls": {"type": "string", "enum": ["none", "partial", "confirmed"]}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_control_surface", "smartess_control_surface", "vendor_register_map"],
+      "description": "Coverage dimensions are intentionally separate from validation. They distinguish the runtime surface exposed by the integration, the cloud-learned write surface, and the broader vendor/MCU register map.",
+      "properties": {
+        "runtime_control_surface": {
+          "type": "string",
+          "enum": ["none", "read_only", "available", "device_scoped_overlay", "hardware_confirmed"],
+          "description": "What the integration can expose for this model today."
+        },
+        "smartess_control_surface": {
+          "type": "string",
+          "enum": ["unknown", "not_applicable", "cloud_catalog", "correlated", "device_scoped_overlay", "hardware_confirmed"],
+          "description": "How completely the cloud-known control surface is known."
+        },
+        "vendor_register_map": {
+          "type": "string",
+          "enum": ["unknown", "not_applicable", "partial", "documented", "extended"],
+          "description": "How much of the broader manufacturer/MCU register map is known."
+        },
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "known_limitations": {"type": "array", "items": {"type": "string"}},
+    "knowledge_summary": {"type": "string", "minLength": 1},
+    "source_keys": {"type": "array", "items": {"type": "string"}}
+  }
+}

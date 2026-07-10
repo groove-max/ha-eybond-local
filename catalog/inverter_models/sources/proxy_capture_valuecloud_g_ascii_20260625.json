@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "proxy_capture_valuecloud_g_ascii_20260625",
+  "kind": "support_archive",
+  "title": "SmartValue cloud proxy capture with G-command polling",
+  "reference": "sha256:305f52c99164db1fe467d84203b4a23f30d6bf1eeb9b5b0b98d4e4c1cf58e517",
+  "captured_at": "2026-06-25",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Proxy capture shows the cloud polling the logger/inverter with plain G-ASCII commands including GPDAT0, GPV, GBAT, GMOD, SVFW, GTMP, GLINE, GBUS, GCHG, GOP, GINV, GWS, TE?, Q1, and F. Captured responses provide read-only telemetry field evidence; no write-control behavior was validated.",
+  "assertions": [
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

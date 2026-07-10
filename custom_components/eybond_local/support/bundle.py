@@ -18,6 +18,7 @@ _COLLECTOR_VALUE_PREFIXES = (
     "smartess_",
 )
 _RUNTIME_DIAGNOSTIC_VALUE_PREFIXES = (
+    "integration_",
     "runtime_",
     "support_workflow_",
 )
@@ -105,15 +106,75 @@ def _build_role_payloads(
     }
 
 
+def _descriptor_decision_shadow_payload(
+    *,
+    inverter: dict[str, Any] | None,
+    values: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return descriptor-tree shadow diagnostics from runtime payloads, if present."""
+
+    if isinstance(inverter, dict):
+        direct = inverter.get("descriptor_decision_shadow")
+        if isinstance(direct, dict):
+            return direct
+        details = inverter.get("details")
+        if isinstance(details, dict):
+            nested = details.get("descriptor_decision_shadow")
+            if isinstance(nested, dict):
+                return nested
+            device_catalog = details.get("device_catalog")
+            if isinstance(device_catalog, dict):
+                catalog_report = device_catalog.get("descriptor_decision")
+                if isinstance(catalog_report, dict):
+                    return catalog_report
+    value_report = values.get("descriptor_decision_shadow")
+    if isinstance(value_report, dict):
+        return value_report
+    return None
+
+
+def _catalog_detection_payload(
+    *,
+    inverter: dict[str, Any] | None,
+    values: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the canonical compiled-catalog resolution payload."""
+
+    if isinstance(inverter, dict):
+        details = inverter.get("details")
+        if isinstance(details, dict):
+            direct = details.get("catalog_detection")
+            if isinstance(direct, dict):
+                return direct
+            device_catalog = details.get("device_catalog")
+            if isinstance(device_catalog, dict):
+                compiled = device_catalog.get("compiled_resolution")
+                if isinstance(compiled, dict):
+                    return compiled
+    direct = values.get("catalog_detection")
+    if isinstance(direct, dict):
+        return direct
+    device_catalog = values.get("device_catalog")
+    if isinstance(device_catalog, dict):
+        compiled = device_catalog.get("compiled_resolution")
+        if isinstance(compiled, dict):
+            return compiled
+    return None
+
+
 def is_read_only_unverified_smg_family(
     *,
     variant_key: str = "",
     profile_name: str = "",
+    effective_owner_key: str = "",
 ) -> bool:
     """Return whether one runtime path is the read-only unverified SMG family state."""
 
     normalized_variant_key = str(variant_key or "").strip()
     normalized_profile_name = str(profile_name or "").strip()
+    normalized_owner_key = str(effective_owner_key or "").strip()
+    if normalized_owner_key and normalized_owner_key != "modbus_smg":
+        return False
     return (
         normalized_variant_key == _SMG_FAMILY_FALLBACK_VARIANT
         or normalized_profile_name == _SMG_READ_ONLY_PROFILE_NAME
@@ -124,12 +185,14 @@ def build_support_marker(
     *,
     variant_key: str = "",
     profile_name: str = "",
+    effective_owner_key: str = "",
 ) -> dict[str, Any] | None:
     """Return one machine-readable support marker for special runtime states."""
 
     if not is_read_only_unverified_smg_family(
         variant_key=variant_key,
         profile_name=profile_name,
+        effective_owner_key=effective_owner_key,
     ):
         return None
     return {
@@ -171,6 +234,7 @@ def build_support_bundle_payload(
     support_marker = build_support_marker(
         variant_key=variant_key,
         profile_name=profile_name,
+        effective_owner_key=effective_owner_key,
     )
 
     source_metadata = {
@@ -192,6 +256,14 @@ def build_support_bundle_payload(
         "inverter": inverter,
         "values": values,
     }
+    descriptor_decision_shadow = _descriptor_decision_shadow_payload(
+        inverter=inverter,
+        values=values,
+    )
+    catalog_detection = _catalog_detection_payload(
+        inverter=inverter,
+        values=values,
+    )
 
     return {
         "bundle_version": 1,
@@ -214,6 +286,8 @@ def build_support_bundle_payload(
         ),
         "evidence": {
             "cloud": cloud_evidence,
+            "catalog_detection": catalog_detection,
+            "descriptor_decision_shadow": descriptor_decision_shadow,
         },
     }
 

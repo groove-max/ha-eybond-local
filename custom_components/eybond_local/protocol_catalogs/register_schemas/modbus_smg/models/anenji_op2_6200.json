@@ -1,0 +1,86 @@
+{
+  "extends": "../base.json",
+  "schema_key": "modbus_smg_anenji_op2_6200",
+  "title": "SMG OP2 6200 Dual Output Register Schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "blocks": [
+    {"key": "live", "start": 201, "count": 44},
+    {"key": "config", "start": 300, "count": 54}
+  ],
+  "spec_sets": {
+    "live": [
+      {"key": "output2_va", "register": 239, "signed": true},
+      {"key": "output2_power", "register": 240},
+      {"key": "output2_load_percent", "register": 243},
+      {"key": "output2_voltage", "register": 244, "divisor": 10, "decimals": 1}
+    ],
+    "config": [
+      {
+        "key": "charge_source_priority",
+        "register": 331,
+        "enum_table": null,
+        "enum_map": {
+          "1": "PV Priority",
+          "2": "PV and Utility",
+          "3": "PV Only",
+          "4": "PV Priority With Load Reserve"
+        }
+      },
+      {"key": "output2_cutoff_soc", "register": 344},
+      {"key": "output2_overload_warning_percent", "register": 353}
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "output2_va",
+      "name": "Output 2 Apparent Power",
+      "unit": "VA",
+      "state_class": "measurement",
+      "icon": "mdi:flash-outline",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "output2_power",
+      "name": "Output 2 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "icon": "mdi:flash"
+    },
+    {
+      "key": "output2_load_percent",
+      "name": "Output 2 Load Percent",
+      "unit": "%",
+      "state_class": "measurement",
+      "icon": "mdi:gauge"
+    },
+    {
+      "key": "output2_voltage",
+      "name": "Output 2 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "icon": "mdi:power-socket"
+    },
+    {
+      "key": "output2_cutoff_soc",
+      "name": "Output 2 Cut-Off SOC",
+      "unit": "%",
+      "icon": "mdi:battery-arrow-down",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "output2_overload_warning_percent",
+      "name": "Output 2 Overload Warning Threshold",
+      "unit": "%",
+      "icon": "mdi:speedometer",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    }
+  ]
+}

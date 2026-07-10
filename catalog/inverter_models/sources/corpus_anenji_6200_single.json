@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "corpus_anenji_6200_single",
+  "kind": "support_archive",
+  "title": "Anenji 6200 single-output donor capture",
+  "reference": "private:corpus-anenji-6200-single",
+  "captured_at": "2026-06-12",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Donor single-output capture (layout 1, model code 14080, fw 3700_A6250424v1). Bound to the SMG 6200 surface with correct telemetry readback.",
+  "assertions": [
+    "fingerprint",
+    "telemetry_validation",
+    "runtime_compatibility"
+  ]
+}

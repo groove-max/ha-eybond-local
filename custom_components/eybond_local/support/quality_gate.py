@@ -19,7 +19,6 @@ class GeneratedExport:
     key: str
     tool_path: Path
     output_path: Path
-    profile_name: str | None = None
 
     def command(self, python_executable: str, *, check: bool) -> tuple[str, ...]:
         """Build the command line for this export."""
@@ -30,8 +29,6 @@ class GeneratedExport:
             "--format",
             "markdown",
         ]
-        if self.profile_name:
-            args.extend(["--profile", self.profile_name])
         args.extend(["--output", str(self.output_path)])
         if check:
             args.append("--check")
@@ -52,15 +49,9 @@ def generated_exports() -> tuple[GeneratedExport, ...]:
 
     return (
         GeneratedExport(
-            key="support_matrix",
-            tool_path=TOOLS_DIR / "export_support_matrix.py",
-            output_path=GENERATED_DOCS_DIR / "SMG_SUPPORT_MATRIX.generated.md",
-            profile_name="smg_modbus.json",
-        ),
-        GeneratedExport(
-            key="support_overview",
-            tool_path=TOOLS_DIR / "export_support_overview.py",
-            output_path=GENERATED_DOCS_DIR / "SUPPORT_OVERVIEW.generated.md",
+            key="model_catalog",
+            tool_path=TOOLS_DIR / "model_catalog.py",
+            output_path=GENERATED_DOCS_DIR / "INVERTER_MODEL_CATALOG.generated.md",
         ),
     )
 
@@ -77,6 +68,11 @@ def build_quality_gate_steps(
             key="validate_profiles",
             title="Validate declarative profiles",
             command=(python_executable, str(TOOLS_DIR / "validate_profiles.py")),
+        ),
+        QualityGateStep(
+            key="validate_model_catalog",
+            title="Validate inverter model catalog",
+            command=(python_executable, str(TOOLS_DIR / "model_catalog.py"), "validate"),
         ),
         QualityGateStep(
             key="unit_tests",

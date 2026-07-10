@@ -7,13 +7,13 @@ from typing import Any
 
 from ..fixtures.coverage import build_fixture_coverage_overview
 from ..fixtures.validation import build_fixture_validation_overview
-from .overview import build_support_overview
+from .runtime_inventory import build_runtime_profile_inventory
 
 
 async def build_evidence_index() -> dict[str, Any]:
     """Build one combined evidence index across profiles and local fixtures."""
 
-    support = build_support_overview()
+    support = build_runtime_profile_inventory()
     coverage = build_fixture_coverage_overview()
     validation = await build_fixture_validation_overview()
 

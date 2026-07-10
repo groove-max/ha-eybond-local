@@ -16,28 +16,20 @@
       },
       "collector_network": {
         "title": "Подключение коллектора к сети",
-        "description": "На этом этапе коллектор уже должен быть подключён к той же сети, что и Home Assistant. Если это уже так, просто выберите первый пункт ниже.\n\nЕсли нет, у вас есть несколько путей: воспользоваться оригинальным приложением SmartESS, выполнить подключение вручную или, для совместимых моделей, передать параметры Wi-Fi через Bluetooth.\n\nПуть через SmartESS обычно самый простой. При этом ручная настройка не проверяет привязку коллектора к серверу SmartESS и не требует доступа к учётной записи SmartESS, к которой этот коллектор уже привязан.\n\nДля ручного управления подключением сейчас доступны два практических варианта:\n- **Через Wi-Fi.** Это более совместимый путь, который можно использовать даже тогда, когда коллектор сейчас работает как точка доступа.\n- **Через Bluetooth.** Это проще, потому что обычно выполняется за одну итерацию и не требует предварительного переключения Home Assistant на Wi-Fi точку коллектора. Но этот путь работает только на новых коллекторах и требует аппаратной поддержки Bluetooth на стороне Home Assistant. Также поддерживаются Home Assistant Bluetooth Proxy, например на ESPHome.\n\nДля Wi-Fi-пути нужно самостоятельно подключить Home Assistant к точке доступа, которую поднимает сам коллектор. Обычно в названии этой сети присутствует PN коллектора, а типичный пароль - `12345678`.\n\nПосле установления такого подключения вернитесь на этот экран и выберите **\"Да, коллектор уже подключён к моей сети\"**.\n\nПосле добавления устройства в интеграцию в настройках устройства можно будет указать SSID и пароль вашей основной Wi-Fi сети, чтобы перевести коллектор в режим клиента.\n\nПосле изменения параметров сети или точки доступа рекомендуется удалить устройство из интеграции и добавить его заново.",
+        "description": "Коллектор уже подключён к той же сети, что и Home Assistant? Если да — выберите первый пункт.\n\nЕсли нет, есть два способа подключить его:\n- **Bluetooth** (второй пункт) — самый простой путь для новых коллекторов. Нужен Bluetooth на стороне Home Assistant: локальный адаптер или ESPHome Bluetooth Proxy рядом с коллектором.\n- **Собственный Wi-Fi коллектора** — подключите хост Home Assistant к точке доступа коллектора (SSID содержит PN коллектора, пароль обычно `12345678`), затем выберите первый пункт.\n\nПосле добавления устройства коллектор можно перевести на вашу обычную Wi-Fi-сеть из настроек интеграции.",
         "menu_options": {
           "auto": "Да, коллектор уже подключён к моей сети",
           "bluetooth_setup": "Нет, сначала подключить коллектор к Wi-Fi через Bluetooth"
-        },
-        "data": {
-          "collector_network_status": "Состояние подключения коллектора"
-        },
-        "data_description": {
-          "collector_network_status": "Выбирайте Bluetooth-настройку Wi-Fi только если коллектор ещё нужно подключить к вашей сети. Этот путь пока работает в тестовом режиме и только для коллекторов с поддержкой Bluetooth. Для этого можно использовать как локальный Bluetooth-адаптер, так и Bluetooth Proxy Home Assistant, например на ESPHome, рядом с коллектором."
         }
       },
       "auto": {
         "title": "Выберите интерфейс сканирования",
-        "description": "Ниже выберите интерфейс Home Assistant, затем решите, запускать ли быстрый автопоиск сейчас, перейти к более глубокому поиску по всей сети или открыть ручную настройку.",
+        "description": "Выберите сетевой интерфейс Home Assistant (тот, что в одной подсети с инвертором) и запустите сканирование.",
         "data": {
-          "server_ip": "Интерфейс Home Assistant",
-          "setup_mode": "Следующий шаг"
+          "server_ip": "Интерфейс Home Assistant"
         },
         "data_description": {
-          "server_ip": "Сетевой интерфейс, к которому коллектор подключится в ответ. Выберите тот, что находится в той же подсети, что и ваш инвертор.",
-          "setup_mode": "Запустить быстрый автопоиск, перейти к более глубокому поиску по всей сети или сразу открыть ручную настройку."
+          "server_ip": "Сетевой интерфейс, к которому коллектор подключится в ответ. Выберите тот, что находится в той же подсети, что и ваш инвертор."
         }
       },
       "bluetooth_setup": {
@@ -74,10 +66,14 @@
         "description": "**Интерфейс сканирования:** {selected_scan_interface}\n\n{scan_summary}\n\n{candidate_list}\n\n{scan_next_hint}",
         "menu_options": {
           "choose": "Добавить обнаруженное устройство",
-          "deep_scan": "Запустить глубокое сканирование",
-          "change_scan_interface": "Изменить интерфейс сканирования",
           "refresh_scan": "Повторить сканирование",
-          "manual": "Ручная настройка"
+          "advanced_setup": "Устройство не найдено? Расширенная настройка"
+        },
+        "data": {
+          "result_key": "Устройство или действие"
+        },
+        "data_description": {
+          "result_key": "Выберите найденное устройство, чтобы добавить его, или действие из списка."
         }
       },
       "change_scan_interface": {
@@ -100,64 +96,68 @@
           "result_key": "Выберите инвертор, который хотите добавить в Home Assistant."
         }
       },
-      "collector_operation": {
-        "title": "Режим работы коллектора",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}",
+      "driver_choice": {
+        "title": "Выбор драйвера инвертора",
+        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
         "data": {
-          "collector_operation_mode": "Режим работы коллектора"
+          "driver_match_key": "Драйвер / протокол"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant."
+          "driver_match_key": "Если не уверены — оставьте рекомендованный вариант."
         }
       },
-      "collector_endpoint_confirm": {
-        "title": "Подтверждение смены callback endpoint",
-        "description": "{collector_confirm_table}\n\n**Текущий сервер коллектора:** `{current_collector_server_endpoint}`\n**Новый сервер Home Assistant:** `{target_collector_server_endpoint}`\n\n{collector_endpoint_originality_hint}\n\nПосле применения изменения коллектор будет отвязан от текущего callback-сервера. Пока нет 100% гарантии, что исходный endpoint одинаков для всех моделей коллекторов.\n\n**Последняя ошибка endpoint:** {collector_endpoint_last_error}",
-        "data": {
-          "confirm_collector_endpoint_risk": "Я записал текущий endpoint и принимаю риск"
-        },
-        "data_description": {
-          "confirm_collector_endpoint_risk": "Обязательно перед записью callback endpoint Home Assistant в коллектор."
+      "detection_summary": {
+        "title": "Результат определения",
+        "description": "**{model}**\n\n**{tier_headline}**\n\n{tier_details}",
+        "menu_options": {
+          "confirm": "Добавить это устройство",
+          "smartess_cloud_assist": "Уточнить определение через облако SmartESS"
         }
       },
       "confirm": {
         "title": "Подтвердите обнаружение",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Режим работы коллектора",
+          "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
       "confirm_without_cloud_assist": {
         "title": "Подтвердите обнаружение",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "collector_operation_mode": "Режим работы коллектора",
+          "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
-          "collector_operation_mode": "SmartESS cloud + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "collector_operation_mode": "Облачное приложение + Home Assistant оставляет текущий адрес сервера коллектора без изменений. Только Home Assistant меняет callback endpoint коллектора на этот listener Home Assistant.",
+          "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
-      "smartess_cloud_assist_choice": {
-        "title": "Уточнить через SmartESS cloud",
-        "description": "{smartess_cloud_offer_summary}\n\n**PN коллектора:** {collector_pn}\n**Последние облачные данные:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
-        "menu_options": {
-          "smartess_cloud_assist": "Использовать SmartESS cloud assist",
-          "confirm_without_cloud_assist": "Продолжить без SmartESS cloud assist"
+      "confirm_poll_interval": {
+        "title": "Ручной интервал обновления",
+        "description": "В ручном режиме используется точный интервал ниже.",
+        "data": {
+          "poll_interval": "Интервал опроса"
+        },
+        "data_description": {
+          "poll_interval": "Только для ручного режима. Это целевой интервал между началами циклов опроса. Если устройству нужно больше времени на ответ, EyeBond Local предупредит о высокой загрузке опроса; используйте автоматический режим, чтобы интеграция сама выбрала безопасный интервал."
         }
       },
       "smartess_cloud_assist": {
         "title": "SmartESS Cloud Assist",
-        "description": "Интеграция выполнит вход в SmartESS cloud, определит идентичность устройства для коллектора `{collector_pn}` и сохранит переиспользуемые облачные данные для мастера настройки.\n\n{smartess_cloud_offer_summary}\n\n**Последние облачные данные:** {cloud_evidence_path}\n\n{smartess_cloud_status_line}",
+        "description": "Войдите в аккаунт SmartESS, чтобы подтвердить идентичность устройства для коллектора `{collector_pn}`. Логин используется один раз для этого шага; результат сохраняется как переиспользуемые данные онбординга.\n\n{smartess_cloud_offer_summary}\n\n{smartess_cloud_status_line}",
         "data": {
-          "username": "Имя пользователя SmartESS",
-          "password": "Пароль SmartESS"
+          "username": "Имя пользователя облака",
+          "password": "Пароль облака"
         },
         "data_description": {
           "username": "Имя учётной записи SmartESS, используемой в мобильном приложении.",
@@ -174,7 +174,7 @@
       },
       "manual": {
         "title": "Ручная настройка",
-        "description": "Используйте этот режим, если автообнаружение не может найти устройство, если коллектор находится удалённо или если обратное подключение должно идти через VPN / NAT.\n\nКогда вы продолжите, интеграция попробует выполнить probe с этими параметрами перед созданием записи. Если probe не подтвердит устройство, на следующем экране можно будет изменить значения и повторить попытку.",
+        "description": "Для случаев, когда авто-скан не достаёт до устройства: удалённый коллектор, VPN/NAT или известный фиксированный адрес. Настройки сначала проверяются — если устройство не подтвердится, их можно поправить и повторить на следующем экране.",
         "data": {
           "server_ip": "Локальный IP-адрес слушателя",
           "collector_ip": "IP-адрес коллектора",
@@ -188,7 +188,7 @@
         "sections": {
           "advanced_connection": {
             "name": "Расширенные параметры подключения",
-            "description": "Порты, обнаружение, heartbeat и необязательные параметры обратного вызова для remote сценариев. Для обычной локальной сети оставляйте advertised поля пустыми.",
+            "description": "Нужно только для удалённых подключений, VPN или NAT. Для обычной домашней сети значения по умолчанию верны — здесь можно ничего не менять.",
             "data": {
               "tcp_port": "Локальный TCP-порт",
               "advertised_server_ip": "Advertised IP обратного вызова",
@@ -200,12 +200,12 @@
             },
             "data_description": {
               "tcp_port": "Локальный TCP-порт слушателя на Home Assistant. Значение по умолчанию: 8899.",
-              "advertised_server_ip": "IPv4-адрес, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный IP-адрес слушателя выше. Меняйте только для VPN, NAT или публичного маршрута обратного вызова.",
-              "advertised_tcp_port": "TCP-порт, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный TCP-порт выше. Меняйте только если внешний проброшенный порт отличается от локального.",
-              "udp_port": "UDP-порт для discovery redirect пакетов коллектора. Значение по умолчанию: 58899.",
+              "advertised_server_ip": "Публичный или проброшенный IP, на который коллектор должен подключаться. Для обычной домашней сети оставьте пустым (используется локальный адрес выше).",
+              "advertised_tcp_port": "Проброшенный внешний порт для обратного подключения. Оставьте пустым, если роутер не пробрасывает другой внешний порт.",
+              "udp_port": "Порт обнаружения коллектора в сети. По умолчанию: 58899 — меняйте только по инструкции.",
               "discovery_target": "IPv4-адрес, который получает discovery пакеты. Для локальной сети используйте broadcast подсети, для remote/NAT сценариев - конкретный IPv4-адрес для unicast.",
               "discovery_interval": "Как часто отправлять discovery redirect пакеты, пока коллектор ещё не подключился.",
-              "heartbeat_interval": "Как часто отправлять keep-alive пакеты после подключения коллектора."
+              "heartbeat_interval": "Как часто Home Assistant пингует коллектор, чтобы поддерживать соединение."
             }
           }
         }
@@ -219,10 +219,21 @@
           "manual_smartess_cloud_assist": "Уточнить через SmartESS cloud",
           "manual_create_pending": "Сохранить ожидающее устройство"
         }
+      },
+      "advanced_setup": {
+        "title": "Расширенная настройка",
+        "description": "Используйте это, только если автоматический скан не нашёл инвертор.",
+        "menu_options": {
+          "deep_scan": "Глубокий скан (вся подсеть)",
+          "change_scan_interface": "Сменить сетевой интерфейс",
+          "manual": "Ввести адрес вручную",
+          "refresh_scan": "Сканировать снова"
+        }
       }
     },
     "progress": {
-      "scanning_network": "Сканирование локальной сети на наличие коллекторов EyeBond…"
+      "scanning_network": "Сканирование локальной сети на наличие коллекторов EyeBond…",
+      "shadow_learning": "{control_discovery_hint}"
     },
     "error": {
       "invalid_ip": "Некорректный IPv4-адрес.",
@@ -233,14 +244,13 @@
       "ble_address_invalid": "Укажите Bluetooth-адрес коллектора.",
       "ble_wifi_ssid_invalid": "Укажите имя Wi-Fi сети для передачи по Bluetooth.",
       "ble_wifi_password_invalid": "Укажите пароль Wi-Fi сети для передачи по Bluetooth.",
-      "ble_wifi_scan_failed": "Коллектор найден по Bluetooth, но Home Assistant не смог прочитать список Wi-Fi сетей. Скорее всего, Bluetooth-связь нестабильна: переместите коллектор или Bluetooth-адаптер ближе либо разместите рядом с коллектором ESPHome Bluetooth Proxy и попробуйте снова.",
+      "ble_wifi_scan_failed": "Коллектор найден по Bluetooth, но список его Wi-Fi-сетей прочитать не удалось — связь, вероятно, слабая. Поднесите коллектор или адаптер ближе (или разместите рядом ESPHome Bluetooth Proxy) и повторите.",
       "ble_provision_failed": "Bluetooth-настройка не завершилась успешно. Проверьте коллектор, права доступа к адаптеру и учётные данные Wi-Fi, затем попробуйте снова.",
-      "collector_endpoint_read_failed": "Не удалось прочитать текущий callback endpoint коллектора.",
       "collector_endpoint_write_failed": "Не удалось записать callback endpoint Home Assistant в коллектор.",
-      "collector_endpoint_risk_not_confirmed": "Подтвердите, что вы записали текущий endpoint, прежде чем продолжить.",
       "invalid_selection": "Выбранный результат обнаружения больше недоступен.",
       "already_added_candidate": "Это обнаруженное устройство уже настроено и не может быть добавлено повторно.",
-      "smartess_cloud_assist_failed": "SmartESS cloud assist не завершился. Смотрите объяснение выше и попробуйте ещё раз."
+      "smartess_cloud_assist_failed": "SmartESS cloud assist не завершился. Смотрите объяснение выше и попробуйте ещё раз.",
+      "inverter_link_down": "Коллектор отвечает, но связь с инвертором отсутствует (identity-регистры читаются нулями). Проверьте питание инвертора и кабель коллектора, затем повторите сканирование."
     },
     "abort": {
       "already_configured": "Этот коллектор или инвертор уже настроен."
@@ -257,15 +267,27 @@
       "collector_wifi_password_required": "Введите пароль Wi-Fi.",
       "collector_wifi_password_not_ascii": "На локальном управляющем пути этот коллектор принимает только ASCII-пароли Wi-Fi.",
       "collector_wifi_apply_not_confirmed": "Подтвердите, что применение Wi-Fi настроек может временно отключить коллектор.",
-      "proxy_capture_action_failed": "Не удалось выполнить действие захвата. Проверьте журнал Home Assistant."
+      "collector_uart_read_failed": "Не удалось прочитать параметры UART с коллектора.",
+      "collector_uart_write_failed": "Не удалось записать параметры UART в коллектор.",
+      "collector_uart_baudrate_invalid": "Выберите поддерживаемую скорость UART.",
+      "collector_uart_apply_not_confirmed": "Подтвердите, что смена скорости UART может временно остановить связь с инвертором.",
+      "collector_uart_runtime_unavailable": "Этот коллектор не умеет менять скорость UART без перепрошивки.",
+      "proxy_capture_action_failed": "Не удалось выполнить действие захвата. Проверьте журнал Home Assistant.",
+      "shadow_learning_failed": "Действие обнаружения элементов управления завершилось ошибкой. Проверьте детали и подтверждения и попробуйте снова.",
+      "diagnostic_commands_required": "Вставьте хотя бы одну диагностическую команду.",
+      "diagnostic_commands_unavailable": "Runtime интеграции не загружен, поэтому диагностические команды сейчас недоступны.",
+      "diagnostic_commands_failed": "Диагностический сценарий неожиданно завершился ошибкой. Проверьте журнал Home Assistant.",
+      "invalid_selection": "Выбранный вариант больше недоступен."
     },
     "step": {
       "init": {
         "title": "Параметры EyeBond Local",
-        "description": "Выберите, чем именно вы хотите управлять для этой записи.",
+        "description": "Выберите, чем именно вы хотите управлять для этой записи.{bridge_note}",
         "menu_options": {
           "runtime": "Подключение и опрос",
+          "shadow_learning": "Расширить поддержку устройства",
           "collector_wifi": "Сменить Wi-Fi коллектора",
+          "collector_uart": "Сменить скорость UART инвертора",
           "diagnostics": "Диагностика и сервисные инструменты"
         }
       },
@@ -283,23 +305,38 @@
           "confirm_collector_wifi_apply": "После изменения сетевых параметров рекомендуется удалить это устройство из Home Assistant и добавить его заново, чтобы коллектор переподключился уже с новым IP-адресом."
         }
       },
+      "collector_uart": {
+        "title": "Сменить скорость UART инвертора",
+        "description": "**Текущее состояние**\nКоллектор: {collector_ip}\nПлатформа: {hardware_version}\nТекущий UART: {current_uart}\n\nВыберите скорость UART, которую ожидает инвертор, и примените её. Эта настройка доступна только для мостов ESP EyeBond Collector.{runtime_unavailable_note}{status_updates}",
+        "data": {
+          "collector_uart_baudrate": "Скорость UART",
+          "collector_uart_action": "Что сделать",
+          "confirm_collector_uart_apply": "Я понимаю, что смена скорости UART может временно остановить связь с инвертором"
+        },
+        "data_description": {
+          "collector_uart_baudrate": "Мост сохраняет текущий формат кадра и меняет только скорость. PI30/Voltronic часто используют 2400; SMG/Modbus часто используют 9600.",
+          "confirm_collector_uart_apply": "Если скорость выбрана неверно, Home Assistant может продолжать видеть коллектор, но перестать получать данные инвертора до исправления скорости."
+        }
+      },
       "runtime": {
         "title": "Параметры работы",
-        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}",
+        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса",
           "collector_operation_mode": "Режим работы коллектора",
           "control_mode": "Режим управления"
         },
         "data_description": {
-          "poll_interval": "Как часто считывать значения датчиков с инвертора.",
-          "collector_operation_mode": "SmartESS + HA оставляет коллектор доступным в приложении SmartESS, а Home Assistant при этом тоже работает с ним локально. Только Home Assistant переводит коллектор в режим подключения только к Home Assistant.",
+          "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
+          "poll_interval": "Только для ручного режима. Это целевой интервал между началами циклов опроса. Если устройству нужно больше времени на ответ, EyeBond Local предупредит о высокой загрузке опроса; используйте автоматический режим, чтобы интеграция сама выбрала безопасный интервал.",
+          "collector_operation_mode": "Cloud app + HA оставляет коллектор доступным в исходном облачном приложении, а Home Assistant при этом тоже работает с ним локально. Только Home Assistant переводит коллектор в режим подключения только к Home Assistant.",
           "control_mode": "Авто включает проверенные элементы управления, когда уверенность обнаружения высока. Только чтение отключает все управление. Полный режим включает всё."
         },
         "sections": {
           "connection": {
             "name": "Параметры подключения",
-            "description": "Настройки сетевого транспорта, включая необязательные advertised параметры обратного вызова. Для обычной локальной сети оставляйте advertised поля пустыми.",
+            "description": "Нужно только для удалённых подключений, VPN или NAT. Для обычной домашней сети значения по умолчанию верны — здесь можно ничего не менять.",
             "data": {
               "server_ip": "Локальный IP-адрес слушателя",
               "collector_ip": "IP-адрес коллектора",
@@ -316,40 +353,92 @@
               "server_ip": "Локальный IPv4-адрес Home Assistant, к которому привязывается TCP-слушатель EyeBond.",
               "collector_ip": "Оставьте пустым для локального широковещательного обнаружения. Для remote или NAT сценариев укажите публичный или проброшенный IPv4-адрес, ведущий к коллектору.",
               "tcp_port": "Локальный TCP-порт слушателя на Home Assistant. Значение по умолчанию: 8899.",
-              "advertised_server_ip": "IPv4-адрес, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный IP-адрес слушателя выше.",
-              "advertised_tcp_port": "TCP-порт, который интеграция объявляет внутри set>server=. Оставьте пустым, чтобы объявлять локальный TCP-порт выше.",
-              "udp_port": "UDP-порт для discovery redirect пакетов коллектора. Значение по умолчанию: 58899.",
+              "advertised_server_ip": "Публичный или проброшенный IP, на который коллектор должен подключаться. Для обычной домашней сети оставьте пустым (используется локальный адрес выше).",
+              "advertised_tcp_port": "Проброшенный внешний порт для обратного подключения. Оставьте пустым, если роутер не пробрасывает другой внешний порт.",
+              "udp_port": "Порт обнаружения коллектора в сети. По умолчанию: 58899 — меняйте только по инструкции.",
               "discovery_target": "IPv4-адрес, который получает discovery пакеты. Для локальной сети используйте broadcast подсети, для remote/NAT сценариев - конкретный IPv4-адрес для unicast.",
               "discovery_interval": "Как часто отправлять discovery redirect пакеты, пока коллектор ещё не подключился.",
-              "heartbeat_interval": "Интервал keep-alive после подключения коллектора.",
+              "heartbeat_interval": "Как часто Home Assistant пингует коллектор, чтобы поддерживать соединение.",
               "driver_hint": "Автообнаружение работает для большинства инверторов."
             }
           }
         }
       },
-      "diagnostics": {
-        "title": "Диагностика и экспериментальные метаданные",
-        "description": "**Нужно поделиться диагностикой?** Выберите ниже **{support_archive_action_label}**. Будет создан один ZIP с runtime-данными, сырыми данными захвата, анонимизированным replay-fixture и соответствующими SmartESS cloud evidence, если они доступны.\n\n**Статус поддержки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n**Основное действие для текущего состояния:** {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n**Рекомендуемый следующий шаг:** {support_workflow_next_action}\n\n{smartess_cloud_diagnostics_hint}\n\n---\n**Устройство:** {model_name} — серийный номер {serial_number}\n**Последний архив поддержки:** {support_package_path}\n**Скачать:** {support_package_download_markdown}\n**Последние облачные данные:** {cloud_evidence_path}",
-        "menu_options": {
-          "create_support_package": "Создать архив поддержки",
-          "reload_local_metadata": "Перезагрузить локальные метаданные",
-          "rollback_local_metadata": "Откатить локальные метаданные",
-          "advanced_metadata": "Расширенные инструменты метаданных"
+      "runtime_poll_interval": {
+        "title": "Ручной интервал обновления",
+        "description": "В ручном режиме используется точный интервал ниже.",
+        "data": {
+          "poll_interval": "Интервал опроса"
+        },
+        "data_description": {
+          "poll_interval": "Только для ручного режима. Это целевой интервал между началами циклов опроса. Если устройству нужно больше времени на ответ, EyeBond Local предупредит о высокой загрузке опроса; используйте автоматический режим, чтобы интеграция сама выбрала безопасный интервал."
         }
       },
-      "advanced_metadata": {
-        "title": "Расширенные инструменты метаданных",
-        "description": "**Этот экран предназначен для создания черновиков и сырого JSON-экспорта.**\n\n**Статус поддержки:** {support_workflow_level_label} — {support_workflow_primary_action_label}\n\n1. {support_workflow_step_1}\n2. {support_workflow_step_2}\n3. {support_workflow_step_3}\n\n{support_workflow_advanced_hint}\n\n---\n**Внутренний runtime-путь:** {effective_owner_name} (`{effective_owner_key}`){smartess_family_line}\n\n| Метаданные | Встроенные | Источник | Переопределение |\n|---|---|---|---|\n| Профиль | {profile_name} | {effective_profile_source} | {profile_override_status} |\n| Схема | {register_schema_name} | {effective_schema_source} | {schema_override_status} |\n\n**Предлагаемые имена черновиков:** `{suggested_profile_output}` / `{suggested_schema_output}`\n**Последние облачные данные:** {cloud_evidence_path}\n**Последний черновик профиля:** {local_profile_draft_path}\n**Последний черновик схемы:** {local_schema_draft_path}\n**Статус:** {local_metadata_status}",
+      "diagnostics": {
+        "title": "Диагностика и экспериментальные метаданные",
+        "description": "**{support_archive_action_label}** собирает один ZIP со всем необходимым для помощи: данные рантайма, захваченные доказательства, анонимизированную фикстуру и сохранённые облачные данные SmartESS.\n\n**Статус поддержки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Устройство:** {model_name} — серийный {serial_number}\n**Последний архив поддержки:** {support_package_path}\n**Скачать:** {support_package_download_markdown}",
         "menu_options": {
-          "export_smartess_cloud_evidence": "Экспортировать облачные данные SmartESS",
-          "proxy_capture": "Захват трафика коллектора",
-          "create_smartess_smg_bridge": "Создать SmartESS bridge для SMG",
-          "create_smartess_draft": "Создать черновик SmartESS",
-          "create_profile_draft": "Создать локальный черновик профиля",
-          "create_schema_draft": "Создать локальный черновик схемы регистров",
+          "create_support_package": "Создать архив поддержки",
+          "diagnostic_commands": "Выполнить диагностические команды",
           "reload_local_metadata": "Перезагрузить локальные метаданные",
           "rollback_local_metadata": "Откатить локальные метаданные",
-          "create_support_package": "Создать архив поддержки"
+          "proxy_capture": "Захват трафика коллектора"
+        }
+      },
+      "diagnostic_commands": {
+        "title": "Диагностические команды",
+        "description": "Вставьте диагностический сценарий, полученный от разработчика. Команды выполняются непосредственно на устройстве через текущее соединение с коллектором; команды записи могут изменить настройки инвертора.\n\n**Локальный результат:** `{diagnostic_result_path}`\n**Результат для отправки:** {diagnostic_download_markdown}",
+        "data": {
+          "diagnostic_commands": "Команды",
+          "diagnostic_stop_on_error": "Остановиться после первой ошибки",
+          "diagnostic_confirm_write": "Подтвердить запись в устройство",
+          "diagnostic_publish_download_copy": "Создать ссылку для скачивания",
+          "diagnostic_result": "Результат"
+        },
+        "data_description": {
+          "diagnostic_commands": "Вставьте полный многострочный сценарий, включая переопределение драйвера или адресов, если они были указаны.",
+          "diagnostic_stop_on_error": "Отключите только если следующие команды должны выполняться даже после ошибки.",
+          "diagnostic_publish_download_copy": "Копирует обезличенный результат в Home Assistant /local. Оставьте выключенным, если не планируете скачивать или отправлять файл.",
+          "diagnostic_result": "Результат последнего запуска только для чтения. Скопируйте его или используйте ссылку выше."
+        }
+      },
+      "shadow_learning": {
+        "title": "Расширить поддержку этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "shadow_learning_confirm_cloud_write": "Да, ненадолго проверить, какие дополнительные сенсоры и элементы управления поддерживает устройство"
+        },
+        "data_description": {
+          "shadow_learning_confirm_cloud_write": "Home Assistant ненадолго проверяет устройство через его облачный сервис, чтобы найти дополнительные элементы управления и данные для сенсоров. Настройки устройства не меняются."
+        }
+      },
+      "shadow_learning_credentials": {
+        "title": "Расширить поддержку этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "username": "Имя пользователя облака",
+          "password": "Пароль облака"
+        },
+        "data_description": {
+          "username": "Используется только для текущего обнаружения возможностей устройства.",
+          "password": "Используется только для текущего обнаружения возможностей устройства."
+        }
+      },
+      "shadow_learning_review": {
+        "title": "Расширить поддержку этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "enabled_controls": "Какие дополнительные элементы управления добавить"
+        },
+        "data_description": {
+          "enabled_controls": "Отметьте дополнительные элементы управления, которые хотите видеть в Home Assistant. Рискованные по умолчанию выключены."
+        }
+      },
+      "shadow_learning_result": {
+        "title": "Расширить поддержку этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "result_action": "Что вы хотите сделать?"
         }
       },
       "proxy_capture": {
@@ -367,90 +456,29 @@
       },
       "create_support_package": {
         "title": "Создать архив поддержки",
-        "description": "Этот шаг собирает архив поддержки в одном сценарии. Если подходящие SmartESS cloud evidence уже сохранены, они будут включены автоматически. Если нужен свежий пакет облачных данных SmartESS, выберите ниже **{refresh_mode_label}** и введите учётные данные здесь, не уходя с этого экрана.\n\n| Деталь | Значение |\n|---|---|\n| Collector PN | {collector_pn} |\n| Текущие cloud evidence | {cloud_evidence_path} |\n| План архива | {smartess_archive_plan_summary} |",
+        "description": "Собирает архив поддержки за один шаг. Сохранённые облачные данные включаются автоматически; выберите **{refresh_mode_label}**, чтобы получить свежую копию с логином облачного аккаунта.\n\n| Параметр | Значение |\n|---|---|\n| PN коллектора | {collector_pn} |\n| Текущие облачные данные | {cloud_evidence_path} |\n| План архива | {smartess_archive_plan_summary} |",
         "data": {
-          "smartess_cloud_mode": "Облачные данные SmartESS",
-          "username": "Имя пользователя SmartESS",
-          "password": "Пароль SmartESS"
+          "smartess_cloud_mode": "Облачные данные",
+          "username": "Имя пользователя облачного аккаунта",
+          "password": "Пароль облачного аккаунта"
         },
         "data_description": {
-          "smartess_cloud_mode": "Выберите, использовать ли уже сохранённые SmartESS cloud evidence, обновить их прямо в этом шаге или собрать архив без них.",
-          "username": "Нужно только если вы хотите получить или обновить SmartESS cloud evidence прямо в этом шаге.",
-          "password": "Нужно только если вы хотите получить или обновить SmartESS cloud evidence прямо в этом шаге. Он используется только для этого live-действия."
+          "smartess_cloud_mode": "Выберите, использовать ли уже сохранённые облачные данные, обновить их прямо в этом шаге или собрать архив без них.",
+          "username": "Нужно только если вы хотите получить или обновить облачные данные прямо в этом шаге.",
+          "password": "Нужно только если вы хотите получить или обновить облачные данные прямо в этом шаге. Он используется только для этого live-действия."
         }
       },
       "rollback_local_metadata": {
         "title": "Откат локальных метаданных",
-        "description": "Указанные ниже активные управляемые файлы локального переопределения будут удалены, после чего запись снова загрузится на встроенных метаданных.\n\n| Деталь | Значение |\n|---|---|\n| Активных файлов переопределения | {rollback_target_count} |\n| Переопределение профиля | {rollback_profile_path} |\n| Переопределение схемы | {rollback_schema_path} |\n\nБудут затронуты только текущие активные переопределения внутри `/config/eybond_local/`. Неактивные черновики и cloud evidence останутся без изменений."
-      },
-      "export_smartess_cloud_evidence": {
-        "title": "Экспортировать облачные данные SmartESS",
-        "description": "Интеграция выполнит вход в облако SmartESS, определит идентификатор устройства для коллектора `{collector_pn}` и сохранит переиспользуемый пакет cloud evidence в `/config/eybond_local/cloud_evidence/`. Используйте этот отдельный шаг, когда cloud evidence нужны сами по себе для расширенных инструментов метаданных или для просмотра без создания архива поддержки.\n\n**Последние облачные данные:** {cloud_evidence_path}",
-        "data": {
-          "username": "Имя пользователя SmartESS",
-          "password": "Пароль SmartESS"
-        },
-        "data_description": {
-          "username": "Имя учётной записи SmartESS, используемой в мобильном приложении.",
-          "password": "Пароль учётной записи SmartESS. Он используется только для этого шага живого экспорта."
-        }
-      },
-      "create_smartess_smg_bridge": {
-        "title": "Создать SmartESS Bridge Для SMG",
-        "description": "Будет сгенерирован локальный SmartESS-backed SMG bridge draft на основе последних подходящих облачных данных без смены активного runtime owner.\n\n| Деталь | Значение |\n|---|---|\n| Bridge | {bridge_label} |\n| Причина | {reason} |\n| Совпавшие controls | {matched_controls} |\n| Совпавшие readback | {matched_readbacks} |\n| Заблокированные поля без изменений | {blocked_fields} |\n| Непримапленные cloud fields | {skipped_fields} |\n| Исходный профиль | {source_profile} |\n| Исходная схема | {source_schema} |\n| Облачные данные | {cloud_evidence_path} |\n| Переопределение профиля | {profile_override} |\n| Переопределение схемы | {schema_override} |",
-        "data": {
-          "output_profile": "Имя выходного файла профиля",
-          "output_schema": "Путь к выходному файлу схемы",
-          "overwrite": "Перезаписать существующие файлы"
-        },
-        "data_description": {
-          "output_profile": "Оставьте без изменений, чтобы автоматически переопределить встроенный профиль после перезагрузки.",
-          "output_schema": "Оставьте без изменений, чтобы автоматически переопределить встроенную схему после перезагрузки.",
-          "overwrite": "Заменить файлы, если они уже существуют."
-        }
-      },
-      "create_smartess_draft": {
-        "title": "Создать черновик SmartESS",
-        "description": "Локальный черновик SmartESS будет сгенерирован из последних подходящих облачных данных.\n\n| Деталь | Значение |\n|---|---|\n| Распознанное семейство | {driver_label} |\n| Причина | {reason} |\n| Исходный профиль | {source_profile} |\n| Исходная схема | {source_schema} |\n| Облачные данные | {cloud_evidence_path} |\n| Переопределение профиля | {profile_override} |\n| Переопределение схемы | {schema_override} |",
-        "data": {
-          "output_profile": "Имя выходного файла профиля",
-          "output_schema": "Путь к выходному файлу схемы",
-          "overwrite": "Перезаписать существующие файлы"
-        },
-        "data_description": {
-          "output_profile": "Оставьте без изменений, чтобы автоматически переопределить встроенный профиль после перезагрузки.",
-          "output_schema": "Оставьте без изменений, чтобы автоматически переопределить встроенную схему после перезагрузки.",
-          "overwrite": "Заменить файлы, если они уже существуют."
-        }
-      },
-      "create_profile_draft": {
-        "title": "Создать локальный черновик профиля",
-        "description": "Локальный экспериментальный профиль будет создан в `/config/eybond_local/profiles/`.\n\n| Деталь | Значение |\n|---|---|\n| Исходный профиль | {source_profile} |\n| Предлагаемое имя | {suggested_output} |\n| Текущее переопределение | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_profile": "Имя выходного файла профиля",
-          "overwrite": "Перезаписать существующий файл"
-        },
-        "data_description": {
-          "output_profile": "Оставьте без изменений, чтобы автоматически переопределить встроенный профиль после перезагрузки.",
-          "overwrite": "Заменить файл, если он уже существует."
-        }
-      },
-      "create_schema_draft": {
-        "title": "Создать локальный черновик схемы регистров",
-        "description": "Локальная экспериментальная схема регистров будет создана в `/config/eybond_local/register_schemas/`.\n\n| Деталь | Значение |\n|---|---|\n| Исходная схема | {source_schema} |\n| Предлагаемое имя | {suggested_output} |\n| Текущее переопределение | {current_override} |\n\n{activation_hint}",
-        "data": {
-          "output_schema": "Путь к выходному файлу схемы",
-          "overwrite": "Перезаписать существующий файл"
-        },
-        "data_description": {
-          "output_schema": "Оставьте без изменений, чтобы автоматически переопределить встроенную схему после перезагрузки.",
-          "overwrite": "Заменить файл, если он уже существует."
-        }
+        "description": "Удаляет активные локальные override-файлы ниже и перезагружает устройство на встроенные метаданные. Неактивные черновики и сохранённые данные не затрагиваются.\n\n| Параметр | Значение |\n|---|---|\n| Активные override-файлы | {rollback_target_count} |\n| Override профиля | {rollback_profile_path} |\n| Override схемы | {rollback_schema_path} |"
       },
       "diagnostics_result": {
         "title": "Результат диагностики",
         "description": "**{action_title}**\n\n{status}\n\n**Путь:** `{path}`\n**Скачать:** {download_markdown}\n\n**Следующий шаг:** {next_step}"
       }
+    },
+    "progress": {
+      "shadow_learning": "{control_discovery_hint}"
     }
   },
   "entity": {
@@ -458,7 +486,7 @@
       "collector_operation_mode": {
         "name": "Режим работы коллектора",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + HA",
+          "smartess_cloud_home_assistant": "Cloud + HA",
           "home_assistant_only": "Только Home Assistant"
         }
       },
@@ -485,8 +513,31 @@
       "collector_operation_mode": {
         "name": "Режим работы коллектора",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + HA",
+          "smartess_cloud_home_assistant": "Cloud + HA",
           "home_assistant_only": "Только Home Assistant"
+        }
+      },
+      "collector_poll_mode": {
+        "name": "Режим опроса",
+        "state": {
+          "auto": "Автоматический",
+          "manual": "Ручной"
+        }
+      },
+      "collector_poll_context": {
+        "name": "Контекст опроса",
+        "state": {
+          "runtime": "Опрос инвертора",
+          "detection": "Поиск инвертора",
+          "collector": "Связь с коллектором"
+        }
+      },
+      "runtime_driver_state": {
+        "name": "Состояние runtime-драйвера",
+        "state": {
+          "driver_bound": "Драйвер выбран",
+          "driver_unbound": "Драйвер не определён",
+          "collector_offline": "Коллектор недоступен"
         }
       },
       "collector_signal_quality": {
@@ -581,7 +632,7 @@
         }
       },
       "rollback_collector_server_endpoint": {
-        "name": "Восстановить доступ к SmartESS",
+        "name": "Восстановить облачный доступ",
         "state_attributes": {
           "action_summary": {
             "name": "Сводка действия"
@@ -647,7 +698,13 @@
       "options": {
         "auto": "Авто",
         "modbus_smg": "SMG / Modbus",
-        "pi30": "PI30"
+        "srne_modbus": "SRNE / Modbus",
+        "must_pv_ph18": "MUST PV/PH18",
+        "modbus_catalog": "Каталог устройств / Modbus (Aohai FSA…)",
+        "smartess_local": "SmartESS 0925 / Modbus",
+        "pi30": "PI30",
+        "eybond_g_ascii": "EyeBond G-ASCII",
+        "pi18": "PI18"
       }
     },
     "control_mode": {
@@ -655,6 +712,12 @@
         "auto": "Авто",
         "read_only": "Только чтение",
         "full": "Полный контроль"
+      }
+    },
+    "poll_mode": {
+      "options": {
+        "auto": "Автоматически",
+        "manual": "Вручную"
       }
     }
   }

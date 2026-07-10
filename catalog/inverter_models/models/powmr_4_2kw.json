@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "model_key": "powmr_4_2kw",
+  "manufacturer": "PowMr",
+  "model": "4.2KW",
+  "aliases": [
+    "VMII-NXPW5KW"
+  ],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "pi30_vmii_nxpw5kw",
+      "label": "PI30 VMII-NXPW5KW raw-model variant",
+      "device_descriptor_keys": [
+        "pi30_vmii_nxpw5kw"
+      ],
+      "known_firmware": []
+    },
+    {
+      "variant_key": "smartess_0925_modbus",
+      "label": "SmartESS 0925 local Modbus alternate runtime",
+      "device_descriptor_keys": [
+        "pi30_vmii_nxpw5kw"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "confirmed"
+  },
+  "coverage": {
+    "runtime_control_surface": "hardware_confirmed",
+    "smartess_control_surface": "hardware_confirmed",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "PI30 ASCII runtime control surface is validated from the VMII-NXPW5KW live-capture fixture.",
+      "The same inverter also responds to the local SmartESS 0925 Modbus map through the legacy EyeBond binary tunnel; the commercial model is PowMr 4.2kW, while the raw inverter model reports VMII-NXPW5KW."
+    ]
+  },
+  "known_limitations": [],
+  "knowledge_summary": "PowMr 4.2KW with raw model number VMII-NXPW5KW. The inverter supports PI30 ASCII and the local SmartESS 0925 Modbus runtime through the legacy EyeBond binary tunnel.",
+  "source_keys": [
+    "fixture_pi30_vmii_nxpw5kw"
+  ]
+}

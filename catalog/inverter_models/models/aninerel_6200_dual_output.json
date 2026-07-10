@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "model_key": "aninerel_6200_dual_output",
+  "manufacturer": "Aninerel",
+  "model": "6200 (dual output)",
+  "aliases": [
+    "SMG OP2 6200",
+    "Aninerel 6.2KW"
+  ],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "layout11_model30979",
+      "label": "OP2 dual-output variant",
+      "device_descriptor_keys": [
+        "anenji_op2_6200"
+      ],
+      "known_firmware": [
+        "7903_A6260126v1"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "device_scoped_overlay",
+    "smartess_control_surface": "device_scoped_overlay",
+    "vendor_register_map": "extended",
+    "notes": [
+      "The aninerel.zip donor capture and the issue #7 Aninerel 6.2KW device currently share the same immutable local fingerprint: layout 11, model code 30979, rated power 6200, firmware 7903_A6260126v1.",
+      "A fresh issue #7 support archive includes a device-scoped shadow-learning overlay with 71 matched cloud write attempts and zero unmatched attempts or writes.",
+      "cloud evidence and shadow-learning trace confirm charge_source_priority/register 331 values 1-3; owner ESPHome YAML also lists value 4, so the built-in UI exposes 1-4 for this shared OP2 profile. The generic SMG value 0 remains excluded after a user-reported illegal_data_value rejection.",
+      "Owner-supplied ESPHome YAML extends the known register map beyond the OP2-only register list, but it is not official manufacturer documentation.",
+      "Only the OP2 enable write and the selected shadow-learning controls have device-specific evidence; the rest of the base SMG control surface is inherited."
+    ]
+  },
+  "known_limitations": [
+    "No official manufacturer register document is available for this exact commercial model family.",
+    "Charge Source Priority value 4 is exposed from owner-supplied YAML evidence; if a particular unit rejects it, Home Assistant will surface the inverter rejection.",
+    "Shadow-learning proves cloud-to-local register correlation for selected controls, but does not by itself confirm every Home Assistant write/readback path as user-tested."
+  ],
+  "knowledge_summary": "Aninerel dual-output 6200 / Aninerel 6.2KW resolves to the OP2 6200 runtime surface (layout 11, model code 30979, rated 6200, firmware 7903_A6260126v1). The aninerel.zip donor capture and the issue #7 support package are treated as the same shared OP2 model family unless a future stable runtime anchor proves otherwise. Owner ESPHome YAML and shadow-learning evidence extend the known Modbus register map for this family.",
+  "source_keys": [
+    "github_issue_7",
+    "corpus_aninerel_op2_6200",
+    "private_message_op2_registers",
+    "support_archive_issue_7_20260620",
+    "github_issue_7_esphome_yaml"
+  ]
+}
