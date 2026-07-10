@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import suppress
 import inspect
 import logging
@@ -249,6 +250,7 @@ class PassiveCallbackDiscovery:
         # the listener inventory (via ``iter_observed_sessions``), collapses
         # short/full PN duplicates, and marks sessions owned by a config entry.
         observed = self._registry.observed_sessions()
+        self._prune_notified_for_observed_sessions(observed)
 
         # 1) Repair/upgrade existing entries from their currently-live session.
         for candidate in observed:
@@ -261,6 +263,10 @@ class PassiveCallbackDiscovery:
             self._log_session_once(port, session)
             existing_entry = self._entry_for_collector_pn(collector_pn)
             if existing_entry is not None:
+                await self._async_abort_configured_discovery_flows(
+                    port=port,
+                    session=session,
+                )
                 self._maybe_upgrade_existing_entry_from_session(
                     existing_entry,
                     port=port,
@@ -298,6 +304,14 @@ class PassiveCallbackDiscovery:
                     peer_ip,
                 )
                 continue
+            if self._already_notified(port, collector_pn, session=session):
+                logger.debug(
+                    "Passive callback discovery already published port=%s pn=%s peer=%s",
+                    port,
+                    collector_pn,
+                    peer_ip,
+                )
+                continue
             logger.info(
                 "Publishing passive EyeBond callback discovery port=%s pn=%s peer=%s source=%s state=%s",
                 port,
@@ -327,6 +341,7 @@ class PassiveCallbackDiscovery:
                     ),
                 },
             )
+            self._remember_notified(port, collector_pn, session=session)
 
     def _log_session_once(self, port: int, session: dict[str, object]) -> None:
         collector_pn = str(session.get("collector_pn") or "").strip()
@@ -354,6 +369,73 @@ class PassiveCallbackDiscovery:
         )
 
         self._prune_weak_identity_seen()
+
+    async def _async_abort_configured_discovery_flows(
+        self,
+        *,
+        port: int,
+        session: dict[str, object],
+    ) -> None:
+        """Abort passive discovery flows once the collector has a config entry."""
+
+        flow_manager = getattr(getattr(self._hass, "config_entries", None), "flow", None)
+        async_progress = getattr(flow_manager, "async_progress", None)
+        async_abort = getattr(flow_manager, "async_abort", None)
+        if not callable(async_progress) or not callable(async_abort):
+            return
+
+        collector_pn = str(session.get("collector_pn") or "").strip()
+        peer_ip = str(session.get("peer_ip") or "").strip()
+        session_id = _session_id(session)
+        if not collector_pn:
+            return
+
+        try:
+            flows = async_progress(include_uninitialized=True)
+        except TypeError:
+            flows = async_progress()
+        except Exception:
+            logger.debug("Failed to inspect active passive discovery flows", exc_info=True)
+            return
+
+        for flow in tuple(flows or ()):
+            flow_data = self._flow_discovery_data(flow)
+            if flow_data is None:
+                continue
+            flow_pn = str(flow_data.get(CONF_COLLECTOR_PN) or "").strip()
+            flow_peer_ip = str(flow_data.get("peer_ip") or "").strip()
+            flow_port = int(flow_data.get(CONF_TCP_PORT) or 0)
+            flow_session_id = str(flow_data.get("session_id") or "").strip()
+            if flow_port != int(port):
+                continue
+
+            same_identity = _collector_prefix_matches(flow_pn, collector_pn)
+            same_session = bool(session_id and flow_session_id and session_id == flow_session_id)
+            legacy_same_peer = (
+                not flow_session_id
+                and bool(peer_ip)
+                and flow_peer_ip == peer_ip
+            )
+            if not (same_identity or same_session or legacy_same_peer):
+                continue
+
+            flow_id = str(flow.get("flow_id") or "").strip()
+            if not flow_id:
+                continue
+            try:
+                result = async_abort(flow_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.debug(
+                    "Failed to abort configured passive discovery flow for collector %s",
+                    flow_pn,
+                    exc_info=True,
+                )
+                continue
+            self._forget_notified(port, flow_pn or collector_pn)
+            if flow_session_id:
+                self._notified.discard(f"session:{int(port)}:{flow_session_id}")
 
     def _notification_keys(
         self,
@@ -426,6 +508,51 @@ class PassiveCallbackDiscovery:
         self._notified.update(
             self._notification_keys(port, collector_pn, session=session)
         )
+
+    def _prune_notified_for_observed_sessions(self, observed: object) -> None:
+        """Forget published candidates whose live callback session disappeared.
+
+        Passive discovery is edge-triggered: one live session/identity should
+        publish one HA discovery flow.  If the user dismisses that flow while
+        the same socket is still connected, we should not immediately recreate
+        it every poll.  Once the socket disappears, a later callback is a new
+        edge and may be published again.
+        """
+
+        if not self._notified:
+            return
+
+        alive_sessions: set[str] = set()
+        alive_pns: list[tuple[str, str]] = []
+        for candidate in tuple(observed or ()):
+            raw = getattr(candidate, "raw", None)
+            if not isinstance(raw, Mapping):
+                continue
+            port = str(int(raw.get("listener_port") or 0))
+            collector_pn = str(raw.get("collector_pn") or "").strip()
+            session_id = _session_id(raw)
+            if session_id:
+                alive_sessions.add(f"session:{port}:{session_id}")
+            if collector_pn:
+                alive_pns.append((port, collector_pn))
+
+        pruned: set[str] = set()
+        for notified in self._notified:
+            if notified.startswith("session:"):
+                if notified in alive_sessions:
+                    pruned.add(notified)
+                continue
+            if notified.startswith("pn:"):
+                _prefix, _sep, rest = notified.partition(":")
+                port, _sep, pn = rest.partition(":")
+            else:
+                port, _sep, pn = notified.partition(":")
+            if any(
+                port == alive_port and _collector_identity_matches(pn, alive_pn)
+                for alive_port, alive_pn in alive_pns
+            ):
+                pruned.add(notified)
+        self._notified = pruned
 
     async def _async_abort_stale_prefix_discovery_flows(
         self,

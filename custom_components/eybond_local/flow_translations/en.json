@@ -448,7 +448,8 @@
       "scan_line_connection_from": "connection from {peer_ip}",
       "detection_tier_passive_callback_headline": "Collector connected",
       "detection_tier_passive_callback_details": "This collector is already connected to Home Assistant. The setup wizard will add it as an incoming-session device; inverter detection will continue after the entry is created and the runtime owns this session.\n\nIf an inverter is connected, sensors and controls may appear a little later after the first successful runtime detection cycle.",
-      "onboarding_confirm_inverter_pending_after_add": "**Inverter**\n\nThe collector is already connected to Home Assistant. The inverter model and entities will be detected after this entry is created and the runtime takes ownership of the incoming session."
+      "onboarding_confirm_inverter_pending_after_add": "**Inverter**\n\nThe collector is already connected to Home Assistant. The inverter model and entities will be detected after this entry is created and the runtime takes ownership of the incoming session.",
+      "manual_peer_address_note": "The suggested address is only where the collector's connection came from. If the collector is behind a router, VPN, or port forwarding, this may be the router's address - enter the collector address that is reachable from Home Assistant."
     }
   }
 }

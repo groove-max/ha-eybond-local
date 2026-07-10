@@ -29,6 +29,7 @@ from custom_components.eybond_local.link_models import EybondLinkRoute, RawSeria
 from custom_components.eybond_local.link_transport import select_payload_route
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
+    SESSION_STATE_CLOSED,
     reconcile_pn,
 )
 from custom_components.eybond_local.runtime.hub import _reconcile_durable_collector_pn
@@ -148,6 +149,25 @@ class SessionHandleNegotiationTests(unittest.TestCase):
             handle.inverter_forward_adapter,
             ADAPTER_INVERTER_RAW_PASSTHROUGH,
         )
+
+    def test_closed_listener_session_is_not_unclaimed_discovery_candidate(self) -> None:
+        registry = CallbackSessionRegistry(
+            sessions_source=lambda: [
+                _observed(
+                    "s-closed",
+                    FULL_PN,
+                    state="closed_disconnected",
+                    shape="eybond_framed",
+                    source="framed_heartbeat",
+                )
+            ]
+        )
+
+        observed = registry.observed_sessions()
+
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0].state, SESSION_STATE_CLOSED)
+        self.assertEqual(registry.list_unclaimed_sessions(), ())
 
     def test_unknown_shape_is_unobserved(self) -> None:
         handle = negotiate_session_adapters(_observed("s3", FULL_PN))

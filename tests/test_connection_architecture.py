@@ -136,6 +136,22 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
         )
         self.assertEqual(diagnostics["original_endpoint"], endpoint)
 
+    def test_axis_diagnostics_expose_strategy_evidence(self) -> None:
+        # The behavioral-verification provenance is part of support diagnostics.
+        diagnostics = cp.entry_axis_diagnostics(
+            {
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_CONNECTION_STRATEGY_EVIDENCE: (
+                    C.CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT
+                ),
+            },
+            {},
+        )
+        self.assertEqual(
+            diagnostics["connection_strategy_evidence"],
+            C.CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
+        )
+
     def test_migrate_entry_axes_fills_all_three(self) -> None:
         axes = cp.migrate_entry_axes(
             {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA}, {}
@@ -166,6 +182,51 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
 
 
 class CallbackSessionRegistryInvariantTests(unittest.TestCase):
+    def test_transient_session_claim_owns_only_that_session(self) -> None:
+        # Two WEAK sessions sharing a PN prefix: a transient claim of one must
+        # not start owning the other (no weak PN is copied into durable
+        # ownership, no prefix matching).
+        sessions = [
+            _session("s-weak-1", "V00AAA1111111", source="heartbeat", state="identified"),
+            _session("s-weak-2", "V00AAA1111111", source="heartbeat", state="identified"),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+
+        registry.claim_session("verify-1", session_id="s-weak-1")
+
+        per_socket = {
+            session.session_id: session
+            for session in registry.observed_sessions_per_socket()
+        }
+        self.assertEqual(per_socket["s-weak-1"].owner_entry_id, "verify-1")
+        # The prefix twin stays unowned and claimable by someone else.
+        self.assertEqual(per_socket["s-weak-2"].owner_entry_id, "")
+        registry.claim_session("verify-2", session_id="s-weak-2")
+        # The same session cannot be transiently claimed twice.
+        with self.assertRaises(ValueError):
+            registry.claim_session("verify-3", session_id="s-weak-1")
+
+    def test_transient_claim_promotion_enforces_single_owner(self) -> None:
+        sessions = [
+            _session("s-1", "V00AAA1111111111"),
+            _session("s-2", "V00AAA1111111111"),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        registry.claim_session("verify-1", session_id="s-1")
+        registry.claim_session("verify-2", session_id="s-2")
+
+        self.assertTrue(
+            registry.promote_claim_to_full_pn("verify-1", "V00AAA1111111111")
+        )
+        self.assertEqual(registry.claimed_identity("verify-1"), "V00AAA1111111111")
+        self.assertEqual(registry.claimed_session_id("verify-1"), "s-1")
+        # Promotion of the second owner to the SAME durable identity conflicts.
+        with self.assertRaises(ValueError):
+            registry.promote_claim_to_full_pn("verify-2", "V00AAA1111111111")
+        # A session whose identity is durably owned cannot be transiently claimed.
+        with self.assertRaises(ValueError):
+            registry.claim_session("verify-4", session_id="s-2")
+
     def test_two_collectors_one_peer_ip_distinct_when_pn_differs(self) -> None:
         sessions = [
             _session("s1", "V00AAA1111111111", peer_ip="203.0.113.10"),
@@ -523,6 +584,24 @@ class MigrationMatrixTests(unittest.TestCase):
         self.assertTrue(self._run_migrate(entry))
         self.assertEqual(
             entry.data[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+
+    def test_verified_inbound_evidence_blocks_migration_correction(self) -> None:
+        # A behaviorally-verified inbound entry (restart -> genuine reconnect,
+        # no UDP) keeps inbound even with the legacy cloud-primary operation
+        # mode still present: the reboot_reconnect provenance exempts it from
+        # the unreachable-inbound corrective re-migration.
+        data = {
+            C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+            C.CONF_CONNECTION_STRATEGY_EVIDENCE: "reboot_reconnect",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+        }
+        self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
+        # Without the evidence the same shape is still corrected.
+        data.pop(C.CONF_CONNECTION_STRATEGY_EVIDENCE)
+        self.assertEqual(
+            cp.correct_migrated_connection_strategy(data, {}),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
 
     def test_migration_diagnostics_expose_sources_and_status(self) -> None:

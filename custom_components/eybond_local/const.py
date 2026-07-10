@@ -96,6 +96,14 @@ CONNECTION_STRATEGIES = {
 # Safe default: assume the collector is already connected and do not touch the
 # wire on its behalf. Migration promotes cloud-primary entries to callback.
 DEFAULT_CONNECTION_STRATEGY = CONNECTION_STRATEGY_INBOUND
+# Diagnostic provenance for HOW the persisted connection_strategy was decided:
+# behaviorally verified inbound (restart -> genuine collector dial-in with no
+# callback trigger) or a verified one-shot callback attempt. Shared const layer
+# so the connection policy and the onboarding verification agree on the values
+# without importing each other. Never consulted for transport decisions.
+CONF_CONNECTION_STRATEGY_EVIDENCE = "connection_strategy_evidence"
+CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT = "reboot_reconnect"
+CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER = "callback_trigger"
 
 # 2) endpoint_control_policy: whether the integration may manage the endpoint.
 CONF_ENDPOINT_CONTROL_POLICY = "endpoint_control_policy"

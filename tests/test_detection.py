@@ -142,7 +142,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=()),
             ) as probe_targets,
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(
                     return_value=(
                         DiscoveryProbeResult(
@@ -206,7 +206,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=(DiscoveryTarget(ip="192.168.1.14", source="subnet_unicast"),)),
             ) as probe_targets,
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(
                     return_value=(
                         DiscoveryProbeResult(
@@ -287,7 +287,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 create=True,
             ) as release_listener,
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(return_value=()),
             ),
         ):
@@ -386,7 +386,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 create=True,
             ),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(
                     return_value=(
                         DiscoveryProbeResult(
@@ -442,7 +442,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=()),
             ),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(
                     return_value=(
                         DiscoveryProbeResult(
@@ -479,7 +479,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=()),
             ),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(
                     return_value=(
                         DiscoveryProbeResult(
@@ -542,7 +542,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=(DiscoveryTarget(ip="192.168.1.14", source="subnet_unicast"),)),
             ),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target_replies",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(return_value=()),
             ),
         ):
@@ -669,7 +669,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.255",
@@ -739,7 +739,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.255",
@@ -820,7 +820,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.255",
@@ -918,7 +918,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.14",
@@ -1205,7 +1205,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.14",
@@ -1303,7 +1303,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.255",
@@ -1446,7 +1446,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 FakeCollectorAtTransport,
             ),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.255",
@@ -1588,7 +1588,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_target",
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
                 new=AsyncMock(
                     return_value=DiscoveryProbeResult(
                         target_ip="192.168.1.255",

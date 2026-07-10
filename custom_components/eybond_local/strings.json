@@ -171,7 +171,7 @@
       },
       "manual": {
         "title": "Manual Setup",
-        "description": "For setups the auto-scan cannot reach: a remote collector, VPN/NAT, or a known fixed address. The settings are probed first — if the device is not confirmed, you can adjust them and retry on the next screen.",
+        "description": "For setups the auto-scan cannot reach: a remote collector, VPN/NAT, or a known fixed address. The settings are probed first — if the device is not confirmed, you can adjust them and retry on the next screen.\n\n{verification_note}",
         "data": {
           "server_ip": "Local listener IP",
           "collector_ip": "Collector IP",
@@ -226,11 +226,16 @@
           "manual": "Enter address manually",
           "refresh_scan": "Scan again"
         }
+      },
+      "verify_connection": {
+        "title": "Check how the collector connects",
+        "description": "Collector {collector_pn} connected from {peer_ip}. Before adding it, Home Assistant needs to check whether this connection is permanent or only temporary (for example, left over from an earlier reconnect request). The check restarts the collector and briefly interrupts its connection - monitoring and the vendor app may be unavailable for a few minutes. Press Submit to restart the collector and start the check."
       }
     },
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond collectors…",
-      "shadow_learning": "{control_discovery_hint}"
+      "shadow_learning": "{control_discovery_hint}",
+      "verify_connection": "Restarting collector {collector_pn} and waiting for it to reconnect on its own. This can take up to three minutes on older collectors."
     },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",
@@ -247,7 +252,9 @@
       "invalid_selection": "The selected detection result is no longer available.",
       "already_added_candidate": "This detected device is already configured and cannot be added again.",
       "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again.",
-      "inverter_link_down": "The collector responded, but the inverter link is down (identity registers read as zeros). Check the inverter power and the collector cable, then rescan."
+      "inverter_link_down": "The collector responded, but the inverter link is down (identity registers read as zeros). Check the inverter power and the collector cable, then rescan.",
+      "callback_identity_mismatch": "A different collector answered at this address. Check that the address reaches the collector you are adding, then try again.",
+      "callback_timeout": "The collector did not call back. Check the address and that the collector can reach Home Assistant, then try again."
     },
     "abort": {
       "already_configured": "This collector or inverter is already configured."

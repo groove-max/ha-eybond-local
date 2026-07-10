@@ -16,7 +16,7 @@ from ..collector.cloud_family import (
     collector_cloud_family_observation_from_collector,
     select_preferred_collector_cloud_family,
 )
-from ..collector.discovery import DiscoveryAnnouncer, async_probe_target
+from ..collector.discovery import DiscoveryAnnouncer, async_send_callback_trigger
 from ..connection.session_handle import (
     ADAPTER_NONE,
     ADAPTER_INVERTER_FRAMED_FC4,
@@ -935,13 +935,14 @@ class EybondRuntimeLinkManager:
             raise RuntimeError("collector_discovery_target_unavailable")
 
         advertised_port = int(port or self._configured_advertised_tcp_port or self._tcp_port)
-        probe = await async_probe_target(
+        probe = await async_send_callback_trigger(
             bind_ip=self._effective_server_ip,
             advertised_server_ip=self.effective_advertised_server_ip,
             advertised_server_port=advertised_port,
             target_ip=target_ip,
             udp_port=self._udp_port,
             timeout=float(timeout),
+            source="runtime_manual_trigger",
         )
         self._announcer.last_reply = probe.reply
         self._announcer.last_reply_from = probe.reply_from
@@ -990,12 +991,13 @@ class EybondRuntimeLinkManager:
         advertised_port = int(self._configured_advertised_tcp_port or self._tcp_port)
         self._callback_trigger_count += 1
         try:
-            probe = await async_probe_target(
+            probe = await async_send_callback_trigger(
                 bind_ip=self._effective_server_ip,
                 advertised_server_ip=self.effective_advertised_server_ip,
                 advertised_server_port=advertised_port,
                 target_ip=target_ip,
                 udp_port=self._udp_port,
+                source="runtime_callback_on_demand",
                 timeout=_CALLBACK_TRIGGER_TIMEOUT,
             )
         except Exception as exc:  # pragma: no cover - defensive UDP send guard

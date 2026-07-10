@@ -31,6 +31,15 @@ class SmartEssLocalError(Exception):
     """Raised when one SmartESS local collector payload is invalid."""
 
 
+class CollectorManagementUnsupportedError(RuntimeError):
+    """The transport cannot carry collector-management commands at all.
+
+    Typed so callers (runtime entity paths and the onboarding strategy
+    verification) can distinguish "this collector/session cannot be managed"
+    from "the command was sent but not confirmed" without matching substrings.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class CollectorQueryResponse:
     """Decoded FC=2 collector response payload."""
@@ -192,6 +201,29 @@ class SmartEssLocalSession:
 
         descriptor = await self.query_protocol_descriptor()
         return load_smartess_protocol_catalog().protocols.get(descriptor.asset_id)
+
+
+async def async_send_collector_reboot_or_apply(transport: CollectorTransport) -> None:
+    """Send the single collector reboot/apply wire command (parameter 29 = "1").
+
+    This is THE low-level restart command. Both the runtime collector-management
+    path (`EybondHub._async_execute_collector_system_action`) and the onboarding
+    connection-strategy verification use it, so the wire command exists exactly
+    once. Raises ``RuntimeError`` when the transport cannot carry collector
+    management or the collector did not confirm the set.
+    """
+
+    if not hasattr(transport, "async_send_collector"):
+        raise CollectorManagementUnsupportedError(
+            "collector_local_management_not_supported"
+        )
+
+    session = SmartEssLocalSession(transport)
+    response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
+    if response.status != 0 or response.parameter != SET_REBOOT_OR_APPLY:
+        raise RuntimeError(
+            f"collector_set_failed:parameter={SET_REBOOT_OR_APPLY}:status={response.status}"
+        )
 
 
 def _require_query_success(response: CollectorQueryResponse) -> None:

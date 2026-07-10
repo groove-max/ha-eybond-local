@@ -2098,7 +2098,12 @@ class _SharedEybondListener:
         for entry in self._session_inventory.values():
             collector_pn = str(entry.collector_pn or "").strip()
             remote_ip = str(entry.remote_ip or "").strip()
-            if not collector_pn or not remote_ip:
+            if (
+                not collector_pn
+                or not remote_ip
+                or str(entry.state or "").startswith("closed")
+                or str(entry.state or "") == "parked_peer_closed"
+            ):
                 continue
             sessions.append(
                 {
@@ -2656,6 +2661,7 @@ class _SharedEybondListener:
         selected_id = id(connection)
         payload_removed = False
         at_removed = False
+        closed_session_ids: set[str] = set()
         for mapping, is_payload in (
             (self._connections, True),
             (self._connections_by_pn, True),
@@ -2666,11 +2672,19 @@ class _SharedEybondListener:
         ):
             for key, candidate in tuple(mapping.items()):
                 if id(candidate) == selected_id:
+                    if (
+                        mapping is self._session_payload_connections
+                        or mapping is self._session_at_connections
+                    ):
+                        closed_session_ids.add(str(key))
                     mapping.pop(key, None)
                     if is_payload:
                         payload_removed = True
                     else:
                         at_removed = True
+
+        for session_id in closed_session_ids:
+            self._mark_session_state(session_id, "closed_disconnected")
 
         if payload_removed and not any(
             id(candidate) == selected_id for candidate in self._connections.values()

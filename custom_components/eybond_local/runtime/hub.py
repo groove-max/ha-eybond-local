@@ -33,9 +33,9 @@ from ..collector.parameter_registry import (
 )
 from ..collector.smartess_local import (
     QUERY_REBOOT_REQUIRED,
-    SET_REBOOT_OR_APPLY,
     SET_SERVER_ENDPOINT,
     SmartEssLocalSession,
+    async_send_collector_reboot_or_apply,
     parse_query_collector_response,
 )
 from ..drivers.base import InverterDriver
@@ -1647,11 +1647,7 @@ class EybondHub:
         if not apply_changes:
             return result
 
-        apply_response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
-        if apply_response.status != 0 or apply_response.parameter != SET_REBOOT_OR_APPLY:
-            raise RuntimeError(
-                f"collector_set_failed:parameter={SET_REBOOT_OR_APPLY}:status={apply_response.status}"
-            )
+        await async_send_collector_reboot_or_apply(transport)
 
         result["status"] = "applied"
         result["warning"] = "collector redirect apply accepted; the current session may disconnect before the next refresh"
@@ -1993,11 +1989,7 @@ class EybondHub:
         current_endpoint = await self._async_query_collector_text(session, SET_SERVER_ENDPOINT)
         reboot_required = await self._async_query_collector_text(session, QUERY_REBOOT_REQUIRED)
 
-        apply_response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
-        if apply_response.status != 0 or apply_response.parameter != SET_REBOOT_OR_APPLY:
-            raise RuntimeError(
-                f"collector_set_failed:parameter={SET_REBOOT_OR_APPLY}:status={apply_response.status}"
-            )
+        await async_send_collector_reboot_or_apply(transport)
 
         if current_endpoint:
             self._collector_runtime_values["collector_server_endpoint"] = current_endpoint

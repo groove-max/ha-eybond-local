@@ -49,6 +49,9 @@ _STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn"})
 # Listener inventory states that mean the socket is routed/live.
 _ACTIVE_INVENTORY_STATES = frozenset({"routed_at_text", "routed_framed"})
 _CLAIMED_INVENTORY_STATES = frozenset({"claimed"})
+_CLOSED_INVENTORY_STATES = frozenset(
+    {"closed_disconnected", "closed_no_payload", "parked_peer_closed"}
+)
 
 
 def normalize_pn(value: object) -> str:
@@ -129,6 +132,8 @@ def _state_from_inventory(inventory_state: str, identity_source: str) -> str:
         return SESSION_STATE_ACTIVE
     if inventory_state in _CLAIMED_INVENTORY_STATES:
         return SESSION_STATE_CLAIMED
+    if inventory_state in _CLOSED_INVENTORY_STATES:
+        return SESSION_STATE_CLOSED
     if _identity_is_strong(identity_source):
         return SESSION_STATE_IDENTIFIED_STRONG
     return SESSION_STATE_IDENTIFIED_WEAK
@@ -271,6 +276,17 @@ class CallbackSessionRegistry:
 
         return tuple(self._coalesce(self._normalized_sessions()))
 
+    def observed_sessions_per_socket(self) -> tuple[CallbackSession, ...]:
+        """Return per-socket sessions (no short/full coalescing), owner attached.
+
+        The coalesced view collapses several live sockets of one collector into
+        one candidate -- right for discovery, wrong for behavioral verification,
+        which must distinguish "the same old socket" from "a NEW socket of the
+        same collector" (baseline vs post-restart/post-trigger session).
+        """
+
+        return tuple(self._normalized_sessions())
+
     def _attach_owner(self, session: CallbackSession) -> CallbackSession:
         owner = self._owner_for_session(session)
         if not owner:
@@ -284,7 +300,9 @@ class CallbackSessionRegistry:
         """Return observed sessions that no config entry owns yet."""
 
         return tuple(
-            session for session in self.observed_sessions() if not session.owner_entry_id
+            session
+            for session in self.observed_sessions()
+            if not session.owner_entry_id and session.state != SESSION_STATE_CLOSED
         )
 
     # --- ownership ------------------------------------------------------------
@@ -365,6 +383,79 @@ class CallbackSessionRegistry:
         if matched is None:
             return None
         return self._attach_owner(matched)
+
+    def claim_session(
+        self,
+        entry_id: str,
+        *,
+        session_id: object,
+    ) -> None:
+        """Record a TRANSIENT claim that owns exactly one session id.
+
+        Used by the connection-strategy verification before the session's
+        durable identity is strong: the claim never copies a weak/short PN into
+        durable ownership and never matches other same-prefix sessions -- it
+        owns only the given socket. Promote it with
+        :meth:`promote_claim_to_full_pn` once the strong full PN is observed.
+
+        Raises ``ValueError`` when the session (or the durable identity it is
+        currently reporting) is already owned by another entry: single-owner is
+        preserved even for transient claims.
+        """
+
+        entry_id = str(entry_id or "").strip()
+        if not entry_id:
+            raise ValueError("entry_id_required")
+        sid = str(session_id or "").strip()
+        if not sid:
+            raise ValueError("session_id_required")
+
+        for other_id, other in self._claims.items():
+            if other_id != entry_id and other.session_id == sid:
+                raise ValueError(f"session_already_claimed:{sid}:{other_id}")
+        # The session's currently-reported durable identity may already be
+        # owned (e.g. by a configured entry); a transient claim must not carve
+        # that socket out from under its owner.
+        for session in self._normalized_sessions():
+            if session.session_id != sid:
+                continue
+            if session.collector_pn:
+                owner = self.owner_for_pn(session.collector_pn)
+                if owner and owner != entry_id:
+                    raise ValueError(
+                        f"session_already_claimed:{session.collector_pn}:{owner}"
+                    )
+            break
+
+        self._claims[entry_id] = _Claim(entry_id=entry_id, session_id=sid)
+
+    def promote_claim_to_full_pn(self, entry_id: str, full_pn: object) -> bool:
+        """Promote a transient session claim to an exact full durable PN.
+
+        Called once the claimed session reports strong identity. Enforces the
+        single-owner invariant against durable PN claims; raises ``ValueError``
+        when another entry already owns the identity. Returns whether the claim
+        was updated.
+        """
+
+        entry_id = str(entry_id or "").strip()
+        claim = self._claims.get(entry_id)
+        if claim is None:
+            return False
+        pn = normalize_pn(full_pn)
+        if not pn:
+            return False
+        other = self.owner_for_pn(pn)
+        if other and other != entry_id:
+            raise ValueError(f"session_already_claimed:{pn}:{other}")
+        claim.collector_pn = pn
+        return True
+
+    def claimed_session_id(self, entry_id: str) -> str:
+        """Return the transient session id recorded on one entry's claim."""
+
+        claim = self._claims.get(str(entry_id or "").strip())
+        return claim.session_id if claim is not None else ""
 
     def reconcile_identity(self, *, session_id: object, full_pn: object) -> bool:
         """Promote a claim's short PN to a full PN observed on the same session.

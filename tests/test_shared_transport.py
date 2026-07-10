@@ -678,6 +678,17 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         listener._connections["192.168.1.50"] = connection
         listener._connections_by_pn["E50000200000009777"] = connection
         listener._session_payload_connections["session-one"] = connection
+        listener._remember_session(
+            session_id="session-one",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        listener._mark_session_state("session-one", "routed_framed")
+        listener._mark_session_identity(
+            "session-one",
+            "E50000200000009777",
+            "framed_heartbeat",
+        )
         listener._last_connection_ip = "203.0.113.10"
 
         listener._drop_connection_indexes_for_connection(connection)
@@ -686,6 +697,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("192.168.1.50", listener._connections)
         self.assertNotIn("E50000200000009777", listener._connections_by_pn)
         self.assertNotIn("session-one", listener._session_payload_connections)
+        self.assertEqual(listener._session_inventory["session-one"].state, "closed_disconnected")
+        self.assertEqual(listener.discovered_collector_sessions(), ())
         self.assertEqual(listener._last_connection_ip, "")
 
     async def test_next_session_id_increments_once(self) -> None:

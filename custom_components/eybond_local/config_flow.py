@@ -17,6 +17,7 @@ import re
 import socket
 import subprocess
 import time
+import uuid
 from typing import Any, Callable, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -75,6 +76,7 @@ from .const import (
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_STRATEGY,
+    CONF_CONNECTION_STRATEGY_EVIDENCE,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
     CONF_CONTROL_MODE,
@@ -130,7 +132,7 @@ from .const import (
     POLL_MODE_MANUAL,
 )
 from .control_policy import control_mode_options
-from .collector.discovery import async_probe_target
+from .collector.discovery import async_send_callback_trigger
 from .collector.capabilities import (
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
@@ -192,6 +194,16 @@ from .onboarding.presentation import (
     has_smartess_collector_hint,
     scan_result_sort_key,
     scan_result_status_code,
+)
+from .connection.callback_ledger import get_callback_trigger_ledger
+from .connection.session_registry import pn_is_same_identity
+from .onboarding.strategy_verification import (
+    EVIDENCE_CALLBACK_TRIGGER,
+    EVIDENCE_REBOOT_RECONNECT,
+    FAILURE_SESSION_CLAIMED,
+    InboundStrategyVerifier,
+    ObservedSessionRestartChannel,
+    StrategyVerificationResult,
 )
 from .onboarding.timeouts import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -334,6 +346,9 @@ _BLE_WIFI_SCAN_ATTEMPTS = 3
 _BLE_WIFI_SCAN_RETRY_DELAY = 1.0
 _BLE_PROVISION_TIMEOUT = 45.0
 _MANUAL_PROBE_TIMEOUT = _onboarding_manual_probe_timeout_seconds(_ONBOARDING_TIMEOUT_POLICY)
+# The passive callback listeners bind the wildcard host; the verification's
+# restart channel attaches to that same shared listener (host, port) key.
+_PASSIVE_LISTENER_HOST = "0.0.0.0"
 _CONFIRM_RUNTIME_DETAILS_TIMEOUT = 8.0
 _SCAN_PROGRESS_BAR_WIDTH = 12
 _INTERNAL_SCAN_INTERFACE_NAMES = frozenset({"docker0", "hassio"})
@@ -1648,6 +1663,59 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._detection_summary_context = "auto"
         self._confirm_poll_interval_pending_input: dict[str, Any] = {}
         self._confirm_poll_interval_pending_step_id = "confirm"
+        # Behavioral connection-strategy verification (passive discovery only).
+        # Context: {"collector_pn", "session_id", "port", "peer_ip"}; the peer IP
+        # is kept ONLY as an editable form hint, never identity/ownership.
+        self._strategy_verification_context: dict[str, Any] | None = None
+        self._verification_next_step = "detection_summary"
+        self._verification_task: asyncio.Task | None = None
+        self._verification_result: StrategyVerificationResult | None = None
+        self._verification_expected_pn = ""
+        self._verification_old_session_id = ""
+        self._verified_connection_strategy = ""
+        self._verified_strategy_evidence = ""
+        # Temporary registry claim held for the duration of the verification.
+        # The claim makes the CallbackSessionRegistry the single owner of the
+        # session being verified (passive discovery stops republishing it) and
+        # is ALWAYS released: run-task finally, cancel, abort, async_remove.
+        self._verification_claim_owner = ""
+        self._verification_registry: Any = None
+        # Baseline of live session ids snapshotted right before the one-shot
+        # manual callback trigger; only a NEW (non-baseline) strong session of
+        # the exact expected full PN proves the callback.
+        self._manual_callback_baseline: frozenset[str] = frozenset()
+        self._manual_verified_full_pn = ""
+
+    def _release_verification_claim(self) -> None:
+        """Release the temporary verification claim (idempotent)."""
+
+        registry, owner = self._verification_registry, self._verification_claim_owner
+        self._verification_registry = None
+        self._verification_claim_owner = ""
+        if registry is None or not owner:
+            return
+        with suppress(Exception):
+            registry.release(owner)
+
+    def async_remove(self) -> None:
+        """Flow finished or was aborted: release any verification resources.
+
+        Cancelling the progress task makes ``_async_run_strategy_verification``
+        close the claimed restart channel and release the registry claim, so no
+        temporary claim or background wait survives a cancelled/completed flow.
+        The direct release below also covers removal before/after the task runs.
+        """
+
+        task = self._verification_task
+        self._verification_task = None
+        if task is not None and not task.done():
+            # The claim is released by the task's ``finally`` AFTER the restart
+            # channel is closed -- never release it early here, or another
+            # owner could take the identity while our socket is still open.
+            task.cancel()
+        else:
+            self._release_verification_claim()
+        self._strategy_verification_context = None
 
     @staticmethod
     @callback
@@ -1797,9 +1865,340 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._set_selected_result(next(iter(self._autodetect_results.values())))
         self._detection_summary_context = "auto"
-        if self._selected_result_needs_driver_choice():
+        self._verification_next_step = (
+            "driver_choice"
+            if self._selected_result_needs_driver_choice()
+            else "detection_summary"
+        )
+        observed_session_id = str(discovery_info.get("session_id") or "").strip()
+        if observed_session_id:
+            # An observed inbound TCP session is NOT proof of a permanent
+            # inbound configuration (a factory collector may only be connected
+            # because of an earlier temporary UDP callback). Verify the
+            # strategy behaviorally before persisting it.
+            self._strategy_verification_context = {
+                "collector_pn": collector_pn,
+                "session_id": observed_session_id,
+                "port": tcp_port,
+                "peer_ip": peer_ip,
+            }
+            self._verification_expected_pn = collector_pn
+            self._verification_old_session_id = observed_session_id
+            return await self.async_step_verify_connection()
+        # Discovery payload without a session id: reboot verification is
+        # impossible, and an unverified session must NEVER become an inbound
+        # entry. Continue on the existing manual callback step (peer IP is only
+        # an editable hint); the entry is created only after the callback proof.
+        self._verification_expected_pn = collector_pn
+        self._verification_old_session_id = ""
+        logger.info(
+            "Passive discovery payload for %s has no session id; requiring a "
+            "callback proof on the manual step instead of assuming inbound",
+            collector_pn,
+        )
+        return await self.async_step_manual()
+
+    # ---- steps: connection-strategy verification (passive discovery) ----
+
+    async def _async_continue_after_verification(self) -> ConfigFlowResult:
+        if self._verification_next_step == "driver_choice":
             return await self.async_step_driver_choice()
         return await self.async_step_detection_summary()
+
+    @_with_translation_bundle
+    async def async_step_verify_connection(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Consent step: verifying restarts the collector and interrupts the link."""
+
+        context = self._strategy_verification_context
+        if not context:
+            return await self._async_continue_after_verification()
+        if user_input is not None:
+            return await self.async_step_verify_connection_progress()
+        return self.async_show_form(
+            step_id="verify_connection",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "collector_pn": str(context.get("collector_pn") or ""),
+                "peer_ip": str(context.get("peer_ip") or ""),
+            },
+        )
+
+    async def async_step_verify_connection_progress(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Run the restart/reconnect verification as a bounded progress task."""
+
+        del user_input
+        task = self._verification_task
+        if task is None:
+            task = self.hass.async_create_task(self._async_run_strategy_verification())
+            self._verification_task = task
+        if task.done():
+            self._verification_task = None
+            return self.async_show_progress_done(next_step_id="verify_connection_result")
+        context = self._strategy_verification_context or {}
+        return self.async_show_progress(
+            step_id="verify_connection_progress",
+            progress_action="verify_connection",
+            progress_task=task,
+            description_placeholders={
+                "collector_pn": str(context.get("collector_pn") or ""),
+            },
+        )
+
+    async def async_step_verify_connection_result(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Route on the verification outcome; never guess a strategy."""
+
+        del user_input
+        result = self._verification_result
+        enriched_pn = str(getattr(result, "collector_pn", "") or "").strip()
+        abort = await self._async_adopt_enriched_collector_pn(enriched_pn)
+        if abort is not None:
+            return abort
+        if result is not None and result.inbound_verified:
+            self._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
+            self._verified_strategy_evidence = result.evidence
+            # The verified inbound entry needs no verification-context checks in
+            # the manual path anymore.
+            self._strategy_verification_context = None
+            return await self._async_continue_after_verification()
+        # Inbound is NOT confirmed. Do not auto-classify as callback_on_demand:
+        # continue this same flow on the existing manual step, whose one-shot
+        # callback attempt provides the behavioral proof for that strategy. The
+        # address field is prefilled with the observed peer IP purely as an
+        # editable hint (it may be a router/NAT address, not the collector).
+        logger.info(
+            "Passive discovery inbound verification not confirmed (%s); continuing on the manual callback step",
+            getattr(result, "failure_reason", "") or "verification_unavailable",
+        )
+        return await self.async_step_manual()
+
+    async def _async_adopt_enriched_collector_pn(self, full_pn: str):
+        """Propagate a weak->strong enriched FULL PN through every flow model.
+
+        One helper so the entry cannot end up with diverging identities: the
+        verification context, the expected PN, the flow unique_id, the selected
+        onboarding candidate (whose CollectorInfo feeds CONF_COLLECTOR_PN and
+        the entry title), every matching autodetect candidate, and the dialog
+        title placeholders all adopt the same full PN. Returns an abort result
+        when the full PN turns out to be already configured, else ``None``.
+        Never starts a second flow.
+        """
+
+        enriched = str(full_pn or "").strip()
+        if not enriched or enriched == self._verification_expected_pn:
+            return None
+        previous = self._verification_expected_pn
+        self._verification_expected_pn = enriched
+        if self._strategy_verification_context is not None:
+            self._strategy_verification_context["collector_pn"] = enriched
+        for candidate in (
+            self._selected_result,
+            *self._autodetect_results.values(),
+        ):
+            collector_info = getattr(
+                getattr(candidate, "collector", None), "collector", None
+            )
+            candidate_pn = str(
+                getattr(collector_info, "collector_pn", "") or ""
+            ).strip()
+            if collector_info is None:
+                continue
+            if candidate_pn and previous and candidate_pn != previous:
+                continue
+            collector_info.collector_pn = enriched
+        self.context["title_placeholders"] = {"name": f"Collector PN {enriched}"}
+        await self.async_set_unique_id(f"collector:{enriched}")
+        return self._abort_if_unique_id_configured()
+
+    async def _async_run_strategy_verification(self) -> None:
+        """Progress-task body: claim the session in the registry, then verify.
+
+        The temporary registry claim is created BEFORE the restart and held for
+        the whole verification (including the reconnect wait), so passive
+        discovery cannot republish the session and no other entry/flow can claim
+        the same durable identity meanwhile. Released in ``finally`` on every
+        path (success, failure, cancel).
+        """
+
+        context = self._strategy_verification_context or {}
+        collector_pn = str(context.get("collector_pn") or "")
+        session_id = str(context.get("session_id") or "")
+        port = int(context.get("port") or DEFAULT_TCP_PORT)
+
+        registry = self._callback_session_registry()
+        owner = f"strategy_verification:{uuid.uuid4().hex}"
+        try:
+            if registry is not None:
+                # TRANSIENT claim strictly by session_id: a weak/short PN is
+                # never copied into durable ownership and other same-prefix
+                # sessions stay unowned. Promotion to the exact full PN happens
+                # only after the registry certifies strong identity (the
+                # verifier's promote hook, before baseline/restart).
+                registry.claim_session(owner, session_id=session_id)
+                self._verification_registry = registry
+                self._verification_claim_owner = owner
+        except ValueError as exc:
+            # The session/identity is already owned by a config entry or another
+            # verification: never hijack it.
+            logger.info(
+                "Strategy verification: session for %s already claimed: %s",
+                collector_pn,
+                exc,
+            )
+            self._verification_result = StrategyVerificationResult(
+                failure_reason=FAILURE_SESSION_CLAIMED,
+                collector_pn=collector_pn,
+            )
+            return
+
+        def _claimed_session_id() -> str:
+            # The registry-owned claim is the ONLY source for the socket the
+            # restart transport may take. Empty -> the channel raises a typed
+            # session_unavailable; no fallback to the initially observed id and
+            # no PN/IP-based socket selection.
+            if registry is None:
+                return ""
+            try:
+                return str(registry.claimed_session_id(owner) or "").strip()
+            except Exception:
+                return ""
+
+        def _promote_claim(full_pn: str) -> None:
+            if registry is not None:
+                registry.promote_claim_to_full_pn(owner, full_pn)
+
+        channel = ObservedSessionRestartChannel(
+            host=_PASSIVE_LISTENER_HOST,
+            port=port,
+            collector_pn=collector_pn,
+            session_id=session_id,
+            session_id_provider=_claimed_session_id if registry is not None else None,
+        )
+        verifier = InboundStrategyVerifier(
+            collector_pn=collector_pn,
+            session_id=session_id,
+            restart_channel=channel,
+            sessions_source=self._verification_sessions_source,
+            callback_trigger_generation=(
+                get_callback_trigger_ledger().snapshot_generation
+            ),
+            promote_claim=_promote_claim if registry is not None else None,
+        )
+        try:
+            self._verification_result = await verifier.async_verify()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Passive discovery strategy verification failed")
+            self._verification_result = StrategyVerificationResult(
+                failure_reason="verification_error",
+                collector_pn=collector_pn,
+            )
+        finally:
+            # Ordering matters: fully close the restart channel (and the socket
+            # it claimed) BEFORE releasing the registry claim, so no other owner
+            # can grab the identity while our socket is still open.
+            with suppress(Exception):
+                await channel.async_close()
+            self._release_verification_claim()
+
+    def _callback_session_registry(self):
+        from .passive_discovery import get_callback_session_registry
+
+        try:
+            return get_callback_session_registry(self.hass)
+        except Exception:
+            return None
+
+    def _verification_sessions_source(self) -> tuple[dict[str, Any], ...]:
+        """Public registry view of live callback sessions (no listener internals).
+
+        ``has_strong_identity`` is the registry's centralized strong/weak
+        verdict; the verifier never re-derives it from identity sources or PN
+        length.
+        """
+
+        registry = self._callback_session_registry()
+        if registry is None:
+            return ()
+        try:
+            # Per-socket view: verification must tell one collector's OLD socket
+            # apart from its NEW one; the coalesced discovery view cannot.
+            sessions = registry.observed_sessions_per_socket()
+        except Exception:
+            logger.debug("Callback session registry unavailable", exc_info=True)
+            return ()
+        return tuple(
+            {
+                "session_id": str(getattr(session, "session_id", "") or ""),
+                "collector_pn": str(getattr(session, "collector_pn", "") or ""),
+                "state": str(getattr(session, "state", "") or ""),
+                "has_strong_identity": bool(
+                    getattr(session, "has_strong_identity", False)
+                ),
+            }
+            for session in sessions
+        )
+
+    def _manual_callback_verification_error(self) -> str:
+        """Return a flow error key when the manual probe fails callback verification.
+
+        Active only while a passive-discovery verification context exists: the
+        one-shot manual callback attempt must reach the SAME full collector PN on
+        a NEW session. A different PN (even behind the same peer IP), the old
+        session id, or no confirmed identity keeps the entry uncreated.
+        """
+
+        if not self._verification_expected_pn:
+            return ""
+        expected = self._verification_expected_pn
+        self._manual_verified_full_pn = ""
+        result = self._manual_result
+        collector = getattr(result, "collector", None)
+        result_pn = str(
+            getattr(getattr(collector, "collector", None), "collector_pn", "") or ""
+        ).strip()
+        if not result_pn:
+            return "callback_timeout"
+        # Identity gate on the probe result: exact match, or a strict weak->strong
+        # enrichment when the discovery-time expected PN was still short. A
+        # shorter/different PN is a different collector.
+        if result_pn != expected and not (
+            len(result_pn) > len(expected) and pn_is_same_identity(expected, result_pn)
+        ):
+            return "callback_identity_mismatch"
+        # Behavioral gate: only a session id ABSENT from the pre-trigger
+        # baseline, with registry-certified strong identity and the exact full
+        # PN, proves the callback answer. The old session, parallel pre-trigger
+        # sessions, and weak observations never confirm.
+        for session in self._verification_sessions_source():
+            session_id = str(session.get("session_id") or "").strip()
+            if not session_id or session_id in self._manual_callback_baseline:
+                continue
+            if session_id == self._verification_old_session_id:
+                continue
+            state = str(session.get("state") or "").strip().lower()
+            if state.startswith("closed") or state == "route_identity_mismatch":
+                continue
+            if not session.get("has_strong_identity"):
+                continue
+            session_pn = str(session.get("collector_pn") or "").strip()
+            if session_pn != expected and not (
+                len(session_pn) > len(expected)
+                and pn_is_same_identity(expected, session_pn)
+            ):
+                continue
+            self._manual_verified_full_pn = session_pn
+            return ""
+        return "callback_timeout"
 
     # ---- step: collector_network ----
 
@@ -2849,11 +3248,43 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             if not errors:
                 self._manual_config = dict(flat_input)
+                if self._verification_expected_pn:
+                    # Baseline BEFORE the one-shot trigger: any session id that
+                    # already existed (the observed session, parallel sessions,
+                    # sessions of other collectors) can never count as the
+                    # answer. This also covers discovery payloads without a
+                    # session id.
+                    self._manual_callback_baseline = frozenset(
+                        str(session.get("session_id") or "").strip()
+                        for session in self._verification_sessions_source()
+                        if str(session.get("session_id") or "").strip()
+                    )
                 self._manual_result = await self._async_probe_manual_target(flat_input)
-                if self._manual_result.match is not None and self._manual_result.confidence == "high":
-                    self._detection_summary_context = "manual"
-                    return await self.async_step_detection_summary()
-                return await self.async_step_manual_confirm()
+                verification_error = self._manual_callback_verification_error()
+                if verification_error:
+                    # Verification context (from passive discovery): the one-shot
+                    # callback attempt did not reach the expected collector on a
+                    # new session. Keep the form editable so the user can fix
+                    # the address and retry -- no entry is created.
+                    errors["base"] = verification_error
+                else:
+                    if self._verification_expected_pn:
+                        # Behavioral proof: the collector answered this flow's
+                        # one-shot callback trigger with a NEW strong session of
+                        # the exact full PN.
+                        abort = await self._async_adopt_enriched_collector_pn(
+                            self._manual_verified_full_pn
+                        )
+                        if abort is not None:
+                            return abort
+                        self._verified_connection_strategy = (
+                            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                        )
+                        self._verified_strategy_evidence = EVIDENCE_CALLBACK_TRIGGER
+                    if self._manual_result.match is not None and self._manual_result.confidence == "high":
+                        self._detection_summary_context = "manual"
+                        return await self.async_step_detection_summary()
+                    return await self.async_step_manual_confirm()
 
         defaults = self._build_manual_defaults(user_input, self._selected_result)
         data_schema = vol.Schema(
@@ -2880,6 +3311,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             step_id="manual",
             data_schema=data_schema,
             errors=errors,
+            description_placeholders={
+                "verification_note": self._manual_verification_note(),
+            },
+        )
+
+    def _manual_verification_note(self) -> str:
+        """Honest labeling for the prefilled address in the verification context.
+
+        The prefilled value is only the address the observed connection came
+        FROM -- behind a router, VPN, or port forward that is not the collector
+        itself. Empty outside the verification context.
+        """
+
+        if not self._verification_expected_pn:
+            return ""
+        return self._tr(
+            "common.dynamic.manual_peer_address_note",
+            "The suggested address is only where the collector's connection "
+            "came from. If the collector is behind a router, VPN, or port "
+            "forwarding, this may be the router's address - enter the "
+            "collector address that is reachable from Home Assistant.",
         )
 
     # ---- step: manual_confirm ----
@@ -3096,12 +3548,34 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # to integration_managed via its original-endpoint provenance.
         from .connection.connection_policy import migrate_entry_axes
 
+        self._apply_verified_connection_strategy(data)
         data.update(migrate_entry_axes(data, options))
         return self.async_create_entry(
             title=title,
             data=data,
             options=options,
         )
+
+    def _apply_verified_connection_strategy(self, data: dict[str, Any]) -> None:
+        """Persist a behaviorally-verified strategy (and its evidence) explicitly.
+
+        Only ever set from the passive-discovery verification: ``inbound`` after
+        the restart/reconnect proof, ``callback_on_demand`` after the one-shot
+        callback proof. The explicit axis takes precedence over any legacy-field
+        derivation; endpoint ownership is NOT touched (``endpoint_control_policy``
+        still requires real write provenance to become integration_managed).
+        """
+
+        if not self._verified_connection_strategy:
+            return
+        data[CONF_CONNECTION_STRATEGY] = self._verified_connection_strategy
+        if self._verified_strategy_evidence:
+            data[CONF_CONNECTION_STRATEGY_EVIDENCE] = self._verified_strategy_evidence
+        if self._verified_connection_strategy == CONNECTION_STRATEGY_INBOUND:
+            # The observed peer IP is where the connection came FROM (possibly a
+            # router/NAT), not a verified collector address. An inbound entry
+            # never dials or triggers, so persist no unverified address.
+            data[CONF_COLLECTOR_IP] = ""
 
     async def _async_create_manual_entry(
         self,
@@ -3217,6 +3691,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
         }
         _apply_collector_profile_metadata(options, result)
+        self._apply_verified_connection_strategy(data)
         return self.async_create_entry(title=title, data=data, options=options)
 
     async def _async_enrich_manual_pending_collector_profile(
@@ -3330,6 +3805,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> OnboardingResult:
         """Run one-shot detection using the manual settings before creating an entry."""
 
+        # One callback trigger per manual attempt (attempts=1 below); the
+        # detector records it in the integration-wide callback-trigger ledger.
         detector = create_onboarding_manager(
             build_connection_spec_from_values(
                 self._current_connection_type(),
@@ -4202,13 +4679,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         await transport.start()
         try:
             with suppress(Exception):
-                await async_probe_target(
+                await async_send_callback_trigger(
                     bind_ip=spec.server_ip,
                     advertised_server_ip=spec.effective_advertised_server_ip,
                     advertised_server_port=spec.effective_advertised_tcp_port,
                     target_ip=collector_ip,
                     udp_port=spec.udp_port,
                     timeout=1.0,
+                    source="config_flow_management_probe",
                 )
             connected = await transport.wait_until_connected(timeout=5.0)
             if not connected:
@@ -9985,7 +10463,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         await transport.start()
         try:
             with suppress(Exception):
-                await async_probe_target(
+                await async_send_callback_trigger(
+                    source="options_flow_management_probe",
                     bind_ip=getattr(spec, "server_ip", self._config_entry.data[CONF_SERVER_IP]),
                     advertised_server_ip=getattr(
                         spec,

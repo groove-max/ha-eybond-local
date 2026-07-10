@@ -159,7 +159,11 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["peer_ip"], "195.138.86.175")
         self.assertEqual(data["tcp_port"], 18899)
 
-    async def test_poll_recreates_flow_after_user_cancelled_previous_discovery(self) -> None:
+    async def test_poll_does_not_republish_session_while_verification_claim_active(self) -> None:
+        # An active temporary strategy-verification claim owns the session in
+        # the registry: passive discovery must not publish a second candidate
+        # for it, while an unrelated collector (other PN, same peer IP) still
+        # gets its own flow.
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)
         discovery._listeners[18899] = _FakeListener(
@@ -167,22 +171,75 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "listener-18899-1",
                     "peer_ip": "195.138.86.175",
+                    "collector_pn": "V000405SYN94677058",
+                    "protocol_shape": "at_text",
+                    "collector_identity_source": "at_dtupn",
+                },
+                {
+                    "session_id": "listener-18899-2",
+                    "peer_ip": "195.138.86.175",
                     "collector_pn": "V001020SYN62344022",
                     "protocol_shape": "at_text",
                     "collector_identity_source": "at_dtupn",
-                }
+                },
             ]
         )
+        discovery._registry.claim(
+            "strategy_verification:test",
+            collector_pn="V000405SYN94677058",
+            session_id="listener-18899-1",
+        )
+
+        await discovery._async_poll_once()
+
+        published = {
+            data["collector_pn"] for _domain, _context, data in hass.config_entries.flow.flows
+        }
+        # The claimed collector is suppressed; the independent one is published.
+        self.assertEqual(published, {"V001020SYN62344022"})
+
+        discovery._registry.release("strategy_verification:test")
+        await discovery._async_poll_once()
+        published = {
+            data["collector_pn"] for _domain, _context, data in hass.config_entries.flow.flows
+        }
+        self.assertEqual(
+            published, {"V001020SYN62344022", "V000405SYN94677058"}
+        )
+
+    async def test_poll_does_not_republish_same_live_session_after_user_cancelled_flow(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        sessions = [
+            {
+                "session_id": "listener-18899-1",
+                "peer_ip": "195.138.86.175",
+                "collector_pn": "V001020SYN62344022",
+                "protocol_shape": "at_text",
+                "collector_identity_source": "at_dtupn",
+            }
+        ]
+        discovery._listeners[18899] = _FakeListener(sessions)
 
         await discovery._async_poll_once()
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
 
         # Simulate the frontend/user cancelling the discovery flow while the
-        # collector remains connected.  Passive discovery must use active HA
-        # flows and configured entries as the source of truth, not a stale
-        # in-memory "already notified" flag.
+        # collector remains connected.  Passive discovery is edge-triggered:
+        # do not recreate the same flow every poll for the same live socket,
+        # because HA may surface that as "already_in_progress" duplicates.
         hass.config_entries.flow.flows.clear()
 
+        await discovery._async_poll_once()
+
+        self.assertEqual(len(hass.config_entries.flow.flows), 0)
+
+        # Once the old socket disappears, a later callback is a new edge and
+        # can be published again.
+        discovery._listeners[18899] = _FakeListener(())
+        await discovery._async_poll_once()
+        sessions[0] = {**sessions[0], "session_id": "listener-18899-2"}
+        discovery._listeners[18899] = _FakeListener(sessions)
         await discovery._async_poll_once()
 
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
@@ -192,6 +249,28 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             {"name": "Collector PN V001020SYN62344022"},
         )
         self.assertEqual(data["collector_pn"], "V001020SYN62344022")
+
+    async def test_poll_publishes_unclaimed_live_session_only_once(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[8899] = _FakeListener(
+            [
+                {
+                    "session_id": "listener-8899-2",
+                    "peer_ip": "192.168.1.55",
+                    "collector_pn": "E500002SYN84199645",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "at_dtupn",
+                    "state": "routed_framed",
+                }
+            ]
+        )
+
+        await discovery._async_poll_once()
+        await discovery._async_poll_once()
+        await discovery._async_poll_once()
+
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
 
     async def test_poll_ignores_weak_short_pn_without_strong_identity(self) -> None:
         hass = _FakeHass()
@@ -526,6 +605,37 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         await discovery._async_poll_once()
 
         self.assertEqual(hass.config_entries.flow.flows, [])
+
+    async def test_poll_aborts_discovery_flow_after_collector_gets_configured(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[8899] = _FakeListener(
+            [
+                {
+                    "session_id": "listener-8899-1",
+                    "peer_ip": "192.168.1.55",
+                    "collector_pn": "E500002SYN84199645",
+                    "collector_identity_source": "at_dtupn",
+                    "protocol_shape": "eybond_framed",
+                    "state": "routed_framed",
+                }
+            ]
+        )
+
+        await discovery._async_poll_once()
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+        entry = types.SimpleNamespace(
+            data={"collector_pn": "E500002SYN84199645"},
+            unique_id="collector:E500002SYN84199645",
+            title="Collector PN E500002SYN84199645",
+        )
+        hass.config_entries._entries.append(entry)
+
+        await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.flows, [])
+        self.assertEqual(hass.config_entries.flow.aborted, ["flow-1"])
 
     async def test_poll_upgrades_existing_callback_entry_from_short_to_full_pn(self) -> None:
         entry = types.SimpleNamespace(

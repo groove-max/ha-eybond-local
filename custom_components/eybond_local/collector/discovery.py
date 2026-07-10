@@ -170,6 +170,64 @@ async def async_probe_target_replies(
     )
 
 
+async def async_send_callback_trigger(
+    *,
+    bind_ip: str,
+    advertised_server_ip: str,
+    advertised_server_port: int,
+    target_ip: str,
+    udp_port: int,
+    timeout: float,
+    source: str = "",
+) -> DiscoveryProbeResult:
+    """Send one callback trigger and record it in the integration-wide ledger.
+
+    This is THE production facade for asking a collector to dial back. All
+    integration paths (runtime one-shot callback, manual onboarding probes,
+    auto-scan, config-flow management probes) must go through it so the
+    behavioral inbound verification can prove "no trigger was sent anywhere"
+    from one monotonic generation. ``async_probe_target`` stays a raw wire
+    utility for tests/tools.
+    """
+
+    from ..connection.callback_ledger import get_callback_trigger_ledger
+
+    get_callback_trigger_ledger().record(target=target_ip, source=source)
+    return await async_probe_target(
+        bind_ip=bind_ip,
+        advertised_server_ip=advertised_server_ip,
+        advertised_server_port=advertised_server_port,
+        target_ip=target_ip,
+        udp_port=udp_port,
+        timeout=timeout,
+    )
+
+
+async def async_send_callback_trigger_replies(
+    *,
+    bind_ip: str,
+    advertised_server_ip: str,
+    advertised_server_port: int,
+    target_ip: str,
+    udp_port: int,
+    timeout: float,
+    source: str = "",
+) -> tuple[DiscoveryProbeResult, ...]:
+    """Ledger-recorded variant of ``async_probe_target_replies`` (fan-out scans)."""
+
+    from ..connection.callback_ledger import get_callback_trigger_ledger
+
+    get_callback_trigger_ledger().record(target=target_ip, source=source)
+    return await async_probe_target_replies(
+        bind_ip=bind_ip,
+        advertised_server_ip=advertised_server_ip,
+        advertised_server_port=advertised_server_port,
+        target_ip=target_ip,
+        udp_port=udp_port,
+        timeout=timeout,
+    )
+
+
 class DiscoveryAnnouncer:
     """Periodically broadcasts set>server=... until the collector connects."""
 
@@ -235,6 +293,20 @@ class DiscoveryAnnouncer:
                             sock.bind((self._bind_ip, 0))
                         except OSError:
                             sock.bind(("", 0))
+                        # The announcer is a production callback-trigger sender
+                        # (proxy capture uses it): every datagram must move the
+                        # integration-wide ledger generation. Recorded HERE at
+                        # the single send site (the announcer does not go
+                        # through the probe facade), so one datagram increments
+                        # the generation exactly once.
+                        from ..connection.callback_ledger import (
+                            get_callback_trigger_ledger,
+                        )
+
+                        get_callback_trigger_ledger().record(
+                            target=self._target_ip,
+                            source="discovery_announcer",
+                        )
                         sock.sendto(message, (self._target_ip, self._udp_port))
                         logger.debug(
                             "Discovery TX target=%s:%d payload=%s",

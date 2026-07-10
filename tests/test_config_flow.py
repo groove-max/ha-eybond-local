@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import suppress
 from unittest.mock import AsyncMock, Mock, patch, sentinel
 import zipfile
 
@@ -8356,6 +8357,608 @@ class PreflightEffectiveMetadataTests(unittest.TestCase):
         self.assertIs(
             EybondLocalOptionsFlow._preflight_effective_metadata(coordinator), snapshot
         )
+
+
+class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
+    """Behavioral connection-strategy verification wired into passive discovery."""
+
+    FULL_PN = "V001020SYN62344022"
+    OTHER_FULL_PN = "V000405SYN94677058"
+    OLD_SESSION = "listener-18899-1"
+    NEW_SESSION = "listener-18899-2"
+    PEER_IP = "203.0.113.10"
+
+    def _make_flow(self) -> EybondLocalConfigFlow:
+        flow = EybondLocalConfigFlow()
+        flow.hass = _FakeHass()
+        flow.context = {}
+        flow._local_ip = "192.168.1.50"
+        flow._auto_config = {"server_ip": "192.168.1.50"}
+        flow._interface_options = [
+            {
+                "name": "eth0",
+                "ip": "192.168.1.50",
+                "label": "eth0 - 192.168.1.50",
+                "network": "192.168.0.0/16",
+                "broadcast": "192.168.255.255",
+            },
+        ]
+        return flow
+
+    def _discovery_info(self, **overrides) -> dict[str, object]:
+        info = {
+            "tcp_port": 18899,
+            "collector_pn": self.FULL_PN,
+            "peer_ip": self.PEER_IP,
+            "session_id": self.OLD_SESSION,
+        }
+        info.update(overrides)
+        return info
+
+    def _install_registry(self, flow, inventory: list[dict[str, object]]):
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
+        flow.hass.data["eybond_local"] = {"callback_session_registry": registry}
+        return registry
+
+    @staticmethod
+    def _inventory_session(
+        session_id: str,
+        pn: str,
+        state: str = "identified",
+        *,
+        identity_source: str = "at_dtupn",
+    ) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "peer_ip": "203.0.113.10",
+            "listener_port": 18899,
+            "collector_pn": pn,
+            "state": state,
+            "collector_identity_source": identity_source,
+        }
+
+    @staticmethod
+    def _schema_default(schema, field: str):
+        for key in schema.schema:
+            if str(getattr(key, "schema", key)) == field:
+                default = getattr(key, "default", None)
+                return default() if callable(default) else default
+        return None
+
+    def _manual_input(self, collector_ip: str) -> dict[str, object]:
+        return {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "collector_ip": collector_ip,
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+
+    def _manual_result_with_pn(self, pn: str) -> OnboardingResult:
+        return OnboardingResult(
+            connection_mode="manual",
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="manual",
+                ip="192.168.1.60",
+                connected=True,
+                collector=CollectorInfo(collector_pn=pn),
+            ),
+        )
+
+    async def _drive_verification(self, flow) -> dict[str, object]:
+        """Consent -> progress -> completed task -> result step routing."""
+
+        consent = await flow.async_step_verify_connection()
+        self.assertEqual(consent["type"], "form")
+        self.assertEqual(consent["step_id"], "verify_connection")
+
+        progress = await flow.async_step_verify_connection_progress()
+        self.assertEqual(progress["type"], "progress")
+        await flow._verification_task
+        done = await flow.async_step_verify_connection_progress()
+        self.assertEqual(done["type"], "progress_done")
+        self.assertEqual(done["next_step_id"], "verify_connection_result")
+        return await flow.async_step_verify_connection_result()
+
+    # Discovery with an observed session id must ask for verification consent
+    # in the SAME flow (no second flow is initialized anywhere).
+    async def test_discovery_with_session_id_shows_verification_consent(self) -> None:
+        flow = self._make_flow()
+        result = await flow.async_step_integration_discovery(self._discovery_info())
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "verify_connection")
+        self.assertEqual(
+            flow._strategy_verification_context,
+            {
+                "collector_pn": self.FULL_PN,
+                "session_id": self.OLD_SESSION,
+                "port": 18899,
+                "peer_ip": self.PEER_IP,
+            },
+        )
+        # Payloads without a session id can never become inbound: reboot
+        # verification is impossible, so the SAME flow continues on the manual
+        # callback step (peer IP prefilled as an editable hint) and the entry is
+        # created only after the callback proof.
+        legacy_flow = self._make_flow()
+        legacy = await legacy_flow.async_step_integration_discovery(
+            self._discovery_info(session_id="", collector_pn=self.OTHER_FULL_PN)
+        )
+        self.assertEqual(legacy["type"], "form")
+        self.assertEqual(legacy["step_id"], "manual")
+        self.assertIsNone(legacy_flow._strategy_verification_context)
+        self.assertEqual(legacy_flow._verification_expected_pn, self.OTHER_FULL_PN)
+        self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
+        self.assertEqual(legacy_flow._verified_connection_strategy, "")
+
+    # 6./7. Verification failure continues THIS flow on the existing manual step
+    # with the peer IP prefilled as an editable, honestly-labelled hint.
+    async def test_verification_failure_falls_through_to_manual_with_peer_prefill(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            StrategyVerificationResult,
+        )
+
+        flow = self._make_flow()
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        async def _fake_run() -> None:
+            flow._verification_result = StrategyVerificationResult(
+                failure_reason="restart_not_supported",
+                collector_pn=self.FULL_PN,
+            )
+
+        with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
+            result = await self._drive_verification(flow)
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "manual")
+        # Peer IP is prefilled purely as an editable hint...
+        self.assertEqual(flow._manual_defaults.get("collector_ip"), self.PEER_IP)
+        # ...with honest labeling about router/VPN/port-forward setups.
+        note = result["description_placeholders"]["verification_note"]
+        self.assertIn("router", note.lower())
+        # No strategy was guessed and no entry was created.
+        self.assertEqual(flow._verified_connection_strategy, "")
+
+    # 1./13. Verified inbound: entry data gets inbound + external + evidence,
+    # and no unverified peer address is persisted as collector_ip.
+    async def test_verification_success_stamps_inbound_external(self) -> None:
+        from custom_components.eybond_local.connection import connection_policy as cp
+        from custom_components.eybond_local.onboarding import strategy_verification as sv
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        claim_owner_during_restart: list[str] = []
+        test = self
+        new_session = self._inventory_session(self.NEW_SESSION, self.FULL_PN)
+
+        class _FakeChannel:
+            def __init__(self, **_kwargs) -> None:
+                self.closed = 0
+
+            async def async_send_restart(self) -> None:
+                # The temporary registry claim must already be held here.
+                claim_owner_during_restart.append(registry.owner_for_pn(test.FULL_PN))
+                # Collector reboots: old session drops, then a NEW one dials in.
+                inventory.clear()
+                inventory.append(new_session)
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                self.closed += 1
+
+        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+            result = await self._drive_verification(flow)
+
+        # Success continues the normal passive-candidate routing.
+        self.assertIn(result["type"], {"form", "menu"})
+        self.assertIn(result["step_id"], {"driver_choice", "detection_summary"})
+        self.assertEqual(flow._verified_connection_strategy, "inbound")
+        self.assertEqual(flow._verified_strategy_evidence, sv.EVIDENCE_REBOOT_RECONNECT)
+        # The temporary claim existed during the restart and was released after.
+        self.assertTrue(claim_owner_during_restart[0].startswith("strategy_verification:"))
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+        # Entry-data stamping: explicit inbound + evidence, no peer IP persisted.
+        data = {
+            "connection_mode": "callback_listener",
+            "collector_ip": self.PEER_IP,
+            "collector_operation_mode": "smartess_cloud_home_assistant",
+        }
+        flow._apply_verified_connection_strategy(data)
+        data.update(cp.migrate_entry_axes(data, {}))
+        self.assertEqual(data["connection_strategy"], "inbound")
+        self.assertEqual(data["connection_strategy_evidence"], "reboot_reconnect")
+        self.assertEqual(data["endpoint_control_policy"], "external")
+        self.assertEqual(data["collector_ip"], "")
+        # The behaviorally-verified inbound entry is exempt from the legacy
+        # cloud-primary migration correction.
+        self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
+
+    # 2. Zero UDP callback triggers are sent while inbound verification runs.
+    async def test_inbound_verification_sends_zero_udp_triggers(self) -> None:
+        from custom_components.eybond_local.onboarding import strategy_verification as sv
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+        new_session = self._inventory_session(self.NEW_SESSION, self.FULL_PN)
+
+        class _FakeChannel:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+            async def async_send_restart(self) -> None:
+                inventory.clear()
+                inventory.append(new_session)
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                return None
+
+        probe = AsyncMock(side_effect=AssertionError("UDP trigger sent during inbound verification"))
+        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel), patch.object(
+            config_flow_module, "async_send_callback_trigger", probe
+        ):
+            await flow.async_step_verify_connection({})
+            await flow._verification_task
+
+        probe.assert_not_called()
+        result = flow._verification_result
+        assert result is not None
+        self.assertTrue(result.inbound_verified)
+        self.assertEqual(result.evidence, sv.EVIDENCE_REBOOT_RECONNECT)
+
+    # A session/identity already claimed by another owner is a typed failure --
+    # never hijacked -- and the flow continues on the manual callback step.
+    async def test_already_claimed_session_is_not_hijacked(self) -> None:
+        from custom_components.eybond_local.onboarding import strategy_verification as sv
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        registry.claim("entry-other", collector_pn=self.FULL_PN, session_id=self.OLD_SESSION)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        class _FailChannel:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+            async def async_send_restart(self) -> None:
+                raise AssertionError("restart must not be sent for a claimed session")
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                return None
+
+        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FailChannel):
+            result = await self._drive_verification(flow)
+
+        verification = flow._verification_result
+        assert verification is not None
+        self.assertEqual(verification.failure_reason, sv.FAILURE_SESSION_CLAIMED)
+        # No inbound classification; the same flow continues on the manual step.
+        self.assertEqual(flow._verified_connection_strategy, "")
+        self.assertEqual(result["step_id"], "manual")
+        # The foreign claim is untouched.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "entry-other")
+
+    # Cancel (flow removal) releases the temporary claim in every state.
+    async def test_cancel_during_verification_releases_claim(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        restart_started = asyncio.Event()
+
+        class _HangingChannel:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+            async def async_send_restart(self) -> None:
+                restart_started.set()
+                await asyncio.sleep(30)
+
+            def is_connected(self) -> bool:
+                return True
+
+            async def async_close(self) -> None:
+                order.append("close")
+
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        order: list[str] = []
+        real_release = CallbackSessionRegistry.release
+
+        def _tracking_release(registry_self, owner):
+            order.append("release")
+            return real_release(registry_self, owner)
+
+        with patch.object(
+            config_flow_module, "ObservedSessionRestartChannel", _HangingChannel
+        ), patch.object(CallbackSessionRegistry, "release", _tracking_release):
+            progress = await flow.async_step_verify_connection_progress()
+            self.assertEqual(progress["type"], "progress")
+            task = flow._verification_task
+            await asyncio.wait_for(restart_started.wait(), timeout=5)
+            # The claim is held while the verification is in flight (promotion
+            # to the full PN already happened before the restart).
+            self.assertTrue(
+                registry.owner_for_pn(self.FULL_PN).startswith("strategy_verification:")
+            )
+
+            flow.async_remove()
+            # async_remove must NOT release the claim early while the task is
+            # alive; the task's finally releases it after the channel closes.
+            with suppress(asyncio.CancelledError):
+                await task
+
+        self.assertTrue(task.cancelled())
+        # Ordering: restart channel fully closed BEFORE the claim was released.
+        self.assertEqual(order, ["close", "release"])
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(flow._verification_claim_owner, "")
+
+    # 8. Manual callback success -> callback_on_demand + evidence; the persisted
+    # address is the one the trigger was actually sent to.
+    async def test_manual_callback_success_marks_callback_on_demand(self) -> None:
+        flow = self._make_flow()
+        flow._verification_expected_pn = self.FULL_PN
+        flow._verification_old_session_id = self.OLD_SESSION
+        # Pre-trigger: only the originally observed session exists (baseline).
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+
+        async def _probe(_flat_input):
+            # The collector answers OUR trigger with a NEW strong session.
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+            return self._manual_result_with_pn(self.FULL_PN)
+
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            side_effect=_probe,
+        ):
+            result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(flow._verified_connection_strategy, "callback_on_demand")
+        self.assertEqual(flow._verified_strategy_evidence, "callback_trigger")
+
+        data = {"collector_ip": "192.168.1.60"}
+        flow._apply_verified_connection_strategy(data)
+        self.assertEqual(data["connection_strategy"], "callback_on_demand")
+        self.assertEqual(data["connection_strategy_evidence"], "callback_trigger")
+        # The callback target address is kept (it answered), not cleared.
+        self.assertEqual(data["collector_ip"], "192.168.1.60")
+
+    # 9. Identity mismatch / timeout show the flow error and create nothing;
+    # the address stays editable for a retry.
+    async def test_manual_callback_identity_mismatch_shows_error(self) -> None:
+        flow = self._make_flow()
+        flow._verification_expected_pn = self.FULL_PN
+        flow._verification_old_session_id = self.OLD_SESSION
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+
+        async def _probe(_flat_input):
+            # A DIFFERENT collector answered at this address.
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.OTHER_FULL_PN))
+            return self._manual_result_with_pn(self.OTHER_FULL_PN)
+
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            side_effect=_probe,
+        ):
+            result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(result["errors"]["base"], "callback_identity_mismatch")
+        self.assertEqual(flow._verified_connection_strategy, "")
+        # Editable and re-submittable: the entered address is only flow state.
+        self.assertEqual(flow._manual_defaults.get("collector_ip"), "192.168.1.60")
+
+    async def test_manual_callback_timeout_shows_error(self) -> None:
+        flow = self._make_flow()
+        flow._verification_expected_pn = self.FULL_PN
+        flow._verification_old_session_id = self.OLD_SESSION
+        self._install_registry(flow, [])
+
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            return_value=OnboardingResult(connection_mode="manual"),
+        ):
+            result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self.assertEqual(flow._verified_connection_strategy, "")
+
+    # 10. Two collectors behind one peer IP cannot confirm each other: a fresh
+    # session of a DIFFERENT full PN does not satisfy the new-session check.
+    async def test_same_peer_ip_other_collector_does_not_confirm_callback(self) -> None:
+        flow = self._make_flow()
+        flow._verification_expected_pn = self.FULL_PN
+        flow._verification_old_session_id = self.OLD_SESSION
+        self._install_registry(
+            flow,
+            [self._inventory_session(self.NEW_SESSION, self.OTHER_FULL_PN)],
+        )
+        # Probe "found" the right PN but the only fresh session is the other
+        # collector behind the same NAT: verification must not pass.
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            return_value=self._manual_result_with_pn(self.FULL_PN),
+        ):
+            result = await flow.async_step_manual(self._manual_input(self.PEER_IP))
+
+        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self.assertEqual(flow._verified_connection_strategy, "")
+
+    # Weak new session never proves the callback: strong identity is required.
+    async def test_manual_weak_new_session_does_not_confirm(self) -> None:
+        flow = self._make_flow()
+        flow._verification_expected_pn = self.FULL_PN
+        flow._verification_old_session_id = self.OLD_SESSION
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+
+        async def _probe(_flat_input):
+            inventory.append(
+                self._inventory_session(
+                    self.NEW_SESSION,
+                    self.FULL_PN,
+                    identity_source="framed_heartbeat",  # weak
+                )
+            )
+            return self._manual_result_with_pn(self.FULL_PN)
+
+        with patch.object(flow, "_async_probe_manual_target", side_effect=_probe):
+            result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
+
+        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self.assertEqual(flow._verified_connection_strategy, "")
+
+    # No-session-id discovery: a session that ALREADY existed before the trigger
+    # is baseline and never counts as the callback answer.
+    async def test_manual_no_session_id_preexisting_session_is_not_answer(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+        # Discovery payload without session_id routes straight to manual.
+        result = await flow.async_step_integration_discovery(
+            self._discovery_info(session_id="")
+        )
+        self.assertEqual(result["step_id"], "manual")
+
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            return_value=self._manual_result_with_pn(self.FULL_PN),
+        ):
+            result = await flow.async_step_manual(self._manual_input(self.PEER_IP))
+
+        # The pre-existing session is in the baseline: no proof, no entry.
+        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self.assertEqual(flow._verified_connection_strategy, "")
+
+    # Entry created after short->full enrichment carries ONE consistent full PN
+    # in unique_id, CONF_COLLECTOR_PN, and the title.
+    async def test_entry_after_short_to_full_enrichment_is_consistent(self) -> None:
+        short_pn = "V001020SYN6234"
+        flow = self._make_flow()
+        # The observed session already reports the strong FULL PN; the discovery
+        # payload still carried the short prefix.
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(
+            self._discovery_info(collector_pn=short_pn)
+        )
+        self.assertEqual(flow._test_unique_id, f"collector:{short_pn}")
+        new_session = self._inventory_session(self.NEW_SESSION, self.FULL_PN)
+
+        class _FakeChannel:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+            async def async_send_restart(self) -> None:
+                inventory.clear()
+                inventory.append(new_session)
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                return None
+
+        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+            await self._drive_verification(flow)
+
+        # Every flow model adopted the enriched FULL PN.
+        self.assertEqual(flow._verified_connection_strategy, "inbound")
+        self.assertEqual(flow._test_unique_id, f"collector:{self.FULL_PN}")
+        self.assertEqual(
+            flow._selected_result.collector.collector.collector_pn, self.FULL_PN
+        )
+        self.assertEqual(
+            flow.context["title_placeholders"],
+            {"name": f"Collector PN {self.FULL_PN}"},
+        )
+
+        # Create the REAL entry through the confirm submit path and check its
+        # data -- not just the strategy stamping helper.
+        with (
+            patch(
+                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                side_effect=AssertionError("passive confirm must not start payload transport"),
+            ),
+            patch(
+                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                side_effect=AssertionError("passive confirm must not start AT transport"),
+            ),
+        ):
+            created = await flow.async_step_confirm({"poll_mode": "auto"})
+
+        self.assertEqual(created["type"], "create_entry")
+        data = created["data"]
+        self.assertEqual(data["collector_pn"], self.FULL_PN)
+        self.assertEqual(data["connection_strategy"], "inbound")
+        self.assertEqual(data["connection_strategy_evidence"], "reboot_reconnect")
+        self.assertEqual(data["endpoint_control_policy"], "external")
+        self.assertEqual(data["collector_ip"], "")
+        self.assertIn(self.FULL_PN, created["title"])
+
+    # 12. Cancel/error cleanup: removing the flow cancels the verification task.
+    async def test_flow_removal_cancels_verification_task(self) -> None:
+        flow = self._make_flow()
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        started = asyncio.Event()
+
+        async def _hang() -> None:
+            started.set()
+            await asyncio.sleep(30)
+
+        with patch.object(flow, "_async_run_strategy_verification", side_effect=_hang):
+            progress = await flow.async_step_verify_connection_progress()
+            self.assertEqual(progress["type"], "progress")
+            task = flow._verification_task
+            await started.wait()
+
+        flow.async_remove()
+        with suppress(asyncio.CancelledError):
+            await task
+        self.assertTrue(task.cancelled())
+        self.assertIsNone(flow._verification_task)
+        self.assertIsNone(flow._strategy_verification_context)
 
 
 if __name__ == "__main__":

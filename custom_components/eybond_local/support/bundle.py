@@ -104,6 +104,7 @@ def _build_diagnostics_split(
             "collector_cloud_profile_key": values.get("collector_cloud_profile_key")
             or data.get("collector_cloud_profile_key", ""),
             "connection_strategy": axes.get("connection_strategy", ""),
+            "connection_strategy_evidence": axes.get("connection_strategy_evidence", ""),
             "endpoint_control_policy": axes.get("endpoint_control_policy", ""),
             # Stable identity devcode (heartbeat), NOT the volatile last frame.
             "devcode": values.get("collector_devcode", ""),

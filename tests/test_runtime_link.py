@@ -415,7 +415,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         probe = _fake_probe()
 
         with patch(
-            "custom_components.eybond_local.runtime.link.async_probe_target", probe
+            "custom_components.eybond_local.runtime.link.async_send_callback_trigger", probe
         ):
             connected = asyncio.run(
                 manager.async_try_connect(timeout=5.0, require_heartbeat=True)
@@ -615,7 +615,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
 
         with patch(
-            "custom_components.eybond_local.runtime.link.async_probe_target",
+            "custom_components.eybond_local.runtime.link.async_send_callback_trigger",
             new=AsyncMock(
                 return_value=DiscoveryProbeResult(
                     target_ip="192.168.1.14",
@@ -635,6 +635,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             target_ip="192.168.1.14",
             udp_port=58899,
             timeout=0.75,
+            source="runtime_manual_trigger",
         )
         self.assertEqual(manager._announcer.last_reply, "rsp>server=1;")
         self.assertEqual(manager._announcer.last_reply_from, "192.168.1.14:58899")
@@ -999,7 +1000,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         probe = _fake_probe()
 
         with patch(
-            "custom_components.eybond_local.runtime.link.async_probe_target", probe
+            "custom_components.eybond_local.runtime.link.async_send_callback_trigger", probe
         ):
             connected = asyncio.run(
                 manager.async_try_connect(timeout=5.0, require_heartbeat=True)
@@ -1132,7 +1133,7 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
     def _run_connect(self, manager, *, timeout=0.2):
         probe = _fake_probe()
         with patch(
-            "custom_components.eybond_local.runtime.link.async_probe_target", probe
+            "custom_components.eybond_local.runtime.link.async_send_callback_trigger", probe
         ):
             ok = asyncio.run(manager.async_try_connect(timeout=timeout))
         return ok, probe

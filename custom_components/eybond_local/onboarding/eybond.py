@@ -20,7 +20,10 @@ from ..collector.cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
 )
-from ..collector.discovery import async_probe_target, async_probe_target_replies
+from ..collector.discovery import (
+    async_send_callback_trigger,
+    async_send_callback_trigger_replies,
+)
 from ..collector.parameter_registry import RUNTIME_COLLECTOR_PARAMETERS, query_runtime_collector_values
 from ..collector.smartess_local import SmartEssLocalSession, SmartEssProtocolDescriptor
 from ..collector.transport import (
@@ -360,13 +363,14 @@ async def async_probe_fallback_targets(
 
     async def _probe(target: DiscoveryTarget) -> DiscoveryTarget | None:
         try:
-            probe = await async_probe_target(
+            probe = await async_send_callback_trigger(
                 bind_ip=bind_ip,
                 advertised_server_ip=advertised_server_ip,
                 advertised_server_port=advertised_server_port,
                 target_ip=target.ip,
                 udp_port=udp_port,
                 timeout=timeout,
+                source="onboarding_fallback_probe",
             )
         except Exception as exc:
             logger.debug("Fallback unicast probe failed target=%s error=%s", target.ip, exc)
@@ -974,13 +978,14 @@ class OnboardingDetector:
 
         await transport.start()
         try:
-            probe = await async_probe_target(
+            probe = await async_send_callback_trigger(
                 bind_ip=self._connection.server_ip,
                 advertised_server_ip=self._connection.effective_advertised_server_ip,
                 advertised_server_port=self._connection.effective_advertised_tcp_port,
                 target_ip=target.ip,
                 udp_port=self._connection.udp_port,
                 timeout=discovery_timeout,
+                source="onboarding_detect_probe",
             )
             candidate.udp_reply = probe.reply
             candidate.udp_reply_from = probe.reply_from
@@ -1585,13 +1590,14 @@ class OnboardingDetector:
             timeout = deadline.bounded_timeout(discovery_timeout)
             if timeout is None or timeout > 0:
                 try:
-                    replies = await async_probe_target_replies(
+                    replies = await async_send_callback_trigger_replies(
                         bind_ip=self._connection.server_ip,
                         advertised_server_ip=self._connection.effective_advertised_server_ip,
                         advertised_server_port=self._connection.effective_advertised_tcp_port,
                         target_ip=target.ip,
                         udp_port=self._connection.udp_port,
                         timeout=timeout or discovery_timeout,
+                        source="onboarding_broadcast_scan",
                     )
                 except Exception as exc:
                     logger.debug("Broadcast discovery expansion failed target=%s error=%s", target.ip, exc)

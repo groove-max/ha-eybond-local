@@ -30,6 +30,8 @@ from ..const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONF_COLLECTOR_OPERATION_MODE,
+    CONF_CONNECTION_STRATEGY_EVIDENCE,
+    CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_CONNECTION_MODE,
@@ -279,7 +281,11 @@ def correct_migrated_connection_strategy(
     - when the operation mode is explicitly the cloud-primary SmartESS+HA value, and
     - when the integration did NOT write the endpoint (``external``): if the
       integration wrote the endpoint to Home Assistant, the collector really does
-      dial in and inbound is correct.
+      dial in and inbound is correct, and
+    - when inbound was NOT behaviorally verified: an entry whose strategy was
+      proven by the restart/reconnect verification carries
+      ``connection_strategy_evidence=reboot_reconnect`` provenance and is
+      genuinely inbound regardless of the legacy operation mode.
 
     No endpoint is written. Returns ``None`` when there is nothing to correct.
     """
@@ -287,6 +293,11 @@ def correct_migrated_connection_strategy(
     options = options or {}
     strategy = str(_first_present(CONF_CONNECTION_STRATEGY, data, options) or "").strip()
     if strategy != CONNECTION_STRATEGY_INBOUND:
+        return None
+    evidence = str(
+        _first_present(CONF_CONNECTION_STRATEGY_EVIDENCE, data, options) or ""
+    ).strip()
+    if evidence == CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT:
         return None
     operation_mode = str(
         _first_present(CONF_COLLECTOR_OPERATION_MODE, data, options) or ""
@@ -428,6 +439,9 @@ def entry_axis_diagnostics(
         ),
         "endpoint_written_at": str(
             _first_present(CONF_ENDPOINT_WRITTEN_AT, data, options) or ""
+        ),
+        "connection_strategy_evidence": str(
+            _first_present(CONF_CONNECTION_STRATEGY_EVIDENCE, data, options) or ""
         ),
         "may_send_callback_trigger": may_send_callback_trigger(strategy),
         "may_auto_manage_endpoint": may_auto_manage_endpoint(policy),
