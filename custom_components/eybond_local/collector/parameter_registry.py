@@ -21,6 +21,7 @@ class CollectorParameterDefinition:
     name: str
     description: str
     risky_write: bool = False
+    sensitive_read: bool = False
     decode: CollectorValueDecoder | None = None
 
 
@@ -113,7 +114,13 @@ COLLECTOR_PARAMETER_DEFINITIONS: tuple[CollectorParameterDefinition, ...] = (
         risky_write=True,
         decode=_decode_text_value("collector_ssid"),
     ),
-    CollectorParameterDefinition(43, "router_password", "Configured upstream router password.", risky_write=True),
+    CollectorParameterDefinition(
+        43,
+        "router_password",
+        "Configured upstream router password.",
+        risky_write=True,
+        sensitive_read=True,
+    ),
     CollectorParameterDefinition(46, "collector_ap_ssid", "Collector AP SSID.", risky_write=True),
     CollectorParameterDefinition(48, "network_diagnostics", "Network connection diagnostics.", risky_write=True, decode=_decode_network_diagnostics),
     CollectorParameterDefinition(49, "wifi_scan_list", "Nearby Wi-Fi scan results.", risky_write=True),
@@ -137,6 +144,12 @@ RISKY_WRITE_PARAMETERS: set[int] = {
     definition.parameter for definition in COLLECTOR_PARAMETER_DEFINITIONS if definition.risky_write
 }
 
+SENSITIVE_READ_PARAMETERS: set[int] = {
+    definition.parameter
+    for definition in COLLECTOR_PARAMETER_DEFINITIONS
+    if definition.sensitive_read
+}
+
 RUNTIME_COLLECTOR_PARAMETERS: tuple[CollectorParameterDefinition, ...] = tuple(
     definition
     for definition in COLLECTOR_PARAMETER_DEFINITIONS
@@ -153,6 +166,8 @@ async def query_runtime_collector_values(
 
     values: dict[str, object] = {}
     for definition in parameters:
+        if definition.sensitive_read:
+            continue
         if definition.decode is None:
             continue
         try:

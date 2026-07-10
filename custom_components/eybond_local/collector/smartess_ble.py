@@ -119,12 +119,12 @@ _AT_VALUE_RE = re.compile(r"^([^\r\n,]+)")
 _DEFAULT_FW_VERSION = "7.5.1.1"
 _DEFAULT_AT_VERSION = "1.10"
 _WFLKAP_FW_VERSION_THRESHOLD = "8.0.0"
-_DEFAULT_WIFI_SCAN_COMMAND_TIMEOUT = 20.0
+_DEFAULT_WIFI_SCAN_COMMAND_TIMEOUT = 4.0
 _DEFAULT_WIFI_SCAN_PREFLIGHT_DELAY = 0.5
 _DEFAULT_ANDROID_BLE_TEXT_TIMEOUT = 4.0
 _DEFAULT_ESTABLISH_CONNECTION_TIMEOUT = 8.0
 _DEFAULT_REFRESH_DEVICE_LOOKUP_TIMEOUT = 2.0
-_WIFI_SCAN_COMMAND_ATTEMPTS = 1
+_BLE_READ_QUERY_ATTEMPTS = 4
 _VENDOR_NOTIFY_POLL_TIMEOUT = 0.25
 _VENDOR_FRAGMENT_SETTLE_TIMEOUT = 0.5
 _DEFAULT_RESTART_REQUIRED_FW_VERSIONS = frozenset(
@@ -457,6 +457,17 @@ def _is_vendor_placeholder_payload(text: str) -> bool:
     return not stripped or "-----" in stripped
 
 
+def _safe_ble_log_preview(text: str, *, max_len: int = 160) -> str:
+    """Return a log preview with known credential readbacks removed."""
+
+    value = str(text or "")
+    marker = "AT+INTPARA:43,"
+    marker_index = value.find(marker)
+    if marker_index >= 0:
+        value = f"{value[: marker_index + len(marker)]}<redacted>"
+    return value[:max_len]
+
+
 def _is_wifi_scan_response_payload(text: str) -> bool:
     stripped = str(text or "").strip()
     return any(
@@ -467,6 +478,34 @@ def _is_wifi_scan_response_payload(text: str) -> bool:
             "49,",
         )
     )
+
+
+def _is_possible_vendor_response_fragment(text: str, expected_marker: str) -> bool:
+    """Return whether *text* may be an incomplete response for *expected_marker*."""
+
+    value = str(text or "").strip()
+    marker = str(expected_marker or "").strip()
+    if not value or not marker:
+        return False
+    if marker in value:
+        return True
+    # Vendor BLE payloads can be split at arbitrary positions. A first fragment
+    # such as "AT+WFLKA" must not be treated as a complete response for
+    # AT+WFLKAP=...; wait for the next read/notify fragment instead.
+    if marker.startswith(value):
+        return True
+    return value.startswith(marker)
+
+
+def _can_return_vendor_fragments(text: str, expected_marker: str) -> bool:
+    """Return whether buffered vendor fragments are a complete response."""
+
+    marker = str(expected_marker or "").strip()
+    if not marker:
+        return True
+    if marker == "AT+INTPARA:49":
+        return True
+    return marker in str(text or "")
 
 
 def extract_at_status_code(response: str, prefix: str) -> str:
@@ -1243,7 +1282,9 @@ class SmartEssBleSession:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 if fragments:
-                    return "".join(fragments)
+                    combined = "".join(fragments)
+                    if _can_return_vendor_fragments(combined, expected_marker):
+                        return combined
                 logger.debug(
                     "SmartESS BLE vendor response timed out command=%s marker=%s read_attempts=%d "
                     "read_errors=%d last_source=%s",
@@ -1270,7 +1311,9 @@ class SmartEssBleSession:
                     and last_fragment_at is not None
                     and loop.time() - last_fragment_at >= _VENDOR_FRAGMENT_SETTLE_TIMEOUT
                 ):
-                    return "".join(fragments)
+                    combined = "".join(fragments)
+                    if _can_return_vendor_fragments(combined, expected_marker):
+                        return combined
                 continue
 
             if command == "AT+ATVER?" and not text:
@@ -1294,12 +1337,26 @@ class SmartEssBleSession:
                     return "".join(fragments)
                 logger.debug(
                     "SmartESS BLE ignoring non-Wi-Fi vendor response while waiting for scan payload preview=%s",
-                    text[:160],
+                    _safe_ble_log_preview(text),
                 )
                 continue
 
             if expected_marker and expected_marker in text:
                 return text
+            if expected_marker:
+                combined = "".join(fragments) + text if fragments else text
+                if expected_marker in combined:
+                    return combined
+                if _is_possible_vendor_response_fragment(combined, expected_marker):
+                    fragments.append(text)
+                    last_fragment_at = loop.time()
+                    continue
+                logger.debug(
+                    "SmartESS BLE ignoring unrelated vendor response while waiting for marker=%s preview=%s",
+                    expected_marker,
+                    _safe_ble_log_preview(text),
+                )
+                continue
             if text:
                 return text
 
@@ -1320,7 +1377,7 @@ class SmartEssBleSession:
                 logger.debug(
                     "SmartESS BLE vendor response via notify layout=%s preview=%s",
                     self._layout.name if self._layout is not None else "unknown",
-                    text[:160],
+                    _safe_ble_log_preview(text),
                 )
                 return text, "notify"
 
@@ -1343,7 +1400,7 @@ class SmartEssBleSession:
             logger.debug(
                 "SmartESS BLE vendor response via read layout=%s preview=%s",
                 self._layout.name,
-                text[:160],
+                _safe_ble_log_preview(text),
             )
             return text, "read"
         return None, "read_empty"
@@ -1403,11 +1460,9 @@ class SmartEssBleProvisioner:
         """Read `AT+FWVER?`, matching the SmartESS default fallback."""
 
         try:
-            response = await self._session.exchange_text(
+            response = await self._exchange_read_query(
                 "AT+FWVER?",
                 timeout=max(self._command_timeout, _DEFAULT_ANDROID_BLE_TEXT_TIMEOUT),
-                append_crlf=False,
-                response=True,
             )
         finally:
             self._wifi_scan_preflight_done = True
@@ -1420,13 +1475,48 @@ class SmartEssBleProvisioner:
     async def read_at_version(self) -> str:
         """Read `AT+ATVER?`, matching the SmartESS default fallback."""
 
-        response = await self._session.exchange_text(
+        response = await self._exchange_read_query(
             "AT+ATVER?",
             timeout=max(self._command_timeout, _DEFAULT_ANDROID_BLE_TEXT_TIMEOUT),
-            append_crlf=False,
-            response=True,
         )
         return parse_at_response_value(response, "AT+ATVER:")
+
+    async def _exchange_read_query(self, command: str, *, timeout: float) -> str:
+        """Run one idempotent BLE AT query with the retry policy used by SmartESS.
+
+        Field collectors can acknowledge the GATT write while ignoring the first
+        AT query.  The Android client retries read-only commands up to four times;
+        mirror that behavior here without ever applying it to provisioning writes.
+        """
+
+        if not str(command or "").strip().endswith("?"):
+            raise SmartEssBleError("ble_query_command_required")
+
+        last_error: SmartEssBleError | None = None
+        for attempt in range(_BLE_READ_QUERY_ATTEMPTS):
+            logger.debug(
+                "SmartESS BLE read query command=%s attempt=%d/%d timeout=%.1fs",
+                command,
+                attempt + 1,
+                _BLE_READ_QUERY_ATTEMPTS,
+                timeout,
+            )
+            try:
+                return await self._session.exchange_text(
+                    command,
+                    timeout=timeout,
+                    append_crlf=False,
+                    response=True,
+                )
+            except SmartEssBleError as exc:
+                last_error = exc
+                if (
+                    str(exc) != "ble_notification_timeout"
+                    or attempt == _BLE_READ_QUERY_ATTEMPTS - 1
+                ):
+                    raise
+        assert last_error is not None
+        raise last_error
 
     async def query_device_info(
         self,
@@ -1495,37 +1585,15 @@ class SmartEssBleProvisioner:
         """Read one collector-side Wi-Fi scan list via `AT+INTPARA49?`."""
 
         await self._prepare_wifi_scan()
-        # Collector-side Wi-Fi discovery regularly takes longer than simple AT queries,
-        # especially when the BLE link is proxied through Home Assistant.
-        # The Android clients send this vendor scan command without a CRLF suffix.
+        # The Android clients use a four-second window and retry the idempotent
+        # scan query up to four times.  Some collectors consistently answer only
+        # the second request even with a strong BLE signal.
         per_attempt_timeout = max(self._command_timeout, _DEFAULT_WIFI_SCAN_COMMAND_TIMEOUT)
-        last_error: SmartEssBleError | None = None
-        for attempt in range(_WIFI_SCAN_COMMAND_ATTEMPTS):
-            logger.debug(
-                "SmartESS BLE Wi-Fi scan command attempt=%d timeout=%.1fs",
-                attempt + 1,
-                per_attempt_timeout,
-            )
-            try:
-                response = await self._session.exchange_text(
-                    "AT+INTPARA49?",
-                    timeout=per_attempt_timeout,
-                    append_crlf=False,
-                    response=True,
-                )
-            except SmartEssBleError as exc:
-                last_error = exc
-                if str(exc) != "ble_notification_timeout" or attempt == _WIFI_SCAN_COMMAND_ATTEMPTS - 1:
-                    raise
-                logger.debug(
-                    "SmartESS BLE Wi-Fi scan command timed out; retrying attempt=%d",
-                    attempt + 2,
-                )
-                continue
-            return parse_wifi_scan_response(response)
-        if last_error is not None:
-            raise last_error
-        return ()
+        response = await self._exchange_read_query(
+            "AT+INTPARA49?",
+            timeout=per_attempt_timeout,
+        )
+        return parse_wifi_scan_response(response)
 
     async def _prepare_wifi_scan(self) -> None:
         if self._wifi_scan_preflight_done:

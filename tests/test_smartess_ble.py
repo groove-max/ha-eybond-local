@@ -30,6 +30,7 @@ from custom_components.eybond_local.collector.smartess_ble import (
     SmartEssBleSession,
     SmartEssBleWifiNetwork,
     _default_bleak_connect_client,
+    _safe_ble_log_preview,
     async_probe_ble_host_capability,
     build_ble_candidate,
     build_ble_text_payload,
@@ -185,6 +186,12 @@ class _FakeTextSession:
 
 
 class SmartEssBleHelperTests(unittest.TestCase):
+    def test_sensitive_wifi_password_readback_is_redacted_from_logs(self) -> None:
+        preview = _safe_ble_log_preview("AT+INTPARA:43,Secret123")
+
+        self.assertEqual(preview, "AT+INTPARA:43,<redacted>")
+        self.assertNotIn("Secret123", preview)
+
     def test_compare_ble_versions_and_branch_selection(self) -> None:
         self.assertLess(compare_ble_versions("1.10", "1.11"), 0)
         self.assertEqual(compare_ble_versions("1.11", "1.11.0"), 0)
@@ -426,13 +433,13 @@ class SmartEssBleHelperTests(unittest.TestCase):
                 [
                     ("AT+FWVER?", 4.0, False, True),
                     ("AT+ATVER?", 4.0, False, True),
-                    ("AT+INTPARA49?", 20.0, False, True),
+                    ("AT+INTPARA49?", 4.0, False, True),
                 ],
             )
 
         asyncio.run(_run())
 
-    def test_provisioner_scan_wifi_uses_long_command_timeout(self) -> None:
+    def test_provisioner_scan_wifi_uses_android_query_timeout(self) -> None:
         async def _run() -> None:
             session = _FakeTextSession(
                 {
@@ -448,7 +455,7 @@ class SmartEssBleHelperTests(unittest.TestCase):
                 session.calls,
                 [
                     ("AT+FWVER?", 4.0, False, True),
-                    ("AT+INTPARA49?", 20.0, False, True),
+                    ("AT+INTPARA49?", 4.0, False, True),
                 ],
             )
 
@@ -458,7 +465,10 @@ class SmartEssBleHelperTests(unittest.TestCase):
         async def _run() -> None:
             session = _FakeTextSession(
                 {
-                    "AT+FWVER?": [SmartEssBleError("ble_notification_timeout")],
+                    "AT+FWVER?": [
+                        SmartEssBleError("ble_notification_timeout")
+                        for _ in range(4)
+                    ],
                     "AT+INTPARA49?": ["AT+INTPARA:49,[Home WiFi,-48]"],
                 }
             )
@@ -470,8 +480,8 @@ class SmartEssBleHelperTests(unittest.TestCase):
             self.assertEqual(
                 session.calls,
                 [
-                    ("AT+FWVER?", 4.0, False, True),
-                    ("AT+INTPARA49?", 20.0, False, True),
+                    *(("AT+FWVER?", 4.0, False, True) for _ in range(4)),
+                    ("AT+INTPARA49?", 4.0, False, True),
                 ],
             )
 
@@ -482,7 +492,10 @@ class SmartEssBleHelperTests(unittest.TestCase):
             session = _FakeTextSession(
                 {
                     "AT+FWVER?": ["AT+FWVER:8.50.8.18"],
-                    "AT+ATVER?": [SmartEssBleError("ble_notification_timeout")],
+                    "AT+ATVER?": [
+                        SmartEssBleError("ble_notification_timeout")
+                        for _ in range(4)
+                    ],
                 }
             )
             provisioner = SmartEssBleProvisioner(session)
@@ -502,7 +515,7 @@ class SmartEssBleHelperTests(unittest.TestCase):
                 session.calls,
                 [
                     ("AT+FWVER?", 4.0, False, True),
-                    ("AT+ATVER?", 4.0, False, True),
+                    *(("AT+ATVER?", 4.0, False, True) for _ in range(4)),
                 ],
             )
 
@@ -512,8 +525,14 @@ class SmartEssBleHelperTests(unittest.TestCase):
         async def _run() -> None:
             session = _FakeTextSession(
                 {
-                    "AT+FWVER?": [SmartEssBleError("ble_notification_timeout")],
-                    "AT+ATVER?": [SmartEssBleError("ble_notification_timeout")],
+                    "AT+FWVER?": [
+                        SmartEssBleError("ble_notification_timeout")
+                        for _ in range(4)
+                    ],
+                    "AT+ATVER?": [
+                        SmartEssBleError("ble_notification_timeout")
+                        for _ in range(4)
+                    ],
                 }
             )
             provisioner = SmartEssBleProvisioner(session)
@@ -533,8 +552,8 @@ class SmartEssBleHelperTests(unittest.TestCase):
             self.assertEqual(
                 session.calls,
                 [
-                    ("AT+FWVER?", 4.0, False, True),
-                    ("AT+ATVER?", 4.0, False, True),
+                    *(("AT+FWVER?", 4.0, False, True) for _ in range(4)),
+                    *(("AT+ATVER?", 4.0, False, True) for _ in range(4)),
                 ],
             )
 
@@ -569,13 +588,14 @@ class SmartEssBleHelperTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_provisioner_scan_wifi_propagates_notification_timeout_after_long_command_window(self) -> None:
+    def test_provisioner_scan_wifi_retries_four_times_before_timeout(self) -> None:
         async def _run() -> None:
             session = _FakeTextSession(
                 {
                     "AT+FWVER?": ["AT+FWVER:8.50.8.18"],
                     "AT+INTPARA49?": [
-                        SmartEssBleError("ble_notification_timeout"),
+                        SmartEssBleError("ble_notification_timeout")
+                        for _ in range(4)
                     ],
                 }
             )
@@ -588,7 +608,40 @@ class SmartEssBleHelperTests(unittest.TestCase):
                 session.calls,
                 [
                     ("AT+FWVER?", 4.0, False, True),
-                    ("AT+INTPARA49?", 20.0, False, True),
+                    *(("AT+INTPARA49?", 4.0, False, True) for _ in range(4)),
+                ],
+            )
+
+        asyncio.run(_run())
+
+    def test_provisioner_scan_wifi_accepts_second_query_attempt(self) -> None:
+        async def _run() -> None:
+            session = _FakeTextSession(
+                {
+                    "AT+FWVER?": ["AT+FWVER:8.50.8.18"],
+                    "AT+INTPARA49?": [
+                        SmartEssBleError("ble_notification_timeout"),
+                        "AT+INTPARA:49,[Home WiFi,-48]",
+                    ],
+                }
+            )
+            provisioner = SmartEssBleProvisioner(
+                session,
+                wifi_scan_preflight_delay=0.0,
+            )
+
+            networks = await provisioner.scan_wifi_networks()
+
+            self.assertEqual(
+                networks,
+                (SmartEssBleWifiNetwork(ssid="Home WiFi", signal=-48),),
+            )
+            self.assertEqual(
+                session.calls,
+                [
+                    ("AT+FWVER?", 4.0, False, True),
+                    ("AT+INTPARA49?", 4.0, False, True),
+                    ("AT+INTPARA49?", 4.0, False, True),
                 ],
             )
 
@@ -1296,9 +1349,58 @@ class SmartEssBleSessionTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_session_exchange_text_can_preserve_pending_notification_before_send(self) -> None:
+    def test_session_exchange_text_collects_fragmented_vendor_command_response(self) -> None:
         async def _run() -> None:
-            link = _FakeBleLink([VENDOR_LAYOUT.service_uuid])
+            link = _FakeBleLink(
+                [VENDOR_LAYOUT.service_uuid],
+                read_results=[
+                    b"AT+WFLKA",
+                    b"P:W000\r\n",
+                ],
+            )
+            session = SmartEssBleSession(link)
+            await session.connect()
+
+            response = await session.exchange_text(
+                "AT+WFLKAP=Home,AES,WPA2_PSK,Secret123",
+                timeout=1.0,
+                append_crlf=False,
+                response=True,
+            )
+
+            self.assertEqual(response, "AT+WFLKAP:W000")
+            self.assertEqual(
+                link.read_calls,
+                [VENDOR_LAYOUT.write_uuid, VENDOR_LAYOUT.write_uuid],
+            )
+
+        asyncio.run(_run())
+
+    def test_session_exchange_text_times_out_on_incomplete_vendor_command_response(self) -> None:
+        async def _run() -> None:
+            link = _FakeBleLink(
+                [VENDOR_LAYOUT.service_uuid],
+                read_results=[b"AT+WFLKA"],
+            )
+            session = SmartEssBleSession(link)
+            await session.connect()
+
+            with self.assertRaisesRegex(SmartEssBleError, "ble_notification_timeout"):
+                await session.exchange_text(
+                    "AT+WFLKAP=Home,AES,WPA2_PSK,Secret123",
+                    timeout=0.1,
+                    append_crlf=False,
+                    response=True,
+                )
+
+        asyncio.run(_run())
+
+    def test_session_exchange_text_ignores_stale_vendor_response_for_different_command(self) -> None:
+        async def _run() -> None:
+            link = _FakeBleLink(
+                [VENDOR_LAYOUT.service_uuid],
+                read_results=[b"AT+LINK:W000\r\n"],
+            )
             session = SmartEssBleSession(link)
             await session.connect()
             link.push_notification(b"AT+WFLKAP:W000\r\n")
@@ -1311,11 +1413,12 @@ class SmartEssBleSessionTests(unittest.TestCase):
                 drain_before_send=False,
             )
 
-            self.assertEqual(response, "AT+WFLKAP:W000")
+            self.assertEqual(response, "AT+LINK:W000")
             self.assertEqual(
                 link.write_calls,
                 [(VENDOR_LAYOUT.write_uuid, b"AT+LINK?", True)],
             )
+            self.assertEqual(link.read_calls, [VENDOR_LAYOUT.write_uuid])
 
         asyncio.run(_run())
 

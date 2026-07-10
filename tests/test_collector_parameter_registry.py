@@ -11,7 +11,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.collector.parameter_registry import query_runtime_collector_values
+from custom_components.eybond_local.collector.parameter_registry import (
+    COLLECTOR_PARAMETER_DEFINITION_BY_ID,
+    RUNTIME_COLLECTOR_PARAMETERS,
+    SENSITIVE_READ_PARAMETERS,
+    query_runtime_collector_values,
+)
 from custom_components.eybond_local.collector.protocol import EybondHeader
 from custom_components.eybond_local.collector.smartess_local import SmartEssLocalSession
 
@@ -42,6 +47,13 @@ class _FakeCollectorTransport:
 
 
 class CollectorParameterRegistryTests(unittest.TestCase):
+    def test_router_password_is_never_part_of_runtime_collector_reads(self) -> None:
+        password_parameter = COLLECTOR_PARAMETER_DEFINITION_BY_ID[43]
+
+        self.assertTrue(password_parameter.sensitive_read)
+        self.assertIn(43, SENSITIVE_READ_PARAMETERS)
+        self.assertNotIn(password_parameter, RUNTIME_COLLECTOR_PARAMETERS)
+
     def test_query_runtime_collector_values_decodes_safe_metadata_set(self) -> None:
         transport = _FakeCollectorTransport(
             {
