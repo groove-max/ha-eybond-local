@@ -46,11 +46,11 @@
       "4": "PV Priority With Load Reserve"
     },
     "secondary_charging_priority": {
-      "0": "Off",
-      "1": "PV Priority",
-      "2": "PV and Utility",
-      "3": "PV Only",
-      "4": "PV Priority With Load Reserve"
+      "0": "OFF",
+      "1": "SOF",
+      "2": "SNU",
+      "3": "OSO",
+      "4": "SOR"
     },
     "input_mode": {
       "0": "APL",

@@ -102,6 +102,9 @@ class RestartChannel(Protocol):
     async def async_send_restart(self) -> None:
         """Send the restart command over the observed session; raise on failure."""
 
+    async def async_probe_identity(self) -> str:
+        """Read the authoritative collector PN over the claimed session."""
+
     def is_connected(self) -> bool:
         """Return whether the observed (old) session is still connected."""
 
@@ -166,6 +169,7 @@ class InboundStrategyVerifier:
         sessions_source: Callable[[], Iterable[Mapping[str, Any]]],
         callback_trigger_generation: Callable[[], int] | None = None,
         promote_claim: Callable[[str], None] | None = None,
+        probe_reconnected_identity: Callable[[str], Any] | None = None,
         disconnect_timeout: float = RESTART_DISCONNECT_TIMEOUT_SECONDS,
         reconnect_timeout: float = INBOUND_RECONNECT_TIMEOUT_SECONDS,
         identity_timeout: float = STRONG_IDENTITY_TIMEOUT_SECONDS,
@@ -181,6 +185,7 @@ class InboundStrategyVerifier:
         # session-id claim becomes the durable full-PN claim in the registry.
         # Raising ValueError means another owner holds the identity.
         self._promote_claim = promote_claim
+        self._probe_reconnected_identity = probe_reconnected_identity
         self._disconnect_timeout = max(0.0, float(disconnect_timeout))
         self._reconnect_timeout = max(0.0, float(reconnect_timeout))
         self._identity_timeout = max(0.0, float(identity_timeout))
@@ -273,6 +278,22 @@ class InboundStrategyVerifier:
             return session_id
         return ""
 
+    def _find_new_weak_identity_candidate(self) -> str:
+        """Return one new trusted socket needing authoritative PN enrichment."""
+
+        for session in self._sessions():
+            session_id = str(session.get("session_id") or "").strip()
+            if not session_id or session_id in self._baseline_session_ids:
+                continue
+            if _session_is_closed(session) or _session_state(session) in _UNTRUSTED_SESSION_STATES:
+                continue
+            if _session_has_strong_identity(session):
+                continue
+            session_pn = str(session.get("collector_pn") or "").strip()
+            if session_pn and pn_is_same_identity(self._collector_pn, session_pn):
+                return session_id
+        return ""
+
     async def async_verify(self) -> StrategyVerificationResult:
         if not self._collector_pn or not self._session_id:
             return self._fail(FAILURE_SESSION_UNAVAILABLE)
@@ -284,9 +305,24 @@ class InboundStrategyVerifier:
         # collector whose durable identity is not yet strong. Two matching short
         # PNs do not prove identity; the registry is the strong/weak authority.
         self._enter(STATE_WAITING_FOR_STRONG_IDENTITY)
+        observed = self._observed_session_entry()
+        if observed is None or not _session_has_strong_identity(observed):
+            # A passive heartbeat commonly carries only a short PN. Once the
+            # user consented, issue one safe read-only FC2 identity query over
+            # the exact transient-claimed socket. Its response is recorded in
+            # the registry as strong evidence before this coroutine resumes.
+            probe_identity = getattr(self._restart_channel, "async_probe_identity", None)
+            if callable(probe_identity):
+                try:
+                    await probe_identity()
+                except Exception as exc:
+                    logger.info(
+                        "Inbound verification: collector identity probe did not complete: %s",
+                        exc,
+                    )
+            observed = self._observed_session_entry()
         deadline = loop.time() + self._identity_timeout
         while True:
-            observed = self._observed_session_entry()
             if observed is not None and _session_has_strong_identity(observed):
                 strong_pn = str(observed.get("collector_pn") or "").strip()
                 if strong_pn and (
@@ -301,6 +337,7 @@ class InboundStrategyVerifier:
                 await self._close_channel()
                 return self._fail(FAILURE_STRONG_IDENTITY_TIMEOUT)
             await asyncio.sleep(self._poll_interval)
+            observed = self._observed_session_entry()
 
         # Promote the transient session-id claim to the now-final full durable
         # PN BEFORE baseline/restart. A conflict means another owner holds the
@@ -355,7 +392,12 @@ class InboundStrategyVerifier:
             # observing the disconnect, so the EOF is genuine device behavior).
             self._enter(STATE_WAITING_FOR_DISCONNECT)
             deadline = loop.time() + self._disconnect_timeout
-            while self._restart_channel.is_connected() or self._old_session_live():
+            # The registry's physical session_id is the sole disconnect truth.
+            # ``RestartChannel`` wraps a reusable transport facade which may
+            # immediately attach to a successor socket and remain connected;
+            # consulting it here would turn a successful reboot/reconnect into
+            # a false ``disconnect_not_observed`` result.
+            while self._old_session_live():
                 if loop.time() >= deadline:
                     return self._fail(FAILURE_DISCONNECT_NOT_OBSERVED)
                 await asyncio.sleep(self._poll_interval)
@@ -367,10 +409,28 @@ class InboundStrategyVerifier:
         # waiting_for_disconnect -> waiting_for_inbound_reconnect
         self._enter(STATE_WAITING_FOR_INBOUND_RECONNECT)
         deadline = loop.time() + self._reconnect_timeout
+        identity_probe_attempted: set[str] = set()
         while True:
             new_session_id = self._find_new_inbound_session()
             if new_session_id:
                 break
+            weak_session_id = self._find_new_weak_identity_candidate()
+            if (
+                weak_session_id
+                and weak_session_id not in identity_probe_attempted
+                and self._probe_reconnected_identity is not None
+            ):
+                identity_probe_attempted.add(weak_session_id)
+                try:
+                    result = self._probe_reconnected_identity(weak_session_id)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as exc:
+                    logger.info(
+                        "Inbound verification: reconnect identity probe failed for %s: %s",
+                        weak_session_id,
+                        exc,
+                    )
             if loop.time() >= deadline:
                 return self._fail(FAILURE_RECONNECT_TIMEOUT)
             await asyncio.sleep(self._poll_interval)
@@ -456,14 +516,17 @@ class ObservedSessionRestartChannel:
             raise SessionUnavailableError(FAILURE_SESSION_UNAVAILABLE)
         return resolved
 
-    async def async_send_restart(self) -> None:
-        from ..collector.smartess_local import async_send_collector_reboot_or_apply
+    async def _async_ensure_transport(self):
+        """Activate and return the exact registry-owned framed session."""
+
+        if self._transport is not None:
+            return self._transport
+
         from ..collector.transport import SharedEybondTransport
 
         # Resolve strictly BEFORE touching any socket; a missing registry claim
         # aborts here and no transport is created at all.
         resolved_session_id = self._resolve_session_id()
-
         transport = SharedEybondTransport(
             host=self._host,
             port=self._port,
@@ -472,14 +535,26 @@ class ObservedSessionRestartChannel:
             collector_ip="",
             collector_pn=self._collector_pn,
         )
-        # Static snapshot: the claim-window session id, never re-derived and
-        # never empty, so the socket claim can only match exactly this session.
         transport.set_claimed_session_provider(lambda: resolved_session_id)
         await transport.start()
         self._transport = transport
         connected = await transport.wait_until_connected(timeout=self._claim_timeout)
         if not connected:
             raise SessionUnavailableError(FAILURE_SESSION_UNAVAILABLE)
+        return transport
+
+    async def async_probe_identity(self) -> str:
+        """Read full collector identity before deciding whether restart is safe."""
+
+        from ..collector.smartess_local import SmartEssLocalSession
+
+        transport = await self._async_ensure_transport()
+        return await SmartEssLocalSession(transport).query_collector_pn()
+
+    async def async_send_restart(self) -> None:
+        from ..collector.smartess_local import async_send_collector_reboot_or_apply
+
+        transport = await self._async_ensure_transport()
         await async_send_collector_reboot_or_apply(transport)
 
     def is_connected(self) -> bool:

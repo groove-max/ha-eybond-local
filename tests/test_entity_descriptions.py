@@ -99,6 +99,15 @@ class EntityDescriptionsTests(unittest.TestCase):
         self.assertTrue(description.diagnostic)
         self.assertTrue(description.enabled_default)
 
+    def test_collector_profile_is_an_honest_hidden_heartbeat_diagnostic(self) -> None:
+        description = next(
+            item for item in BASE_SENSOR_DESCRIPTIONS if item.key == "collector_profile"
+        )
+
+        self.assertEqual(description.name, "Collector Heartbeat Profile")
+        self.assertTrue(description.diagnostic)
+        self.assertFalse(description.enabled_default)
+
     def test_collector_callback_identity_status_is_enabled_diagnostic_sensor(self) -> None:
         description = next(
             item

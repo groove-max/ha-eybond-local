@@ -57,6 +57,7 @@ from ..collector.transport_profile import (
 from ..metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_provider,
 )
+from ..metadata.compiled_detection_catalog import resolve_unique_full_model_surface
 from ..const import (
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -148,7 +149,10 @@ from ..metadata.local_metadata import (
     rollback_local_metadata_overrides,
 )
 from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
-from ..metadata.register_schema_loader import builtin_base_schema_name
+from ..metadata.register_schema_loader import (
+    builtin_base_schema_name,
+    load_register_schema,
+)
 from ..naming import collector_display_name
 from ..metadata.smartess_draft import (
     SmartEssKnownFamilyDraftPlan,
@@ -1029,6 +1033,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             collector_bridge_version=persisted_bridge_version,
         )
         values: dict[str, object] = dict(getattr(existing_snapshot, "values", {}) or {})
+        persisted_detection_status = str(
+            getattr(inverter, "details", {}).get("runtime_detection_status", "")
+            if inverter is not None
+            else ""
+        ).strip()
         values.update({
             "connection_type": self.config_entry.data.get(
                 CONF_CONNECTION_TYPE,
@@ -1037,8 +1046,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "collector_operation_mode": self.collector_operation_mode,
             "control_mode": self.control_mode,
             "detection_confidence": self.detection_confidence,
-            "runtime_driver_state": _RUNTIME_DRIVER_STATE_DRIVER_UNBOUND,
-            "runtime_detection_status": "detecting_inverter",
+            "runtime_driver_state": (
+                _RUNTIME_DRIVER_STATE_DRIVER_BOUND
+                if inverter is not None
+                else _RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
+            ),
+            "runtime_detection_status": (
+                persisted_detection_status or "detecting_inverter"
+            ),
             "collector_poll_context": _COLLECTOR_POLL_CONTEXT_DETECTION,
             "collector_poll_mode": self._configured_poll_mode(),
             "collector_poll_current_interval_seconds": self._configured_poll_interval_seconds(),
@@ -1049,6 +1064,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "collector_poll_recommended_min_interval_seconds": self._configured_poll_interval_seconds(),
             "last_error": "startup_detection_pending",
         })
+        if inverter is not None:
+            values["effective_variant_key"] = inverter.variant_key
+            values["effective_profile_name"] = inverter.profile_name
+            values["effective_register_schema_name"] = inverter.register_schema_name
+            values["effective_inverter_capability_count"] = len(inverter.capabilities)
         connection_mode = self.config_entry.data.get(CONF_CONNECTION_MODE, "")
         if connection_mode:
             values["connection_mode"] = connection_mode
@@ -1176,6 +1196,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         ).strip()
         variant_key = str(getattr(snapshot, "variant_key", "") or "default").strip()
 
+        catalog_identity_source = ""
         driver_key = str(
             self.config_entry.options.get(
                 CONF_DRIVER_HINT,
@@ -1183,6 +1204,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
             or ""
         ).strip()
+        if not getattr(snapshot, "is_valid", False) and (
+            not driver_key or driver_key == DRIVER_HINT_AUTO
+        ):
+            if self.detection_confidence != "high" or not detected_model:
+                return None
+            catalog_resolution = resolve_unique_full_model_surface(detected_model)
+            if catalog_resolution is None:
+                return None
+            _descriptor, surface = catalog_resolution
+            driver_key = surface.driver_key
+            profile_name = surface.profile_name
+            register_schema_name = surface.register_schema_name
+            variant_key = surface.variant_key
+            catalog_identity_source = "persisted_detected_model"
+
         driver = None
         if driver_key and driver_key != DRIVER_HINT_AUTO:
             try:
@@ -1214,6 +1250,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             profile = load_driver_profile(profile_name)
         except Exception:
             return None
+        if catalog_identity_source:
+            try:
+                register_schema = load_register_schema(register_schema_name)
+            except Exception:
+                return None
+            if (
+                str(getattr(profile, "driver_key", "") or "").strip() != driver_key
+                or str(getattr(register_schema, "driver_key", "") or "").strip()
+                != driver_key
+            ):
+                return None
 
         probe_targets = tuple(getattr(driver, "probe_targets", ()) or ())
         probe_target = (
@@ -1233,8 +1280,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             probe_target=probe_target,
             variant_key=variant_key or "default",
             details={
-                "runtime_detection_status": "startup_persisted_identity",
+                "runtime_detection_status": (
+                    "persisted_model_probe_degraded"
+                    if catalog_identity_source
+                    else "startup_persisted_identity"
+                ),
                 "detection_confidence": self.detection_confidence,
+                **(
+                    {"identity_source": catalog_identity_source}
+                    if catalog_identity_source
+                    else {}
+                ),
             },
             profile_name=profile_name,
             register_schema_name=register_schema_name,
@@ -1717,7 +1773,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return changed
 
     async def _async_reconcile_collector_session_profile(self, *, reason: str) -> bool:
-        """Align the runtime link with the best known collector cloud profile."""
+        """Align the runtime link with the best known collector cloud profile.
+
+        BOOTSTRAP-ONLY. Cloud-family / persisted / options-data are transport
+        hints used only until the link has confirmed a live wire binding. Once a
+        live wire is confirmed, the live session is the sole transport authority:
+        a real framed<->at_text change is applied in place by the link's
+        SessionHandle wire negotiation (no destructive rebuild), and this per-
+        poll cloud-profile computation must never tear transports down. This is
+        the removal of the steady-state competing authority: without this gate,
+        a momentary reconnect gap let the cloud-family bootstrap flip the profile
+        and rebuild the transport (the framed->at_text->framed flap).
+        """
+
+        has_confirmed_binding = getattr(
+            self._runtime, "has_confirmed_wire_binding", None
+        )
+        if callable(has_confirmed_binding):
+            try:
+                if has_confirmed_binding():
+                    return False
+            except Exception:  # pragma: no cover - defensive runtime inspection
+                pass
 
         protocol = self.collector_session_protocol
         identity_strategy = self.collector_identity_strategy
@@ -2111,9 +2188,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _configure_callback_ownership(self) -> None:
         """Give the runtime the domain callback-session registry + this entry id.
 
-        Read-only wiring: lets the link classify the
-        ``callback_session_claimed_by_other_entry`` outcome. Never used to select
-        a wire or read listener internals.
+        The domain registry is the production ownership authority: runtime uses
+        the real entry claim to resolve the live session id, listener port, and
+        negotiated wire without reading listener internals or using peer IP as
+        identity. It also classifies claimed-by-other callback outcomes.
         """
 
         set_ownership = getattr(self._runtime, "set_callback_ownership", None)

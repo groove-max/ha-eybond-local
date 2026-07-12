@@ -9,6 +9,7 @@ PN, never peer IP; short PNs only enrich the full PN.
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 import types
 
@@ -19,6 +20,7 @@ from custom_components.eybond_local.connection.session_handle import (
     ADAPTER_FRAMED_COLLECTOR_COMMANDS,
     ADAPTER_FRAMED_FORWARD,
     ADAPTER_RAW_PASSTHROUGH,
+    ConfirmedWireBinding,
     WIRE_AT_TEXT,
     WIRE_FRAMED,
     WIRE_UNKNOWN,
@@ -36,6 +38,7 @@ from custom_components.eybond_local.runtime.hub import _reconcile_durable_collec
 from custom_components.eybond_local.runtime.link import (
     EybondRuntimeLinkManager,
     _UnavailablePayloadTransport,
+    _callback_identity_status_values,
 )
 
 
@@ -92,6 +95,7 @@ def _bare_link(*, collector_pn, collector_ip, persisted_protocol, sessions):
     link._auxiliary_at_transports = {}
     link._auxiliary_listener_ports = set()
     link._runtime_claim_pn = None
+    link._confirmed_wire_binding = None
     link._session_registry = CallbackSessionRegistry(
         sessions_source=link._iter_observed_sessions,
     )
@@ -442,6 +446,471 @@ class RegistryPnReconciliationTests(unittest.TestCase):
         for a, b in ((SHORT_PN, FULL_PN), (FULL_PN, SHORT_PN), (FULL_PN, OTHER_FULL_PN)):
             self.assertEqual(_prefer_more_complete_identity(a, b), reconcile_pn(a, b))
             self.assertEqual(_prefer_more_complete_collector_pn(a, b), reconcile_pn(a, b))
+
+
+def _set_sessions(link, sessions) -> None:
+    """Replace the fake transport's observed sessions (models socket lifecycle)."""
+
+    link._transport._sessions = tuple(dict(s) for s in sessions)
+
+
+def _reconcilable(link) -> None:
+    """Add the persisted-profile fields the reconcile method reads."""
+
+    link._collector_identity_strategy = "framed_heartbeat_then_fc2_pn"
+    link._collector_raw_passthrough_bootstrap = ""
+    link._collector_raw_passthrough_frame_format = ""
+    link._collector_raw_passthrough_min_interval_ms = 0
+
+
+def _observe(link) -> None:
+    """Model an explicit session-observation event (poll / owned-session monitor).
+
+    Binding adoption is a lifecycle step, never a side effect of a read, so tests
+    must adopt explicitly instead of relying on an accessor to latch.
+    """
+
+    link._adopt_trusted_live_binding()
+
+
+class SessionHandoverLifecycleTests(unittest.TestCase):
+    """Same-PN reconnect is a session handover, never a wire/profile change.
+
+    These lock in the fix for the ~15-minute PI30 reconnect that flapped
+    eybond_framed -> at_text -> eybond_framed and re-onboarded for ~17s. A trusted
+    live wire is adopted into an immutable ConfirmedWireBinding (durable wire
+    facts only, no socket metadata); it survives the transient gap so cloud-family
+    bootstrap can never fill it with at_text.
+    """
+
+    # A. Same-PN framed replacement keeps framed_fc4 throughout, never at_text.
+    def test_same_pn_framed_replacement_keeps_framed_adapter(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)  # a poll observed the trusted framed session
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
+
+        # Old socket closes; the new same-PN socket is present but not yet routed
+        # (the real handover window). The confirmed wire must survive.
+        _set_sessions(link, [_observed("s2", FULL_PN, state="waiting_for_route_identity")])
+        _observe(link)  # observation during the gap must not change the binding
+        self.assertFalse(link._uses_at_text_payload())
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
+
+        # New socket becomes routed framed: still framed, no flap.
+        _set_sessions(link, [_observed("s2", FULL_PN, state="routed_framed", source="framed_heartbeat")])
+        _observe(link)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+
+    # B. Full gap (no session observed) + cloud-family bootstrap cannot switch to
+    # at_text: the confirmed wire holds and the reconcile refuses the guess.
+    def test_gap_holds_confirmed_wire_and_reconcile_refuses_bootstrap(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _reconcilable(link)
+        _observe(link)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertTrue(link.has_confirmed_wire_binding())
+
+        # Transient gap: nothing observed at all.
+        _set_sessions(link, [])
+        self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+
+        # The coordinator's cloud-family bootstrap (smartess_at -> at_text) tries
+        # to reconcile during the gap. It must be a no-op: no rebuild, no
+        # downgrade of the confirmed live wire.
+        changed = asyncio.run(
+            link.async_reconcile_collector_session_profile(
+                collector_session_protocol="at_text",
+                collector_identity_strategy="at_dtupn",
+                reason="refresh",
+            )
+        )
+        self.assertFalse(changed)
+        self.assertEqual(link._collector_session_protocol, "eybond_framed")
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+
+    # Conflict + attempted bootstrap reconcile: a live conflict blocks the rebuild
+    # entirely; conflict preserved, configured protocol unchanged, no bootstrap.
+    def test_live_conflict_blocks_bootstrap_reconcile(self) -> None:
+        from custom_components.eybond_local.connection.session_handle import ADAPTER_NONE
+
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _reconcilable(link)
+        _observe(link)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+
+        # A contradictory live observation appears (real conflict).
+        _set_sessions(
+            link,
+            [_observed("s2", FULL_PN, state="routed_at_text", shape="eybond_framed", source="at_dtupn")],
+        )
+        self.assertTrue(link._live_session_handle().conflict)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_NONE)  # fail-closed
+
+        # Bootstrap reconcile during the conflict must be blocked.
+        changed = asyncio.run(
+            link.async_reconcile_collector_session_profile(
+                collector_session_protocol="at_text",
+                collector_identity_strategy="at_dtupn",
+                reason="refresh",
+            )
+        )
+        self.assertFalse(changed)
+        self.assertEqual(link._collector_session_protocol, "eybond_framed")
+        # Conflict is still surfaced; bootstrap not applied.
+        self.assertTrue(link._live_session_handle().conflict)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_NONE)
+
+    # A genuine live framed->at_text change (positive live evidence) IS adopted
+    # once observed, and updates the confirmed binding.
+    def test_genuine_live_framed_to_at_text_change_is_adopted(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
+
+        # A genuinely observed at_text session (positive live evidence).
+        _set_sessions(link, [_observed("s2", FULL_PN, state="routed_at_text", source="at_dtupn")])
+        self.assertEqual(link._raw_live_observed_protocol(), "at_text")
+        # Live observed session routes directly; adoption updates the binding.
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH)
+        _observe(link)
+        self.assertTrue(link.confirmed_wire_binding.uses_at_text_wire)
+        self.assertEqual(
+            link.confirmed_wire_binding.inverter_forward_adapter,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+        )
+
+    # The confirmed binding must NOT carry stale socket metadata.
+    def test_confirmed_binding_has_no_socket_metadata(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[
+                _observed(
+                    "sock-42", FULL_PN, peer_ip="203.0.113.9",
+                    state="routed_framed", source="framed_heartbeat",
+                )
+            ],
+        )
+        _observe(link)
+        binding = link.confirmed_wire_binding
+        self.assertIsNotNone(binding)
+        # Durable wire facts only.
+        self.assertEqual(binding.collector_pn, FULL_PN)
+        self.assertTrue(binding.uses_framed_wire)
+        self.assertEqual(binding.inverter_forward_adapter, ADAPTER_INVERTER_FRAMED_FC4)
+        # No transient socket identity is retained anywhere on the binding.
+        for attr in ("session_id", "peer_ip", "listener_port", "state", "observed"):
+            self.assertFalse(hasattr(binding, attr), attr)
+
+    # Reading accessors/diagnostics must NOT create or change the binding.
+    def test_reads_do_not_mutate_binding(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        # A trusted session is observable, but until an explicit adoption event
+        # the binding stays None no matter how many reads happen.
+        for _ in range(3):
+            link._inverter_forward_adapter()
+            link._owned_observed_session_protocol()
+            link._effective_wire_binding()
+            link._raw_live_observed_protocol()
+        self.assertIsNone(link._confirmed_wire_binding)
+        self.assertFalse(link.has_confirmed_wire_binding())
+
+        # Only the explicit lifecycle step creates it.
+        _observe(link)
+        self.assertIsNotNone(link._confirmed_wire_binding)
+
+    # E. Two collectors behind one peer IP stay independent: replacing one PN's
+    # session never leaks the other's wire, and peer IP is never identity.
+    def test_two_collectors_one_peer_ip_do_not_leak_wire(self) -> None:
+        peer = "198.51.100.7"
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[
+                _observed("a1", FULL_PN, peer_ip=peer, state="routed_framed", source="framed_heartbeat"),
+                _observed("b1", OTHER_FULL_PN, peer_ip=peer, state="routed_at_text", source="at_dtupn"),
+            ],
+        )
+        _observe(link)
+        # Our entry negotiates its OWN framed wire, not the neighbour's at_text.
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertEqual(link.confirmed_wire_binding.collector_pn, FULL_PN)
+
+        # Our socket enters a handover gap while the neighbour's at_text session
+        # is still live on the same peer IP: we keep framed, never adopt at_text.
+        _set_sessions(
+            link,
+            [
+                _observed("a2", FULL_PN, peer_ip=peer, state="waiting_for_route_identity"),
+                _observed("b1", OTHER_FULL_PN, peer_ip=peer, state="routed_at_text", source="at_dtupn"),
+            ],
+        )
+        _observe(link)  # must not adopt the neighbour's at_text
+        self.assertFalse(link._uses_at_text_payload())
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
+        self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
+
+    # C. Delayed close of the OLD socket after the NEW one is accepted must not
+    # drop the new session's ownership (registry-level index/ownership).
+    def test_old_close_after_new_accept_keeps_new_session(self) -> None:
+        sessions = [
+            _observed("old", FULL_PN, state="routed_framed", source="framed_heartbeat"),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        registry.claim("entry-1", collector_pn=FULL_PN)
+
+        # New socket accepted for the same PN.
+        sessions.append(_observed("new", FULL_PN, state="routed_framed", source="framed_heartbeat"))
+        # Delayed close callback for the OLD socket arrives: it becomes terminal.
+        sessions[0]["state"] = SESSION_STATE_CLOSED
+
+        owned = registry.owned_session_location("entry-1")
+        self.assertIsNotNone(owned)
+        self.assertEqual(owned.session_id, "new")
+        handle = registry.session_handle_for_entry("entry-1")
+        self.assertTrue(handle.observed)
+        self.assertEqual(handle.session_id, "new")
+
+    # F. Diagnostics: a same-collector handover reports "reconnecting"; a real
+    # route_identity_mismatch reports "conflict"; a merely-identified FOREIGN
+    # session is unresolved/unowned, never a conflict.
+    def test_diagnostics_reconnecting_vs_conflict(self) -> None:
+        identified = [{"collector_identity_masked": True, "state": "waiting_for_route_identity"}]
+
+        handover = _callback_identity_status_values(
+            pending_count=1,
+            recent_count=1,
+            duplicate_peer_ip_count=0,
+            sessions=identified,
+            expects_collector_identity=True,
+            owned_session_observed=True,
+            handover_in_progress=True,
+        )
+        self.assertEqual(handover["collector_callback_identity_status"], "reconnecting")
+        self.assertEqual(handover["collector_callback_identity_mismatch_count"], 0)
+
+        # A foreign identified session (we own nothing here) is NOT a conflict.
+        foreign = _callback_identity_status_values(
+            pending_count=1,
+            recent_count=1,
+            duplicate_peer_ip_count=0,
+            sessions=identified,
+            expects_collector_identity=True,
+            owned_session_observed=False,
+            handover_in_progress=False,
+        )
+        self.assertEqual(foreign["collector_callback_identity_status"], "unresolved")
+        self.assertEqual(foreign["collector_callback_identity_mismatch_count"], 0)
+        self.assertEqual(foreign["collector_callback_foreign_identified_session_count"], 1)
+
+        # Only positive evidence (route_identity_mismatch) is a conflict.
+        real_mismatch = _callback_identity_status_values(
+            pending_count=1,
+            recent_count=1,
+            duplicate_peer_ip_count=0,
+            sessions=[{"state": "route_identity_mismatch"}],
+            expects_collector_identity=True,
+            owned_session_observed=True,
+            handover_in_progress=False,
+        )
+        self.assertEqual(real_mismatch["collector_callback_identity_status"], "conflict")
+
+    # Two PNs on one peer IP BEFORE any confirmed binding: a foreign identified
+    # session must not create a conflict for the second entry.
+    def test_foreign_pn_before_confirmed_binding_is_not_conflict(self) -> None:
+        status = _callback_identity_status_values(
+            pending_count=1,
+            recent_count=1,
+            duplicate_peer_ip_count=1,
+            sessions=[{"collector_identity_masked": True, "state": "waiting_for_route_identity"}],
+            expects_collector_identity=True,
+            owned_session_observed=False,
+            handover_in_progress=False,
+        )
+        self.assertNotEqual(status["collector_callback_identity_status"], "conflict")
+        self.assertEqual(status["collector_callback_identity_mismatch_count"], 0)
+
+    # G. Existing invariants: nothing is confirmed before the first observation,
+    # and short/full PN remain one identity (no duplicate) across a handover.
+    def test_no_confirmed_wire_before_first_observation(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+        )
+        # Never observed: no binding is invented; reports no observed protocol.
+        self.assertEqual(link._owned_observed_session_protocol(), "")
+        self.assertIsNone(getattr(link, "_confirmed_wire_binding", None))
+        self.assertFalse(link.has_confirmed_wire_binding())
+
+    def test_short_full_pn_remain_one_identity_across_handover(self) -> None:
+        # Confirm on the full PN, then a heartbeat reports only the short PN: it
+        # is the same collector, so the confirmed framed wire is preserved.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        _set_sessions(link, [_observed("s2", SHORT_PN, state="waiting_for_route_identity")])
+        _observe(link)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+        self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
+        self.assertEqual(link.confirmed_wire_binding.collector_pn, FULL_PN)
+
+
+class ConfirmedWireBindingInvariantTests(unittest.TestCase):
+    """A confirmed binding requires a durable entry PN and an identified live PN."""
+
+    def _handle(self, pn, *, state="routed_framed", shape="", source="framed_heartbeat"):
+        return negotiate_session_adapters(_observed("s1", pn, state=state, shape=shape, source=source))
+
+    # A. Observed wire but NO live PN -> no binding (unidentified session).
+    def test_observed_wire_without_live_pn_creates_no_binding(self) -> None:
+        handle = self._handle("")  # routed framed, but collector_pn empty
+        self.assertTrue(handle.observed)
+        self.assertIsNone(ConfirmedWireBinding.from_handle(handle, collector_pn=FULL_PN))
+
+    # B. No durable entry PN -> no binding, even for a fully identified session.
+    def test_no_durable_pn_creates_no_binding(self) -> None:
+        handle = self._handle(FULL_PN)
+        self.assertIsNone(ConfirmedWireBinding.from_handle(handle, collector_pn=""))
+        # And at the link level: an entry without a durable PN never confirms.
+        link = _bare_link(
+            collector_pn="",
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)
+        self.assertIsNone(link._confirmed_wire_binding)
+        self.assertFalse(link.has_confirmed_wire_binding())
+
+    # A conflict / unknown wire never confirms.
+    def test_conflict_or_unknown_wire_creates_no_binding(self) -> None:
+        conflict = self._handle(FULL_PN, state="routed_at_text", shape="eybond_framed")
+        self.assertTrue(conflict.conflict)
+        self.assertIsNone(ConfirmedWireBinding.from_handle(conflict, collector_pn=FULL_PN))
+        unknown = self._handle(FULL_PN, state="waiting_for_route_identity")
+        self.assertFalse(unknown.observed)
+        self.assertIsNone(ConfirmedWireBinding.from_handle(unknown, collector_pn=FULL_PN))
+
+    # C. Durable full PN + live short PN -> binding stores the full PN.
+    def test_durable_full_pn_and_live_short_pn_bind_with_full_pn(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", SHORT_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)
+        binding = link.confirmed_wire_binding
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.collector_pn, FULL_PN)  # preferred full PN, not short
+        self.assertTrue(binding.uses_framed_wire)
+
+    # D. A foreign live PN never replaces an existing confirmed binding.
+    def test_foreign_live_pn_does_not_replace_binding(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)
+        self.assertEqual(link.confirmed_wire_binding.collector_pn, FULL_PN)
+
+        # A different collector (foreign full PN) appears on the shared listener.
+        _set_sessions(link, [_observed("x1", OTHER_FULL_PN, state="routed_at_text", source="at_dtupn")])
+        _observe(link)
+        # Our binding is untouched: still FULL_PN, still framed.
+        self.assertEqual(link.confirmed_wire_binding.collector_pn, FULL_PN)
+        self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
+
+
+class HandoverLifecycleEvidenceTests(unittest.TestCase):
+    """`reconnecting` requires an owned pending socket, not just a gap."""
+
+    def _framed_link(self):
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")],
+        )
+        _observe(link)  # confirm a framed binding
+        return link
+
+    # A. Confirmed binding but NO socket -> offline/idle, NOT reconnecting forever.
+    def test_binding_without_socket_is_not_reconnecting(self) -> None:
+        link = self._framed_link()
+        _set_sessions(link, [])
+        self.assertFalse(link._has_owned_pending_session())
+        self.assertFalse(link._handover_in_progress())
+
+    # B. Confirmed binding + owned pending socket -> reconnecting.
+    def test_binding_with_owned_pending_socket_is_reconnecting(self) -> None:
+        link = self._framed_link()
+        _set_sessions(link, [_observed("s2", FULL_PN, state="waiting_for_route_identity")])
+        self.assertTrue(link._has_owned_pending_session())
+        self.assertTrue(link._handover_in_progress())
+
+    # C. Confirmed binding + active trusted socket -> not reconnecting (ok/active).
+    def test_binding_with_active_trusted_socket_is_ok(self) -> None:
+        link = self._framed_link()
+        _set_sessions(link, [_observed("s2", FULL_PN, state="routed_framed", source="framed_heartbeat")])
+        _observe(link)
+        self.assertFalse(link._handover_in_progress())
+        self.assertTrue(link._live_session_handle().observed)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
+
+    # D. Positive route_identity_mismatch is a conflict (not reconnecting).
+    def test_route_identity_mismatch_is_conflict(self) -> None:
+        status = _callback_identity_status_values(
+            pending_count=1,
+            recent_count=1,
+            duplicate_peer_ip_count=0,
+            sessions=[{"state": "route_identity_mismatch"}],
+            expects_collector_identity=True,
+            owned_session_observed=True,
+            handover_in_progress=False,
+        )
+        self.assertEqual(status["collector_callback_identity_status"], "conflict")
 
 
 if __name__ == "__main__":

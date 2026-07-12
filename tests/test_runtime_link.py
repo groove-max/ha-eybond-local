@@ -1222,14 +1222,16 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
 
         diagnostics = manager.listener_diagnostics()
 
-        self.assertEqual(diagnostics["collector_callback_identity_status"], "conflict")
-        self.assertEqual(diagnostics["collector_callback_identity_mismatch_count"], 1)
-        self.assertIn(
-            "does not match",
-            diagnostics["collector_callback_identity_summary"],
+        # A foreign identified session on a shared listener that this entry does
+        # not own is unresolved/unowned -- NOT a conflict (conflict requires
+        # positive evidence: a route_identity_mismatch, not mere presence).
+        self.assertEqual(diagnostics["collector_callback_identity_status"], "unresolved")
+        self.assertEqual(diagnostics["collector_callback_identity_mismatch_count"], 0)
+        self.assertEqual(
+            diagnostics["collector_callback_foreign_identified_session_count"], 1
         )
 
-    def test_recent_foreign_identified_session_keeps_conflict_without_pending(self) -> None:
+    def test_recent_foreign_identified_session_is_not_conflict(self) -> None:
         manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
         transport = _FakeTransport(
             connected=False,
@@ -1256,10 +1258,14 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
 
         diagnostics = manager.listener_diagnostics()
 
-        self.assertEqual(diagnostics["collector_callback_identity_status"], "conflict")
+        # A recent foreign identified session (not owned, nothing pending) is
+        # never a conflict for this entry.
+        self.assertNotEqual(
+            diagnostics["collector_callback_identity_status"], "conflict"
+        )
         self.assertEqual(diagnostics["collector_callback_pending_session_count"], 0)
         self.assertEqual(diagnostics["collector_callback_recent_session_count"], 1)
-        self.assertEqual(diagnostics["collector_callback_identity_mismatch_count"], 1)
+        self.assertEqual(diagnostics["collector_callback_identity_mismatch_count"], 0)
 
     def test_callback_on_demand_session_claimed_by_other_entry(self) -> None:
         manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
@@ -1306,6 +1312,344 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         self.assertEqual(
             manager.callback_trigger_diagnostics()["collector_callback_state"], ""
         )
+
+
+class _ClaimRecordingTransport(_FakeTransport):
+    """Payload-transport fake that records the registry claim provider."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.claim_provider = None
+
+    def set_claimed_session_provider(self, provider) -> None:
+        self.claim_provider = provider
+
+
+class _FakeAuxAtTransport:
+    def __init__(self) -> None:
+        self.connected = False
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.collector_info = CollectorInfo()
+        self.claim_provider = None
+        self.negotiated_wire = None
+
+    async def start(self) -> None:
+        self.start_calls += 1
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+
+    async def wait_until_connected(self, timeout: float) -> bool:
+        return False
+
+    def set_claimed_session_provider(self, provider) -> None:
+        self.claim_provider = provider
+
+    def set_negotiated_wire(self, wire) -> None:
+        self.negotiated_wire = wire
+
+
+class DomainTransportOwnershipTests(unittest.TestCase):
+    """End-to-end inbound transport ownership through the DOMAIN registry."""
+
+    FULL_PN = "V001020SYN62344022"
+    SHORT_PN = "V001020SYN6234"
+    OTHER_PN = "V000405SYN94677058"
+    ENTRY = "entry-1"
+    OTHER_ENTRY = "entry-2"
+
+    def _manager(self, *, collector_pn: str) -> EybondRuntimeLinkManager:
+        with patch(
+            "custom_components.eybond_local.runtime.link.resolve_server_ip",
+            return_value="192.168.1.10",
+        ):
+            manager = EybondRuntimeLinkManager(
+                server_ip="192.168.1.10",
+                collector_ip="",
+                collector_pn=collector_pn,
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+            )
+        manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
+        manager.set_reverse_discovery_enabled(False)  # inbound entry
+        manager._started = True
+        manager._listener_status = "listening"
+        # Primary transport (port 8899) sees no session in these scenarios.
+        manager._transport = _FakeTransport(connected=False, connect_result=False)  # type: ignore[assignment]
+        return manager
+
+    @staticmethod
+    def _domain_session(
+        session_id: str,
+        pn: str,
+        *,
+        listener_port: int,
+        state: str = "parked_waiting_for_identity",
+        shape: str = "eybond_framed_or_binary",
+        source: str = "framed_heartbeat",
+        peer_ip: str = "203.0.113.10",
+    ) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "peer_ip": peer_ip,
+            "listener_port": listener_port,
+            "collector_pn": pn,
+            "state": state,
+            "protocol_shape": shape,
+            "collector_identity_source": source,
+        }
+
+    def _wire_domain(self, manager, inventory: list[dict[str, object]], *, entry_id: str = ""):
+        domain = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
+        entry = entry_id or self.ENTRY
+        domain.claim(entry, collector_pn=manager._collector_pn)
+        manager.set_callback_ownership(domain, entry)
+        return domain
+
+    def _install_aux_fakes(self, manager) -> dict[int, _ClaimRecordingTransport]:
+        built: dict[int, _ClaimRecordingTransport] = {}
+
+        def _pair(_host: str, port: int):
+            payload = _ClaimRecordingTransport(connected=False, connect_result=True)
+            built[port] = payload
+            return payload, _FakeAuxAtTransport()
+
+        manager._build_transport_pair = _pair  # type: ignore[assignment]
+        return built
+
+    # 1. Entry primary 8899; owned session of the same PN arrives on listener
+    # 18899: runtime follows via the domain registry, claims the exact session
+    # id, becomes connected, and sends ZERO UDP triggers.
+    def test_owned_session_on_other_listener_connects_without_udp(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        built = self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session("listener-18899-7", self.SHORT_PN, listener_port=18899)
+        ]
+        self._wire_domain(manager, inventory)
+        manager._announcer.last_reply = ""
+        manager._announcer.last_reply_from = ""
+
+        ok, probe = CallbackOnDemandPhase3Tests._run_connect(self, manager)
+
+        self.assertTrue(ok)
+        self.assertIn(18899, manager._auxiliary_listener_ports)
+        aux = built[18899]
+        self.assertTrue(aux.connected)
+        # Exact session id claim through the registry-mediated provider.
+        self.assertIsNotNone(aux.claim_provider)
+        self.assertEqual(aux.claim_provider(), "listener-18899-7")
+        # Zero UDP: inbound never triggers, and no UDP side effects appear.
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(manager._callback_trigger_count, 0)
+        self.assertEqual(manager._announcer.last_reply_from, "")
+        # Ownership diagnostics expose the full chain.
+        diagnostics = manager.listener_diagnostics()
+        self.assertEqual(
+            diagnostics["collector_session_ownership_authority"], "domain_registry"
+        )
+        self.assertEqual(diagnostics["collector_session_claim_entry_id"], self.ENTRY)
+        self.assertEqual(diagnostics["collector_claimed_session_id"], "listener-18899-7")
+        self.assertEqual(diagnostics["collector_claimed_listener_port"], 18899)
+        self.assertEqual(diagnostics["collector_primary_tcp_port"], 8899)
+        self.assertEqual(diagnostics["collector_active_listener_port"], 18899)
+
+    # 2. Reconnect: same PN first on 8899, then a NEW session id on 18899 --
+    # runtime follows the new handle without reload and without UDP.
+    def test_reconnect_follows_new_session_on_other_listener(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        built = self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session(
+                "listener-8899-1", self.FULL_PN, listener_port=8899, state="routed_framed"
+            )
+        ]
+        self._wire_domain(manager, inventory)
+
+        # Phase 1: session on the primary port -- claim id follows it.
+        self.assertEqual(manager._claimed_session_id(), "listener-8899-1")
+
+        # Phase 2: old socket closes; the collector dials the 18899 listener.
+        inventory.clear()
+        inventory.append(
+            self._domain_session("listener-18899-2", self.FULL_PN, listener_port=18899)
+        )
+
+        ok, probe = CallbackOnDemandPhase3Tests._run_connect(self, manager)
+
+        self.assertTrue(ok)
+        self.assertEqual(probe.await_count, 0)
+        self.assertIn(18899, manager._auxiliary_listener_ports)
+        self.assertEqual(manager._claimed_session_id(), "listener-18899-2")
+        self.assertEqual(built[18899].claim_provider(), "listener-18899-2")
+
+    # 3. Full entry PN + short heartbeat PN are ONE identity; the durable full
+    # PN never degrades to the short observation.
+    def test_short_heartbeat_pn_matches_full_entry_pn(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session("listener-18899-3", self.SHORT_PN, listener_port=18899)
+        ]
+        domain = self._wire_domain(manager, inventory)
+
+        session = manager._owned_domain_session()
+        self.assertIsNotNone(session)
+        self.assertEqual(session.session_id, "listener-18899-3")
+        # Durable identity stays the FULL PN.
+        self.assertEqual(domain.claimed_identity(self.ENTRY), self.FULL_PN)
+        self.assertEqual(manager._collector_pn, self.FULL_PN)
+
+    # 4. Two different full PNs behind one peer IP: each entry only ever sees
+    # its own session -- no socket stealing.
+    def test_two_collectors_one_peer_ip_no_socket_stealing(self) -> None:
+        inventory = [
+            self._domain_session(
+                "listener-18899-a", self.FULL_PN, listener_port=18899, peer_ip="203.0.113.10"
+            ),
+            self._domain_session(
+                "listener-18899-b", self.OTHER_PN, listener_port=18899, peer_ip="203.0.113.10"
+            ),
+        ]
+        domain = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
+        domain.claim(self.ENTRY, collector_pn=self.FULL_PN)
+        domain.claim(self.OTHER_ENTRY, collector_pn=self.OTHER_PN)
+
+        manager_a = self._manager(collector_pn=self.FULL_PN)
+        manager_a.set_callback_ownership(domain, self.ENTRY)
+        manager_b = self._manager(collector_pn=self.OTHER_PN)
+        manager_b.set_callback_ownership(domain, self.OTHER_ENTRY)
+
+        self.assertEqual(manager_a._claimed_session_id(), "listener-18899-a")
+        self.assertEqual(manager_b._claimed_session_id(), "listener-18899-b")
+
+    # 5. Session identity owned by ANOTHER entry: no socket, no follow; the
+    # typed ownership diagnostic stays honest.
+    def test_session_claimed_by_other_entry_is_not_taken(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        built = self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session("listener-18899-9", self.FULL_PN, listener_port=18899)
+        ]
+        domain = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
+        domain.claim(self.OTHER_ENTRY, collector_pn=self.FULL_PN)
+        manager.set_callback_ownership(domain, self.ENTRY)
+
+        self.assertIsNone(manager._owned_domain_session())
+        self.assertEqual(manager._claimed_session_id(), "")
+
+        ok, probe = CallbackOnDemandPhase3Tests._run_connect(self, manager)
+        self.assertFalse(ok)
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(built, {})  # no facade was even created
+
+    # 6. Live framed session on a non-primary listener selects framed_fc4 even
+    # against a persisted at_text hint.
+    def test_live_framed_on_other_listener_overrides_persisted_at_text(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        manager._collector_session_protocol = "at_text"
+        self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session(
+                "listener-18899-4",
+                self.FULL_PN,
+                listener_port=18899,
+                state="routed_framed",
+                shape="eybond_framed_or_binary",
+            )
+        ]
+        self._wire_domain(manager, inventory)
+
+        handle = manager.session_handle
+        self.assertTrue(handle.observed)
+        self.assertEqual(handle.wire, "eybond_framed")
+        self.assertEqual(
+            manager._inverter_forward_adapter(), "framed_fc4"
+        )
+
+    # 7. Live AT/raw session on a non-primary listener keeps the
+    # ValueCloud/G-ASCII raw-passthrough transport.
+    def test_live_at_text_on_other_listener_keeps_raw_passthrough(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        manager._collector_session_protocol = "eybond_framed"
+        self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session(
+                "listener-18899-5",
+                self.FULL_PN,
+                listener_port=18899,
+                state="routed_at_text",
+                shape="at_text",
+                source="at_dtupn",
+            )
+        ]
+        self._wire_domain(manager, inventory)
+
+        handle = manager.session_handle
+        self.assertTrue(handle.observed)
+        self.assertEqual(handle.wire, "at_text")
+        self.assertEqual(
+            manager._inverter_forward_adapter(), "raw_passthrough"
+        )
+
+    def test_owned_session_monitor_reports_cross_listener_replacement(self) -> None:
+        async def _run() -> None:
+            manager = self._manager(collector_pn=self.FULL_PN)
+            inventory = [
+                self._domain_session(
+                    "listener-18899-old",
+                    self.FULL_PN,
+                    listener_port=18899,
+                    state="routed_framed",
+                )
+            ]
+            self._wire_domain(manager, inventory)
+            notifications: list[str] = []
+            manager.set_collector_connection_watcher(notifications.append)
+            manager._start_owned_session_monitor()
+            baseline = manager.owned_session_generation
+
+            inventory.clear()
+            inventory.append(
+                self._domain_session(
+                    "listener-8899-new",
+                    self.SHORT_PN,
+                    listener_port=8899,
+                    state="routed_framed",
+                    peer_ip="192.0.2.44",
+                )
+            )
+
+            await asyncio.wait_for(
+                manager.async_wait_for_owned_session_change(baseline),
+                timeout=1.0,
+            )
+            self.assertGreater(manager.owned_session_generation, baseline)
+            self.assertEqual(manager._claimed_session_id(), "listener-8899-new")
+            self.assertEqual(notifications, ["192.0.2.44"])
+            await manager._stop_owned_session_monitor()
+
+        asyncio.run(_run())
+
+    # 9. Stop releases the auxiliary facades; the domain claim release itself is
+    # owned by the entry unload hook (integration __init__).
+    def test_stop_cleans_auxiliary_facades(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        built = self._install_aux_fakes(manager)
+        inventory = [
+            self._domain_session("listener-18899-6", self.FULL_PN, listener_port=18899)
+        ]
+        self._wire_domain(manager, inventory)
+        CallbackOnDemandPhase3Tests._run_connect(self, manager)
+        self.assertIn(18899, built)
+
+        asyncio.run(manager.async_stop())
+
+        self.assertGreaterEqual(built[18899].stop_calls, 1)
 
 
 if __name__ == "__main__":

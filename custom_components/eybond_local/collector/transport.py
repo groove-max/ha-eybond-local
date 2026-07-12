@@ -15,7 +15,11 @@ from .cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
 )
-from ..connection.session_registry import reconcile_pn as _reconcile_pn
+from ..connection.session_registry import (
+    identity_source_is_strong,
+    prefer_identity_source,
+    reconcile_pn as _reconcile_pn,
+)
 from ..link_models import EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ..link_transport import PayloadLinkTransport
 from ..models import CollectorInfo
@@ -739,6 +743,7 @@ class _CollectorConnection:
         initial_bytes: bytes = b"",
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
+        session_closed_callback: Callable[[str, object], None] | None = None,
         disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
         # The epoch marks THIS session as the connection's current owner.  A
@@ -782,6 +787,12 @@ class _CollectorConnection:
             # above was awaiting; the callback must not fire for it then.
             if self._run_epoch == epoch and disconnect_callback is not None:
                 disconnect_callback(self)
+            # Socket/session lifetime is independent of the reusable
+            # connection facade lifetime. A replacement run deliberately skips
+            # ``disconnect_callback`` so it cannot unindex its successor, but
+            # the replaced session_id must still become terminal in inventory.
+            if session_id and session_closed_callback is not None:
+                session_closed_callback(session_id, self)
 
     async def _heartbeat_loop(self) -> None:
         try:
@@ -1277,6 +1288,7 @@ class _CollectorAtConnection:
         initial_bytes: bytes = b"",
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
+        session_closed_callback: Callable[[str, object], None] | None = None,
         disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
         # Same epoch discipline as _CollectorConnection.run: a replaced
@@ -1320,6 +1332,8 @@ class _CollectorAtConnection:
                 await self._disconnect(skip_task=current_task)
             if self._run_epoch == epoch and disconnect_callback is not None:
                 disconnect_callback(self)
+            if session_id and session_closed_callback is not None:
+                session_closed_callback(session_id, self)
 
     async def disconnect(self) -> None:
         await self._disconnect(reason="manual_disconnect")
@@ -2143,6 +2157,27 @@ class _SharedEybondListener:
         if entry is not None:
             entry.state = state
 
+    def _mark_socket_session_closed(self, session_id: str, connection: object) -> None:
+        """Close one physical socket session without unindexing its successor.
+
+        A collector reconnect may reuse the same ``_CollectorConnection``
+        facade. The old run then has a stale epoch and must not execute the
+        facade-level disconnect callback, but its own session inventory record
+        still has to become terminal. Session ids are per accepted socket, so
+        this operation never identifies or owns a collector by peer IP.
+        """
+
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            return
+        for mapping in (
+            self._session_payload_connections,
+            self._session_at_connections,
+        ):
+            if mapping.get(normalized) is connection:
+                mapping.pop(normalized, None)
+        self._mark_session_state(normalized, "closed_disconnected")
+
     def _mark_session_first_bytes(self, session_id: str, chunk: bytes) -> None:
         entry = self._session_inventory.get(session_id)
         if entry is None:
@@ -2167,7 +2202,10 @@ class _SharedEybondListener:
                 normalized_pn,
             )
             if source:
-                entry.collector_identity_source = str(source)
+                entry.collector_identity_source = prefer_identity_source(
+                    entry.collector_identity_source,
+                    source,
+                )
 
         payload_connection = self._session_payload_connections.get(session_id)
         if payload_connection is not None:
@@ -2327,7 +2365,14 @@ class _SharedEybondListener:
                 # it is not left as an unwatched phantom.
                 existing_entry = self._session_inventory.get(pending.session_id)
                 existing_pn = str(getattr(existing_entry, "collector_pn", "") or "").strip()
-                if existing_pn and not self._collector_pn_matches(normalized_pn, existing_pn):
+                existing_source = str(
+                    getattr(existing_entry, "collector_identity_source", "") or ""
+                ).strip()
+                if (
+                    existing_pn
+                    and identity_source_is_strong(existing_source)
+                    and not self._collector_pn_matches(normalized_pn, existing_pn)
+                ):
                     self._resume_pending_watch(pending)
                     continue
                 await self._pause_pending_sniff(pending)
@@ -2941,6 +2986,7 @@ class _SharedEybondListener:
                 initial_bytes=initial_bytes,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
+                session_closed_callback=self._mark_socket_session_closed,
                 disconnect_callback=self._drop_connection_indexes_for_connection,
             ),
             name=f"collector_at_{remote_ip}",
@@ -2998,6 +3044,7 @@ class _SharedEybondListener:
                 initial_bytes=initial_bytes,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
+                session_closed_callback=self._mark_socket_session_closed,
                 disconnect_callback=self._drop_connection_indexes_for_connection,
             ),
             name=f"collector_framed_{remote_ip}",
@@ -3009,21 +3056,54 @@ class _SharedEybondListener:
         self,
         pending: _PendingCollectorSocket,
     ) -> tuple[bytes, bool]:
-        """Return initial bytes and whether the socket is exhausted/closed."""
+        """Return enough bytes to identify the first bounded framed record.
+
+        TCP can split the EyeBond payload after a complete header.  If routing
+        sees only that header, a heartbeat has no readable PN and the socket is
+        parked ownerless until the next heartbeat (commonly 60 seconds).  Once
+        a valid header is available, accumulate the rest of the first frame
+        before identity/routing decisions.  This is generic stream framing and
+        does not depend on collector type, endpoint, or peer IP.
+        """
 
         if pending.initial_bytes:
             chunk = pending.initial_bytes
             pending.initial_bytes = b""
-            return chunk, False
+        else:
+            try:
+                chunk = await asyncio.wait_for(pending.reader.read(64), timeout=0.25)
+            except asyncio.TimeoutError:
+                chunk = await self._async_probe_pending_identity(pending)
+                return chunk, False
+            except Exception:
+                return b"", True
+        if not chunk:
+            return chunk, True
 
-        try:
-            chunk = await asyncio.wait_for(pending.reader.read(64), timeout=0.25)
-        except asyncio.TimeoutError:
-            chunk = await self._async_probe_pending_identity(pending)
-            return chunk, False
-        except Exception:
-            return b"", True
-        return chunk, not chunk
+        if len(chunk) >= HEADER_SIZE:
+            try:
+                header = decode_header(chunk[:HEADER_SIZE])
+            except Exception:
+                header = None
+            if header is not None:
+                frame_len = HEADER_SIZE + max(int(header.payload_len), 0)
+                if (
+                    HEADER_SIZE <= frame_len <= HEADER_SIZE + _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN
+                    and len(chunk) < frame_len
+                ):
+                    try:
+                        chunk += await asyncio.wait_for(
+                            pending.reader.readexactly(frame_len - len(chunk)),
+                            timeout=0.5,
+                        )
+                    except asyncio.IncompleteReadError as exc:
+                        chunk += exc.partial
+                        return chunk, True
+                    except asyncio.TimeoutError:
+                        return chunk, False
+                    except (ConnectionResetError, OSError):
+                        return chunk, True
+        return chunk, False
 
     async def _async_probe_pending_identity(self, pending: _PendingCollectorSocket) -> bytes:
         session_protocol = self._single_registered_session_protocol()
@@ -3055,7 +3135,10 @@ class _SharedEybondListener:
 
         entry = self._session_inventory.get(pending.session_id)
         known_pn = str(getattr(entry, "collector_pn", "") or "").strip()
-        if known_pn:
+        known_source = str(
+            getattr(entry, "collector_identity_source", "") or ""
+        ).strip()
+        if known_pn and identity_source_is_strong(known_source):
             return known_pn
 
         try:
@@ -3236,6 +3319,7 @@ class _SharedEybondListener:
                 initial_bytes=chunk,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
+                session_closed_callback=self._mark_socket_session_closed,
                 disconnect_callback=self._drop_connection_indexes_for_connection,
             )
             return
@@ -3291,6 +3375,7 @@ class _SharedEybondListener:
             initial_bytes=chunk,
             session_id=pending.session_id,
             session_identity_callback=self._mark_session_identity,
+            session_closed_callback=self._mark_socket_session_closed,
             disconnect_callback=self._drop_connection_indexes_for_connection,
         )
 

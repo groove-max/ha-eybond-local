@@ -1140,6 +1140,17 @@
    "support_capture_policy": "smg_protocol_1"
   },
   {
+   "key": "anenji_anj_5kw_48v_wifi_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_anj_5kw_48v_wifi",
+   "profile_name": "modbus_smg/models/anenji_anj_5kw_48v_wifi.json",
+   "register_schema_name": "modbus_smg/models/anenji_anj_5kw_48v_wifi.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
    "key": "anenji_anj_11kw_full",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1566,6 +1577,75 @@
    "provenance": {
     "sources": [
      "corpus:donor …5865 (5 captures)"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_anj_5kw_48v_wifi",
+   "fingerprint": {
+    "layout_code": 11,
+    "model_code": 30977,
+    "rated_power_one_of": [
+     5000
+    ]
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "ANENJI ANJ-5KW-48V-WIFI",
+   "surface_key": "anenji_anj_5kw_48v_wifi_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "rated_power",
+      "one_of": [
+       5000
+      ]
+     }
+    ],
+    "optional_registers": [
+     {
+      "key": "device_type",
+      "register": 171
+     },
+     {
+      "key": "protocol_number",
+      "register": 184
+     },
+     {
+      "key": "rated_cell_count",
+      "register": 644
+     }
+    ],
+    "optional_ascii": [
+     {
+      "key": "device_name",
+      "register": 172,
+      "word_count": 12
+     },
+     {
+      "key": "program_version",
+      "register": 626,
+      "word_count": 8
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "support archive 01KX3F9JYQRS1DHKX1ZGC252GD (2026-07-09): ANENJI ANJ-5KW-48V-WIFI, layout_code=11, model_code=0x7901, rated_power=5000",
+     "shadow-learning run in the same archive: 77/77 SmartESS write attempts matched local Modbus writes with no degraded, unknown-field, or unmatched writes"
     ],
     "confidence": "capture-derived"
    }

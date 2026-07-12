@@ -7,6 +7,27 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Added
+
+- Added a persistent **EyeBond Local — Discovery** service entry so passive
+  callback discovery remains available after all collector entries are removed
+  and across Home Assistant restarts.
+- Added the release-branch Anenji model extensions to the development branch:
+  **ANENJI ANJ-5KW-48V-WIFI** now has a model-specific SMG layout-11 profile, and
+  **Anenji ANJ-11KW-48V-WIFI-P** keeps the secondary-output / secondary-charging
+  controls confirmed by user shadow-learning evidence.
+
+### Fixed
+
+- Kept one passive-discovery flow alive while a short collector PN is enriched
+  to its full PN, instead of replacing the flow underneath the Home Assistant UI.
+- Fixed the failed inbound-verification and discovery-listener options steps so
+  Home Assistant no longer reports `Invalid flow specified` / `UnknownStep`.
+- Preserve the full runtime profile and controls for a previously detected,
+  high-confidence inverter when a startup catalog probe temporarily times out;
+  the saved model is resolved through one unambiguous full catalog surface and
+  remains provisional until live detection confirms it.
+
 ## [0.3.0-beta.2] - 2026-07-09
 
 ### Changed

@@ -165,6 +165,9 @@ RUNTIME_POLL_STATE_DEGRADED = "degraded"
 # detection. Bound the number of refresh attempts so a permanently-silent
 # inverter cannot re-run detection on every single poll.
 _INVERTER_BINDING_REFRESH_MAX_ATTEMPTS = 3
+_PROVISIONAL_INVERTER_DETECTION_STATUSES = frozenset(
+    {"startup_persisted_identity", "persisted_model_probe_degraded"}
+)
 
 # Keep a small ring of recent composite state transitions for the support
 # package. Bounded on purpose: no unbounded growth, no per-poll logging.
@@ -691,6 +694,23 @@ class EybondHub:
             return dict(diagnostics())
         return {}
 
+    def has_confirmed_wire_binding(self) -> bool:
+        """Return whether the link has ever confirmed a live wire binding.
+
+        Delegated so the coordinator's per-poll session-profile reconcile can be
+        bootstrap-only: once a live wire is confirmed, the live session is the
+        transport authority and the cloud-family/persisted profile must not drive
+        a steady-state destructive rebuild.
+        """
+
+        probe = getattr(self._link_manager, "has_confirmed_wire_binding", None)
+        if callable(probe):
+            try:
+                return bool(probe())
+            except Exception:  # pragma: no cover - defensive
+                return False
+        return False
+
     def set_initial_inverter_binding(
         self,
         driver: InverterDriver,
@@ -705,7 +725,7 @@ class EybondHub:
         details = getattr(inverter, "details", {}) or {}
         self._inverter_binding_needs_live_detection_refresh = (
             str(details.get("runtime_detection_status") or "").strip()
-            == "startup_persisted_identity"
+            in _PROVISIONAL_INVERTER_DETECTION_STATUSES
         )
         self._reset_runtime_read_state()
         self._write_blockers.clear()
@@ -751,8 +771,9 @@ class EybondHub:
     def set_callback_ownership(self, registry: object, entry_id: str) -> None:
         """Pass the domain callback-session registry + entry id to the link layer.
 
-        Read-only: lets the link classify the ``callback_session_claimed_by_other_entry``
-        outcome for callback_on_demand attempts.
+        The link uses this as its production ownership authority for live
+        session location, exact socket claim, negotiated wire, and
+        claimed-by-other callback diagnostics.
         """
 
         set_ownership = getattr(self._link_manager, "set_callback_ownership", None)
@@ -1024,6 +1045,7 @@ class EybondHub:
 
         collector_values = await self._async_read_collector_runtime_values(poll_interval=poll_interval)
         _mark_refresh_phase("collector_metadata")
+        detect_error = ""
         if self._driver is None or self._inverter is None:
             self._publish_intermediate_snapshot(
                 collector_values,
@@ -1034,9 +1056,37 @@ class EybondHub:
         if self._driver is None or self._inverter is None:
             detect_error = await self._async_detect_driver()
             _mark_refresh_phase("driver_detection")
+            if detect_error == "collector_session_changed":
+                # The collector replaced its socket (possibly on another shared
+                # listener) while the driver sweep was running.  Bind the new
+                # registry-owned session immediately and restart detection once;
+                # never publish the old sweep's offline/result state.
+                self._reset_runtime_read_state()
+                reconnected = await self._link_manager.async_try_connect(
+                    timeout=1.5,
+                    require_heartbeat=True,
+                )
+                _mark_refresh_phase("session_handover")
+                if reconnected:
+                    collector_values = await self._async_read_collector_runtime_values(
+                        poll_interval=poll_interval,
+                        force_liveness=True,
+                    )
+                    self._publish_intermediate_snapshot(
+                        collector_values,
+                        status="detecting_inverter",
+                    )
+                    detect_error = await self._async_detect_driver()
+                    _mark_refresh_phase("driver_detection_after_handover")
+                else:
+                    detect_error = "waiting_for_collector"
             if self._driver is None or self._inverter is None:
                 logger.warning("Driver detection failed: %s", detect_error)
-                snapshot = self._build_snapshot(extra_values=collector_values, last_error=detect_error)
+                snapshot = self._build_snapshot(
+                    extra_values=collector_values,
+                    last_error=detect_error,
+                    connected=self._link_manager.connected,
+                )
                 self._last_snapshot = snapshot
                 return snapshot
         elif self._inverter_binding_needs_live_detection_refresh:
@@ -1149,7 +1199,10 @@ class EybondHub:
         commit_cycle_failures(self._runtime_read_state)
         merged_values = {**collector_values, **runtime_values}
         apply_unsupported_diagnostics(merged_values, self._runtime_read_state)
-        snapshot = self._build_snapshot(extra_values=merged_values)
+        snapshot = self._build_snapshot(
+            extra_values=merged_values,
+            last_error=detect_error or None,
+        )
         _mark_refresh_phase("snapshot_build")
         refresh_phases["collector_metadata_fc"] = self._collector_metadata_fc_last_ms
         refresh_phases["collector_metadata_at"] = self._collector_metadata_at_last_ms
@@ -2033,13 +2086,55 @@ class EybondHub:
         )
 
     async def _async_detect_driver(self) -> str:
-        try:
-            context = await async_detect_inverter(
+        detection_task = asyncio.create_task(
+            async_detect_inverter(
                 self._link_manager.transport,
                 driver_hint=self._driver_hint,
+            ),
+            name="eybond_inverter_detection",
+        )
+        wait_for_session_change = getattr(
+            self._link_manager,
+            "async_wait_for_owned_session_change",
+            None,
+        )
+        session_change_task: asyncio.Task[None] | None = None
+        if callable(wait_for_session_change):
+            generation = int(
+                getattr(self._link_manager, "owned_session_generation", 0) or 0
             )
+            session_change_task = asyncio.create_task(
+                wait_for_session_change(generation),
+                name="eybond_detection_session_guard",
+            )
+        try:
+            if session_change_task is None:
+                context = await detection_task
+            else:
+                done, _pending = await asyncio.wait(
+                    (detection_task, session_change_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if session_change_task in done and detection_task not in done:
+                    detection_task.cancel()
+                    try:
+                        await detection_task
+                    except asyncio.CancelledError:
+                        pass
+                    logger.info(
+                        "Discarding inverter detection after owned collector session changed"
+                    )
+                    return "collector_session_changed"
+                context = await detection_task
         except RuntimeError as exc:
             return str(exc)
+        finally:
+            if session_change_task is not None:
+                session_change_task.cancel()
+                try:
+                    await session_change_task
+                except asyncio.CancelledError:
+                    pass
 
         # Identity-conflict guard: a durable/provisional binding is sticky. When
         # live detection reports a DIFFERENT full identity, report the conflict
@@ -2170,7 +2265,7 @@ class EybondHub:
                 else RUNTIME_INVERTER_STATE_ABSENT
             )
         elif (
-            detection_status == "startup_persisted_identity"
+            detection_status in _PROVISIONAL_INVERTER_DETECTION_STATUSES
             or self._inverter_binding_needs_live_detection_refresh
         ):
             inverter_state = RUNTIME_INVERTER_STATE_PROVISIONAL

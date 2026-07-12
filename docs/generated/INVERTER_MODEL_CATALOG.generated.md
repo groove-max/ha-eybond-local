@@ -39,6 +39,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 
 | Descriptor | Protocol | Surface | Tier | Read-only |
 |---|---|---|---|---|
+| `anenji_anj_5kw_48v_wifi` | modbus_smg | anenji_anj_5kw_48v_wifi_full | full | no |
 | `aohai_fsa_family` | modbus_catalog | aohai_fsa_read_only | partial | yes |
 | `deye_lv_family` | modbus_catalog | deye_lv_untested | full | no |
 | `eybond_g_ascii_family` | eybond_g_ascii | eybond_g_ascii_read_only | partial | yes |

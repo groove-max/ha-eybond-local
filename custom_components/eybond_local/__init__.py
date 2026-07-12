@@ -46,13 +46,16 @@ from .const import (
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
     CONF_DRIVER_HINT,
+    CONF_ENTRY_ROLE,
     CONF_CONNECTION_TYPE,
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_SERVER_IP,
     CONNECTION_TYPE_EYBOND,
     CONTROL_MODE_FULL,
     DEFAULT_COLLECTOR_OPERATION_MODE,
+    DOMAIN,
     DRIVER_HINT_AUTO,
+    ENTRY_ROLE_LISTENER,
     PLATFORMS,
 )
 from .platform_context import entity_setup_context
@@ -148,7 +151,10 @@ def _register_entry_callback_session_claim(hass: HomeAssistant, entry: ConfigEnt
     Claiming is best-effort: a conflicting stale claim must never break setup.
     """
 
-    from .passive_discovery import get_callback_session_registry
+    from .passive_discovery import (
+        get_callback_session_registry,
+        get_passive_callback_discovery,
+    )
 
     registry = get_callback_session_registry(hass)
     if registry is None:
@@ -178,6 +184,9 @@ def _register_entry_callback_session_claim(hass: HomeAssistant, entry: ConfigEnt
         )
 
     def _release_callback_session() -> None:
+        discovery = get_passive_callback_discovery(hass)
+        if discovery is not None:
+            discovery.retire_entry_sessions(entry.entry_id)
         released_registry = get_callback_session_registry(hass)
         if released_registry is not None:
             released_registry.release(entry.entry_id)
@@ -1422,6 +1431,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EyeBond Local from a config entry."""
 
+    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
+        # ``async_setup`` owns the shared passive listeners. This entry merely
+        # keeps the integration loaded when there are no collector entries.
+        entry.runtime_data = None
+        return True
+
     from .runtime.coordinator import EybondLocalCoordinator
     from .services import async_setup_services
     from .support.download import async_register_support_package_download_view
@@ -1463,6 +1478,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(partial(_cancel_task_callback, expert_migration_task))
         coordinator.async_sync_device_registry()
         entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+        await _async_ensure_listener_entry(hass)
     except CollectorListenerBindError as exc:
         if coordinator is not None:
             try:
@@ -1502,6 +1518,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
 
+    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
+        return True
+
     from .runtime.coordinator import EybondLocalCoordinator
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
@@ -1513,6 +1532,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Drop saved cloud-evidence files for the entry being removed."""
+
+    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
+        # Removing this explicit service entry is how the user disables the
+        # integration completely. Never recreate it from its own removal.
+        return
 
     from .support.cloud_evidence import remove_cloud_evidence_for_entry
 
@@ -1530,6 +1554,40 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         logger.debug(
             "Removed %d cloud-evidence file(s) for entry %s", len(deleted), entry.entry_id
         )
+    await _async_ensure_listener_entry(hass, excluding_entry_id=entry.entry_id)
+
+
+async def _async_ensure_listener_entry(
+    hass: HomeAssistant,
+    *,
+    excluding_entry_id: str = "",
+) -> None:
+    """Ensure one persistent integration-level passive-listener entry exists."""
+
+    async_entries = getattr(hass.config_entries, "async_entries", None)
+    if not callable(async_entries):
+        return
+    entries = tuple(async_entries(DOMAIN))
+    if any(
+        str(candidate.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER
+        and candidate.entry_id != excluding_entry_id
+        for candidate in entries
+    ):
+        return
+    flow_manager = getattr(hass.config_entries, "flow", None)
+    async_init = getattr(flow_manager, "async_init", None)
+    if not callable(async_init):
+        return
+    try:
+        await async_init(
+            DOMAIN,
+            context={"source": "import"},
+            data={CONF_ENTRY_ROLE: ENTRY_ROLE_LISTENER},
+        )
+    except Exception:
+        # The collector entry remains valid even if an older HA core or a
+        # concurrent setup flow rejects the service-entry bootstrap.
+        logger.exception("Failed to ensure EyeBond passive-discovery listener entry")
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

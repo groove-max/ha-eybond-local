@@ -295,6 +295,43 @@ def load_compiled_detection_catalog() -> CompiledDetectionCatalog:
     )
 
 
+def resolve_unique_full_model_surface(
+    model_name: str,
+    *,
+    catalog: CompiledDetectionCatalog | None = None,
+) -> tuple[CompiledDeviceDescriptor, CompiledSurfaceDescriptor] | None:
+    """Resolve one durable model name to one writable full runtime surface.
+
+    This is intentionally an identity-to-metadata lookup, not a detector.  It is
+    suitable only when a caller already owns a durable, high-confidence model
+    identity and needs to reconstruct metadata while live probing is degraded.
+    Ambiguous aliases, family fallbacks and reduced/read-only surfaces fail
+    closed.
+    """
+
+    normalized = str(model_name or "").strip().casefold()
+    if not normalized:
+        return None
+    resolved = catalog if catalog is not None else load_compiled_detection_catalog()
+    device_keys = tuple(resolved.devices_by_alias.get(normalized, ()))
+    if len(device_keys) != 1:
+        return None
+    descriptor = resolved.devices.get(device_keys[0])
+    if descriptor is None or descriptor.family_fallback:
+        return None
+    surface = resolved.surfaces.get(descriptor.surface_key)
+    if (
+        surface is None
+        or surface.read_only
+        or surface.support_tier != "full"
+        or not surface.driver_key
+        or not surface.profile_name
+        or not surface.register_schema_name
+    ):
+        return None
+    return descriptor, surface
+
+
 def compile_detection_catalog(
     source: DetectionDescriptorCatalog,
     *,

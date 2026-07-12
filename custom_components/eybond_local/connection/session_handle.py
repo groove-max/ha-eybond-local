@@ -179,6 +179,96 @@ class SessionHandle:
         return adapter in self.available_adapters
 
 
+@dataclass(frozen=True, slots=True)
+class ConfirmedWireBinding:
+    """The last confirmed live wire for a collector, decoupled from any socket.
+
+    A ``SessionHandle`` always describes a CURRENT real session (its transient
+    ``session_id`` / ``peer_ip`` / ``listener_port`` / live ``state`` /
+    ``observed`` flag). Storing a whole SessionHandle as the "confirmed binding"
+    would carry stale socket metadata across a reconnect. This immutable model
+    carries ONLY the durable wire facts that a same-collector session handover
+    must preserve -- never a socket identity or a live-observation flag. It is
+    adopted from a trusted observed handle by an explicit lifecycle step, never
+    as a side effect of reading diagnostics.
+    """
+
+    collector_pn: str
+    wire_framing: str
+    collector_management_adapter: str = ADAPTER_NONE
+    inverter_forward_adapter: str = ADAPTER_NONE
+    proxy_adapter: str = ADAPTER_NONE
+    identity_sources: frozenset[str] = field(default_factory=frozenset)
+
+    @property
+    def uses_framed_wire(self) -> bool:
+        return self.wire_framing == WIRE_FRAMED
+
+    @property
+    def uses_at_text_wire(self) -> bool:
+        return self.wire_framing == WIRE_AT_TEXT
+
+    @property
+    def uses_raw_tcp_wire(self) -> bool:
+        return self.wire_framing == WIRE_RAW_TCP
+
+    @property
+    def transport_wire(self) -> str:
+        """Return the coarse transport selector for the current implementation."""
+
+        return _TRANSPORT_WIRE_BY_WIRE_FRAMING.get(self.wire_framing, "")
+
+    @property
+    def session_protocol(self) -> str:
+        """Return the legacy session-protocol string for this wire."""
+
+        if self.wire_framing == WIRE_FRAMED:
+            return "eybond_framed"
+        if self.wire_framing == WIRE_AT_TEXT:
+            return "at_text"
+        return ""
+
+    @classmethod
+    def from_handle(
+        cls,
+        handle: "SessionHandle",
+        *,
+        collector_pn: str,
+    ) -> "ConfirmedWireBinding | None":
+        """Build a confirmed binding from a TRUSTED observed handle + durable PN.
+
+        Returns ``None`` unless ALL hold:
+        - a durable ``collector_pn`` is supplied (the entry's identity -- an
+          entry with no durable PN can never confirm a binding);
+        - the handle is observed, non-conflicting, with a real negotiated wire;
+        - the handle itself carries a collector PN (an unidentified live session
+          can never confirm a binding).
+
+        The stored PN is the caller-supplied durable/preferred (fuller) PN, so a
+        later short/full enrichment keeps one stable identity. The identity match
+        between the durable PN and the handle's PN is enforced by the caller
+        (which owns the short/full reconciliation function).
+        """
+
+        durable = str(collector_pn or "").strip()
+        if not durable:
+            return None
+        if handle is None or not handle.observed or handle.conflict:
+            return None
+        if not handle.wire_framing or handle.wire_framing == WIRE_UNKNOWN:
+            return None
+        if not str(getattr(handle, "collector_pn", "") or "").strip():
+            return None
+        return cls(
+            collector_pn=durable,
+            wire_framing=handle.wire_framing,
+            collector_management_adapter=handle.collector_management_adapter,
+            inverter_forward_adapter=handle.inverter_forward_adapter,
+            proxy_adapter=handle.proxy_adapter,
+            identity_sources=handle.identity_sources,
+        )
+
+
 def _normalize_wire_signal(value: object) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in _FRAMED_STATES or normalized in _FRAMED_SHAPES:

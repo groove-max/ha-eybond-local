@@ -645,33 +645,33 @@
       "choices": [
         {
           "value": 0,
-          "label": "Off",
+          "label": "OFF",
           "order": 0,
-          "description": "Disable secondary charging priority."
+          "description": "Vendor mode OFF."
         },
         {
           "value": 1,
-          "label": "PV Priority",
+          "label": "SOF",
           "order": 1,
-          "description": "Prefer PV charging when solar power is available."
+          "description": "Vendor mode SOF."
         },
         {
           "value": 2,
-          "label": "PV and Utility",
+          "label": "SNU",
           "order": 2,
-          "description": "Allow both PV and utility charging."
+          "description": "Vendor mode SNU."
         },
         {
           "value": 3,
-          "label": "PV Only",
+          "label": "OSO",
           "order": 3,
-          "description": "Restrict charging to PV only."
+          "description": "Vendor mode OSO."
         },
         {
           "value": 4,
-          "label": "PV Priority With Load Reserve",
+          "label": "SOR",
           "order": 4,
-          "description": "Prefer PV charging while reserving PV for the load when needed."
+          "description": "Vendor mode SOR."
         }
       ]
     },

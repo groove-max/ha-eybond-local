@@ -1,0 +1,7 @@
+{
+  "extends": "./smg_6200.json",
+  "schema_key": "modbus_smg_anenji_anj_5kw_48v_wifi",
+  "title": "ANENJI ANJ-5KW-48V-WIFI Register Schema",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg"
+}

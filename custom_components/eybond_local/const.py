@@ -44,6 +44,12 @@ CONF_POLL_INTERVAL = "poll_interval"
 CONF_POLL_MODE = "poll_mode"
 CONF_DRIVER_HINT = "driver_hint"
 CONF_PROXY_CAPTURE_DURATION_MINUTES = "proxy_capture_duration_minutes"
+CONF_ENTRY_ROLE = "entry_role"
+
+# Integration-level config entry that keeps the passive callback listeners
+# loaded even when no collector/device entries exist. It owns no device,
+# coordinator, endpoint, or collector session.
+ENTRY_ROLE_LISTENER = "listener"
 
 DEFAULT_TCP_PORT = 8899
 DEFAULT_UDP_PORT = 58899

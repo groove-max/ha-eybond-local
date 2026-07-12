@@ -123,6 +123,77 @@ def _verifier(channel, sessions, **kwargs) -> InboundStrategyVerifier:
 
 
 class InboundStrategyVerifierTests(unittest.TestCase):
+    def test_reconnected_weak_session_is_probed_before_inbound_confirmation(self) -> None:
+        inventory = [_strong_old()]
+
+        class _RestartChannel(_FakeChannel):
+            async def async_send_restart(self) -> None:
+                await super().async_send_restart()
+                inventory[:] = [
+                    _session(
+                        NEW_SESSION,
+                        SHORT_PN,
+                        state="parked_no_payload_owner",
+                        strong=False,
+                    )
+                ]
+
+        probed: list[str] = []
+
+        async def _probe(session_id: str) -> None:
+            probed.append(session_id)
+            inventory[:] = [_session(NEW_SESSION, FULL_PN)]
+
+        result = asyncio.run(
+            _verifier(
+                _RestartChannel(),
+                lambda: tuple(inventory),
+                probe_reconnected_identity=_probe,
+            ).async_verify()
+        )
+
+        self.assertTrue(result.inbound_verified)
+        self.assertEqual(result.new_session_id, NEW_SESSION)
+        self.assertEqual(probed, [NEW_SESSION])
+
+    def test_read_only_identity_probe_enriches_weak_session_before_restart(self) -> None:
+        inventory = [
+            _session(
+                OLD_SESSION,
+                SHORT_PN,
+                state="identified_weak",
+                strong=False,
+            )
+        ]
+
+        class _ProbeChannel(_FakeChannel):
+            def __init__(self) -> None:
+                super().__init__()
+                self.identity_probe_calls = 0
+
+            async def async_probe_identity(self) -> str:
+                self.identity_probe_calls += 1
+                inventory[:] = [_strong_old(FULL_PN)]
+                return FULL_PN
+
+            async def async_send_restart(self) -> None:
+                await super().async_send_restart()
+                inventory[:] = [_session(NEW_SESSION, FULL_PN)]
+
+        channel = _ProbeChannel()
+        result = asyncio.run(
+            _verifier(
+                channel,
+                lambda: tuple(inventory),
+                collector_pn=SHORT_PN,
+            ).async_verify()
+        )
+
+        self.assertTrue(result.inbound_verified)
+        self.assertEqual(result.collector_pn, FULL_PN)
+        self.assertEqual(channel.identity_probe_calls, 1)
+        self.assertEqual(channel.restart_calls, 1)
+
     # Full sequence: strong session -> baseline -> restart -> disconnect ->
     # new non-baseline session, same full PN, ledger unchanged -> inbound.
     def test_full_sequence_verifies_inbound(self) -> None:

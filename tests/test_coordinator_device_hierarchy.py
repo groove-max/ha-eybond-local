@@ -155,6 +155,8 @@ def _install_coordinator_stubs() -> None:
         "home_assistant_only",
     )
     const.CONF_CONNECTION_STRATEGY = "connection_strategy"
+    const.CONF_CONNECTION_STRATEGY_EVIDENCE = "connection_strategy_evidence"
+    const.CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT = "reboot_reconnect"
     const.CONNECTION_STRATEGY_INBOUND = "inbound"
     const.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND = "callback_on_demand"
     const.CONNECTION_STRATEGIES = {"inbound", "callback_on_demand"}
@@ -5176,6 +5178,124 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(coordinator.data.inverter.capabilities, (capability,))
         self.assertEqual(coordinator.data.inverter.capability_groups, (group,))
+
+    def test_prime_startup_restores_high_confidence_auto_model_from_catalog(self) -> None:
+        capability = types.SimpleNamespace(key="output_source_priority")
+        group = types.SimpleNamespace(key="power_source")
+        profile = types.SimpleNamespace(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            groups=(group,),
+            capabilities=(capability,),
+            presets=(),
+        )
+        register_schema = types.SimpleNamespace(driver_key="modbus_smg")
+        surface = types.SimpleNamespace(
+            driver_key="modbus_smg",
+            variant_key="anenji_anj_11kw_48v_wifi_p",
+            profile_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            register_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        driver = types.SimpleNamespace(
+            key="modbus_smg",
+            probe_targets=(
+                self.coordinator_module.ProbeTarget(
+                    devcode=1,
+                    collector_addr=255,
+                    device_addr=1,
+                ),
+            ),
+        )
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "connection_type": "eybond",
+                "control_mode": "auto",
+                "detected_model": "Anenji ANJ-11KW-48V-WIFI-P",
+                "detected_serial": "92B32500004401",
+                "detection_confidence": "high",
+                "driver_hint": "auto",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        coordinator._connection_spec = types.SimpleNamespace(
+            collector_ip="192.0.2.11",
+            collector_pn="E5000SYNTHETIC5507",
+            collector_cloud_family="smartess_at",
+            server_ip="192.0.2.56",
+            tcp_port=8899,
+            effective_advertised_server_ip="192.0.2.56",
+            effective_advertised_tcp_port=8899,
+        )
+
+        with (
+            patch.object(
+                self.coordinator_module,
+                "resolve_unique_full_model_surface",
+                return_value=(types.SimpleNamespace(), surface),
+            ),
+            patch.object(self.coordinator_module, "get_driver", return_value=driver),
+            patch.object(
+                self.coordinator_module,
+                "load_driver_profile",
+                return_value=profile,
+            ),
+            patch.object(
+                self.coordinator_module,
+                "load_register_schema",
+                return_value=register_schema,
+            ),
+        ):
+            primed = coordinator.prime_startup_snapshot()
+
+        self.assertTrue(primed)
+        inverter = coordinator.data.inverter
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.driver_key, "modbus_smg")
+        self.assertEqual(inverter.variant_key, "anenji_anj_11kw_48v_wifi_p")
+        self.assertEqual(inverter.capabilities, (capability,))
+        self.assertEqual(
+            inverter.details["runtime_detection_status"],
+            "persisted_model_probe_degraded",
+        )
+        self.assertEqual(
+            inverter.details["identity_source"], "persisted_detected_model"
+        )
+        self.assertEqual(
+            coordinator.data.values["runtime_driver_state"], "driver_bound"
+        )
+        self.assertEqual(
+            coordinator.data.values["effective_profile_name"],
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertEqual(
+            coordinator.data.values["effective_variant_key"],
+            "anenji_anj_11kw_48v_wifi_p",
+        )
+        self.assertEqual(
+            coordinator.data.values["effective_inverter_capability_count"], 1
+        )
+
+    def test_prime_startup_catalog_fallback_requires_high_confidence(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "detected_model": "Anenji ANJ-11KW-48V-WIFI-P",
+                "detection_confidence": "medium",
+                "driver_hint": "auto",
+            },
+            options={},
+        )
+
+        with patch.object(
+            self.coordinator_module, "resolve_unique_full_model_surface"
+        ) as resolver:
+            inverter = coordinator._prime_startup_inverter_from_persisted_metadata()
+
+        self.assertIsNone(inverter)
+        resolver.assert_not_called()
 
     def test_prime_startup_snapshot_adds_persisted_inverter_when_values_already_exist(self) -> None:
         capability = types.SimpleNamespace(key="output_source_priority")

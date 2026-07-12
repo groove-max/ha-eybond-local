@@ -182,6 +182,41 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
 
 
 class CallbackSessionRegistryInvariantTests(unittest.TestCase):
+    def test_owned_session_location_excludes_parked_peer_closed_socket(self) -> None:
+        sessions = [
+            _session(
+                "s-closed",
+                "V00AAA1111111111",
+                state="parked_peer_closed",
+            ),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        registry.claim("entry-1", collector_pn="V00AAA1111111111")
+
+        self.assertIsNone(registry.owned_session_location("entry-1"))
+
+    def test_current_session_for_pn_rebinds_to_latest_replacement_socket(self) -> None:
+        sessions = [
+            _session("s-old", "V00AAA1111111111", state="routed_framed"),
+            _session("s-new", "V00AAA1111111111", state="routed_framed"),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+
+        current = registry.current_session_for_pn("V00AAA1111111111")
+
+        self.assertIsNotNone(current)
+        self.assertEqual(current.session_id, "s-new")
+
+    def test_weak_current_session_lookup_does_not_follow_longer_prefix(self) -> None:
+        sessions = [
+            _session("s-full", "V00AAA1111111111", state="routed_framed"),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+
+        self.assertIsNone(
+            registry.current_session_for_pn("V00AAA1111", require_exact=True)
+        )
+
     def test_transient_session_claim_owns_only_that_session(self) -> None:
         # Two WEAK sessions sharing a PN prefix: a transient claim of one must
         # not start owning the other (no weak PN is copied into durable
@@ -226,6 +261,48 @@ class CallbackSessionRegistryInvariantTests(unittest.TestCase):
         # A session whose identity is durably owned cannot be transiently claimed.
         with self.assertRaises(ValueError):
             registry.claim_session("verify-4", session_id="s-2")
+
+    def test_verification_claim_retargets_only_after_old_session_closes(self) -> None:
+        sessions = [
+            _session("s-old", "V00AAA1111111111", state="routed_framed"),
+            _session(
+                "s-new",
+                "V00AAA1111",
+                source="heartbeat",
+                state="parked_no_payload_owner",
+            ),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        registry.claim_session("verify-1", session_id="s-old")
+        registry.promote_claim_to_full_pn("verify-1", "V00AAA1111111111")
+
+        with self.assertRaises(ValueError):
+            registry.retarget_claim_to_reconnected_session("verify-1", "s-new")
+
+        sessions[0]["state"] = "closed_disconnected"
+        self.assertTrue(
+            registry.retarget_claim_to_reconnected_session("verify-1", "s-new")
+        )
+        self.assertEqual(registry.claimed_session_id("verify-1"), "s-new")
+
+    def test_verification_claim_never_retargets_to_different_identity(self) -> None:
+        sessions = [
+            _session("s-old", "V00AAA1111111111", state="closed_disconnected"),
+            _session(
+                "s-other",
+                "V00BBB2222",
+                source="heartbeat",
+                state="parked_no_payload_owner",
+            ),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        registry.claim_session("verify-1", session_id="s-old")
+        registry.promote_claim_to_full_pn("verify-1", "V00AAA1111111111")
+
+        self.assertFalse(
+            registry.retarget_claim_to_reconnected_session("verify-1", "s-other")
+        )
+        self.assertEqual(registry.claimed_session_id("verify-1"), "s-old")
 
     def test_two_collectors_one_peer_ip_distinct_when_pn_differs(self) -> None:
         sessions = [

@@ -21,9 +21,14 @@ from ..connection.session_handle import (
     ADAPTER_NONE,
     ADAPTER_INVERTER_FRAMED_FC4,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
+    ConfirmedWireBinding,
     SessionHandle,
 )
-from ..connection.session_registry import CallbackSessionRegistry, reconcile_pn
+from ..connection.session_registry import (
+    CallbackSessionRegistry,
+    pn_is_same_identity,
+    reconcile_pn,
+)
 from ..collector.transport import (
     CollectorAtTransport,
     CollectorListenerBindError,
@@ -282,14 +287,26 @@ def _callback_identity_status_values(
     sessions: list[dict[str, object]],
     expects_collector_identity: bool = False,
     owned_session_observed: bool = False,
+    handover_in_progress: bool = False,
 ) -> dict[str, object]:
-    """Return compact, user-facing callback identity diagnostics."""
+    """Return compact, user-facing callback identity diagnostics.
+
+    ``owned_session_observed`` means we hold a confirmed binding or a current
+    live session; ``handover_in_progress`` means we hold a confirmed binding but
+    its live socket is momentarily absent. A ``conflict`` is reported ONLY on
+    positive evidence -- a ``route_identity_mismatch`` state (the listener proved
+    a different collector answered on our route). A merely-identified foreign
+    session on a shared listener is unresolved/unowned, never a conflict for this
+    entry (two collectors behind one peer IP each keep their own identity). A
+    normal same-collector socket replacement is reported as ``reconnecting``.
+    """
 
     identified_count = 0
     unresolved_count = 0
     mismatch_count = 0
     timeout_count = 0
     waiting_count = 0
+    foreign_identified_count = 0
     pending_states = {
         "pending",
         "waiting_for_identity",
@@ -299,6 +316,12 @@ def _callback_identity_status_values(
         state = str(session.get("state") or "").strip()
         if session.get("collector_identity_masked"):
             identified_count += 1
+            # An identified session that our entry does not own is a foreign
+            # collector sharing the listener, not a conflict. Ownership is
+            # decided by the registry (durable PN), never by presence here.
+            if expects_collector_identity and not owned_session_observed:
+                foreign_identified_count += 1
+                unresolved_count += 1
             continue
         if state == "route_identity_mismatch":
             mismatch_count += 1
@@ -312,18 +335,15 @@ def _callback_identity_status_values(
             waiting_count += 1
             unresolved_count += 1
 
-    if (
-        expects_collector_identity
-        and identified_count > 0
-        and not owned_session_observed
-    ):
-        mismatch_count += identified_count
-        unresolved_count += identified_count
-
     if mismatch_count:
         status = "conflict"
         summary = (
             "A collector callback was identified, but it does not match the expected collector PN."
+        )
+    elif handover_in_progress:
+        status = "reconnecting"
+        summary = (
+            "The collector is replacing its connection; the previously confirmed session is being handed over."
         )
     elif pending_count <= 0:
         status = "idle"
@@ -339,6 +359,11 @@ def _callback_identity_status_values(
     elif waiting_count:
         status = "unresolved"
         summary = "A collector callback is pending, but the collector identity is not known yet."
+    elif foreign_identified_count:
+        status = "unresolved"
+        summary = (
+            "An identified collector callback is not owned by this entry (another collector on the shared listener)."
+        )
     else:
         status = "ok"
         summary = "Pending collector callbacks have a known collector identity."
@@ -347,6 +372,7 @@ def _callback_identity_status_values(
         "collector_callback_identity_status": status,
         "collector_callback_identity_summary": summary,
         "collector_callback_identified_session_count": identified_count,
+        "collector_callback_foreign_identified_session_count": foreign_identified_count,
         "collector_callback_unresolved_session_count": unresolved_count,
         "collector_callback_identity_mismatch_count": mismatch_count,
         "collector_callback_identity_timeout_count": timeout_count,
@@ -469,6 +495,27 @@ class EybondRuntimeLinkManager:
         # listener internals or to pick a wire.
         self._callback_ownership_registry: CallbackSessionRegistry | None = None
         self._callback_entry_id: str = ""
+        # A collector can move between already-open shared listeners while a
+        # long inverter detection is running.  Track the owned socket identity
+        # independently of polling so callers can invalidate work tied to the
+        # replaced session.  The token contains only registry-owned session
+        # identity/location -- never peer IP, endpoint, or collector type.
+        self._owned_session_generation = 0
+        self._owned_session_fingerprint: tuple[str, int] = ("", 0)
+        self._owned_session_changed = asyncio.Event()
+        self._owned_session_monitor_task: asyncio.Task[None] | None = None
+        # Confirmed wire binding. A collector reconnect briefly leaves NO live
+        # session observed (the new socket is parked/identified but not yet
+        # routed). Absence of a live session is NOT evidence that the wire,
+        # adapters, driver, or identity changed -- it is a session handover. Once
+        # a trusted live SessionHandle has been observed, its DURABLE wire facts
+        # are adopted into this immutable binding (never the transient socket
+        # metadata), so cloud-family/persisted bootstrap cannot momentarily win
+        # during the gap and trigger a destructive framed->at_text->framed
+        # transport rebuild. It is written ONLY by the explicit lifecycle path
+        # ``_adopt_trusted_live_binding`` (never by a diagnostics/accessor read),
+        # from positive non-contradictory live evidence.
+        self._confirmed_wire_binding: ConfirmedWireBinding | None = None
         if server_ip and self._effective_server_ip and self._effective_server_ip != server_ip:
             logger.warning(
                 "Configured EyeBond server_ip %s is not active on this host; falling back to %s",
@@ -501,9 +548,93 @@ class EybondRuntimeLinkManager:
         self._apply_collector_connection_watcher()
 
     def _apply_collector_connection_watcher(self) -> None:
-        set_watcher = getattr(self._transport, "set_connection_watcher", None)
-        if callable(set_watcher):
-            set_watcher(self._collector_connection_watcher)
+        for transport in (
+            self._transport,
+            *self._auxiliary_transports.values(),
+        ):
+            set_watcher = getattr(transport, "set_connection_watcher", None)
+            if callable(set_watcher):
+                set_watcher(self._collector_connection_watcher)
+
+    def _current_owned_session_fingerprint(self) -> tuple[str, int]:
+        """Return the owned socket identity used to invalidate stale work."""
+
+        session = self._owned_domain_session()
+        if session is None:
+            return ("", 0)
+        return (
+            str(getattr(session, "session_id", "") or ""),
+            int(getattr(session, "listener_port", 0) or 0),
+        )
+
+    @property
+    def owned_session_generation(self) -> int:
+        """Return the generation of the currently owned inbound socket."""
+
+        return self._owned_session_generation
+
+    async def async_wait_for_owned_session_change(self, generation: int) -> None:
+        """Wait until registry ownership moves to another live socket.
+
+        This is used to cancel inverter detection that was started against a
+        socket which has since disconnected or been replaced on another shared
+        listener.  The background monitor is the event source; this method does
+        not inspect listener internals.
+        """
+
+        while self._owned_session_generation == int(generation):
+            self._owned_session_changed.clear()
+            if self._owned_session_generation != int(generation):
+                return
+            await self._owned_session_changed.wait()
+
+    def _start_owned_session_monitor(self) -> None:
+        if self._owned_session_monitor_task is not None:
+            return
+        if not self._domain_ownership_active():
+            return
+        self._owned_session_fingerprint = self._current_owned_session_fingerprint()
+        self._owned_session_monitor_task = asyncio.create_task(
+            self._async_owned_session_monitor(),
+            name=f"eybond_owned_session_{self._callback_entry_id}",
+        )
+
+    async def _stop_owned_session_monitor(self) -> None:
+        task = self._owned_session_monitor_task
+        self._owned_session_monitor_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _async_owned_session_monitor(self) -> None:
+        """Observe registry-owned socket replacement across shared listeners."""
+
+        while True:
+            await asyncio.sleep(0.2)
+            fingerprint = self._current_owned_session_fingerprint()
+            if fingerprint == self._owned_session_fingerprint:
+                continue
+            self._owned_session_fingerprint = fingerprint
+            self._owned_session_generation += 1
+            # A newly-observed owned socket is an explicit session event: adopt
+            # its trusted wire as the confirmed binding here (not on any read).
+            self._adopt_trusted_live_binding()
+            self._owned_session_changed.set()
+            if fingerprint[0] and self._collector_connection_watcher is not None:
+                session = self._owned_domain_session()
+                try:
+                    self._collector_connection_watcher(
+                        str(getattr(session, "peer_ip", "") or "")
+                    )
+                except Exception:
+                    logger.debug(
+                        "Owned-session connection watcher failed",
+                        exc_info=True,
+                    )
 
     def clear_discovery_reply(self) -> None:
         """Drop the remembered UDP discovery reply.
@@ -667,9 +798,53 @@ class EybondRuntimeLinkManager:
 
         return self._listener_last_error
 
+    def _current_live_session_state(self) -> str:
+        """Return the current real session state for diagnostics (pure read).
+
+        ``SessionHandle`` always describes the CURRENT socket; this collapses it
+        to a coarse, honest label separate from the confirmed wire binding.
+        """
+
+        handle = self._live_session_handle()
+        if handle.conflict:
+            return "conflict"
+        if handle.observed:
+            return "active"
+        if str(getattr(handle, "session_id", "") or "").strip():
+            return "pending"
+        return "absent"
+
     def listener_diagnostics(self) -> dict[str, object]:
         """Return listener bind and advertised endpoint diagnostics."""
 
+        # Report the CURRENT live session and the CONFIRMED wire binding as two
+        # separate facts. The effective wire/adapters describe how the runtime
+        # routes RIGHT NOW: the live session when observed, otherwise the
+        # confirmed binding (so a mid-handover support bundle shows framed_fc4,
+        # not a momentary "unknown"). ``adapter_conflict`` reflects the CURRENT
+        # live conflict only (fail-closed signal), never the binding.
+        live_handle = self._live_session_handle()
+        binding = self._effective_wire_binding()
+        live_effective = live_handle.observed and not live_handle.conflict
+        if live_effective:
+            eff_wire = live_handle.wire_framing
+            eff_sources = live_handle.identity_sources
+            eff_mgmt = live_handle.collector_management_adapter
+            eff_forward = live_handle.inverter_forward_adapter
+            eff_proxy = live_handle.proxy_adapter
+        elif binding is not None:
+            eff_wire = binding.wire_framing
+            eff_sources = binding.identity_sources
+            eff_mgmt = binding.collector_management_adapter
+            eff_forward = binding.inverter_forward_adapter
+            eff_proxy = binding.proxy_adapter
+        else:
+            eff_wire = live_handle.wire_framing
+            eff_sources = live_handle.identity_sources
+            eff_mgmt = live_handle.collector_management_adapter
+            eff_forward = live_handle.inverter_forward_adapter
+            eff_proxy = live_handle.proxy_adapter
+        current_live_session = self._current_live_session_state()
         diagnostics: dict[str, object] = {
             "collector_listener_status": self._listener_status,
             "collector_listener_bind_host": self._listener_bind_host,
@@ -684,18 +859,17 @@ class EybondRuntimeLinkManager:
             "collector_callback_observed_session_protocol": (
                 self._owned_observed_session_protocol()
             ),
-            "collector_callback_wire_framing": self.session_handle.wire_framing,
-            "collector_callback_identity_sources": ", ".join(
-                sorted(self.session_handle.identity_sources)
+            # Current real session vs confirmed binding, reported separately.
+            "collector_current_live_session": current_live_session,
+            "collector_confirmed_wire_binding": (
+                binding.wire_framing if binding is not None else "none"
             ),
-            "collector_callback_collector_management_adapter": (
-                self.session_handle.collector_management_adapter
-            ),
-            "collector_callback_inverter_forward_adapter": (
-                self.session_handle.inverter_forward_adapter
-            ),
-            "collector_callback_proxy_adapter": self.session_handle.proxy_adapter,
-            "collector_callback_adapter_conflict": self.session_handle.conflict,
+            "collector_callback_wire_framing": eff_wire,
+            "collector_callback_identity_sources": ", ".join(sorted(eff_sources)),
+            "collector_callback_collector_management_adapter": eff_mgmt,
+            "collector_callback_inverter_forward_adapter": eff_forward,
+            "collector_callback_proxy_adapter": eff_proxy,
+            "collector_callback_adapter_conflict": live_handle.conflict,
             "collector_callback_identity_strategy": self._collector_identity_strategy,
             "collector_callback_raw_passthrough_bootstrap": (
                 self._collector_raw_passthrough_bootstrap
@@ -707,23 +881,81 @@ class EybondRuntimeLinkManager:
                 self._collector_raw_passthrough_min_interval_ms
             ),
         }
+        diagnostics.update(self._session_ownership_diagnostics())
         diagnostics.update(self._session_inventory_diagnostics())
         diagnostics.update(self.callback_trigger_diagnostics())
         return diagnostics
 
-    def _owned_observed_session_protocol(self) -> str:
-        """Return the observed session protocol for this entry's claimed session.
+    def _session_ownership_diagnostics(self) -> dict[str, object]:
+        """Return domain transport-ownership diagnostics for the support bundle.
 
-        Derived from the registry-negotiated live SessionHandle (which excludes
-        route-identity-mismatch / not-yet-routed sessions), not from a direct
-        scan of listener internals. Empty when nothing trustworthy is observed.
+        Makes the end-to-end ownership chain auditable: which entry claim the
+        domain registry resolved, the exact claimed session id, the listener
+        port the collector actually dialed, the primary configured port, and the
+        listener port of the transport currently carrying the connection.
+        """
+
+        domain_active = self._domain_ownership_active()
+        session = self._owned_domain_session() if domain_active else None
+        active_port = 0
+        if getattr(self, "_transport", None) is not None and self._transport.connected:
+            active_port = self._tcp_port
+        else:
+            for port in sorted(getattr(self, "_auxiliary_listener_ports", ()) or ()):
+                transport = self._auxiliary_transports.get(port)
+                if transport is not None and transport.connected:
+                    active_port = port
+                    break
+            else:
+                for port, transport in sorted(
+                    (getattr(self, "_auxiliary_at_transports", {}) or {}).items()
+                ):
+                    if transport is not None and transport.connected:
+                        active_port = port
+                        break
+        ownership_state = "no_domain_registry"
+        if domain_active:
+            if session is not None:
+                ownership_state = str(getattr(session, "state", "") or "observed")
+            else:
+                ownership_state = "no_owned_session"
+        return {
+            "collector_session_ownership_authority": (
+                "domain_registry" if domain_active else "runtime_registry"
+            ),
+            "collector_session_claim_entry_id": (
+                self._callback_entry_id if domain_active else ""
+            ),
+            "collector_claimed_session_id": (
+                str(getattr(session, "session_id", "") or "") if session else ""
+            ),
+            "collector_claimed_listener_port": (
+                int(getattr(session, "listener_port", 0) or 0) if session else 0
+            ),
+            "collector_primary_tcp_port": self._tcp_port,
+            "collector_active_listener_port": active_port,
+            "collector_session_ownership_state": ownership_state,
+        }
+
+    def _owned_observed_session_protocol(self) -> str:
+        """Return the effective observed session protocol for this entry (pure read).
+
+        A trusted current live session reports its own protocol. During a
+        transient gap (or a live conflict) the CONFIRMED wire binding is
+        reported, so the coordinator never sees "" and never lets cloud-family
+        bootstrap flip the profile to at_text mid-handover. Empty only before any
+        live wire has ever been confirmed.
         """
 
         handle = self._live_session_handle()
-        if handle.uses_framed_wire:
-            return "eybond_framed"
-        if handle.uses_at_text_wire:
-            return "at_text"
+        if not handle.conflict:
+            if handle.uses_framed_wire:
+                return "eybond_framed"
+            if handle.uses_at_text_wire:
+                return "at_text"
+        binding = self._effective_wire_binding()
+        if binding is not None:
+            return binding.session_protocol
         return ""
 
     def _session_inventory_diagnostics(self) -> dict[str, object]:
@@ -760,6 +992,14 @@ class EybondRuntimeLinkManager:
             "collector_callback_duplicate_peer_ips": ", ".join(sorted(duplicate_peer_ips)),
             "collector_callback_session_inventory": sessions,
         }
+        # A conflict is reported only on POSITIVE evidence (a
+        # ``route_identity_mismatch`` state in the inventory). ``reconnecting`` is
+        # reported only during a GENUINE handover -- a confirmed binding plus an
+        # owned pending/new socket the registry can see (a fully offline
+        # collector is idle, not endlessly reconnecting). A foreign identified
+        # session on a shared listener is unresolved/unowned, never a conflict.
+        binding = self._effective_wire_binding()
+        live = self._live_session_handle()
         result.update(
             _callback_identity_status_values(
                 pending_count=pending_count,
@@ -767,7 +1007,8 @@ class EybondRuntimeLinkManager:
                 duplicate_peer_ip_count=duplicate_peer_ip_count,
                 sessions=sessions,
                 expects_collector_identity=bool(str(self._collector_pn or "").strip()),
-                owned_session_observed=bool(self.session_handle.observed),
+                owned_session_observed=bool(binding is not None or live.observed),
+                handover_in_progress=self._handover_in_progress(),
             )
         )
         return result
@@ -788,6 +1029,7 @@ class EybondRuntimeLinkManager:
         self._started = True
         self._listener_status = "listening"
         self._listener_last_error = ""
+        self._start_owned_session_monitor()
         # Phase 3: no continuous announcer. callback_on_demand sends a one-shot
         # trigger per connect attempt (async_try_connect); nothing runs here.
         await self._announcer.stop()
@@ -844,6 +1086,51 @@ class EybondRuntimeLinkManager:
         ):
             return False
 
+        # A live conflict (contradictory wire observation) blocks any profile
+        # rebuild until new NON-contradictory positive live evidence appears.
+        # Tearing transports down on top of a conflict, on a cloud-family guess,
+        # would both destroy a working listener and act on evidence we have
+        # explicitly rejected. The conflict is preserved; the bootstrap is not
+        # applied.
+        live = self._live_session_handle()
+        if live.conflict:
+            logger.debug(
+                "Ignoring session-profile reconcile after %s: live session is in "
+                "an unresolved wire conflict (%s); preserving the confirmed wire",
+                reason or "collector_session_profile_change",
+                live.conflict,
+            )
+            return False
+
+        # Live session handover is NOT a profile change. The confirmed wire
+        # binding is the authority: a reconcile request whose protocol
+        # contradicts it is a cloud-family/persisted bootstrap guess (e.g.
+        # smartess_at implying at_text) filling the momentary gap while a same-PN
+        # socket reconnects. Tearing down transports for it caused the
+        # framed->at_text->framed flap and the ~17s re-onboarding. Only rebuild
+        # when either no live wire has ever been confirmed (genuine
+        # pre-observation bootstrap) or the link currently observes the requested
+        # protocol live (positive live evidence). This is the bootstrap/handover
+        # split; steady-state live wire changes go through set_negotiated_wire,
+        # not a rebuild.
+        binding = self._effective_wire_binding()
+        confirmed_protocol = binding.session_protocol if binding is not None else ""
+        if (
+            confirmed_protocol
+            and normalized_protocol
+            and normalized_protocol != confirmed_protocol
+            and self._raw_live_observed_protocol() != normalized_protocol
+        ):
+            logger.debug(
+                "Ignoring session-profile reconcile after %s: requested protocol %s "
+                "contradicts the confirmed live wire %s with no live evidence "
+                "(transient reconnect handover, not a profile change)",
+                reason or "collector_session_profile_change",
+                normalized_protocol or "unknown",
+                confirmed_protocol,
+            )
+            return False
+
         logger.warning(
             "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s, raw_bootstrap %s -> %s, raw_frame %s -> %s, raw_min_interval_ms %s -> %s; rebuilding transport",
             reason or "collector_session_profile_change",
@@ -892,6 +1179,7 @@ class EybondRuntimeLinkManager:
     async def async_stop(self) -> None:
         """Stop discovery and the active link transport."""
 
+        await self._stop_owned_session_monitor()
         await self.async_stop_proxy_capture_route(force=True)
         await self.async_stop_shadow_learning_route(force=True)
         await self._announcer.stop()
@@ -914,6 +1202,7 @@ class EybondRuntimeLinkManager:
             )
             self._auxiliary_transports[requested_port] = payload_transport
             self._auxiliary_at_transports[requested_port] = at_transport
+            self._apply_collector_connection_watcher()
 
         try:
             await self._auxiliary_transports[requested_port].start()
@@ -963,11 +1252,17 @@ class EybondRuntimeLinkManager:
         registry: CallbackSessionRegistry | None,
         entry_id: str,
     ) -> None:
-        """Inject the domain callback-session registry + this entry id (read-only).
+        """Inject the domain callback-session registry + this entry id.
 
-        Used only to classify the ``callback_session_claimed_by_other_entry``
-        outcome (is a matching session already owned by a *different* entry?). It
-        is never used to read listener internals or to select a wire.
+        The domain registry (the one passive discovery feeds from EVERY shared
+        listener in the process) is the single transport-ownership authority:
+        when it is installed, the runtime resolves its owned live SessionHandle,
+        the exact claimed session id, and the listener port the collector
+        actually dialed from it -- under the REAL config entry id claimed at
+        setup. It never reads listener internals; ownership stays PN/session
+        based (peer IP is never a key). Without a domain registry (standalone
+        hubs, unit tests) the runtime falls back to its own listener-scoped
+        registry, so the two ownership paths are never active at the same time.
         """
 
         self._callback_ownership_registry = registry
@@ -1041,10 +1336,10 @@ class EybondRuntimeLinkManager:
             return CALLBACK_STATE_LISTENER_UNAVAILABLE, self._listener_status
         collector_pn = str(self._collector_pn or "").strip()
         if collector_pn:
-            handle = self._live_session_handle()
-            if handle.observed:
-                # Our session is here but we did not connect: a different entry
-                # already owns this identity in the domain registry -> conflict.
+            if self._matching_live_session_exists(collector_pn):
+                # Our collector's session is here but we did not connect: when a
+                # DIFFERENT entry owns this identity in the domain registry, the
+                # claim (not the network) is what blocked us -> typed conflict.
                 owner = self._callback_ownership_owner_for_pn(collector_pn)
                 if owner and self._callback_entry_id and owner != self._callback_entry_id:
                     return CALLBACK_STATE_CLAIMED_BY_OTHER, owner
@@ -1052,6 +1347,40 @@ class EybondRuntimeLinkManager:
             if self._observed_foreign_session_exists(collector_pn):
                 return CALLBACK_STATE_IDENTITY_MISMATCH, ""
         return CALLBACK_STATE_TIMEOUT, ""
+
+    def _matching_live_session_exists(self, collector_pn: str) -> bool:
+        """Return whether ANY live session of this durable identity is observed.
+
+        Ownership-independent on purpose: classification must see the session
+        even when a different entry owns it (that is exactly the
+        claimed-by-other-entry outcome). Domain registry first (all shared
+        listeners), else this runtime's own listener-scoped view.
+        """
+
+        from ..connection.session_registry import pn_is_same_identity
+
+        registry = getattr(self, "_callback_ownership_registry", None)
+        if registry is not None:
+            try:
+                sessions = registry.observed_sessions_per_socket()
+            except Exception:
+                sessions = ()
+            for session in sessions:
+                state = str(getattr(session, "state", "") or "").strip().lower()
+                if state.startswith("closed"):
+                    continue
+                if pn_is_same_identity(
+                    collector_pn, str(getattr(session, "collector_pn", "") or "")
+                ):
+                    return True
+        # This runtime's own listeners are real observations too (the domain
+        # registry may not cover every listener in test/standalone setups).
+        for session in self._session_registry.observed_sessions():
+            if pn_is_same_identity(
+                collector_pn, str(session.collector_pn or "")
+            ):
+                return True
+        return False
 
     def _record_callback_state(self, state: str, detail: str = "") -> None:
         self._last_callback_state = state
@@ -1440,6 +1769,45 @@ class EybondRuntimeLinkManager:
         )
         await self._disconnect_all_transports()
 
+    async def _async_follow_owned_session_listener(self) -> None:
+        """Attach a transport facade to the listener the owned session lives on.
+
+        The primary configured tcp_port stays the callback target/fallback, but
+        it must not limit ownership of an already-accepted PN session: when the
+        domain registry shows this entry's collector on a DIFFERENT shared
+        listener port, bring up the auxiliary facade for that port so the claim
+        can activate exactly that socket. The port comes ONLY from a live
+        observed owned session (never from the endpoint hostname, peer IP, or
+        collector type), and the facade attaches to the already-running shared
+        listener -- it does not open arbitrary ports.
+        """
+
+        session = self._owned_domain_session()
+        if session is None:
+            return
+        port = int(getattr(session, "listener_port", 0) or 0)
+        if port <= 0 or port == self._tcp_port:
+            return
+        already_prepared = port in self._auxiliary_listener_ports
+        try:
+            await self.async_ensure_callback_listener(port)
+        except Exception as exc:
+            logger.debug(
+                "Could not attach facade to owned-session listener %s: %s",
+                port,
+                exc,
+            )
+            return
+        if not already_prepared:
+            logger.info(
+                "Following owned collector session %s to listener port %s (primary %s)",
+                str(getattr(session, "session_id", "") or "unknown"),
+                port,
+                self._tcp_port,
+            )
+            # New facades must receive the negotiated wire + exact claim target.
+            self._apply_live_wire_to_transports()
+
     async def async_try_connect(
         self,
         *,
@@ -1448,6 +1816,11 @@ class EybondRuntimeLinkManager:
     ) -> bool:
         """Try to ensure a live collector connection without raising on timeout."""
 
+        # Transport ownership end-to-end: if the domain registry shows this
+        # entry's owned session on another already-running shared listener,
+        # attach the facade there BEFORE waiting, so inbound entries connect to
+        # the socket the collector actually opened (no UDP involved).
+        await self._async_follow_owned_session_listener()
         self._apply_live_wire_to_transports()
 
         # callback_on_demand: send exactly ONE UDP callback trigger for this
@@ -1470,6 +1843,9 @@ class EybondRuntimeLinkManager:
 
             await self._announcer.stop()
             self._note_callback_connected()
+            # A freshly-connected session is positive live evidence: adopt its
+            # trusted wire now so the confirmed binding survives the next gap.
+            self._adopt_trusted_live_binding()
             return self.connected
 
         if not self.connected:
@@ -1480,6 +1856,9 @@ class EybondRuntimeLinkManager:
 
         # The callback session itself connected; heartbeat is a separate concern.
         self._note_callback_connected()
+        # A freshly-connected session is positive live evidence: adopt its
+        # trusted wire now so the confirmed binding survives the next gap.
+        self._adopt_trusted_live_binding()
 
         if require_heartbeat:
             heartbeat_ok = await self._async_wait_for_payload_heartbeat(timeout=min(timeout, 1.5))
@@ -1599,14 +1978,136 @@ class EybondRuntimeLinkManager:
             return transport
         return None
 
+    def _adopt_trusted_live_binding(self) -> None:
+        """Adopt the current trusted live wire as the confirmed binding.
+
+        This is the ONLY writer of ``_confirmed_wire_binding``. It is an explicit
+        lifecycle step (called from the connect path and the owned-session
+        monitor), never a side effect of a diagnostics/accessor read. A trusted
+        observed handle of the same durable identity is adopted as an immutable
+        ``ConfirmedWireBinding`` (durable wire facts only, no socket metadata).
+        A conflict or an unobserved handle changes nothing. A stale binding for a
+        now-different durable identity is dropped.
+        """
+
+        durable_pn = str(self._collector_pn or "").strip()
+        handle = self._live_session_handle()
+        live_pn = str(getattr(handle, "collector_pn", "") or "").strip()
+        # Invariant: a confirmed binding requires a durable ENTRY PN AND a live
+        # session PN of the SAME short/full identity. An unidentified live
+        # session, an entry without a durable PN, or a foreign live identity can
+        # never create or overwrite the binding. The stored PN is the preferred
+        # (fuller) of the two, so a later short/full enrichment stays one
+        # identity.
+        if durable_pn and live_pn and pn_is_same_identity(durable_pn, live_pn):
+            preferred_pn = reconcile_pn(durable_pn, live_pn)
+            binding = ConfirmedWireBinding.from_handle(handle, collector_pn=preferred_pn)
+            if binding is not None:
+                self._confirmed_wire_binding = binding
+                return
+        # No positive evidence to adopt. Never overwrite an existing binding with
+        # a foreign/absent identity; only drop one left over from a rebind to a
+        # genuinely different durable identity.
+        existing = getattr(self, "_confirmed_wire_binding", None)
+        if existing is not None and durable_pn:
+            if not existing.collector_pn or not pn_is_same_identity(
+                durable_pn, existing.collector_pn
+            ):
+                self._confirmed_wire_binding = None
+
+    def _effective_wire_binding(self) -> ConfirmedWireBinding | None:
+        """Return the confirmed wire binding for this collector (pure read).
+
+        Never mutates runtime state. Returns ``None`` when nothing has been
+        confirmed yet, or when the stored binding belongs to a now-different
+        durable identity (defensively ignored without rewriting the field).
+        """
+
+        binding = getattr(self, "_confirmed_wire_binding", None)
+        if binding is None:
+            return None
+        # A binding must carry a durable PN (the adoption invariant guarantees
+        # this); a PN-less binding is never trusted.
+        if not str(getattr(binding, "collector_pn", "") or "").strip():
+            return None
+        collector_pn = str(self._collector_pn or "").strip()
+        if (
+            collector_pn
+            and binding.collector_pn
+            and not pn_is_same_identity(collector_pn, binding.collector_pn)
+        ):
+            return None
+        return binding
+
+    def has_confirmed_wire_binding(self) -> bool:
+        """Return whether a live wire has ever been confirmed for this collector.
+
+        Once true, the live session is the transport authority: cloud-family /
+        persisted / options-data are bootstrap hints only and must not drive a
+        steady-state destructive transport rebuild.
+        """
+
+        return self._effective_wire_binding() is not None
+
+    @property
+    def confirmed_wire_binding(self) -> ConfirmedWireBinding | None:
+        """Return the confirmed wire binding (pure read), or None."""
+
+        return self._effective_wire_binding()
+
+    def _has_owned_pending_session(self) -> bool:
+        """Return whether the registry currently sees an owned (pending/new) socket.
+
+        Lifecycle evidence for a handover: a socket for THIS entry's identity is
+        present but has not yet become a trusted live handle. A fully absent
+        socket is offline, not a handover -- there is no timeout involved. The
+        domain path uses the registry's owned-session location (present even for
+        a parked/identified socket); the fallback path uses the claimed handle's
+        session id.
+        """
+
+        if self._domain_ownership_active():
+            return self._owned_domain_session() is not None
+        handle = self._live_session_handle()
+        return bool(str(getattr(handle, "session_id", "") or "").strip())
+
+    def _handover_in_progress(self) -> bool:
+        """Return whether an owned session handover is genuinely in progress.
+
+        True only when ALL hold: a confirmed binding exists; the current live
+        handle is not yet a trusted (observed) session and is not in conflict;
+        and the registry actually sees an owned pending/new socket for this
+        entry. A confirmed binding with NO owned socket is offline/idle, never an
+        endless ``reconnecting``.
+        """
+
+        if self._effective_wire_binding() is None:
+            return False
+        live = self._live_session_handle()
+        if live.observed or live.conflict:
+            return False
+        return self._has_owned_pending_session()
+
+    def _raw_live_observed_protocol(self) -> str:
+        """Return the CURRENTLY observed live protocol (no binding), else ""."""
+
+        handle = self._live_session_handle()
+        if handle.uses_framed_wire:
+            return "eybond_framed"
+        if handle.uses_at_text_wire:
+            return "at_text"
+        return ""
+
     def _inverter_forward_adapter(self) -> str:
         """Return the adapter that must carry inverter payloads.
 
-        Live SessionHandle adapters are authoritative. The persisted
-        collector_session_protocol is only a fallback before any live session has
-        been observed. This is the critical separation: identity source and
-        legacy callback protocol do not choose inverter payload routing once a
-        live session exists.
+        Authority order, all pure reads:
+        - a live ``conflict`` fails closed to no adapter (contradictory wire);
+        - a trusted ``observed`` live session uses its own adapter;
+        - a transient gap uses the CONFIRMED wire binding (a same-collector
+          handover never downgrades the wire);
+        - before anything has ever been confirmed, the persisted
+          collector_session_protocol is the only bootstrap fallback.
         """
 
         handle = self._live_session_handle()
@@ -1614,6 +2115,9 @@ class EybondRuntimeLinkManager:
             return ADAPTER_NONE
         if handle.observed:
             return handle.inverter_forward_adapter
+        binding = self._effective_wire_binding()
+        if binding is not None:
+            return binding.inverter_forward_adapter
         protocol = str(self._collector_session_protocol or "").strip().lower()
         if protocol == "at_text":
             return ADAPTER_INVERTER_RAW_PASSTHROUGH
@@ -1633,29 +2137,83 @@ class EybondRuntimeLinkManager:
 
         return self._live_session_handle()
 
+    def _domain_ownership_active(self) -> bool:
+        """Return whether the domain registry is the ownership authority here."""
+
+        return (
+            getattr(self, "_callback_ownership_registry", None) is not None
+            and bool(getattr(self, "_callback_entry_id", ""))
+        )
+
+    def _owned_domain_session(self):
+        """Return this entry's best owned live session from the DOMAIN registry.
+
+        The domain registry observes every shared listener in the process, so
+        this is what lets an entry whose primary tcp_port is e.g. 8899 find its
+        own collector dialing the 18899 listener. Location (session_id +
+        listener_port) is meaningful even for a parked/identified socket that is
+        still waiting to be claimed; closed / route-identity-mismatch / foreign-
+        owned sockets never qualify (registry-side filtering).
+        """
+
+        if not self._domain_ownership_active():
+            return None
+        try:
+            return self._callback_ownership_registry.owned_session_location(
+                self._callback_entry_id
+            )
+        except Exception:
+            logger.debug("Domain session location lookup failed", exc_info=True)
+            return None
+
     def _claimed_session_id(self) -> str:
         """Return the registry-claimed session id for this entry's owned session.
 
-        Only a trusted (observed-wire) session is returned; a route-identity
-        mismatch / not-yet-routed session negotiates to an unknown wire and is
-        never handed to the transport as the claim target.
+        Domain-registry path: the exact session id of the entry-owned observed
+        session -- including a parked/identified socket that has not been
+        activated yet (activation is exactly what the claim is for). Fallback
+        (no domain registry): only a trusted observed-wire session is returned;
+        a route-identity mismatch / not-yet-routed session negotiates to an
+        unknown wire and is never handed to the transport as the claim target.
         """
 
+        if self._domain_ownership_active():
+            session = self._owned_domain_session()
+            return str(getattr(session, "session_id", "") or "") if session else ""
         handle = self._live_session_handle()
         return handle.session_id if handle.observed else ""
 
-    def _apply_live_wire_to_transports(self) -> None:
-        """Push the negotiated live wire + claim target down to the transports.
+    def _effective_transport_wire(self) -> str:
+        """Return the wire selector to push down: live if observed, else confirmed.
 
-        This makes the runtime's SessionHandle the single source of truth for
-        (a) AT-vs-framed activation inside the transport and (b) which inbound
-        socket the transport claims (the registry-chosen session id). When no
-        live session is observed the wire is cleared (persisted fallback) and the
-        claim id is empty (durable-PN claim path).
+        A genuine live wire is applied in-place (this is how a real framed<->
+        at_text change is adopted -- no destructive rebuild). During a transient
+        gap the confirmed binding's wire is kept so the AT/framed activation
+        stays ready for the reconnecting socket instead of being cleared.
         """
 
         handle = self._live_session_handle()
-        wire = handle.transport_wire
+        if not handle.conflict and handle.observed:
+            return handle.transport_wire
+        binding = self._effective_wire_binding()
+        if binding is not None:
+            return binding.transport_wire
+        return handle.transport_wire
+
+    def _apply_live_wire_to_transports(self) -> None:
+        """Push the effective wire + claim target down to the transports.
+
+        This is an explicit lifecycle path (called every connect attempt), so it
+        also ADOPTS a freshly-observed trusted session as the confirmed wire
+        binding. It makes the runtime the single source of truth for (a) AT-vs-
+        framed activation inside the transport (live if observed, else the
+        confirmed binding) and (b) which inbound socket the transport claims (the
+        registry-chosen session id; empty during a gap so no stale socket is
+        claimed).
+        """
+
+        self._adopt_trusted_live_binding()
+        wire = self._effective_transport_wire()
         for transport in self._at_transports():
             if callable(getattr(transport, "set_negotiated_wire", None)):
                 transport.set_negotiated_wire(wire)
@@ -1692,14 +2250,27 @@ class EybondRuntimeLinkManager:
     def _live_session_handle(self) -> SessionHandle:
         """Return the negotiated live SessionHandle for this entry's claimed session.
 
-        Obtained from the CallbackSessionRegistry ownership API -- not by scanning
-        listener internals. The registry owns this entry's durable full PN
-        (claimed below by identity, never by peer IP), matches short/full PN as
-        one identity, excludes route-identity-mismatch / not-yet-routed sessions,
-        and prefers the routed session. When nothing is observed for the claimed
-        identity the handle is unknown and callers fall back to the persisted
-        hint.
+        Domain-registry path (production): the handle comes from the DOMAIN
+        CallbackSessionRegistry under the REAL config entry id whose claim was
+        registered at setup. That registry observes every shared listener in
+        the process, so the handle follows the collector to whichever listener
+        port it actually dialed. Fallback path (no domain registry injected --
+        standalone hubs/unit tests): the runtime's own listener-scoped registry
+        under a private key. The two paths are never active simultaneously, so
+        there is exactly one ownership authority at any time. Neither path scans
+        listener internals; ownership is durable-PN based (peer IP never a key);
+        untrusted states negotiate to an unknown wire.
         """
+
+        if self._domain_ownership_active():
+            try:
+                handle = self._callback_ownership_registry.session_handle_for_entry(
+                    self._callback_entry_id
+                )
+            except Exception:
+                logger.debug("Domain session handle lookup failed", exc_info=True)
+                handle = None
+            return handle or SessionHandle()
 
         registry = self._session_registry
         collector_pn = str(self._collector_pn or "").strip()

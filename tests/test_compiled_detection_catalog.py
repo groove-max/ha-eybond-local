@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from custom_components.eybond_local.metadata.compiled_detection_catalog import (
     PROBE_ACTION_ASCII_COMMAND,
@@ -14,6 +15,7 @@ from custom_components.eybond_local.metadata.compiled_detection_catalog import (
     clear_compiled_detection_catalog_cache,
     compile_detection_catalog,
     load_compiled_detection_catalog,
+    resolve_unique_full_model_surface,
 )
 from custom_components.eybond_local.metadata.detection_descriptor_loader import (
     DetectionAnchorCondition,
@@ -90,6 +92,45 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         surface = catalog.surfaces["smg_6200_full"]
         self.assertTrue(surface.default_for_driver)
         self.assertIn((700, 45), surface.support_capture_ranges)
+
+    def test_unique_persisted_model_resolves_only_to_full_writable_surface(self) -> None:
+        resolved = resolve_unique_full_model_surface(
+            "  anenji anj-11kw-48v-wifi-p  "
+        )
+
+        self.assertIsNotNone(resolved)
+        descriptor, surface = resolved
+        self.assertEqual(descriptor.key, "anenji_anj_11kw")
+        self.assertEqual(surface.driver_key, "modbus_smg")
+        self.assertEqual(
+            surface.profile_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertFalse(surface.read_only)
+        self.assertEqual(surface.support_tier, "full")
+
+    def test_persisted_model_resolution_fails_closed_when_alias_is_ambiguous(self) -> None:
+        catalog = load_compiled_detection_catalog()
+        ambiguous = replace(
+            catalog,
+            devices_by_alias={
+                **catalog.devices_by_alias,
+                "anenji anj-11kw-48v-wifi-p": (
+                    "anenji_anj_11kw",
+                    "smg_6200",
+                ),
+            },
+        )
+
+        self.assertIsNone(
+            resolve_unique_full_model_surface(
+                "Anenji ANJ-11KW-48V-WIFI-P",
+                catalog=ambiguous,
+            )
+        )
+        self.assertIsNone(
+            resolve_unique_full_model_surface("unknown model", catalog=catalog)
+        )
 
     def test_resolves_exact_and_family_surfaces(self) -> None:
         catalog = load_compiled_detection_catalog()

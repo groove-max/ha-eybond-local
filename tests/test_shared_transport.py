@@ -564,6 +564,29 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             connection,
         )
 
+    async def test_heartbeat_does_not_downgrade_strong_identity_evidence(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="session-strong",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+
+        listener._mark_session_identity(
+            "session-strong",
+            "V001020SYN62344022",
+            "at_dtupn",
+        )
+        listener._mark_session_identity(
+            "session-strong",
+            "V001020SYN6234",
+            "framed_heartbeat",
+        )
+
+        session = listener.discovered_collector_sessions()[0]
+        self.assertEqual(session["collector_pn"], "V001020SYN62344022")
+        self.assertEqual(session["collector_identity_source"], "at_dtupn")
+
     async def test_release_collector_connections_drops_session_identity_indexes(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         connection = _CollectorConnection(
@@ -3035,18 +3058,34 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
             write_timeout=0.5,
         )
         drops: list[object] = []
+        closed_sessions: list[str] = []
+
+        def _session_closed(session_id: str, _connection: object) -> None:
+            closed_sessions.append(session_id)
 
         reader1 = asyncio.StreamReader()
         writer1 = _FakeWriter()
         run1 = asyncio.create_task(
-            connection.run(reader1, writer1, disconnect_callback=drops.append)  # type: ignore[arg-type]
+            connection.run(
+                reader1,
+                writer1,
+                session_id="session-old",
+                session_closed_callback=_session_closed,
+                disconnect_callback=drops.append,
+            )  # type: ignore[arg-type]
         )
         self.assertTrue(await connection.wait_until_connected(1.0))
 
         reader2 = asyncio.StreamReader()
         writer2 = _FakeWriter()
         run2 = asyncio.create_task(
-            connection.run(reader2, writer2, disconnect_callback=drops.append)  # type: ignore[arg-type]
+            connection.run(
+                reader2,
+                writer2,
+                session_id="session-new",
+                session_closed_callback=_session_closed,
+                disconnect_callback=drops.append,
+            )  # type: ignore[arg-type]
         )
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(run1, timeout=2.0)
@@ -3061,6 +3100,7 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         # no closed writer, connection still up.
         self.assertTrue(await connection.wait_until_connected(1.0))
         self.assertEqual(drops, [])
+        self.assertEqual(closed_sessions, ["session-old"])
         self.assertFalse(writer2.closed)
         self.assertTrue(connection.connected)
 
@@ -3068,7 +3108,39 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         reader2.feed_eof()
         await asyncio.wait_for(run2, timeout=2.0)
         self.assertEqual(drops, [connection])
+        self.assertEqual(closed_sessions, ["session-old", "session-new"])
         self.assertTrue(writer2.closed)
+
+    async def test_replaced_socket_closes_only_its_session_inventory(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        listener._remember_session(
+            session_id="session-old", remote_ip="203.0.113.10", remote_port=41000
+        )
+        listener._remember_session(
+            session_id="session-new", remote_ip="203.0.113.10", remote_port=41001
+        )
+        listener._mark_session_state("session-old", "routed_framed")
+        listener._mark_session_state("session-new", "routed_framed")
+        listener._session_payload_connections["session-old"] = connection
+        listener._session_payload_connections["session-new"] = connection
+
+        listener._mark_socket_session_closed("session-old", connection)
+
+        inventory = {
+            item["session_id"]: item
+            for item in listener.session_inventory_diagnostics()["sessions"]
+        }
+        self.assertEqual(inventory["session-old"]["state"], "closed_disconnected")
+        self.assertEqual(inventory["session-new"]["state"], "routed_framed")
+        self.assertNotIn("session-old", listener._session_payload_connections)
+        self.assertIs(
+            listener._session_payload_connections["session-new"], connection
+        )
 
     async def test_disconnect_does_not_wait_for_dead_peer_tcp_timeout(self) -> None:
         class _HangingCloseWriter(_FakeWriter):
@@ -3156,6 +3228,55 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(pending.sniff_task, timeout=2.0)
         self.assertTrue(pending.writer.closed)
         self.assertFalse(listener._pending_socket_still_registered(pending))
+
+    async def test_weak_route_identity_is_probed_before_strong_mismatch(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener.register_session_protocol_owner("eybond_framed")
+        listener._remember_session(
+            session_id="s-weak", remote_ip="203.0.113.10", remote_port=41000
+        )
+        listener._mark_session_identity(
+            "s-weak", "V001020SYN6234", "framed_heartbeat"
+        )
+        reader = asyncio.StreamReader()
+
+        class _ProbeWriter(_FakeWriter):
+            async def drain(self) -> None:
+                reader.feed_data(
+                    build_collector_request(
+                        1,
+                        b"\x00\x02V001020SYN62344022",
+                        devcode=2376,
+                        collector_addr=1,
+                        fcode=2,
+                    )
+                )
+
+        writer = _ProbeWriter()
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s-weak",
+            reader=reader,
+            writer=writer,  # type: ignore[arg-type]
+        )
+        listener._pending_sockets["s-weak"] = pending
+
+        claimed = await listener.pop_pending_socket_for_route(
+            collector_ip="203.0.113.10",
+            collector_pn="V000405SYN94677058",
+            session_protocol="eybond_framed",
+        )
+
+        self.assertIsNone(claimed)
+        session = listener.discovered_collector_sessions()[0]
+        self.assertEqual(session["collector_pn"], "V001020SYN62344022")
+        self.assertEqual(session["collector_identity_source"], "fc2_parameter_2")
+        self.assertEqual(session["state"], "route_identity_mismatch")
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+
+        reader.feed_eof()
+        await asyncio.wait_for(pending.sniff_task, timeout=2.0)
 
     async def test_sniff_does_not_route_at_shaped_bytes_framed_for_framed_owner(
         self,
@@ -3255,6 +3376,49 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("203.0.113.10", listener._connections)
         self.assertNotIn("203.0.113.10", listener._at_connections)
         self.assertEqual(listener._session_inventory["s1"].protocol_shape, "eybond_framed")
+
+        reader.feed_eof()
+        await asyncio.wait_for(sniff, timeout=2.0)
+
+    async def test_partial_heartbeat_payload_is_completed_before_owner_lookup(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="s-partial-payload",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        frame = build_collector_request(
+            7,
+            b"E5000020000000",
+            devcode=0,
+            collector_addr=1,
+            fcode=1,
+        )
+        reader = asyncio.StreamReader()
+        # A complete header plus only part of the PN payload reproduces the
+        # real TCP split that previously parked the socket without identity
+        # until the next 60-second heartbeat.
+        split = 12
+        reader.feed_data(frame[:split])
+        pending = _PendingCollectorSocket(
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            session_id="s-partial-payload",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.05)
+        reader.feed_data(frame[split:])
+        await asyncio.sleep(0.15)
+
+        session = listener.discovered_collector_sessions()[0]
+        self.assertEqual(session["collector_pn"], "E5000020000000")
+        self.assertEqual(session["collector_identity_source"], "framed_heartbeat")
+        self.assertEqual(session["state"], "parked_no_payload_owner")
 
         reader.feed_eof()
         await asyncio.wait_for(sniff, timeout=2.0)

@@ -44,13 +44,43 @@ SESSION_STATE_ACTIVE = "active"
 SESSION_STATE_CLOSED = "closed"
 
 # Identity sources considered strong (a full, authoritative PN).
-_STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn"})
+_STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn", "fc2_parameter_2"})
+
+
+def identity_source_is_strong(source: object) -> bool:
+    """Return whether one observation is authoritative collector identity."""
+
+    return str(source or "").strip() in _STRONG_IDENTITY_SOURCES
+
+
+def prefer_identity_source(current: object, candidate: object) -> str:
+    """Keep the strongest identity evidence observed for one live session.
+
+    Heartbeats may arrive after an authoritative AT/FC2 identity query. They
+    must not downgrade that already-established evidence merely because they
+    are newer.
+    """
+
+    current_value = str(current or "").strip()
+    candidate_value = str(candidate or "").strip()
+    if identity_source_is_strong(current_value):
+        return current_value
+    if identity_source_is_strong(candidate_value):
+        return candidate_value
+    return candidate_value or current_value
 
 # Listener inventory states that mean the socket is routed/live.
 _ACTIVE_INVENTORY_STATES = frozenset({"routed_at_text", "routed_framed"})
 _CLAIMED_INVENTORY_STATES = frozenset({"claimed"})
 _CLOSED_INVENTORY_STATES = frozenset(
     {"closed_disconnected", "closed_no_payload", "parked_peer_closed"}
+)
+_UNDISCOVERABLE_INVENTORY_STATES = frozenset(
+    {
+        "route_identity_mismatch",
+        "waiting_for_route_identity",
+        "parked_waiting_for_identity",
+    }
 )
 
 
@@ -122,7 +152,7 @@ def reconcile_pn(current: object, candidate: object) -> str:
 
 
 def _identity_is_strong(source: object) -> bool:
-    return str(source or "").strip() in _STRONG_IDENTITY_SOURCES
+    return identity_source_is_strong(source)
 
 
 def _state_from_inventory(inventory_state: str, identity_source: str) -> str:
@@ -165,6 +195,21 @@ class CallbackSession:
     @property
     def claimed(self) -> bool:
         return bool(self.owner_entry_id)
+
+    @property
+    def discoverable(self) -> bool:
+        """Return whether this session is safe to publish as a device candidate."""
+
+        inventory_state = str(self.raw.get("state") or "").strip().lower()
+        if inventory_state == "route_identity_mismatch":
+            # A weak mismatch is only an ambiguous heartbeat prefix. A strong
+            # mismatch, however, is positive evidence that this is a different
+            # fully identified collector and therefore a valid new candidate.
+            return self.state != SESSION_STATE_CLOSED and self.has_strong_identity
+        return (
+            self.state != SESSION_STATE_CLOSED
+            and inventory_state not in _UNDISCOVERABLE_INVENTORY_STATES
+        )
 
 
 @dataclass(slots=True)
@@ -292,7 +337,10 @@ class CallbackSessionRegistry:
         if not owner:
             return session
         state = session.state
-        if state not in (SESSION_STATE_ACTIVE,):
+        # Ownership must not resurrect a closed socket as merely "claimed".
+        # Closed remains terminal; only non-active live observations are
+        # promoted to the claimed lifecycle state.
+        if state not in (SESSION_STATE_ACTIVE, SESSION_STATE_CLOSED):
             state = SESSION_STATE_CLAIMED
         return replace(session, owner_entry_id=owner, state=state)
 
@@ -302,8 +350,55 @@ class CallbackSessionRegistry:
         return tuple(
             session
             for session in self.observed_sessions()
-            if not session.owner_entry_id and session.state != SESSION_STATE_CLOSED
+            if not session.owner_entry_id and session.discoverable
         )
+
+    def current_session_for_pn(
+        self,
+        collector_pn: object,
+        *,
+        require_exact: bool = False,
+    ) -> CallbackSession | None:
+        """Return the best currently observed socket for one collector PN.
+
+        Config flows can stay open while a collector reconnects (or is updated
+        over OTA).  The session id captured when discovery created the flow is
+        therefore only an observation, never a durable handle.  Resolve the
+        current socket here, by PN, immediately before taking a transient
+        session claim.
+
+        ``require_exact`` is used when the flow only has weak identity evidence:
+        such a flow may follow the same exact short PN onto a replacement socket,
+        but it must not choose one of several longer prefix matches.  Peer IP is
+        deliberately absent from both matching and ranking.
+        """
+
+        pn = normalize_pn(collector_pn)
+        if not pn:
+            return None
+        best: CallbackSession | None = None
+        best_rank: tuple[int, int, int] | None = None
+        for session in self._normalized_sessions():
+            if session.state == SESSION_STATE_CLOSED:
+                continue
+            if require_exact:
+                if session.collector_pn != pn:
+                    continue
+            elif not pn_is_same_identity(session.collector_pn, pn):
+                continue
+            raw_state = str(session.raw.get("state") or "").strip().lower()
+            rank = (
+                1 if raw_state in _ACTIVE_INVENTORY_STATES else 0,
+                1 if session.has_strong_identity else 0,
+                len(session.collector_pn),
+            )
+            # The listener inventory is acceptance-ordered.  On an exact tie,
+            # prefer its later item so a replacement socket wins over a stale
+            # overlap that has not reached its EOF callback yet.
+            if best_rank is None or rank >= best_rank:
+                best = session
+                best_rank = rank
+        return best
 
     # --- ownership ------------------------------------------------------------
 
@@ -457,6 +552,42 @@ class CallbackSessionRegistry:
         claim = self._claims.get(str(entry_id or "").strip())
         return claim.session_id if claim is not None else ""
 
+    def retarget_claim_to_reconnected_session(
+        self,
+        entry_id: str,
+        session_id: object,
+    ) -> bool:
+        """Move a verification claim from its closed socket to a new candidate.
+
+        This is only valid after the previously claimed physical session is
+        terminal and only for a live session whose observed PN is the same
+        identity (possibly the weak heartbeat prefix) as the claim's already
+        strong durable PN. The caller may then perform a read-only identity
+        query on exactly this socket. Peer IP is deliberately irrelevant.
+        """
+
+        owner = str(entry_id or "").strip()
+        target_sid = str(session_id or "").strip()
+        claim = self._claims.get(owner)
+        if claim is None or not claim.collector_pn or not target_sid:
+            return False
+        sessions = {session.session_id: session for session in self._normalized_sessions()}
+        previous = sessions.get(claim.session_id)
+        if previous is not None and previous.state != SESSION_STATE_CLOSED:
+            raise ValueError(f"previous_session_still_live:{claim.session_id}")
+        target = sessions.get(target_sid)
+        if (
+            target is None
+            or target.state == SESSION_STATE_CLOSED
+            or not pn_is_same_identity(claim.collector_pn, target.collector_pn)
+        ):
+            return False
+        target_owner = self._owner_for_session(target)
+        if target_owner and target_owner != owner:
+            raise ValueError(f"session_already_claimed:{target_sid}:{target_owner}")
+        claim.session_id = target_sid
+        return True
+
     def reconcile_identity(self, *, session_id: object, full_pn: object) -> bool:
         """Promote a claim's short PN to a full PN observed on the same session.
 
@@ -529,6 +660,48 @@ class CallbackSessionRegistry:
         if not pn:
             return None
         return self.session_handle_for_pn(pn)
+
+    def owned_session_location(self, entry_id: str) -> CallbackSession | None:
+        """Return the best live observed session for one entry's claimed identity.
+
+        This is the transport-ownership complement of ``session_handle_for_entry``:
+        the handle carries the negotiated wire (which only becomes trusted once
+        the socket is routed), while the LOCATION -- session_id + listener_port --
+        is already meaningful for a parked/identified inbound socket that is
+        waiting to be claimed. The runtime uses it to attach a transport facade
+        to the listener the collector actually dialed (never derived from the
+        endpoint hostname, peer IP, or collector type) and to claim exactly that
+        session id. Closed and route-identity-mismatch sockets never qualify.
+        """
+
+        pn = self.claimed_identity(entry_id)
+        if not pn:
+            return None
+        best: CallbackSession | None = None
+        best_rank: tuple[int, int, int] | None = None
+        for session in self._normalized_sessions():
+            if not pn_is_same_identity(session.collector_pn, pn):
+                continue
+            raw_state = str(session.raw.get("state") or "").strip().lower()
+            if (
+                session.state == SESSION_STATE_CLOSED
+                or raw_state == "route_identity_mismatch"
+            ):
+                continue
+            owner = self._owner_for_session(session)
+            if owner and owner != str(entry_id or "").strip():
+                # Single-owner invariant: never point a runtime at a socket a
+                # different entry owns (e.g. a transient verification claim).
+                continue
+            rank = (
+                1 if raw_state in ("routed_framed", "routed_at_text", "claimed") else 0,
+                1 if session.has_strong_identity else 0,
+                len(session.collector_pn),
+            )
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best = session
+        return best
 
     # --- diagnostics ----------------------------------------------------------
 

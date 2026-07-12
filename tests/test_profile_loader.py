@@ -555,7 +555,7 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("secondary_charging_priority").register, 633)
         self.assertEqual(
             profile.get_capability("secondary_charging_priority").enum_value_map[4],
-            "PV Priority With Load Reserve",
+            "SOR",
         )
         self.assertEqual(
             profile.get_capability("constant_voltage_to_float_wait_time").register,

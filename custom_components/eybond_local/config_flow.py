@@ -107,6 +107,7 @@ from .const import (
     CONF_DISCOVERY_INTERVAL,
     CONF_DISCOVERY_TARGET,
     CONF_DRIVER_HINT,
+    CONF_ENTRY_ROLE,
     CONF_HEARTBEAT_INTERVAL,
     CONF_POLL_INTERVAL,
     CONF_POLL_MODE,
@@ -126,6 +127,7 @@ from .const import (
     DEFAULT_UDP_PORT,
     DOMAIN,
     DRIVER_HINT_AUTO,
+    ENTRY_ROLE_LISTENER,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
     POLL_MODE_AUTO,
@@ -196,7 +198,7 @@ from .onboarding.presentation import (
     scan_result_status_code,
 )
 from .connection.callback_ledger import get_callback_trigger_ledger
-from .connection.session_registry import pn_is_same_identity
+from .connection.session_registry import identity_source_is_strong, pn_is_same_identity
 from .onboarding.strategy_verification import (
     EVIDENCE_CALLBACK_TRIGGER,
     EVIDENCE_REBOOT_RECONNECT,
@@ -1720,6 +1722,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
+        if str(config_entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
+            return ListenerOptionsFlow(config_entry)
         return EybondLocalOptionsFlow(config_entry)
 
     # ---- step: user (welcome) ----
@@ -1802,6 +1806,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collector_pn = str(discovery_info.get(CONF_COLLECTOR_PN) or "").strip()
         peer_ip = str(discovery_info.get("peer_ip") or "").strip()
         tcp_port = int(discovery_info.get(CONF_TCP_PORT) or DEFAULT_TCP_PORT)
+        self.context["eybond_discovery"] = {
+            CONF_COLLECTOR_PN: collector_pn,
+            CONF_TCP_PORT: tcp_port,
+            "peer_ip": peer_ip,
+            "session_id": str(discovery_info.get("session_id") or "").strip(),
+            "collector_identity_source": str(
+                discovery_info.get("collector_identity_source") or ""
+            ).strip(),
+        }
         discovery_title = (
             f"Collector PN {collector_pn}"
             if collector_pn
@@ -1881,6 +1894,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "session_id": observed_session_id,
                 "port": tcp_port,
                 "peer_ip": peer_ip,
+                "identity_source": str(
+                    discovery_info.get("collector_identity_source") or ""
+                ).strip(),
             }
             self._verification_expected_pn = collector_pn
             self._verification_old_session_id = observed_session_id
@@ -1975,10 +1991,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # address field is prefilled with the observed peer IP purely as an
         # editable hint (it may be a router/NAT address, not the collector).
         logger.info(
-            "Passive discovery inbound verification not confirmed (%s); continuing on the manual callback step",
+            "Passive discovery inbound verification not confirmed (%s); offering retry or manual callback",
             getattr(result, "failure_reason", "") or "verification_unavailable",
         )
-        return await self.async_step_manual()
+        return await self.async_step_verify_connection_failed()
+
+    async def async_step_verify_connection_failed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Keep a failed verification in this flow and offer explicit recovery."""
+
+        del user_input
+        return self.async_show_menu(
+            step_id="verify_connection_failed",
+            menu_options=["verify_connection_retry", "manual"],
+            description_placeholders={
+                "collector_pn": self._verification_expected_pn,
+            },
+        )
+
+    async def async_step_verify_connection_retry(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Retry the behavioral check from its consent step in the same flow."""
+
+        del user_input
+        self._verification_result = None
+        self._verification_task = None
+        return await self.async_step_verify_connection()
 
     async def _async_adopt_enriched_collector_pn(self, full_pn: str):
         """Propagate a weak->strong enriched FULL PN through every flow model.
@@ -1999,6 +2041,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._verification_expected_pn = enriched
         if self._strategy_verification_context is not None:
             self._strategy_verification_context["collector_pn"] = enriched
+        discovery_context = self.context.get("eybond_discovery")
+        if isinstance(discovery_context, dict):
+            discovery_context[CONF_COLLECTOR_PN] = enriched
         for candidate in (
             self._selected_result,
             *self._autodetect_results.values(),
@@ -2037,6 +2082,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         owner = f"strategy_verification:{uuid.uuid4().hex}"
         try:
             if registry is not None:
+                # A config flow may remain open across a collector reconnect or
+                # OTA update.  Its discovery-time session id is transient and
+                # may already be closed.  Re-resolve the CURRENT socket from the
+                # registry immediately before claiming it.  Weak identity may
+                # only follow an exact PN; strong AT/FC2 evidence may use the
+                # registry's centralized short/full reconciliation.
+                identity_source = str(context.get("identity_source") or "").strip()
+                if not identity_source:
+                    discovery_context = self.context.get("eybond_discovery")
+                    if isinstance(discovery_context, dict):
+                        identity_source = str(
+                            discovery_context.get("collector_identity_source") or ""
+                        ).strip()
+                current_session = registry.current_session_for_pn(
+                    collector_pn,
+                    require_exact=not identity_source_is_strong(identity_source),
+                )
+                if current_session is not None:
+                    session_id = current_session.session_id
+                    context["session_id"] = session_id
+                    self._verification_old_session_id = session_id
                 # TRANSIENT claim strictly by session_id: a weak/short PN is
                 # never copied into durable ownership and other same-prefix
                 # sessions stay unowned. Promotion to the exact full PN happens
@@ -2082,6 +2148,21 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             session_id=session_id,
             session_id_provider=_claimed_session_id if registry is not None else None,
         )
+
+        async def _probe_reconnected_identity(new_session_id: str) -> str:
+            if registry is None:
+                return ""
+            if not registry.retarget_claim_to_reconnected_session(
+                owner,
+                new_session_id,
+            ):
+                return ""
+            # The restart channel was closed after the old socket became
+            # terminal. Its dynamic registry provider now resolves exactly the
+            # new socket; the FC2 query strengthens that session's identity
+            # without PN/IP ownership guessing.
+            return await channel.async_probe_identity()
+
         verifier = InboundStrategyVerifier(
             collector_pn=collector_pn,
             session_id=session_id,
@@ -2091,6 +2172,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 get_callback_trigger_ledger().snapshot_generation
             ),
             promote_claim=_promote_claim if registry is not None else None,
+            probe_reconnected_identity=(
+                _probe_reconnected_identity if registry is not None else None
+            ),
         )
         try:
             self._verification_result = await verifier.async_verify()
@@ -2210,9 +2294,40 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         await self._async_ensure_network_defaults()
         return self.async_show_menu(
             step_id="collector_network",
-            menu_options=["auto", "bluetooth_setup"],
+            menu_options=["auto", "bluetooth_setup", "listener"],
             description_placeholders=self._collector_network_placeholders(),
         )
+
+    async def _async_create_listener_entry(self) -> ConfigFlowResult:
+        """Create the integration-level passive-discovery bootstrap entry."""
+
+        await self.async_set_unique_id(f"{DOMAIN}:listener")
+        abort = self._abort_if_unique_id_configured()
+        if abort is not None:
+            return abort
+        return self.async_create_entry(
+            title="EyeBond Local — Discovery",
+            data={CONF_ENTRY_ROLE: ENTRY_ROLE_LISTENER},
+        )
+
+    async def async_step_listener(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Enable persistent passive discovery without a collector entry."""
+
+        del user_input
+        return await self._async_create_listener_entry()
+
+    async def async_step_import(
+        self,
+        import_data: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Create the internal listener entry after device-entry migration/removal."""
+
+        if str((import_data or {}).get(CONF_ENTRY_ROLE) or "") != ENTRY_ROLE_LISTENER:
+            return self.async_abort(reason="invalid_import")
+        return await self._async_create_listener_entry()
 
     # ---- step: auto (choose interface → trigger scan) ----
 
@@ -2556,6 +2671,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return
 
         skip_probe_ips = self._configured_collector_probe_skip_ips()
+        # Passive discovery shares this scan's callback listener. Mark sockets
+        # accepted while the active UDP probe runs as results of this flow so
+        # HA does not publish a duplicate integration-discovery card for them.
+        from .passive_discovery import get_passive_callback_discovery
+
+        passive_discovery = get_passive_callback_discovery(self.hass)
+        probe_scope_id = f"config_flow_scan:{id(self)}:{uuid.uuid4().hex}"
+        if passive_discovery is not None:
+            passive_discovery.begin_active_probe_scope(probe_scope_id)
         try:
             async with _async_timeout(scan_timeout):
                 if self._scan_mode == SETUP_MODE_DEEP_SCAN:
@@ -2587,6 +2711,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._autodetect_results = {}
             return
         finally:
+            if passive_discovery is not None:
+                passive_discovery.end_active_probe_scope(probe_scope_id)
             progress_updater.cancel()
             with suppress(asyncio.CancelledError):
                 await progress_updater
@@ -7086,6 +7212,31 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 # ---------------------------------------------------------------------------
 # Options flow
 # ---------------------------------------------------------------------------
+
+class ListenerOptionsFlow(OptionsFlow):
+    """Read-only options page for the passive-discovery service entry."""
+
+    def __init__(self, config_entry) -> None:
+        self._config_entry = config_entry
+
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        return await self.async_step_listener(user_input)
+
+    async def async_step_listener(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the stable named step required by Home Assistant's flow manager."""
+
+        if user_input is not None:
+            return self.async_create_entry(data=dict(self._config_entry.options))
+        return self.async_show_form(
+            step_id="listener",
+            data_schema=vol.Schema({}),
+        )
 
 class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     """Config entry options."""

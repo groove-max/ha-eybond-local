@@ -20,11 +20,12 @@ class RuntimeInventoryTests(unittest.TestCase):
     def test_profile_names_are_derived_from_compiled_runtime_surfaces(self) -> None:
         names = runtime_profile_names()
 
-        self.assertEqual(len(names), 16)
+        self.assertEqual(len(names), 17)
         self.assertIn("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json", names)
         self.assertIn("modbus_smg/default.json", names)
         self.assertIn("modbus_smg/models/smg_6200.json", names)
         self.assertIn("modbus_smg/models/anenji_4200_protocol_1.json", names)
+        self.assertIn("modbus_smg/models/anenji_anj_5kw_48v_wifi.json", names)
         self.assertIn("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json", names)
         self.assertIn("modbus_smg/models/anenji_op2_6200.json", names)
         self.assertIn("pi30_ascii/models/smartess_0925_compat.json", names)
@@ -35,12 +36,12 @@ class RuntimeInventoryTests(unittest.TestCase):
         summary = inventory["summary"]
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
-        self.assertEqual(summary["profiles"], 16)
-        self.assertEqual(summary["capabilities"], 429)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 319, "untested": 110})
+        self.assertEqual(summary["profiles"], 17)
+        self.assertEqual(summary["capabilities"], 469)
+        self.assertEqual(summary["validation_state_counts"], {"tested": 359, "untested": 110})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 6, "conditional": 214, "standard": 209},
+            {"blocked": 6, "conditional": 241, "standard": 222},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
@@ -48,6 +49,7 @@ class RuntimeInventoryTests(unittest.TestCase):
         self.assertIn("smg_modbus", profile_by_key)
         self.assertIn("modbus_smg_6200", profile_by_key)
         self.assertIn("modbus_smg_anenji_4200_protocol_1", profile_by_key)
+        self.assertIn("modbus_smg_anenji_anj_5kw_48v_wifi", profile_by_key)
         self.assertIn("modbus_smg_anenji_anj_11kw_48v_wifi_p", profile_by_key)
         self.assertIn("modbus_smg_anenji_op2_6200", profile_by_key)
         self.assertIn("pi30_ascii_smartess_0925_compat", profile_by_key)
@@ -56,6 +58,10 @@ class RuntimeInventoryTests(unittest.TestCase):
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_4200_protocol_1"]["capabilities"],
             30,
+        )
+        self.assertEqual(
+            profile_by_key["modbus_smg_anenji_anj_5kw_48v_wifi"]["capabilities"],
+            40,
         )
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_anj_11kw_48v_wifi_p"]["capabilities"],

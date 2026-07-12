@@ -20,7 +20,8 @@
         "description": "Is the collector already on the same network as Home Assistant? If yes, choose the first option.\n\nIf not, two ways to get it online:\n- **Bluetooth** (second option) — the easiest path on newer collectors. Needs Bluetooth on the Home Assistant side: a local adapter or an ESPHome Bluetooth Proxy near the collector.\n- **The collector's own Wi-Fi** — connect the Home Assistant host to the access point the collector broadcasts (the SSID contains the collector PN, the password is usually `12345678`), then choose the first option.\n\nAfter the device is added, you can move the collector onto your normal Wi-Fi from the integration settings.",
         "menu_options": {
           "auto": "Yes, the collector is already on my network",
-          "bluetooth_setup": "No, connect the collector to Wi-Fi using Bluetooth first"
+          "bluetooth_setup": "No, connect the collector to Wi-Fi using Bluetooth first",
+          "listener": "Enable background discovery without adding a collector"
         }
       },
       "auto": {
@@ -230,12 +231,20 @@
       "verify_connection": {
         "title": "Check how the collector connects",
         "description": "Collector {collector_pn} connected from {peer_ip}. Before adding it, Home Assistant needs to check whether this connection is permanent or only temporary (for example, left over from an earlier reconnect request). The check restarts the collector and briefly interrupts its connection - monitoring and the vendor app may be unavailable for a few minutes. Press Submit to restart the collector and start the check."
+      },
+      "verify_connection_failed": {
+        "title": "Connection check needs another step",
+        "description": "Home Assistant could not confirm that collector {collector_pn} reconnects permanently. The collector was not added. You can repeat the automatic check or enter a reachable collector address for the existing callback check.",
+        "menu_options": {
+          "verify_connection_retry": "Repeat automatic check",
+          "manual": "Enter collector address manually"
+        }
       }
     },
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond collectors…",
       "shadow_learning": "{control_discovery_hint}",
-      "verify_connection": "Restarting collector {collector_pn} and waiting for it to reconnect on its own. This can take up to three minutes on older collectors."
+      "verify_connection": "Confirming collector {collector_pn} identity, then restarting it and waiting for it to reconnect on its own. This can take up to three minutes on older collectors."
     },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",
@@ -284,6 +293,10 @@
       "invalid_selection": "The selected option is no longer available."
     },
     "step": {
+      "listener": {
+        "title": "Background discovery",
+        "description": "This service entry keeps EyeBond callback listeners active even when no collectors are configured. Remove the entry to disable background discovery."
+      },
       "init": {
         "title": "EyeBond Local Options",
         "description": "Choose what you want to manage for this entry.{bridge_note}",

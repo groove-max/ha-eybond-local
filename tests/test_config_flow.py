@@ -770,7 +770,45 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "collector_network")
-        self.assertEqual(result["menu_options"], ["auto", "bluetooth_setup"])
+        self.assertEqual(
+            result["menu_options"],
+            ["auto", "bluetooth_setup", "listener"],
+        )
+
+    async def test_listener_menu_option_creates_bootstrap_entry(self) -> None:
+        flow = self._make_flow()
+
+        result = await flow.async_step_listener()
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["title"], "EyeBond Local — Discovery")
+        self.assertEqual(result["data"], {"entry_role": "listener"})
+        self.assertEqual(flow._test_unique_id, "eybond_local:listener")
+
+    async def test_listener_import_uses_same_unique_bootstrap_entry(self) -> None:
+        flow = self._make_flow()
+
+        result = await flow.async_step_import({"entry_role": "listener"})
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"], {"entry_role": "listener"})
+        self.assertEqual(flow._test_unique_id, "eybond_local:listener")
+
+    async def test_listener_entry_uses_read_only_options_flow(self) -> None:
+        entry = types.SimpleNamespace(
+            data={"entry_role": "listener"},
+            options={},
+        )
+
+        options_flow = EybondLocalConfigFlow.async_get_options_flow(entry)
+        result = await options_flow.async_step_init()
+
+        self.assertEqual(type(options_flow).__name__, "ListenerOptionsFlow")
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "listener")
+        self.assertTrue(callable(getattr(options_flow, "async_step_listener", None)))
+        submitted = await options_flow.async_step_listener({})
+        self.assertEqual(submitted["type"], "create_entry")
 
     async def test_collector_network_routes_to_bluetooth_setup_when_collector_is_not_connected(self) -> None:
         flow = self._make_flow()
@@ -3910,6 +3948,37 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured_kwargs["attempts"], 1)
         self.assertFalse(captured_kwargs["enrich_runtime_details"])
+
+    async def test_do_scan_scopes_active_probe_against_passive_discovery(self) -> None:
+        flow = self._make_flow()
+        events: list[str] = []
+
+        class _FakePassiveDiscovery:
+            def begin_active_probe_scope(self, scope_id: str) -> None:
+                self.scope_id = scope_id
+                events.append("begin")
+
+            def end_active_probe_scope(self, scope_id: str) -> None:
+                self.end_scope_id = scope_id
+                events.append("end")
+
+        class _FakeDetector:
+            async def async_auto_detect(self, **kwargs):
+                events.append("detect")
+                return ()
+
+        passive = _FakePassiveDiscovery()
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ), patch(
+            "custom_components.eybond_local.passive_discovery.get_passive_callback_discovery",
+            return_value=passive,
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(events, ["begin", "detect", "end"])
+        self.assertEqual(passive.scope_id, passive.end_scope_id)
 
     async def test_do_scan_uses_addable_passive_callback_without_active_udp_probe(self) -> None:
         flow = self._make_flow()
@@ -8483,6 +8552,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 "session_id": self.OLD_SESSION,
                 "port": 18899,
                 "peer_ip": self.PEER_IP,
+                "identity_source": "",
             },
         )
         # Payloads without a session id can never become inbound: reboot
@@ -8500,8 +8570,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         self.assertEqual(legacy_flow._verified_connection_strategy, "")
 
-    # 6./7. Verification failure continues THIS flow on the existing manual step
-    # with the peer IP prefilled as an editable, honestly-labelled hint.
+    # Verification failure stays retryable in THIS discovery flow. Manual setup
+    # remains an explicit choice and keeps the peer IP as an editable hint.
     async def test_verification_failure_falls_through_to_manual_with_peer_prefill(self) -> None:
         from custom_components.eybond_local.onboarding.strategy_verification import (
             StrategyVerificationResult,
@@ -8519,6 +8589,17 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
             result = await self._drive_verification(flow)
 
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "verify_connection_failed")
+        self.assertEqual(
+            result["menu_options"],
+            ["verify_connection_retry", "manual"],
+        )
+        retry = await flow.async_step_verify_connection_retry()
+        self.assertEqual(retry["type"], "form")
+        self.assertEqual(retry["step_id"], "verify_connection")
+
+        result = await flow.async_step_manual()
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "manual")
         # Peer IP is prefilled purely as an editable hint...
@@ -8589,6 +8670,45 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # cloud-primary migration correction.
         self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
 
+    async def test_verification_rebinds_stale_flow_to_current_session(self) -> None:
+        """An OTA/reboot between discovery and consent must not stale the flow."""
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(
+            self._discovery_info(collector_identity_source="at_dtupn")
+        )
+
+        # The discovery-time socket disappears while the consent form is open;
+        # the same durable collector dials back on a new socket.
+        inventory[:] = [self._inventory_session(self.NEW_SESSION, self.FULL_PN)]
+        claimed_session_ids: list[str] = []
+        post_restart = self._inventory_session(
+            "listener-18899-3", self.FULL_PN
+        )
+
+        class _FakeChannel:
+            def __init__(self, **kwargs) -> None:
+                claimed_session_ids.append(kwargs["session_id"])
+
+            async def async_send_restart(self) -> None:
+                inventory[:] = [post_restart]
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                return None
+
+        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+            await self._drive_verification(flow)
+
+        self.assertEqual(claimed_session_ids, [self.NEW_SESSION])
+        self.assertEqual(flow._verification_old_session_id, self.NEW_SESSION)
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertTrue(flow._verification_result.inbound_verified)
+
     # 2. Zero UDP callback triggers are sent while inbound verification runs.
     async def test_inbound_verification_sends_zero_udp_triggers(self) -> None:
         from custom_components.eybond_local.onboarding import strategy_verification as sv
@@ -8656,9 +8776,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         verification = flow._verification_result
         assert verification is not None
         self.assertEqual(verification.failure_reason, sv.FAILURE_SESSION_CLAIMED)
-        # No inbound classification; the same flow continues on the manual step.
+        # No inbound classification; the same flow offers retry or manual setup.
         self.assertEqual(flow._verified_connection_strategy, "")
-        self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(result["step_id"], "verify_connection_failed")
         # The foreign claim is untouched.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "entry-other")
 

@@ -30,9 +30,13 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
     ),
     MeasurementDescription(
         key="collector_profile",
-        name="Collector Profile",
+        # This is decoded exclusively from the collector heartbeat/devcode. It
+        # is not the collector product/model (which comes from authoritative
+        # hardware metadata such as FC=2 parameter 6).
+        name="Collector Heartbeat Profile",
         icon="mdi:card-bulleted-settings-outline",
         diagnostic=True,
+        enabled_default=False,
         live=False,
     ),
     MeasurementDescription(

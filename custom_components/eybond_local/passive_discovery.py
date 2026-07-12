@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any
 
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
-from .connection.session_registry import CallbackSessionRegistry, pn_is_same_identity
+from .connection.session_registry import (
+    CallbackSessionRegistry,
+    identity_source_is_strong,
+    pn_is_same_identity,
+)
 from .collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     LEGACY_BINARY_COLLECTOR_SERVER_PORT,
@@ -41,7 +45,6 @@ _LISTENER_HOST = "0.0.0.0"
 _POLL_INTERVAL_SECONDS = 2.0
 _WEAK_IDENTITY_SETTLE_SECONDS = 6.0
 _STOP_LISTENER_RELEASE_TIMEOUT_SECONDS = 4.0
-_STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn"})
 
 
 try:
@@ -68,22 +71,20 @@ def _session_identity_source(session: dict[str, object]) -> str:
 
 
 def _session_has_strong_identity(session: dict[str, object]) -> bool:
-    return _session_identity_source(session) in _STRONG_IDENTITY_SOURCES
+    return identity_source_is_strong(_session_identity_source(session))
 
 
 def _session_id(session: dict[str, object]) -> str:
     return str(session.get("session_id") or "").strip()
 
 
-def _session_is_more_complete_same_identity(previous_pn: str, current_pn: str) -> bool:
-    previous_pn = str(previous_pn or "").strip()
-    current_pn = str(current_pn or "").strip()
-    return (
-        bool(previous_pn and current_pn)
-        and previous_pn != current_pn
-        and len(current_pn) > len(previous_pn)
-        and _collector_prefix_matches(previous_pn, current_pn)
-    )
+def _session_inventory_key(session: Mapping[str, object]) -> str:
+    """Return one listener-scoped transient socket identity."""
+
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        return ""
+    return f"{int(session.get('listener_port') or 0)}:{session_id}"
 
 
 class PassiveCallbackDiscovery:
@@ -96,6 +97,13 @@ class PassiveCallbackDiscovery:
         self._notified: set[str] = set()
         self._weak_identity_first_seen: dict[str, float] = {}
         self._logged_session_signatures: set[str] = set()
+        # Active onboarding scans and passive discovery intentionally share the
+        # same listener.  A socket caused by the scan's UDP callback trigger is
+        # a result of that flow, not an independent passive-discovery edge.
+        # Track only transient session ids accepted while a scan scope is open;
+        # PN and peer IP are deliberately not used as causal evidence.
+        self._active_probe_scopes: dict[str, set[str]] = {}
+        self._probe_suppressed_sessions: set[str] = set()
         # The single ownership + short/full PN reconciliation authority. Passive
         # discovery reads coalesced, unclaimed candidates from it; the listener
         # inventory is only its raw source.
@@ -108,6 +116,66 @@ class PassiveCallbackDiscovery:
         """Return the callback session ownership registry backing discovery."""
 
         return self._registry
+
+    def begin_active_probe_scope(self, scope_id: str) -> None:
+        """Start attributing newly accepted sessions to one active scan."""
+
+        token = str(scope_id or "").strip()
+        if not token:
+            return
+        self._active_probe_scopes[token] = self._observed_session_keys()
+
+    def end_active_probe_scope(self, scope_id: str) -> None:
+        """Finish one scan while retaining suppression for its live sockets."""
+
+        token = str(scope_id or "").strip()
+        baseline = self._active_probe_scopes.pop(token, None)
+        if baseline is None:
+            return
+        self._probe_suppressed_sessions.update(
+            self._observed_session_keys() - baseline
+        )
+
+    def retire_entry_sessions(self, entry_id: str) -> None:
+        """Prevent an unloaded entry's current sockets becoming new discovery edges.
+
+        Removing or reloading a config entry releases its registry ownership,
+        but that lifecycle event does not make the already-known TCP socket a
+        newly discovered device.  Retire the exact listener/session ids before
+        the claim is released; a later physical reconnect receives a new
+        session id and remains discoverable.
+        """
+
+        owner = str(entry_id or "").strip()
+        if not owner:
+            return
+        for candidate in self._registry.observed_sessions_per_socket():
+            if candidate.owner_entry_id != owner:
+                continue
+            key = _session_inventory_key(candidate.raw)
+            if key:
+                self._probe_suppressed_sessions.add(key)
+
+    def _observed_session_keys(self) -> set[str]:
+        return {
+            key
+            for session in self.iter_observed_sessions()
+            if (key := _session_inventory_key(session))
+        }
+
+    def _capture_active_probe_sessions(self, observed: object) -> None:
+        """Suppress only sockets accepted after an active scan began."""
+
+        current = {
+            key
+            for candidate in tuple(observed or ())
+            if (key := _session_inventory_key(candidate.raw))
+        }
+        if self._active_probe_scopes:
+            for baseline in self._active_probe_scopes.values():
+                self._probe_suppressed_sessions.update(current - baseline)
+        # A later TCP connection is a new edge and must remain discoverable.
+        self._probe_suppressed_sessions.intersection_update(current)
 
     async def async_start(self) -> None:
         """Start passive discovery on known collector callback ports."""
@@ -250,6 +318,7 @@ class PassiveCallbackDiscovery:
         # the listener inventory (via ``iter_observed_sessions``), collapses
         # short/full PN duplicates, and marks sessions owned by a config entry.
         observed = self._registry.observed_sessions()
+        self._capture_active_probe_sessions(observed)
         self._prune_notified_for_observed_sessions(observed)
 
         # 1) Repair/upgrade existing entries from their currently-live session.
@@ -278,6 +347,14 @@ class PassiveCallbackDiscovery:
         # excludes registry-claimed identities.
         for candidate in self._registry.list_unclaimed_sessions():
             session = dict(candidate.raw)
+            if _session_inventory_key(session) in self._probe_suppressed_sessions:
+                logger.debug(
+                    "Suppressing passive discovery for already-handled session port=%s session=%s pn=%s",
+                    session.get("listener_port"),
+                    session.get("session_id"),
+                    session.get("collector_pn"),
+                )
+                continue
             collector_pn = str(session.get("collector_pn") or "").strip()
             peer_ip = str(session.get("peer_ip") or "").strip()
             if not collector_pn or not peer_ip:
@@ -292,10 +369,12 @@ class PassiveCallbackDiscovery:
                 state=session.get("state"),
                 protocol_shape=session.get("protocol_shape"),
             )
-            await self._async_abort_stale_prefix_discovery_flows(
-                port=port,
-                session=session,
-            )
+            # Never replace an existing short-PN flow when this same identity
+            # later yields its full PN.  The user may already be interacting
+            # with that flow; aborting it makes the frontend poll a removed
+            # flow_id ("Invalid flow specified").  The flow's verification
+            # path owns short->full enrichment and updates its unique identity
+            # in place.
             if self._active_discovery_flow_exists(port=port, session=session):
                 logger.debug(
                     "Passive callback discovery flow already active port=%s pn=%s peer=%s",
@@ -326,6 +405,19 @@ class PassiveCallbackDiscovery:
                     "source": "integration_discovery",
                     "title_placeholders": {
                         "name": _discovery_title(collector_pn, peer_ip)
+                    },
+                    # FlowManager.async_progress() does not expose the original
+                    # discovery data on real Home Assistant. Keep the durable
+                    # identity needed for active-flow dedup in public context
+                    # instead of relying on test-only ``flow['data']``.
+                    "eybond_discovery": {
+                        CONF_COLLECTOR_PN: collector_pn,
+                        CONF_TCP_PORT: port,
+                        "peer_ip": peer_ip,
+                        "session_id": str(session.get("session_id") or ""),
+                        "collector_identity_source": str(
+                            session.get("collector_identity_source") or ""
+                        ),
                     },
                 },
                 data={
@@ -406,10 +498,9 @@ class PassiveCallbackDiscovery:
             flow_peer_ip = str(flow_data.get("peer_ip") or "").strip()
             flow_port = int(flow_data.get(CONF_TCP_PORT) or 0)
             flow_session_id = str(flow_data.get("session_id") or "").strip()
-            if flow_port != int(port):
-                continue
-
             same_identity = _collector_prefix_matches(flow_pn, collector_pn)
+            if flow_port and flow_port != int(port) and not same_identity:
+                continue
             same_session = bool(session_id and flow_session_id and session_id == flow_session_id)
             legacy_same_peer = (
                 not flow_session_id
@@ -554,107 +645,6 @@ class PassiveCallbackDiscovery:
                 pruned.add(notified)
         self._notified = pruned
 
-    async def _async_abort_stale_prefix_discovery_flows(
-        self,
-        *,
-        port: int,
-        session: dict[str, object],
-    ) -> None:
-        """Abort short-PN discovery flows superseded by the same callback session.
-
-        Prefix matching is deliberately scoped to active discovery-flow
-        replacement.  Durable entries and registries still use exact collector
-        identity only.  When a callback ``session_id`` is available, it is the
-        boundary; peer IP alone is not enough behind NAT.
-        """
-
-        flow_manager = getattr(getattr(self._hass, "config_entries", None), "flow", None)
-        async_progress = getattr(flow_manager, "async_progress", None)
-        async_abort = getattr(flow_manager, "async_abort", None)
-        if not callable(async_progress) or not callable(async_abort):
-            return
-
-        collector_pn = str(session.get("collector_pn") or "").strip()
-        peer_ip = str(session.get("peer_ip") or "").strip()
-        session_id = _session_id(session)
-        if not collector_pn or not peer_ip:
-            return
-
-        try:
-            flows = async_progress(include_uninitialized=True)
-        except TypeError:
-            flows = async_progress()
-        except Exception:
-            logger.debug("Failed to inspect active passive discovery flows", exc_info=True)
-            return
-
-        for flow in tuple(flows or ()):
-            if not isinstance(flow, dict):
-                continue
-            if str(flow.get("handler") or "") != DOMAIN:
-                continue
-            context = flow.get("context") if isinstance(flow.get("context"), dict) else {}
-            if str(context.get("source") or "") != "integration_discovery":
-                continue
-            data = flow.get("data") if isinstance(flow.get("data"), dict) else {}
-            flow_pn = str(data.get(CONF_COLLECTOR_PN) or "").strip()
-            flow_peer_ip = str(data.get("peer_ip") or "").strip()
-            flow_port = int(data.get(CONF_TCP_PORT) or 0)
-            flow_session_id = str(data.get("session_id") or "").strip()
-            same_session = (
-                bool(session_id)
-                and bool(flow_session_id)
-                and session_id == flow_session_id
-                and flow_port == int(port)
-            )
-            legacy_same_peer = (
-                not flow_session_id
-                and flow_peer_ip == peer_ip
-                and flow_port == int(port)
-            )
-            replacement_by_same_session = (
-                same_session
-                and _session_is_more_complete_same_identity(flow_pn, collector_pn)
-            )
-            replacement_by_legacy_strong_peer = (
-                legacy_same_peer
-                and _session_has_strong_identity(session)
-                and _session_is_more_complete_same_identity(flow_pn, collector_pn)
-                and not _session_has_strong_identity(data)
-            )
-            replacement_by_strong_prefix = (
-                _session_has_strong_identity(session)
-                and _session_is_more_complete_same_identity(flow_pn, collector_pn)
-                and not _session_has_strong_identity(data)
-            )
-            if (
-                not flow_pn
-                or flow_pn == collector_pn
-                or not (
-                    replacement_by_same_session
-                    or replacement_by_legacy_strong_peer
-                    or replacement_by_strong_prefix
-                )
-            ):
-                continue
-            flow_id = str(flow.get("flow_id") or "").strip()
-            if not flow_id:
-                continue
-            try:
-                result = async_abort(flow_id)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                logger.debug(
-                    "Failed to abort stale passive discovery flow for collector %s",
-                    flow_pn,
-                    exc_info=True,
-                )
-                continue
-            self._forget_notified(port, flow_pn)
-            if flow_session_id:
-                self._notified.discard(f"session:{int(port)}:{flow_session_id}")
-
     def _active_discovery_flow_exists(
         self,
         *,
@@ -689,7 +679,12 @@ class PassiveCallbackDiscovery:
             flow_peer_ip = str(flow_data.get("peer_ip") or "").strip()
             flow_port = int(flow_data.get(CONF_TCP_PORT) or 0)
             flow_session_id = str(flow_data.get("session_id") or "").strip()
-            if flow_port != int(port):
+            # Durable identity is independent of listener port. This also
+            # suppresses a late short heartbeat PN while the same collector's
+            # full-PN flow is already open on another/reconnected session.
+            if flow_pn and _collector_prefix_matches(flow_pn, collector_pn):
+                return True
+            if flow_port and flow_port != int(port):
                 continue
             if (
                 not current_strong
@@ -703,9 +698,8 @@ class PassiveCallbackDiscovery:
                 and current_session_id == flow_session_id
             ):
                 # The same callback socket/session is already represented by
-                # an active discovery flow.  If a more complete PN arrived, the
-                # abort step above should have replaced the weak flow.  If it
-                # could not, keep one candidate instead of creating a duplicate.
+                # an active discovery flow. Keep that flow stable; its own
+                # verification path adopts a later full PN in place.
                 return True
             if flow_peer_ip != peer_ip or flow_port != int(port):
                 continue
@@ -722,7 +716,16 @@ class PassiveCallbackDiscovery:
         context = flow.get("context") if isinstance(flow.get("context"), dict) else {}
         if str(context.get("source") or "") != "integration_discovery":
             return None
-        data = flow.get("data") if isinstance(flow.get("data"), dict) else {}
+        data = dict(flow.get("data")) if isinstance(flow.get("data"), dict) else {}
+        discovery = context.get("eybond_discovery")
+        if isinstance(discovery, dict):
+            for key, value in discovery.items():
+                data.setdefault(str(key), value)
+        # Existing flows created before the context metadata was introduced
+        # still expose their durable identity as ConfigFlow unique_id.
+        unique_id = str(context.get("unique_id") or "").strip()
+        if unique_id.startswith("collector:"):
+            data.setdefault(CONF_COLLECTOR_PN, unique_id.split(":", 1)[1])
         return data
 
     def _forget_notified(self, port: int, collector_pn: str) -> None:
@@ -756,7 +759,7 @@ class PassiveCallbackDiscovery:
         if (
             not collector_pn
             or not identity_source
-            or identity_source in _STRONG_IDENTITY_SOURCES
+            or identity_source_is_strong(identity_source)
         ):
             return False
         session_id = str(session.get("session_id") or "").strip()
@@ -847,7 +850,12 @@ class PassiveCallbackDiscovery:
             data[CONF_COLLECTOR_PN] = collector_pn
             changed = True
 
-        if int(data.get(CONF_TCP_PORT) or 0) != int(port):
+        # The live listener port belongs to the transient SessionHandle in the
+        # callback registry.  Do not rewrite a configured entry every time the
+        # same collector moves between 8899/18899: that causes config churn,
+        # reloads, and a second avoidable reconnect.  Only backfill truly old
+        # entries which have no callback port at all.
+        if int(data.get(CONF_TCP_PORT) or 0) <= 0 and int(port) > 0:
             data[CONF_TCP_PORT] = int(port)
             changed = True
 
@@ -906,6 +914,21 @@ def get_callback_session_registry(hass: HomeAssistant) -> CallbackSessionRegistr
         return None
     registry = domain_data.get(_REGISTRY_DATA_KEY)
     return registry if isinstance(registry, CallbackSessionRegistry) else None
+
+
+def get_passive_callback_discovery(
+    hass: HomeAssistant,
+) -> PassiveCallbackDiscovery | None:
+    """Return the domain passive-discovery service, if it is running."""
+
+    data = getattr(hass, "data", None)
+    if not isinstance(data, dict):
+        return None
+    domain_data = data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return None
+    service = domain_data.get(_DATA_KEY)
+    return service if isinstance(service, PassiveCallbackDiscovery) else None
 
 
 async def async_start_passive_callback_discovery(hass: HomeAssistant) -> None:

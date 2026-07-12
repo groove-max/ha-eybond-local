@@ -2439,6 +2439,32 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_catalog_restored_identity_keeps_binding_and_probe_error(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            hub.set_initial_inverter_binding(
+                _SuccessDriver(),
+                self._inverter(
+                    detection_status="persisted_model_probe_degraded"
+                ),
+            )
+
+            async def _probe_timeout(_transport, *, driver_hint=""):
+                raise RuntimeError("modbus_catalog:probe_timeout")
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                new=_probe_timeout,
+            ):
+                snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertIsNotNone(snapshot.inverter)
+            self.assertEqual(snapshot.values["runtime_driver_state"], "driver_bound")
+            self.assertEqual(snapshot.values["runtime_inverter_state"], "provisional")
+            self.assertEqual(snapshot.last_error, "modbus_catalog:probe_timeout")
+
+        asyncio.run(_run())
+
     # 4. startup persisted identity + different live full identity reports conflict.
     def test_startup_persisted_identity_conflict_keeps_durable(self) -> None:
         async def _run() -> None:
@@ -2562,6 +2588,48 @@ class RuntimeStateMachineTests(unittest.TestCase):
             hub._build_snapshot()
 
         self.assertLessEqual(len(hub._state_transition_history), 20)
+
+    def test_driver_detection_is_cancelled_when_owned_session_changes(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+
+            class _SessionChangingLink(_FakeLinkManager):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.owned_session_generation = 1
+                    self.changed = asyncio.Event()
+
+                async def async_wait_for_owned_session_change(self, generation: int) -> None:
+                    while self.owned_session_generation == generation:
+                        await self.changed.wait()
+
+            link = _SessionChangingLink()
+            hub._link_manager = link
+            started = asyncio.Event()
+            cancelled = asyncio.Event()
+
+            async def _slow_detection(*_args, **_kwargs):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                side_effect=_slow_detection,
+            ):
+                detection = asyncio.create_task(hub._async_detect_driver())
+                await asyncio.wait_for(started.wait(), timeout=1.0)
+                link.owned_session_generation += 1
+                link.changed.set()
+                result = await asyncio.wait_for(detection, timeout=1.0)
+
+            self.assertEqual(result, "collector_session_changed")
+            self.assertTrue(cancelled.is_set())
+
+        asyncio.run(_run())
 
 
 class CollectorDevcodeDiagnosticsTests(unittest.TestCase):

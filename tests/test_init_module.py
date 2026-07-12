@@ -88,6 +88,7 @@ from custom_components.eybond_local import (
     _async_cleanup_obsolete_entities,
     _async_finalize_expert_entity_migration,
     _async_initial_refresh_for_setup,
+    _async_ensure_listener_entry,
     _async_remove_legacy_runtime_select_entities,
     _async_self_heal_collector_cloud_family,
     _async_self_heal_entry_title,
@@ -100,6 +101,7 @@ from custom_components.eybond_local import (
     _prime_metadata_caches,
     _register_entry_stop_shutdown,
     async_setup_entry,
+    async_unload_entry,
 )
 from custom_components.eybond_local.collector.transport import CollectorListenerBindError
 from custom_components.eybond_local.tooling import (
@@ -129,6 +131,94 @@ def _runtime_entity_key_module_stubs() -> dict[str, types.ModuleType]:
         "custom_components.eybond_local.text": text_module,
         "custom_components.eybond_local.tooling": tooling_module,
     }
+
+
+class DomainClaimLifecycleTests(unittest.TestCase):
+    """Entry setup claims the durable PN in the DOMAIN registry; unload releases."""
+
+    def test_setup_claims_and_unload_releases_domain_claim(self) -> None:
+        from custom_components.eybond_local import (
+            _register_entry_callback_session_claim,
+        )
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        registry = CallbackSessionRegistry()
+        hass = types.SimpleNamespace(
+            data={"eybond_local": {"callback_session_registry": registry}}
+        )
+        unload_callbacks: list = []
+        entry = types.SimpleNamespace(
+            entry_id="entry-claim-1",
+            data={"collector_pn": "V001020SYN62344022"},
+            options={},
+            async_on_unload=unload_callbacks.append,
+        )
+
+        _register_entry_callback_session_claim(hass, entry)
+
+        # The REAL config entry id owns the durable PN identity.
+        self.assertEqual(
+            registry.owner_for_pn("V001020SYN62344022"), "entry-claim-1"
+        )
+        self.assertEqual(len(unload_callbacks), 1)
+
+        # Unload releases the claim; other claims are untouched.
+        registry.claim("entry-other", collector_pn="V000405SYN94677058")
+        unload_callbacks[0]()
+        self.assertEqual(registry.owner_for_pn("V001020SYN62344022"), "")
+        self.assertEqual(
+            registry.owner_for_pn("V000405SYN94677058"), "entry-other"
+        )
+
+
+class ListenerBootstrapEntryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_listener_entry_has_no_runtime_or_platforms(self) -> None:
+        entry = types.SimpleNamespace(
+            data={"entry_role": "listener"},
+            runtime_data="stale",
+        )
+
+        result = await async_setup_entry(types.SimpleNamespace(), entry)
+
+        self.assertTrue(result)
+        self.assertIsNone(entry.runtime_data)
+        self.assertTrue(await async_unload_entry(types.SimpleNamespace(), entry))
+
+    async def test_ensure_listener_entry_starts_one_internal_import_flow(self) -> None:
+        flow = types.SimpleNamespace(async_init=AsyncMock())
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_entries=lambda _domain: [],
+                flow=flow,
+            )
+        )
+
+        await _async_ensure_listener_entry(hass)
+
+        flow.async_init.assert_awaited_once_with(
+            "eybond_local",
+            context={"source": "import"},
+            data={"entry_role": "listener"},
+        )
+
+    async def test_ensure_listener_entry_is_idempotent(self) -> None:
+        listener_entry = types.SimpleNamespace(
+            entry_id="listener-entry",
+            data={"entry_role": "listener"},
+        )
+        flow = types.SimpleNamespace(async_init=AsyncMock())
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_entries=lambda _domain: [listener_entry],
+                flow=flow,
+            )
+        )
+
+        await _async_ensure_listener_entry(hass)
+
+        flow.async_init.assert_not_awaited()
 
 
 class InitModuleTests(unittest.TestCase):

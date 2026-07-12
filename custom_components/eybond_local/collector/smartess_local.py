@@ -8,6 +8,7 @@ from .protocol import FC_QUERY_COLLECTOR, FC_SET_COLLECTOR
 from .transport import CollectorTransport
 from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
 
+QUERY_COLLECTOR_PN = 2
 QUERY_COLLECTOR_VERSION = 5
 QUERY_HARDWARE_VERSION = 6
 QUERY_PROTOCOL_DESCRIPTOR = 14
@@ -187,6 +188,15 @@ class SmartEssLocalSession:
 
         response = await self.query_collector(QUERY_COLLECTOR_VERSION)
         _require_query_success(response)
+        return response.text
+
+    async def query_collector_pn(self) -> str:
+        """Read the collector's authoritative full PN using FC=2 parameter 2."""
+
+        response = await self.query_collector(QUERY_COLLECTOR_PN)
+        _require_query_success(response)
+        if not response.text:
+            raise SmartEssLocalError("collector_pn_empty")
         return response.text
 
     async def query_protocol_descriptor(self) -> SmartEssProtocolDescriptor:
