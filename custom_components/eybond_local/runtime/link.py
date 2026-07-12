@@ -502,6 +502,17 @@ class EybondRuntimeLinkManager:
         # identity/location -- never peer IP, endpoint, or collector type.
         self._owned_session_generation = 0
         self._owned_session_fingerprint: tuple[str, int] = ("", 0)
+        # Socket ownership and wire confirmation are related but distinct
+        # lifecycle transitions.  A newly accepted socket first appears as
+        # pending and later becomes routed without changing session_id/port.
+        # Track that trusted-wire transition separately so the confirmed
+        # binding is adopted when the SAME socket becomes routable, without
+        # falsely bumping the socket generation or cancelling work tied to it.
+        self._owned_binding_observation_fingerprint: tuple[str, str, str] = (
+            "",
+            "",
+            "",
+        )
         self._owned_session_changed = asyncio.Event()
         self._owned_session_monitor_task: asyncio.Task[None] | None = None
         # Confirmed wire binding. A collector reconnect briefly leaves NO live
@@ -567,6 +578,40 @@ class EybondRuntimeLinkManager:
             int(getattr(session, "listener_port", 0) or 0),
         )
 
+    def _current_trusted_binding_observation_fingerprint(
+        self,
+    ) -> tuple[str, str, str]:
+        """Return positive live-wire evidence for explicit binding adoption.
+
+        The socket can move from ``waiting_for_route_identity`` to
+        ``routed_framed``/``routed_at_text`` without changing session id or
+        listener port.  Only the latter state is trusted wire evidence, so this
+        fingerprint deliberately stays empty until the live SessionHandle is
+        observed and non-conflicting.
+        """
+
+        handle = self._live_session_handle()
+        if not handle.observed or handle.conflict:
+            return ("", "", "")
+        return (
+            str(handle.session_id or "").strip(),
+            str(handle.wire_framing or "").strip(),
+            str(handle.collector_pn or "").strip(),
+        )
+
+    def _reconcile_owned_session_binding_observation(self) -> None:
+        """Adopt a binding when the owned socket gains trusted wire evidence."""
+
+        fingerprint = self._current_trusted_binding_observation_fingerprint()
+        if fingerprint == getattr(
+            self,
+            "_owned_binding_observation_fingerprint",
+            ("", "", ""),
+        ):
+            return
+        self._owned_binding_observation_fingerprint = fingerprint
+        self._adopt_trusted_live_binding()
+
     @property
     def owned_session_generation(self) -> int:
         """Return the generation of the currently owned inbound socket."""
@@ -615,6 +660,9 @@ class EybondRuntimeLinkManager:
 
         while True:
             await asyncio.sleep(0.2)
+            # Routing/negotiation can complete on the same socket, so it is not
+            # sufficient to react only to session_id/port replacement.
+            self._reconcile_owned_session_binding_observation()
             fingerprint = self._current_owned_session_fingerprint()
             if fingerprint == self._owned_session_fingerprint:
                 continue

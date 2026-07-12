@@ -913,5 +913,53 @@ class HandoverLifecycleEvidenceTests(unittest.TestCase):
         self.assertEqual(status["collector_callback_identity_status"], "conflict")
 
 
+class ProductionBindingAdoptionLifecycleTests(unittest.TestCase):
+    """The monitor adopts wire evidence when one pending socket becomes routed."""
+
+    def test_same_socket_pending_to_routed_adopts_confirmed_binding(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[
+                _observed(
+                    "same-socket",
+                    FULL_PN,
+                    state="waiting_for_route_identity",
+                )
+            ],
+        )
+
+        # The accepted socket exists, but it has not established a trusted wire.
+        link._reconcile_owned_session_binding_observation()
+        self.assertIsNone(link.confirmed_wire_binding)
+        socket_fingerprint = link._current_owned_session_fingerprint()
+
+        # Listener routing completes on that exact socket.  session_id and port
+        # stay unchanged, but the independent wire-observation lifecycle must
+        # now adopt the framed binding.
+        _set_sessions(
+            link,
+            [
+                _observed(
+                    "same-socket",
+                    FULL_PN,
+                    state="routed_framed",
+                    source="framed_heartbeat",
+                )
+            ],
+        )
+        self.assertEqual(link._current_owned_session_fingerprint(), socket_fingerprint)
+        link._reconcile_owned_session_binding_observation()
+
+        binding = link.confirmed_wire_binding
+        self.assertIsNotNone(binding)
+        self.assertTrue(binding.uses_framed_wire)
+        self.assertEqual(
+            binding.inverter_forward_adapter,
+            ADAPTER_INVERTER_FRAMED_FC4,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
