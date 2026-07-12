@@ -18,7 +18,6 @@ from typing import Any
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import network
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -6599,20 +6598,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         path = export_result.path
         if export_result.download_url:
             relative_download_url = str(export_result.download_url)
-            download_url = self._absolute_local_download_url(relative_download_url)
         else:
             # Use a short-lived signed HA API path for browser navigation. A
             # plain authenticated API URL returns 401 when opened from markdown,
             # because the browser does not attach the HA bearer token to a
-            # normal link click. Store the HA-relative path for diagnostics, but
-            # expose an absolute URL in the UI: HA's config-flow frontend may
-            # otherwise SPA-route a relative /api link as the current Lovelace
-            # route with only the authSig query preserved.
+            # normal link click. Keep it relative so the browser uses the same
+            # HA origin through which the frontend was opened (LAN, WireGuard,
+            # reverse proxy, or external URL). HA signs the path and query, not
+            # the origin.
             relative_download_url = sign_support_package_download_url(
                 self.hass,
                 self.config_entry.entry_id,
             )
-            download_url = self._absolute_local_download_url(relative_download_url)
+        download_url = relative_download_url
         self._publish_tooling_values(
             cloud_evidence_path=str(
                 support_bundle_payload["runtime"]["values"].get("cloud_evidence_path") or ""
@@ -7282,23 +7280,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         invalidator = getattr(self._runtime, "invalidate_collector_runtime_values", None)
         if callable(invalidator):
             invalidator()
-
-    def _absolute_local_download_url(self, relative_url: str) -> str:
-        """Return an absolute HA URL for one HA-relative download path when possible."""
-
-        if not relative_url:
-            return ""
-        try:
-            base_url = network.get_url(
-                self.hass,
-                allow_internal=True,
-                allow_external=True,
-                allow_cloud=False,
-                prefer_external=True,
-            ).rstrip("/")
-        except network.NoURLAvailableError:
-            return relative_url
-        return f"{base_url}{relative_url}"
 
     def _support_workflow_values(self, snapshot: RuntimeSnapshot | None = None) -> dict[str, Any]:
         """Return user-facing support workflow guidance for the current entry."""

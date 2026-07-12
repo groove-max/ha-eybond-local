@@ -790,25 +790,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator.cloud_evidence_provider, "")
         self.assertFalse(coordinator.cloud_evidence_export_available)
 
-    def test_absolute_local_download_url_makes_signed_api_link_browser_safe(self) -> None:
-        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
-        coordinator.hass = object()
-
-        with patch.object(
-            self.coordinator_module.network,
-            "get_url",
-            return_value="http://192.168.1.98:8123/",
-        ):
-            url = coordinator._absolute_local_download_url(
-                "/api/eybond_local/support_package/entry-1?authSig=signed"
-            )
-
-        self.assertEqual(
-            url,
-            "http://192.168.1.98:8123/api/eybond_local/support_package/entry-1?authSig=signed",
-        )
-        self.assertNotIn("/lovelace/", url)
-
     def test_diagnostic_waits_for_in_progress_runtime_refresh(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(

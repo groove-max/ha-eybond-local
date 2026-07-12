@@ -10399,8 +10399,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             )
 
         download_url = str(
-            coordinator.data.values.get("support_package_download_url")
-            or coordinator.data.values.get("support_package_download_relative_url")
+            coordinator.data.values.get("support_package_download_relative_url")
+            or coordinator.data.values.get("support_package_download_url")
             or ""
         )
         return await self._async_show_diagnostics_result(
@@ -11397,15 +11397,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "suggested_schema_output": effective_register_schema_name or self._tr("common.dynamic.not_available", "Not available"),
             "support_package_path": str(values.get("support_package_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
             "support_package_download_url": str(
-                values.get("support_package_download_url")
-                or values.get("support_package_download_relative_url")
+                values.get("support_package_download_relative_url")
+                or values.get("support_package_download_url")
                 or ""
             ),
             "support_package_download_markdown": (
                 self._download_link_markup(
                     str(
-                        values.get("support_package_download_url")
-                        or values.get("support_package_download_relative_url")
+                        values.get("support_package_download_relative_url")
+                        or values.get("support_package_download_url")
                         or ""
                     ),
                     label=self._tr(

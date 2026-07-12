@@ -6,6 +6,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from aiohttp import hdrs
+
 from ..const import DOMAIN
 from .package import support_packages_root
 
@@ -62,6 +64,22 @@ def resolve_support_package_download_path(
     return path
 
 
+def support_package_download_request_allowed(request: Any) -> bool:
+    """Authorize a request after Home Assistant auth middleware accepted it.
+
+    Signed browser navigation carries ``authSig`` without a bearer header.
+    Normal API requests remain admin-only. Checking for ``authSig`` alone is
+    unsafe because HA prefers a bearer header when both are present; a
+    non-admin bearer request must not bypass the admin check by appending an
+    arbitrary query parameter.
+    """
+
+    user = request["hass_user"]
+    if user.is_admin:
+        return True
+    return hdrs.AUTHORIZATION not in request.headers and "authSig" in request.query
+
+
 def async_register_support_package_download_view(hass: Any) -> bool:
     """Register the authenticated support package download endpoint once."""
 
@@ -88,13 +106,12 @@ def async_register_support_package_download_view(hass: Any) -> bool:
 
         async def get(self, request, entry_id: str):
             request_hass = request.app["hass"]
-            user = request["hass_user"]
             # Normal API calls still require an admin user. Browser downloads
             # use HA signed paths: those are short-lived bearer URLs generated
             # by Home Assistant specifically for navigation/download requests,
             # and may be backed by HA's content user when generated outside an
             # HTTP/WebSocket request context.
-            if "authSig" not in request.query and not user.is_admin:
+            if not support_package_download_request_allowed(request):
                 raise Unauthorized()
 
             entry = request_hass.config_entries.async_get_entry(entry_id)

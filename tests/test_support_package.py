@@ -21,6 +21,7 @@ from custom_components.eybond_local.support.download import (
     resolve_support_package_download_path,
     sign_support_package_download_url,
     support_package_authenticated_download_url,
+    support_package_download_request_allowed,
 )
 from custom_components.eybond_local.support.package import (
     _mask_jsonl_text,
@@ -46,6 +47,31 @@ class SupportPackageTests(unittest.TestCase):
                 sign_support_package_download_url(object(), "entry123"),
                 "/api/eybond_local/support_package/entry123?authSig=signed",
             )
+
+    def test_signed_navigation_and_admin_api_download_are_allowed(self) -> None:
+        class Request(dict):
+            headers: dict[str, str]
+            query: dict[str, str]
+
+        signed = Request(hass_user=types.SimpleNamespace(is_admin=False))
+        signed.headers = {}
+        signed.query = {"authSig": "signed"}
+        self.assertTrue(support_package_download_request_allowed(signed))
+
+        admin = Request(hass_user=types.SimpleNamespace(is_admin=True))
+        admin.headers = {"Authorization": "Bearer admin"}
+        admin.query = {}
+        self.assertTrue(support_package_download_request_allowed(admin))
+
+    def test_non_admin_bearer_cannot_bypass_admin_with_authsig_parameter(self) -> None:
+        class Request(dict):
+            headers: dict[str, str]
+            query: dict[str, str]
+
+        request = Request(hass_user=types.SimpleNamespace(is_admin=False))
+        request.headers = {"Authorization": "Bearer non-admin"}
+        request.query = {"authSig": "not-validated-because-bearer-wins"}
+        self.assertFalse(support_package_download_request_allowed(request))
 
     def test_download_view_registration_noops_for_minimal_hass_stub(self) -> None:
         self.assertFalse(

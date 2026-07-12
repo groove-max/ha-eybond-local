@@ -6569,7 +6569,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step_id"], "proxy_capture")
         self.assertEqual(result["description_placeholders"]["proxy_capture_action_result"], "Capture stopped.")
 
-    async def test_create_support_package_uses_absolute_download_link_in_result(self) -> None:
+    async def test_create_support_package_uses_current_origin_download_link_in_result(self) -> None:
         options = self._make_options_flow()
 
         async def _export_support_package_with_cloud_refresh(
@@ -6602,7 +6602,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["step_id"], "diagnostics_result")
         self.assertIn(
-            'href="http://192.168.1.50:8123/local/eybond_local/support/support_archive.zip"',
+            'href="/local/eybond_local/support/support_archive.zip"',
+            result["description_placeholders"]["download_markdown"],
+        )
+        self.assertNotIn(
+            "http://192.168.1.50:8123",
             result["description_placeholders"]["download_markdown"],
         )
         self.assertIn(
@@ -6861,7 +6865,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(
                 values={
-                    "support_package_download_url": "/api/diagnostics/support_archive.zip",
+                    "support_package_download_url": "https://ha.example/api/diagnostics/support_archive.zip",
+                    "support_package_download_relative_url": "/api/diagnostics/support_archive.zip?authSig=current-origin",
                 }
             ),
         )
@@ -6884,6 +6889,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "Fresh cloud evidence was fetched",
             result["description_placeholders"]["status"],
+        )
+        self.assertIn(
+            "/api/diagnostics/support_archive.zip?authSig=current-origin",
+            result["description_placeholders"]["download_markdown"],
+        )
+        self.assertNotIn(
+            "https://ha.example",
+            result["description_placeholders"]["download_markdown"],
         )
 
     async def test_create_support_package_for_bridge_does_not_refresh_cloud_evidence(self) -> None:
