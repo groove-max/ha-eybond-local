@@ -397,11 +397,11 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(
             config_specs["secondary_charging_priority"].enum_map,
             {
-                0: "Off",
-                1: "PV Priority",
-                2: "PV and Utility",
-                3: "PV Only",
-                4: "PV Priority With Load Reserve",
+                0: "OFF",
+                1: "SOF",
+                2: "SNU",
+                3: "OSO",
+                4: "SOR",
             },
         )
         self.assertEqual(config_specs["constant_voltage_to_float_wait_time"].register, 639)
