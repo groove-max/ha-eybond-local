@@ -185,6 +185,11 @@ class EybondRuntimeSettingSelect(CoordinatorEntity[EybondLocalCoordinator], Sele
             return "Collector is not connected."
         if reason == "collector_operation_mode_rollback_endpoint_unavailable":
             return "No upstream callback endpoint is available yet."
+        # An operation-mode change moves the collector's callback endpoint, i.e. it
+        # requires an endpoint write: gate on the write_endpoint capability so an
+        # unavailable/conflict wire hides the control.
+        if not self.coordinator.collector_management_action_available("write_endpoint"):
+            return "This collector connection does not support changing the operation mode."
         return None
 
     @property

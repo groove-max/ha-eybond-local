@@ -1,62 +1,53 @@
-"""SmartESS local collector helpers over the existing reverse TCP channel."""
+"""SmartESS protocol-descriptor resolution over the neutral collector wire.
+
+The FC=2/FC=3 collector-management wire itself is provider-neutral and now lives
+in ``collector_wire``. This module keeps the SmartESS-specific protocol-asset
+catalog resolution (query 14 -> asset id) and re-exports the neutral wire names
+for backward compatibility. ``SmartEssLocalSession`` is the neutral wire session
+plus the SmartESS descriptor/catalog reads.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .protocol import FC_QUERY_COLLECTOR, FC_SET_COLLECTOR
-from .transport import CollectorTransport
-from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
+from .collector_wire import (
+    CollectorManagementUnsupportedError,
+    CollectorQueryResponse,
+    CollectorSetResponse,
+    CollectorWireError,
+    CollectorWireManagementSession,
+    QUERY_COLLECTOR_PN,
+    QUERY_COLLECTOR_VERSION,
+    QUERY_HARDWARE_VERSION,
+    QUERY_NETWORK_DIAGNOSTICS,
+    QUERY_PROTOCOL_DESCRIPTOR,
+    QUERY_REBOOT_REQUIRED,
+    QUERY_SERIAL_BAUDRATE,
+    QUERY_WIFI_SCAN_LIST,
+    SET_REBOOT_OR_APPLY,
+    SET_SERIAL_BAUDRATE,
+    SET_SERVER_ENDPOINT,
+    SET_TARGET_PASSWORD,
+    SET_TARGET_SSID,
+    async_send_collector_reboot_or_apply,
+    build_query_collector_payload,
+    build_set_collector_payload,
+    parse_query_collector_response,
+    parse_set_collector_response,
+)
+from ..metadata.smartess_protocol_catalog_loader import (
+    SmartEssProtocolCatalogEntry,
+    load_smartess_protocol_catalog,
+)
 
-QUERY_COLLECTOR_PN = 2
-QUERY_COLLECTOR_VERSION = 5
-QUERY_HARDWARE_VERSION = 6
-QUERY_PROTOCOL_DESCRIPTOR = 14
-QUERY_REBOOT_REQUIRED = 30
-QUERY_SERIAL_BAUDRATE = 34
-QUERY_NETWORK_DIAGNOSTICS = 48
-QUERY_WIFI_SCAN_LIST = 49
-
-SET_SERVER_ENDPOINT = 21
-SET_REBOOT_OR_APPLY = 29
-SET_SERIAL_BAUDRATE = 34
-SET_TARGET_SSID = 41
-SET_TARGET_PASSWORD = 43
+# ``SmartEssLocalError`` is the historical name of the neutral wire error; keep
+# it as an alias so existing callers/tests keep working.
+SmartEssLocalError = CollectorWireError
 
 _LEGACY_PROTOCOL_ASSET_ALIASES: dict[str, str] = {
     "0230": "0942",
 }
-
-
-class SmartEssLocalError(Exception):
-    """Raised when one SmartESS local collector payload is invalid."""
-
-
-class CollectorManagementUnsupportedError(RuntimeError):
-    """The transport cannot carry collector-management commands at all.
-
-    Typed so callers (runtime entity paths and the onboarding strategy
-    verification) can distinguish "this collector/session cannot be managed"
-    from "the command was sent but not confirmed" without matching substrings.
-    """
-
-
-@dataclass(frozen=True, slots=True)
-class CollectorQueryResponse:
-    """Decoded FC=2 collector response payload."""
-
-    code: int
-    parameter: int
-    data: bytes
-    text: str
-
-
-@dataclass(frozen=True, slots=True)
-class CollectorSetResponse:
-    """Decoded FC=3 collector response payload."""
-
-    status: int
-    parameter: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,46 +59,6 @@ class SmartEssProtocolDescriptor:
     asset_name: str
     suffix: str = ""
     uses_legacy_alias: bool = False
-
-
-def build_query_collector_payload(*parameters: int) -> bytes:
-    """Build one FC=2 collector query payload from one or more parameters."""
-
-    if not parameters:
-        raise SmartEssLocalError("query_parameters_required")
-    return bytes(_coerce_u8(parameter, label="query_parameter") for parameter in parameters)
-
-
-def parse_query_collector_response(payload: bytes) -> CollectorQueryResponse:
-    """Decode one FC=2 collector response payload."""
-
-    if len(payload) < 2:
-        raise SmartEssLocalError("query_response_too_short")
-
-    data = bytes(payload[2:])
-    return CollectorQueryResponse(
-        code=payload[0],
-        parameter=payload[1],
-        data=data,
-        text=data.decode("ascii", errors="ignore").strip("\x00"),
-    )
-
-
-def build_set_collector_payload(parameter: int, value: str) -> bytes:
-    """Build one FC=3 collector set payload."""
-
-    parameter_u8 = _coerce_u8(parameter, label="set_parameter")
-    if not isinstance(value, str) or not value.isascii():
-        raise SmartEssLocalError("set_value_not_ascii")
-    return bytes((parameter_u8,)) + value.encode("ascii")
-
-
-def parse_set_collector_response(payload: bytes) -> CollectorSetResponse:
-    """Decode one FC=3 collector response payload."""
-
-    if len(payload) < 2:
-        raise SmartEssLocalError("set_response_too_short")
-    return CollectorSetResponse(status=payload[0], parameter=payload[1])
 
 
 def resolve_protocol_descriptor(
@@ -147,63 +98,17 @@ def resolve_protocol_descriptor(
     )
 
 
-class SmartEssLocalSession:
-    """SmartESS local collector session over the shared EyeBond reverse TCP transport."""
-
-    def __init__(
-        self,
-        transport: CollectorTransport,
-        *,
-        devcode: int = 1,
-        collector_addr: int = 1,
-    ) -> None:
-        self._transport = transport
-        self._devcode = _coerce_u16(devcode, label="devcode")
-        self._collector_addr = _coerce_u8(collector_addr, label="collector_addr")
-
-    async def query_collector(self, *parameters: int) -> CollectorQueryResponse:
-        """Send one collector FC=2 query and decode the response payload."""
-
-        _, payload = await self._transport.async_send_collector(
-            fcode=FC_QUERY_COLLECTOR,
-            payload=build_query_collector_payload(*parameters),
-            devcode=self._devcode,
-            collector_addr=self._collector_addr,
-        )
-        return parse_query_collector_response(payload)
-
-    async def set_collector(self, parameter: int, value: str) -> CollectorSetResponse:
-        """Send one collector FC=3 set request and decode the response payload."""
-
-        _, payload = await self._transport.async_send_collector(
-            fcode=FC_SET_COLLECTOR,
-            payload=build_set_collector_payload(parameter, value),
-            devcode=self._devcode,
-            collector_addr=self._collector_addr,
-        )
-        return parse_set_collector_response(payload)
-
-    async def query_collector_version(self) -> str:
-        """Read the collector version string using query parameter 5."""
-
-        response = await self.query_collector(QUERY_COLLECTOR_VERSION)
-        _require_query_success(response)
-        return response.text
-
-    async def query_collector_pn(self) -> str:
-        """Read the collector's authoritative full PN using FC=2 parameter 2."""
-
-        response = await self.query_collector(QUERY_COLLECTOR_PN)
-        _require_query_success(response)
-        if not response.text:
-            raise SmartEssLocalError("collector_pn_empty")
-        return response.text
+class SmartEssLocalSession(CollectorWireManagementSession):
+    """Neutral collector wire session plus SmartESS protocol-descriptor reads."""
 
     async def query_protocol_descriptor(self) -> SmartEssProtocolDescriptor:
         """Read and parse the SmartESS protocol asset descriptor using query 14."""
 
         response = await self.query_collector(QUERY_PROTOCOL_DESCRIPTOR)
-        _require_query_success(response)
+        if response.code != 0:
+            raise SmartEssLocalError(
+                f"query_failed:parameter={response.parameter}:code={response.code}"
+            )
         return resolve_protocol_descriptor(response)
 
     async def query_known_protocol(self) -> SmartEssProtocolCatalogEntry | None:
@@ -211,47 +116,3 @@ class SmartEssLocalSession:
 
         descriptor = await self.query_protocol_descriptor()
         return load_smartess_protocol_catalog().protocols.get(descriptor.asset_id)
-
-
-async def async_send_collector_reboot_or_apply(transport: CollectorTransport) -> None:
-    """Send the single collector reboot/apply wire command (parameter 29 = "1").
-
-    This is THE low-level restart command. Both the runtime collector-management
-    path (`EybondHub._async_execute_collector_system_action`) and the onboarding
-    connection-strategy verification use it, so the wire command exists exactly
-    once. Raises ``RuntimeError`` when the transport cannot carry collector
-    management or the collector did not confirm the set.
-    """
-
-    if not hasattr(transport, "async_send_collector"):
-        raise CollectorManagementUnsupportedError(
-            "collector_local_management_not_supported"
-        )
-
-    session = SmartEssLocalSession(transport)
-    response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
-    if response.status != 0 or response.parameter != SET_REBOOT_OR_APPLY:
-        raise RuntimeError(
-            f"collector_set_failed:parameter={SET_REBOOT_OR_APPLY}:status={response.status}"
-        )
-
-
-def _require_query_success(response: CollectorQueryResponse) -> None:
-    if response.code != 0:
-        raise SmartEssLocalError(
-            f"query_failed:parameter={response.parameter}:code={response.code}"
-        )
-
-
-def _coerce_u8(value: int, *, label: str) -> int:
-    numeric = int(value)
-    if not 0 <= numeric <= 0xFF:
-        raise SmartEssLocalError(f"{label}_out_of_range")
-    return numeric
-
-
-def _coerce_u16(value: int, *, label: str) -> int:
-    numeric = int(value)
-    if not 0 <= numeric <= 0xFFFF:
-        raise SmartEssLocalError(f"{label}_out_of_range")
-    return numeric

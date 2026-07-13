@@ -154,7 +154,22 @@ def _build_diagnostics_split(
             "collector_management_adapter": values.get(
                 "collector_callback_collector_management_adapter", ""
             ),
-            **_present(values, "smartess_device_address"),
+            **_present(
+                values,
+                "collector_management_adapter_id",
+                "collector_management_adapter_provenance",
+                "collector_management_can_read_endpoint_state",
+                "collector_management_can_write_endpoint",
+                "collector_management_can_apply_changes",
+                "collector_management_can_reboot",
+                "collector_management_last_operation",
+                "collector_management_last_status",
+                "collector_management_last_error_class",
+                "collector_management_last_error_code",
+                "collector_management_last_duration_ms",
+                "collector_management_last_timestamp",
+                "smartess_device_address",
+            ),
         },
         "migration": {
             "migration_status": axes.get("migration_status", ""),

@@ -382,6 +382,13 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             )()
             if mode_apply_lock_reason is not None:
                 return mode_apply_lock_reason
+            # When starting proxy capture redirects the collector callback endpoint,
+            # it needs the write_endpoint capability; gate it so an
+            # unavailable/conflict wire cannot offer a redirect it can't perform.
+            if bool(
+                getattr(overview, "redirect_required", False)
+            ) and not self.coordinator.collector_management_action_available("write_endpoint"):
+                return "This collector connection does not support the endpoint redirect proxy capture needs."
             if overview.can_start:
                 return None
             if overview.blocking_reason == "collector_control_disabled":
@@ -422,6 +429,20 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return "Requires Auto or Full Control."
         if not self.coordinator.data.connected:
             return "Collector is not connected."
+        # Capability gate: the negotiated management adapter must actually support
+        # this action over the CURRENT wire (updates live on handover, no reload).
+        # Never gated on collector kind / cloud provider / hostname.
+        _action_capability = {
+            "bind_collector_to_home_assistant": "write_endpoint",
+            "rollback_collector_server_endpoint": "write_endpoint",
+            "apply_collector_changes": "apply_changes",
+            "reboot_collector": "reboot",
+        }
+        required_capability = _action_capability.get(self._spec.key)
+        if required_capability is not None and not self.coordinator.collector_management_action_available(
+            required_capability
+        ):
+            return "This collector connection does not support this management action."
         if self._spec.key == "bind_collector_to_home_assistant":
             current_endpoint = _normalize_collector_endpoint(
                 self.coordinator.data.values.get("collector_server_endpoint")

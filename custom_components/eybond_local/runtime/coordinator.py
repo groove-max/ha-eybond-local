@@ -1408,6 +1408,35 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return self.collector_operation_mode_apply_lock_reason()
         return None
 
+    def collector_management_capabilities(self):
+        """Return the CURRENT collector-management capabilities from the runtime.
+
+        Recomputed from the negotiated live wire each call, so it reflects a live
+        handover/adoption immediately without a config-entry reload. Wire choice
+        is the runtime's negotiated authority -- never collector kind, cloud
+        provider or hostname.
+        """
+
+        getter = getattr(self._runtime, "collector_management_capabilities", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def collector_management_action_available(self, action: str) -> bool:
+        """Return whether one management ACTION is supported by the live adapter.
+
+        ``action`` in {write_endpoint, apply_changes, reboot, read_endpoint_state}.
+        Conflict/unknown/unavailable -> all False (fail closed).
+        """
+
+        capabilities = self.collector_management_capabilities()
+        if capabilities is None:
+            return False
+        return bool(getattr(capabilities, action, False))
+
     async def async_setup(self) -> None:
         """Start the underlying hub."""
 

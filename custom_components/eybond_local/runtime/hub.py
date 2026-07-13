@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from time import monotonic
+from time import monotonic, time as _wall_time
 from typing import Any, Callable
 
 from ..canonical_telemetry import (
@@ -17,7 +17,17 @@ from ..const import (
     DRIVER_HINT_AUTO,
 )
 from ..connection.models import EybondConnectionSpec
+from ..connection.session_handle import ADAPTER_COLLECTOR_AT_COMMANDS
 from ..collector.at_runtime import query_runtime_collector_at_values
+from ..collector.collector_wire import (
+    CollectorWireManagementSession,
+    QUERY_HARDWARE_VERSION,
+    parse_query_collector_response,
+)
+from ..collector.parameter_registry import (
+    COLLECTOR_PARAMETER_DEFINITION_BY_ID,
+    query_runtime_collector_values,
+)
 from ..collector.capabilities import (
     collector_capability_profile_from_runtime,
     parse_esp_collector_hardware_token,
@@ -27,16 +37,13 @@ from ..collector_endpoint import (
     inspect_collector_server_endpoint,
     normalize_collector_server_endpoint as normalize_runtime_collector_server_endpoint,
 )
-from ..collector.parameter_registry import (
-    COLLECTOR_PARAMETER_DEFINITION_BY_ID,
-    query_runtime_collector_values,
-)
-from ..collector.smartess_local import (
-    QUERY_REBOOT_REQUIRED,
-    SET_SERVER_ENDPOINT,
-    SmartEssLocalSession,
-    async_send_collector_reboot_or_apply,
-    parse_query_collector_response,
+from ..collector.management import (
+    CollectorEndpointWriteResult,
+    CollectorManagementCapabilities,
+    CollectorManagementError,
+    CollectorManagementUnsupportedError,
+    CollectorSystemActionResult,
+    select_collector_management_adapter,
 )
 from ..drivers.base import InverterDriver
 from ..drivers.command_support import (
@@ -659,6 +666,9 @@ class EybondHub:
         self._collector_metadata_fc_last_ms = 0
         self._collector_metadata_at_last_ms = 0
         self._collector_last_server_endpoint_before_change = ""
+        # Last collector-management operation record (non-sensitive) for support
+        # diagnostics; populated by ``_run_management_operation``.
+        self._last_management_operation: dict[str, object] | None = None
         self._write_blockers: dict[str, CapabilityBlocker] = {}
         self._last_operating_mode: object | None = None
         self._last_success_monotonic: float | None = None
@@ -1438,12 +1448,11 @@ class EybondHub:
                 and str(self._connection.collector_ip or "").strip()
             ):
                 # Collector-side metadata must be readable before an inverter
-                # heartbeat exists. This is required for collector-only bridge
-                # bootstrap: the esp-collector identity token lives in FC=2
-                # param 6, but a freshly added bridge without an inverter will
-                # not produce a framed inverter heartbeat yet. Route by the
-                # configured collector IP and let the shared transport claim a
-                # pending callback socket if one is available.
+                # heartbeat exists (collector-only bridge bootstrap): the
+                # esp-collector identity token lives in FC=2 param 6, but a fresh
+                # bridge without an inverter produces no framed inverter heartbeat
+                # yet. Route by the configured collector IP and let the shared
+                # transport claim a pending callback socket if one is available.
                 transport = getattr(self._link_manager, "transport", None)
 
         active_at_transport = getattr(self._link_manager, "active_collector_at_transport", missing)
@@ -1456,10 +1465,6 @@ class EybondHub:
                 and not self._link_manager.connected
                 and str(self._connection.collector_ip or "").strip()
             ):
-                # Same collector-only bootstrap rule for plain AT metadata:
-                # use the per-entry transport facade even before it becomes the
-                # active runtime transport. It remains scoped by collector_ip,
-                # so entries without a concrete target still fail closed.
                 at_transport = getattr(self._link_manager, "collector_at_transport", None)
         allow_disconnected_at_query = (
             at_transport is not None
@@ -1467,6 +1472,12 @@ class EybondHub:
             and str(self._connection.collector_ip or "").strip()
         )
 
+        # This is a best-effort collector-metadata TELEMETRY read with its own
+        # dual-channel cadence/cache; it is NOT the collector-management action
+        # surface (endpoint/apply/reboot -- those go through the negotiated
+        # CollectorManagementAdapter). The FC read uses the NEUTRAL collector
+        # wire session; the transport-capability probe below is a metadata-channel
+        # gate, not an action-path selector.
         now_monotonic = asyncio.get_running_loop().time()
         refresh_interval = max(float(poll_interval or 0.0) * 3.0, 30.0)
         force_refresh = bool(self._collector_runtime_values_dirty)
@@ -1480,7 +1491,9 @@ class EybondHub:
         ):
             fc_query_started = asyncio.get_running_loop().time()
             try:
-                values = await query_runtime_collector_values(SmartEssLocalSession(transport))
+                values = await query_runtime_collector_values(
+                    CollectorWireManagementSession(transport)
+                )
             except Exception as exc:
                 logger.debug("Collector runtime FC query failed: %s", exc)
             else:
@@ -1517,8 +1530,8 @@ class EybondHub:
                 _header, payload = await at_transport.async_query_bridge_hardware_version()
                 response = parse_query_collector_response(payload)
                 values = {}
-                if response.code == 0 and response.parameter == 6:
-                    decoder = COLLECTOR_PARAMETER_DEFINITION_BY_ID[6].decode
+                if response.code == 0 and response.parameter == QUERY_HARDWARE_VERSION:
+                    decoder = COLLECTOR_PARAMETER_DEFINITION_BY_ID[QUERY_HARDWARE_VERSION].decode
                     if decoder is not None:
                         values = decoder(response)
             except Exception as exc:
@@ -1552,8 +1565,6 @@ class EybondHub:
             or allow_disconnected_at_query
         ) and (
             force_at_refresh
-            # Cadence is keyed on ATTEMPTS, not successful results: an AT
-            # link that answers nothing must not be re-swept every cycle.
             or (at_values_stale and at_attempt_due)
         ):
             self._collector_at_runtime_last_attempt_monotonic = now_monotonic
@@ -1836,115 +1847,169 @@ class EybondHub:
             "warnings": list(runtime_state.warnings),
         }
 
+    def _collector_management_adapter(self):
+        """Build the negotiated collector-management adapter (single switch: link).
+
+        The wire is chosen ONCE, in ``link.collector_management_adapter_id``
+        (live trusted SessionHandle > confirmed binding > conflict/unknown ->
+        none). This hub never guesses framed/AT: it just hands both transport
+        providers to the factory, which resolves the live transport lazily so a
+        reconnect/handover never leaves the adapter holding a stale socket.
+        """
+
+        return select_collector_management_adapter(
+            self._link_manager.collector_management_adapter_id(),
+            framed_transport_provider=lambda: (
+                getattr(self._link_manager, "active_transport", None)
+                or self._link_manager.transport
+            ),
+            at_transport_provider=lambda: (
+                getattr(self._link_manager, "active_collector_at_transport", None)
+                or getattr(self._link_manager, "collector_at_transport", None)
+            ),
+        )
+
+    def collector_management_capabilities(self) -> CollectorManagementCapabilities:
+        """Return the CURRENT management capabilities (recomputed each call).
+
+        Because the adapter is re-selected from the negotiated live wire on every
+        call, capabilities reflect a live handover/adoption immediately without a
+        config-entry reload.
+        """
+
+        return self._collector_management_adapter().capabilities
+
+    def collector_management_diagnostics(self) -> dict[str, object]:
+        """Return non-sensitive collector-management diagnostics.
+
+        Never includes endpoint values, Wi-Fi credentials, or other secrets --
+        only the selected adapter, its capabilities, and the last operation's
+        status/error-class/duration/timestamp.
+        """
+
+        caps = self.collector_management_capabilities()
+        provenance_getter = getattr(
+            self._link_manager, "collector_management_adapter_provenance", None
+        )
+        diagnostics: dict[str, object] = {
+            "collector_management_adapter_id": (
+                self._link_manager.collector_management_adapter_id()
+            ),
+            "collector_management_adapter_provenance": (
+                provenance_getter() if callable(provenance_getter) else ""
+            ),
+            "collector_management_capabilities": {
+                "read_endpoint_state": caps.read_endpoint_state,
+                "write_endpoint": caps.write_endpoint,
+                "apply_changes": caps.apply_changes,
+                "reboot": caps.reboot,
+            },
+        }
+        if self._last_management_operation is not None:
+            diagnostics["collector_management_last_operation"] = dict(
+                self._last_management_operation
+            )
+        return diagnostics
+
+    async def _run_management_operation(self, name: str, operation):
+        """Execute one management operation, recording non-sensitive diagnostics.
+
+        Records operation name, ok/error status, typed error class + short code,
+        duration, and timestamp -- NEVER endpoint values or credentials -- so the
+        per-action methods stay free of diagnostics bookkeeping.
+        """
+
+        started = asyncio.get_running_loop().time()
+        record: dict[str, object] = {
+            "operation": name,
+            "status": "ok",
+            "error_class": "",
+            "error_code": "",
+            "timestamp": _wall_time(),
+        }
+        try:
+            return await operation()
+        except CollectorManagementError as exc:
+            record["status"] = "error"
+            record["error_class"] = type(exc).__name__
+            record["error_code"] = str(exc).split(":", 1)[0]
+            raise
+        except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+            record["status"] = "error"
+            record["error_class"] = type(exc).__name__
+            raise
+        finally:
+            record["duration_ms"] = int(
+                round((asyncio.get_running_loop().time() - started) * 1000.0)
+            )
+            self._last_management_operation = record
+
+    def _collector_endpoint_write_result_to_dict(
+        self, result: CollectorEndpointWriteResult
+    ) -> dict[str, object]:
+        """Map the normalized write result to the runtime/coordinator dict shape.
+
+        ``status`` is HONEST: ``applied`` only when a requested apply was
+        confirmed (``apply_performed``), otherwise ``staged`` (write done, no
+        apply requested). A requested-but-unconfirmed apply never reaches here --
+        the adapter raises. ``readback_endpoint`` is the real read (may be "").
+        """
+
+        out: dict[str, object] = {
+            "status": "applied" if result.apply_performed else "staged",
+            "requested_endpoint": result.requested_endpoint,
+            "readback_endpoint": result.readback_endpoint,
+            "apply_changes": result.apply_requested,
+            "write_confirmed": result.write_confirmed,
+            "apply_performed": result.apply_performed,
+            "confirmation_source": result.confirmation_source,
+        }
+        if result.previous_endpoint:
+            out["previous_endpoint"] = result.previous_endpoint
+        if result.reboot_or_apply_required:
+            out["reboot_required"] = result.reboot_or_apply_required
+        if result.adapter_id == ADAPTER_COLLECTOR_AT_COMMANDS:
+            out["management_protocol"] = "at_text"
+        out.update(dict(result.extra or {}))
+        if result.warnings:
+            out["warning"] = result.warnings[0]
+        return out
+
     async def async_set_collector_server_endpoint(
         self,
         endpoint: str,
         *,
         apply_changes: bool = True,
     ) -> dict[str, object]:
-        """Stage or apply collector parameter 21 on the local SmartESS management path."""
+        """Stage or apply the collector's upstream endpoint via the management adapter."""
 
         await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
 
-        transport = self._link_manager.transport
         normalized_endpoint = _normalize_collector_server_endpoint(endpoint)
-        if not hasattr(transport, "async_send_collector"):
-            at_transport = getattr(self._link_manager, "collector_at_transport", None)
-            if not hasattr(at_transport, "async_query") or not hasattr(at_transport, "async_write"):
-                raise RuntimeError("collector_local_management_not_supported")
-            return await self._async_set_collector_server_endpoint_at(
-                at_transport,
-                normalized_endpoint,
-                apply_changes=apply_changes,
+        adapter = self._collector_management_adapter()
+        result = await self._run_management_operation(
+            "write_endpoint",
+            lambda: adapter.async_write_endpoint(
+                normalized_endpoint, apply_changes=apply_changes
+            ),
+        )
+
+        if result.previous_endpoint and result.previous_endpoint != normalized_endpoint:
+            self._collector_last_server_endpoint_before_change = result.previous_endpoint
+
+        # The hub caches the EFFECTIVE endpoint (real readback if the collector
+        # echoed it, else the requested value it just wrote): the hub knows what
+        # it requested, so this is honest -- it never fabricates the result's
+        # ``readback_endpoint``.
+        self._collector_runtime_values["collector_server_endpoint"] = (
+            result.readback_endpoint or result.requested_endpoint
+        )
+        if result.reboot_or_apply_required:
+            self._collector_runtime_values["collector_reboot_required"] = (
+                result.reboot_or_apply_required
             )
-
-        session = SmartEssLocalSession(transport)
-        previous_endpoint = await self._async_query_collector_text(session, SET_SERVER_ENDPOINT)
-        if previous_endpoint and previous_endpoint != normalized_endpoint:
-            self._collector_last_server_endpoint_before_change = previous_endpoint
-
-        set_response = await session.set_collector(SET_SERVER_ENDPOINT, normalized_endpoint)
-        if set_response.status != 0 or set_response.parameter != SET_SERVER_ENDPOINT:
-            raise RuntimeError(
-                f"collector_set_failed:parameter={SET_SERVER_ENDPOINT}:status={set_response.status}"
-            )
-
-        readback_endpoint = await self._async_query_collector_text(session, SET_SERVER_ENDPOINT)
-        reboot_required = await self._async_query_collector_text(session, QUERY_REBOOT_REQUIRED)
-
-        effective_endpoint = readback_endpoint or normalized_endpoint
-        self._collector_runtime_values["collector_server_endpoint"] = effective_endpoint
-        if reboot_required:
-            self._collector_runtime_values["collector_reboot_required"] = reboot_required
         self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
-
-        result: dict[str, object] = {
-            "status": "staged",
-            "requested_endpoint": normalized_endpoint,
-            "readback_endpoint": effective_endpoint,
-            "apply_changes": apply_changes,
-        }
-        if previous_endpoint:
-            result["previous_endpoint"] = previous_endpoint
-        if reboot_required:
-            result["reboot_required"] = reboot_required
-
-        if not apply_changes:
-            return result
-
-        await async_send_collector_reboot_or_apply(transport)
-
-        result["status"] = "applied"
-        result["warning"] = "collector redirect apply accepted; the current session may disconnect before the next refresh"
-        return result
-
-    async def _async_set_collector_server_endpoint_at(
-        self,
-        at_transport: object,
-        normalized_endpoint: str,
-        *,
-        apply_changes: bool = True,
-    ) -> dict[str, object]:
-        """Stage or apply CLDSRVHOST1 through the collector AT management path."""
-
-        previous_response = await at_transport.async_query("CLDSRVHOST1")
-        previous_endpoint = str(getattr(previous_response, "value", "") or "").strip()
-        if previous_endpoint and previous_endpoint != normalized_endpoint:
-            self._collector_last_server_endpoint_before_change = previous_endpoint
-
-        write_response = await at_transport.async_write("CLDSRVHOST1", normalized_endpoint)
-        if str(getattr(write_response, "command", "") or "").strip().upper() != "CLDSRVHOST1":
-            raise RuntimeError("collector_at_set_failed:command=CLDSRVHOST1")
-
-        readback_response = await at_transport.async_query("CLDSRVHOST1")
-        readback_endpoint = str(getattr(readback_response, "value", "") or "").strip()
-        effective_endpoint = readback_endpoint or normalized_endpoint
-
-        self._collector_runtime_values["collector_server_endpoint"] = effective_endpoint
-        self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
-
-        result: dict[str, object] = {
-            "status": "applied" if apply_changes else "staged",
-            "requested_endpoint": normalized_endpoint,
-            "readback_endpoint": effective_endpoint,
-            "apply_changes": apply_changes,
-            "management_protocol": "at_text",
-        }
-        if previous_endpoint:
-            result["previous_endpoint"] = previous_endpoint
-        if apply_changes:
-            try:
-                apply_response = await at_transport.async_write("INTPARA", "29,1")
-                result["at_apply_response"] = str(
-                    getattr(apply_response, "value", "") or ""
-                ).strip()
-            except Exception as exc:
-                result["at_apply_warning"] = f"{type(exc).__name__}:{exc}"
-            result["warning"] = (
-                "collector AT endpoint write accepted; the current session may disconnect "
-                "before the next refresh"
-            )
-        return result
+        return self._collector_endpoint_write_result_to_dict(result)
 
     async def async_apply_collector_changes(self) -> dict[str, object]:
         """Trigger collector apply on parameter 29 without changing parameter 21."""
@@ -1981,22 +2046,19 @@ class EybondHub:
 
         await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
 
-        transport = self._link_manager.transport
-        if not hasattr(transport, "async_send_collector"):
-            raise RuntimeError("collector_local_management_not_supported")
+        adapter = self._collector_management_adapter()
+        state = await self._run_management_operation(
+            "read_endpoint_state", adapter.async_read_endpoint_state
+        )
 
-        session = SmartEssLocalSession(transport)
-        current_endpoint = await self._async_query_collector_text(session, SET_SERVER_ENDPOINT)
-        reboot_required = await self._async_query_collector_text(session, QUERY_REBOOT_REQUIRED)
-
-        if current_endpoint:
-            self._collector_runtime_values["collector_server_endpoint"] = current_endpoint
-        if reboot_required:
-            self._collector_runtime_values["collector_reboot_required"] = reboot_required
+        if state.current_endpoint:
+            self._collector_runtime_values["collector_server_endpoint"] = state.current_endpoint
+        if state.reboot_required:
+            self._collector_runtime_values["collector_reboot_required"] = state.reboot_required
         self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
         return {
-            "current_endpoint": current_endpoint,
-            "reboot_required": reboot_required,
+            "current_endpoint": state.current_endpoint,
+            "reboot_required": state.reboot_required,
         }
 
     async def async_capture_support_evidence(self) -> dict[str, object]:
@@ -2213,41 +2275,35 @@ class EybondHub:
             evidence["at_text_ascii_probe"] = ascii_probe
         return evidence
 
-    async def _async_query_collector_text(
-        self,
-        session: SmartEssLocalSession,
-        parameter: int,
-    ) -> str:
-        response = await session.query_collector(parameter)
-        if response.code != 0:
-            return ""
-        return str(response.text or "").strip().strip("\x00")
-
     async def _async_execute_collector_system_action(self, *, action: str) -> dict[str, object]:
-        """Run collector parameter 29 for apply/reboot intent without changing endpoint state."""
+        """Run a standalone collector apply/reboot via the management adapter."""
 
         await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
 
-        transport = self._link_manager.transport
-        if not hasattr(transport, "async_send_collector"):
-            raise RuntimeError("collector_local_management_not_supported")
+        adapter = self._collector_management_adapter()
+        result: CollectorSystemActionResult = await self._run_management_operation(
+            action,
+            (
+                adapter.async_apply_changes
+                if action == "apply"
+                else adapter.async_reboot
+            ),
+        )
 
-        session = SmartEssLocalSession(transport)
-        current_endpoint = await self._async_query_collector_text(session, SET_SERVER_ENDPOINT)
-        reboot_required = await self._async_query_collector_text(session, QUERY_REBOOT_REQUIRED)
-
-        await async_send_collector_reboot_or_apply(transport)
-
-        if current_endpoint:
-            self._collector_runtime_values["collector_server_endpoint"] = current_endpoint
+        if result.current_endpoint:
+            self._collector_runtime_values["collector_server_endpoint"] = result.current_endpoint
         self._collector_runtime_values["collector_reboot_required"] = "0"
         self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
         return {
             "status": "applied" if action == "apply" else "reboot_triggered",
             "action": action,
-            "current_endpoint": current_endpoint,
-            "reboot_required_before": reboot_required,
-            "warning": "collector system action accepted; the current session may disconnect before the next refresh",
+            "current_endpoint": result.current_endpoint,
+            "reboot_required_before": result.reboot_required_before,
+            "warning": (
+                result.warnings[0]
+                if result.warnings
+                else "collector system action accepted; the current session may disconnect before the next refresh"
+            ),
         }
 
     async def _async_ensure_connected(
@@ -2696,6 +2752,26 @@ class EybondHub:
             values.update(listener_diagnostics())
             if not values.get("collector_listener_last_error"):
                 values.pop("collector_listener_last_error", None)
+        # Non-sensitive collector-management diagnostics: selected adapter
+        # capabilities + the last operation's status/error-class/duration/time
+        # (NEVER endpoint values or credentials).
+        try:
+            caps = self.collector_management_capabilities()
+        except Exception:  # pragma: no cover - defensive during snapshot build
+            caps = None
+        if caps is not None:
+            values["collector_management_can_read_endpoint_state"] = caps.read_endpoint_state
+            values["collector_management_can_write_endpoint"] = caps.write_endpoint
+            values["collector_management_can_apply_changes"] = caps.apply_changes
+            values["collector_management_can_reboot"] = caps.reboot
+        if self._last_management_operation is not None:
+            op = self._last_management_operation
+            values["collector_management_last_operation"] = op.get("operation", "")
+            values["collector_management_last_status"] = op.get("status", "")
+            values["collector_management_last_error_class"] = op.get("error_class", "")
+            values["collector_management_last_error_code"] = op.get("error_code", "")
+            values["collector_management_last_duration_ms"] = op.get("duration_ms", 0)
+            values["collector_management_last_timestamp"] = op.get("timestamp", 0.0)
         # Collector Devcode is STABLE identity: the heartbeat frame's devcode.
         # 0x0000 is a valid devcode, so gate on ``is not None`` and NEVER fall
         # back to the volatile last-frame devcode -- that alternates with every

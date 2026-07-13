@@ -141,6 +141,16 @@ class _CoordinatorStub:
             blocking_reason="",
             redirect_required=False,
         )
+        # Explicit collector-management capability model (framed-like by default).
+        self.management_actions = {
+            "read_endpoint_state": True,
+            "write_endpoint": True,
+            "apply_changes": True,
+            "reboot": True,
+        }
+
+    def collector_management_action_available(self, action: str) -> bool:
+        return bool(self.management_actions.get(action, False))
 
     @property
     def collector_actions_enabled(self) -> bool:
@@ -945,6 +955,70 @@ class ToolingButtonTests(unittest.TestCase):
             )
 
         asyncio.run(_run())
+
+
+class CollectorManagementCapabilityGatingTests(unittest.TestCase):
+    """Collector-management buttons are gated on the negotiated adapter capabilities."""
+
+    def _button(self, coordinator, key: str) -> EybondToolingButton:
+        return EybondToolingButton(
+            coordinator,
+            _ToolingButtonSpec(key=key, name=key, icon="mdi:cog", entity_category="config"),
+        )
+
+    def test_reboot_button_unavailable_when_reboot_capability_absent(self) -> None:
+        # AT wire: apply available, reboot not.
+        coordinator = _CoordinatorStub()
+        coordinator.management_actions["reboot"] = False
+        self.assertFalse(self._button(coordinator, "reboot_collector").available)
+        self.assertTrue(self._button(coordinator, "apply_collector_changes").available)
+
+    def test_apply_button_unavailable_when_apply_capability_absent(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.management_actions["apply_changes"] = False
+        self.assertFalse(self._button(coordinator, "apply_collector_changes").available)
+
+    def test_bind_and_rollback_unavailable_when_write_capability_absent(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.management_actions["write_endpoint"] = False
+        self.assertFalse(
+            self._button(coordinator, "bind_collector_to_home_assistant").available
+        )
+        self.assertFalse(
+            self._button(coordinator, "rollback_collector_server_endpoint").available
+        )
+
+    def test_all_management_buttons_unavailable_when_adapter_unavailable(self) -> None:
+        # Conflict/unavailable wire -> every capability false -> no management action.
+        coordinator = _CoordinatorStub()
+        coordinator.management_actions = {
+            "read_endpoint_state": False,
+            "write_endpoint": False,
+            "apply_changes": False,
+            "reboot": False,
+        }
+        for key in (
+            "bind_collector_to_home_assistant",
+            "rollback_collector_server_endpoint",
+            "apply_collector_changes",
+            "reboot_collector",
+        ):
+            self.assertFalse(self._button(coordinator, key).available, msg=key)
+
+    def test_start_proxy_capture_gated_on_write_when_redirect_required(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.proxy_capture_overview = types.SimpleNamespace(
+            can_start=True,
+            can_stop=False,
+            status="ready",
+            blocking_reason="",
+            redirect_required=True,
+        )
+        # With write capability the redirect-requiring start is offered...
+        self.assertTrue(self._button(coordinator, "start_proxy_capture").available)
+        # ...without it, the redirect cannot be performed, so it is hidden.
+        coordinator.management_actions["write_endpoint"] = False
+        self.assertFalse(self._button(coordinator, "start_proxy_capture").available)
 
 
 if __name__ == "__main__":

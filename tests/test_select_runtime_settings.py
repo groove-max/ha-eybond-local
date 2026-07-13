@@ -111,6 +111,15 @@ class _CoordinatorStub:
         self.proxy_capture_upstream_endpoint = "47.91.67.66,18899,TCP"
         self.collector_capabilities = collector_capability_profile()
         self.calls: list[tuple[str, str]] = []
+        self.management_actions = {
+            "read_endpoint_state": True,
+            "write_endpoint": True,
+            "apply_changes": True,
+            "reboot": True,
+        }
+
+    def collector_management_action_available(self, action: str) -> bool:
+        return bool(self.management_actions.get(action, False))
 
     def collector_device_info(self):
         return {"scope": "collector"}
@@ -291,6 +300,31 @@ class RuntimeSelectTests(unittest.TestCase):
             "No upstream callback endpoint is available yet.",
         )
         self.assertFalse(entity.extra_state_attributes["write_enabled"])
+
+
+class CollectorOperationModeCapabilityGatingTests(unittest.TestCase):
+    def _entity(self, coordinator) -> EybondRuntimeSettingSelect:
+        return EybondRuntimeSettingSelect(
+            coordinator,
+            _RuntimeSelectSpec(
+                key="collector_operation_mode",
+                translation_key="collector_operation_mode",
+                name="Collector Operation Mode",
+                options=("smartess_cloud_home_assistant", "home_assistant_only"),
+                device_scope="collector",
+            ),
+        )
+
+    def test_unavailable_when_write_endpoint_capability_absent(self) -> None:
+        # An operation-mode change writes the endpoint, so it needs write_endpoint.
+        coordinator = _CoordinatorStub()
+        coordinator.management_actions["write_endpoint"] = False
+        self.assertFalse(self._entity(coordinator).available)
+
+    def test_available_when_write_endpoint_capability_present(self) -> None:
+        coordinator = _CoordinatorStub()
+        self.assertTrue(self._entity(coordinator).available)
+
 
 if __name__ == "__main__":
     unittest.main()

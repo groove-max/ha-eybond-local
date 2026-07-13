@@ -78,6 +78,10 @@ def _collector_text_availability_reason(coordinator: EybondLocalCoordinator) -> 
         return lock_reason
     if not coordinator.data.connected:
         return "Collector is not connected."
+    # The collector endpoint text WRITES the endpoint: unavailable/conflict wire
+    # (no write_endpoint capability) hides the management control entirely.
+    if not coordinator.collector_management_action_available("write_endpoint"):
+        return "This collector connection does not support endpoint management."
     if coordinator.control_mode == CONTROL_MODE_FULL:
         return None
     return "Requires Full Control."
@@ -89,6 +93,8 @@ def _collector_text_write_reason(coordinator: EybondLocalCoordinator) -> str | N
         return lock_reason
     if not coordinator.data.connected:
         return "Collector is not connected."
+    if not coordinator.collector_management_action_available("write_endpoint"):
+        return "This collector connection does not support endpoint write."
     if coordinator.control_mode != CONTROL_MODE_FULL:
         return "Requires Full Control for write access."
     return None

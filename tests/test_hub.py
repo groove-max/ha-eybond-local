@@ -15,6 +15,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.connection.models import EybondConnectionSpec
 from custom_components.eybond_local.collector.at import CollectorAtResponse
+from custom_components.eybond_local.collector.management import (
+    CollectorManagementUnsupportedError,
+)
 from custom_components.eybond_local.models import (
     CollectorInfo,
     DetectedInverter,
@@ -66,6 +69,19 @@ class _FakeLinkManager:
             "collector_callback_session_protocol": "at_text",
             "collector_callback_identity_strategy": "at_dtupn",
         }
+
+    def collector_management_adapter_id(self) -> str:
+        from custom_components.eybond_local.connection.session_handle import (
+            ADAPTER_COLLECTOR_AT_COMMANDS,
+            ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+            ADAPTER_NONE,
+        )
+
+        if hasattr(self.transport, "async_send_collector"):
+            return ADAPTER_COLLECTOR_FRAMED_COMMANDS
+        if hasattr(self.collector_at_transport, "async_query"):
+            return ADAPTER_COLLECTOR_AT_COMMANDS
+        return ADAPTER_NONE
 
 
 class _StaleHeartbeatThenRecoveredLinkManager(_FakeLinkManager):
@@ -2857,6 +2873,188 @@ class CollectorDevcodeDiagnosticsTests(unittest.TestCase):
             snapshot.values["collector_devcode"],
             snapshot.values["collector_last_frame_devcode"],
         )
+
+
+class HubCollectorManagementTests(unittest.TestCase):
+    """Hub delegation of collector-management ACTIONS to the negotiated adapter."""
+
+    def _hub(self) -> EybondHub:
+        return EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+
+    def _framed_hub(self):
+        hub = self._hub()
+        link = _FakeLinkManager()
+        link.transport = _CollectorManagementTransport()
+        hub._link_manager = link
+        return hub, link
+
+    def _at_hub(self):
+        hub = self._hub()
+        link = _FakeLinkManager()
+        link.transport = object()  # no async_send_collector -> not framed
+        link.collector_at_transport = _CollectorAtQueryTransport(
+            {"CLDSRVHOST1": "iot.eybond.com,18899,TCP"}
+        )
+        hub._link_manager = link
+        return hub, link
+
+    def test_framed_capabilities_all_true(self) -> None:
+        hub, _ = self._framed_hub()
+        caps = hub.collector_management_capabilities()
+        self.assertTrue(caps.read_endpoint_state)
+        self.assertTrue(caps.write_endpoint)
+        self.assertTrue(caps.apply_changes)
+        self.assertTrue(caps.reboot)
+
+    def test_at_capabilities_have_no_reboot(self) -> None:
+        hub, _ = self._at_hub()
+        caps = hub.collector_management_capabilities()
+        self.assertTrue(caps.read_endpoint_state)
+        self.assertTrue(caps.write_endpoint)
+        self.assertTrue(caps.apply_changes)
+        self.assertFalse(caps.reboot)
+
+    def test_capabilities_follow_live_handover_without_reload(self) -> None:
+        # Start framed (reboot capable), then the SAME hub sees the wire hand over
+        # to AT: capabilities update immediately, no config-entry reload.
+        hub, link = self._framed_hub()
+        self.assertTrue(hub.collector_management_capabilities().reboot)
+        link.transport = object()
+        link.collector_at_transport = _CollectorAtQueryTransport(
+            {"CLDSRVHOST1": "iot.eybond.com,18899,TCP"}
+        )
+        self.assertFalse(hub.collector_management_capabilities().reboot)
+        self.assertTrue(hub.collector_management_capabilities().write_endpoint)
+
+    def test_unavailable_when_adapter_is_none(self) -> None:
+        hub = self._hub()
+        link = _FakeLinkManager()
+        link.transport = object()  # neither framed nor AT
+        hub._link_manager = link
+        caps = hub.collector_management_capabilities()
+        self.assertFalse(
+            any((caps.read_endpoint_state, caps.write_endpoint, caps.apply_changes, caps.reboot))
+        )
+
+    def test_live_conflict_with_binding_is_none_capabilities_false_provenance_conflict(self) -> None:
+        # Even with an existing (framed) confirmed binding, a live conflict yields
+        # none adapter, all-false capabilities, provenance "conflict", and the
+        # diagnostics never show framed/AT as the effective management adapter.
+        hub = self._hub()
+        link = _FakeLinkManager()
+        link.transport = _CollectorManagementTransport()  # framed transport present
+
+        def _adapter_id() -> str:
+            from custom_components.eybond_local.connection.session_handle import ADAPTER_NONE
+
+            return ADAPTER_NONE
+
+        link.collector_management_adapter_id = _adapter_id
+        link.collector_management_adapter_provenance = lambda: "conflict"
+        hub._link_manager = link
+
+        caps = hub.collector_management_capabilities()
+        self.assertFalse(
+            any((caps.read_endpoint_state, caps.write_endpoint, caps.apply_changes, caps.reboot))
+        )
+        diag = hub.collector_management_diagnostics()
+        self.assertEqual(diag["collector_management_adapter_id"], "none")
+        self.assertEqual(diag["collector_management_adapter_provenance"], "conflict")
+        self.assertNotIn("framed_collector_commands", str(diag))
+        self.assertNotIn("at_commands", str(diag))
+
+    def test_at_write_uses_cldsrvhost1_and_intpara(self) -> None:
+        async def _run() -> None:
+            hub, link = self._at_hub()
+            result = await hub.async_set_collector_server_endpoint(
+                "192.168.8.113,18899,TCP", apply_changes=True
+            )
+            at = link.collector_at_transport
+            self.assertIn(("CLDSRVHOST1", "192.168.8.113,18899,TCP"), at.writes)
+            self.assertIn(("INTPARA", "29,1"), at.writes)
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["management_protocol"], "at_text")
+            self.assertTrue(result["apply_performed"])
+
+        asyncio.run(_run())
+
+    def test_at_read_endpoint_state(self) -> None:
+        async def _run() -> None:
+            hub, link = self._at_hub()
+            state = await hub.async_get_collector_server_endpoint_state()
+            self.assertEqual(state["current_endpoint"], "iot.eybond.com,18899,TCP")
+            self.assertIn("CLDSRVHOST1", link.collector_at_transport.queries)
+
+        asyncio.run(_run())
+
+    def test_at_reboot_is_unsupported(self) -> None:
+        async def _run() -> None:
+            hub, _ = self._at_hub()
+            with self.assertRaises(CollectorManagementUnsupportedError):
+                await hub.async_reboot_collector()
+
+        asyncio.run(_run())
+
+    def test_framed_staged_when_apply_not_requested(self) -> None:
+        async def _run() -> None:
+            hub, _ = self._framed_hub()
+            result = await hub.async_set_collector_server_endpoint(
+                "192.168.1.193,18899,TCP", apply_changes=False
+            )
+            self.assertEqual(result["status"], "staged")
+            self.assertFalse(result["apply_performed"])
+            self.assertTrue(result["write_confirmed"])
+
+        asyncio.run(_run())
+
+    def test_last_operation_recorded_on_success(self) -> None:
+        async def _run() -> None:
+            hub, _ = self._framed_hub()
+            await hub.async_set_collector_server_endpoint(
+                "192.168.1.193,18899,TCP", apply_changes=False
+            )
+            diag = hub.collector_management_diagnostics()
+            op = diag["collector_management_last_operation"]
+            self.assertEqual(op["operation"], "write_endpoint")
+            self.assertEqual(op["status"], "ok")
+            self.assertEqual(op["error_class"], "")
+            self.assertIn("duration_ms", op)
+            # No endpoint value leaked into diagnostics.
+            self.assertNotIn("192.168.1.193", str(diag))
+
+        asyncio.run(_run())
+
+    def test_last_operation_records_typed_error(self) -> None:
+        async def _run() -> None:
+            hub, _ = self._at_hub()
+            with self.assertRaises(CollectorManagementUnsupportedError):
+                await hub.async_reboot_collector()
+            op = hub.collector_management_diagnostics()["collector_management_last_operation"]
+            self.assertEqual(op["operation"], "reboot")
+            self.assertEqual(op["status"], "error")
+            self.assertEqual(op["error_class"], "CollectorManagementUnsupportedError")
+
+        asyncio.run(_run())
+
+    def test_diagnostics_have_no_endpoint_or_credentials(self) -> None:
+        hub, _ = self._framed_hub()
+        diag = hub.collector_management_diagnostics()
+        self.assertIn("collector_management_adapter_id", diag)
+        self.assertIn("collector_management_capabilities", diag)
+        blob = str(diag)
+        for secret in ("password", "ssid", "18899", "eybond.com"):
+            self.assertNotIn(secret, blob)
 
 
 if __name__ == "__main__":

@@ -137,6 +137,15 @@ class _CoordinatorStub:
         self.control_mode = "full"
         self.collector_callback_target_endpoint = "203.0.113.7,2223,TCP"
         self.calls: list[dict[str, object]] = []
+        self.management_actions = {
+            "read_endpoint_state": True,
+            "write_endpoint": True,
+            "apply_changes": True,
+            "reboot": True,
+        }
+
+    def collector_management_action_available(self, action: str) -> bool:
+        return bool(self.management_actions.get(action, False))
 
     def collector_device_info(self):
         return {"scope": "collector"}
@@ -329,6 +338,32 @@ class CollectorTextTests(unittest.TestCase):
             "10.0.0.25,18899",
         )
         self.assertTrue(entity.extra_state_attributes["pending_apply_required"])
+
+
+class CollectorTextCapabilityGatingTests(unittest.TestCase):
+    def _entity(self, coordinator) -> EybondCollectorText:
+        return EybondCollectorText(
+            coordinator,
+            _CollectorTextSpec(
+                key="collector_callback_endpoint",
+                translation_key="collector_callback_endpoint",
+                name="Collector Callback Endpoint",
+                icon="mdi:lan-pending",
+                enabled_default=True,
+            ),
+        )
+
+    def test_unavailable_when_write_endpoint_capability_absent(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.management_actions["write_endpoint"] = False
+        entity = self._entity(coordinator)
+        self.assertFalse(entity.available)
+
+    def test_available_and_writable_when_write_endpoint_capability_present(self) -> None:
+        coordinator = _CoordinatorStub()  # framed-like, write_endpoint True
+        entity = self._entity(coordinator)
+        self.assertTrue(entity.available)
+        self.assertTrue(entity.extra_state_attributes["write_enabled"])
 
 
 if __name__ == "__main__":

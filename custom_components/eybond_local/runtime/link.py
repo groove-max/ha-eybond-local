@@ -900,21 +900,21 @@ class EybondRuntimeLinkManager:
         if live_effective:
             eff_wire = live_handle.wire_framing
             eff_sources = live_handle.identity_sources
-            eff_mgmt = live_handle.collector_management_adapter
             eff_forward = live_handle.inverter_forward_adapter
             eff_proxy = live_handle.proxy_adapter
         elif binding is not None:
             eff_wire = binding.wire_framing
             eff_sources = binding.identity_sources
-            eff_mgmt = binding.collector_management_adapter
             eff_forward = binding.inverter_forward_adapter
             eff_proxy = binding.proxy_adapter
         else:
             eff_wire = live_handle.wire_framing
             eff_sources = live_handle.identity_sources
-            eff_mgmt = live_handle.collector_management_adapter
             eff_forward = live_handle.inverter_forward_adapter
             eff_proxy = live_handle.proxy_adapter
+        # Collector management is resolved by its OWN single resolver (conflict ->
+        # none/"conflict"), NOT the shared wire/forward selection above.
+        _mgmt_adapter_id, _mgmt_provenance = self._collector_management_selection()
         current_live_session = self._current_live_session_state()
         diagnostics: dict[str, object] = {
             "collector_listener_status": self._listener_status,
@@ -956,7 +956,13 @@ class EybondRuntimeLinkManager:
             ),
             "collector_callback_wire_framing": eff_wire,
             "collector_callback_identity_sources": ", ".join(sorted(eff_sources)),
-            "collector_callback_collector_management_adapter": eff_mgmt,
+            # Collector-management adapter + provenance come from the ONE resolver,
+            # so a live conflict reports (none, "conflict") -- the stale confirmed
+            # binding is never shown as the effective management adapter, and the
+            # id/provenance can never disagree.
+            "collector_callback_collector_management_adapter": _mgmt_adapter_id,
+            "collector_management_adapter_id": _mgmt_adapter_id,
+            "collector_management_adapter_provenance": _mgmt_provenance,
             "collector_callback_inverter_forward_adapter": eff_forward,
             "collector_callback_proxy_adapter": eff_proxy,
             "collector_callback_adapter_conflict": live_handle.conflict,
@@ -2308,6 +2314,41 @@ class EybondRuntimeLinkManager:
         """Compatibility helper for tests/diagnostics."""
 
         return self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH
+
+    def _collector_management_selection(self) -> tuple[str, str]:
+        """Return ``(adapter_id, provenance)`` -- the SINGLE management resolver.
+
+        The one place adapter id and provenance are decided together, so they can
+        never disagree in diagnostics. Authority order (collector-management role):
+
+        * live ``conflict`` -> ``(none, "conflict")`` -- a contradictory wire fails
+          closed and the stale confirmed binding is NOT reported as effective;
+        * trusted ``observed`` live session -> ``(its adapter, "live")``;
+        * transient gap with a CONFIRMED binding -> ``(binding adapter, "confirmed_binding")``;
+        * no live and no confirmed evidence -> ``(none, "unavailable")``.
+
+        The inferred/expected protocol never participates.
+        """
+
+        handle = self._live_session_handle()
+        if handle.conflict:
+            return ADAPTER_NONE, "conflict"
+        if handle.observed:
+            return handle.collector_management_adapter, "live"
+        binding = self._effective_wire_binding()
+        if binding is not None:
+            return binding.collector_management_adapter, "confirmed_binding"
+        return ADAPTER_NONE, "unavailable"
+
+    def collector_management_adapter_id(self) -> str:
+        """Return the negotiated collector-management adapter id (the single switch)."""
+
+        return self._collector_management_selection()[0]
+
+    def collector_management_adapter_provenance(self) -> str:
+        """Return the management-adapter selection provenance (see the resolver)."""
+
+        return self._collector_management_selection()[1]
 
     @property
     def session_handle(self) -> SessionHandle:

@@ -1452,5 +1452,192 @@ class SeedTrustBoundaryFailClosedTests(unittest.TestCase):
         self.assertEqual(binding.collector_pn, FULL_PN)
 
 
+class CollectorManagementAdapterSelectionTests(unittest.TestCase):
+    """`collector_management_adapter_id` is the single management-adapter switch.
+
+    Live trusted SessionHandle > confirmed binding (handover) > conflict/unknown
+    -> none. The inferred/expected protocol never participates; collector kind /
+    cloud family / peer IP / driver key are not inputs.
+    """
+
+    def test_live_framed_selects_framed_management(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",  # inferred hint: must not matter
+            sessions=[
+                _observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")
+            ],
+        )
+        self.assertEqual(
+            link.collector_management_adapter_id(), ADAPTER_FRAMED_COLLECTOR_COMMANDS
+        )
+
+    def test_live_at_selects_at_management(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",  # inferred hint: must not matter
+            sessions=[
+                _observed("s1", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn")
+            ],
+        )
+        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS)
+
+    def test_conflict_selects_none(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed(
+                    "s-conflict",
+                    FULL_PN,
+                    state="routed_at_text",
+                    shape="eybond_framed",
+                    source="at_dtupn",
+                )
+            ],
+        )
+        self.assertTrue(link._live_session_handle().conflict)
+        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_NONE)
+        self.assertEqual(link.collector_management_adapter_provenance(), "conflict")
+
+    def test_conflict_over_confirmed_binding_is_none_and_conflict_provenance(self) -> None:
+        # A live conflict WITH an existing confirmed framed binding: the selection
+        # fails closed to none/"conflict" -- the stale binding is never reported as
+        # the effective management adapter.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed(
+                    "s-conflict",
+                    FULL_PN,
+                    state="routed_at_text",
+                    shape="eybond_framed",
+                    source="at_dtupn",
+                )
+            ],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertIsNotNone(link.confirmed_wire_binding)  # a binding exists
+        self.assertTrue(link._live_session_handle().conflict)
+        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_NONE)
+        self.assertEqual(link.collector_management_adapter_provenance(), "conflict")
+        # Provider-neutral consistency: id and provenance come from one resolver.
+        adapter_id, provenance = link._collector_management_selection()
+        self.assertEqual((adapter_id, provenance), (ADAPTER_NONE, "conflict"))
+
+    def test_provenance_live_and_confirmed_binding(self) -> None:
+        live = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed("s1", FULL_PN, state="routed_framed", source="framed_heartbeat")
+            ],
+        )
+        self.assertEqual(live.collector_management_adapter_provenance(), "live")
+        gap = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertEqual(gap.collector_management_adapter_provenance(), "confirmed_binding")
+        empty = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[],
+        )
+        self.assertEqual(empty.collector_management_adapter_provenance(), "unavailable")
+
+    def test_no_evidence_selects_none(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[],
+        )
+        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_NONE)
+
+    def test_handover_uses_confirmed_binding_management(self) -> None:
+        # No live session; a confirmed framed binding keeps framed management.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertIsNotNone(link.confirmed_wire_binding)
+        self.assertEqual(
+            link.collector_management_adapter_id(), ADAPTER_FRAMED_COLLECTOR_COMMANDS
+        )
+
+    def test_live_wire_overrides_confirmed_binding_management(self) -> None:
+        # A live AT session overrides a persisted confirmed framed binding.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed("live", FULL_PN, state="routed_at_text", source="at_dtupn")
+            ],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertTrue(link.session_handle.observed)
+        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS)
+
+    def test_two_collectors_one_peer_ip_do_not_mix_management_adapter(self) -> None:
+        # Two entries (two links) behind ONE peer IP, each with its own durable PN
+        # and its own live wire: each link selects its OWN management adapter by
+        # its own SessionHandle -- peer IP never mixes them.
+        shared_ip = "203.0.113.50"
+        framed_link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed(
+                    "s-framed",
+                    FULL_PN,
+                    peer_ip=shared_ip,
+                    state="routed_framed",
+                    source="framed_heartbeat",
+                )
+            ],
+        )
+        at_link = _bare_link(
+            collector_pn=OTHER_FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed(
+                    "s-at",
+                    OTHER_FULL_PN,
+                    peer_ip=shared_ip,
+                    state="routed_at_text",
+                    source="at_dtupn",
+                )
+            ],
+        )
+        self.assertEqual(
+            framed_link.collector_management_adapter_id(),
+            ADAPTER_FRAMED_COLLECTOR_COMMANDS,
+        )
+        self.assertEqual(
+            at_link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
