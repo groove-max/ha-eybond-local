@@ -15,6 +15,41 @@ def _fake_probe():
     return AsyncMock(return_value=types.SimpleNamespace(reply="", reply_from=""))
 
 
+_OBSERVED_PN = "PN123"
+
+
+def _observed_framed_session(pn: str = _OBSERVED_PN, session_id: str = "obs-framed"):
+    """A trusted, routed framed live session (claimed + observed SessionHandle).
+
+    Payload forwarding now fail-closes until a wire is observed/confirmed, so a
+    connected transport must expose a realistic observed session to be usable.
+    """
+
+    return {
+        "session_id": session_id,
+        "collector_pn": pn,
+        "peer_ip": "192.168.1.14",
+        "listener_port": 8899,
+        "state": "routed_framed",
+        "protocol_shape": "eybond_framed_or_binary",
+        "collector_identity_source": "framed_heartbeat",
+    }
+
+
+def _observed_at_session(pn: str = _OBSERVED_PN, session_id: str = "obs-at"):
+    """A trusted, routed AT-text live session."""
+
+    return {
+        "session_id": session_id,
+        "collector_pn": pn,
+        "peer_ip": "192.168.1.14",
+        "listener_port": 8899,
+        "state": "routed_at_text",
+        "protocol_shape": "at_text",
+        "collector_identity_source": "at_dtupn",
+    }
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -35,12 +70,16 @@ class _FakeTransport:
         heartbeat_result: bool = True,
         remote_ip: str = "192.168.1.14",
         observed_sessions: tuple = (),
+        listener_key: str = "fake:0",
     ) -> None:
         self.connected = connected
         self.collector_info = CollectorInfo(remote_ip=remote_ip, collector_pn="PN123")
         self._connect_result = connect_result
         self._heartbeat_result = heartbeat_result
         self._observed_sessions = tuple(dict(s) for s in observed_sessions)
+        # Distinct per transport so _iter_observed_sessions does not dedupe two
+        # different fake listeners as one (real listeners have distinct keys).
+        self._listener_key = listener_key
         self.connected_waits: list[float] = []
         self.heartbeat_waits: list[float] = []
         self.disconnect_calls = 0
@@ -49,7 +88,7 @@ class _FakeTransport:
 
     @property
     def listener_key(self) -> str:
-        return "fake:0"
+        return self._listener_key
 
     def observed_collector_sessions(self) -> tuple:
         return self._observed_sessions
@@ -91,6 +130,30 @@ class _FakeTransport:
                 }
             ],
         }
+
+
+class _HeartbeatReplacementTransport(_FakeTransport):
+    """Drop the first socket while heartbeat is awaited, then expose its replacement."""
+
+    def __init__(self) -> None:
+        super().__init__(connected=True, heartbeat_result=False)
+        self._heartbeat_attempt = 0
+
+    async def wait_until_heartbeat(self, timeout: float) -> bool:
+        self.heartbeat_waits.append(timeout)
+        self._heartbeat_attempt += 1
+        if self._heartbeat_attempt == 1:
+            self.connected = False
+            asyncio.get_running_loop().call_later(
+                0.03,
+                setattr,
+                self,
+                "connected",
+                True,
+            )
+            return False
+        self.collector_info.heartbeat_fresh = True
+        return True
 
 
 class _FakeAnnouncer:
@@ -214,7 +277,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_listener_diagnostics_include_callback_session_inventory(self) -> None:
         manager = self._build_manager()
-        manager._collector_session_protocol = "at_text"
+        manager._expected_collector_session_protocol = "at_text"
         manager._collector_identity_strategy = "at_dtupn"
         transport = _FakeTransport(connected=False)
         transport._listener = object()  # type: ignore[attr-defined]
@@ -253,8 +316,15 @@ class RuntimeLinkManagerTests(unittest.TestCase):
     def test_at_text_connect_uses_at_transport_without_payload_heartbeat(self) -> None:
         async def _run() -> None:
             manager = self._build_manager()
-            manager._collector_session_protocol = "at_text"
-            payload = _FakeTransport(connected=False, connect_result=False)
+            manager._collector_pn = _OBSERVED_PN
+            # Expected (inferred) hint no longer drives the adapter; a routed AT
+            # live session provides the confirmed raw/AT wire.
+            manager._expected_collector_session_protocol = "at_text"
+            payload = _FakeTransport(
+                connected=False,
+                connect_result=False,
+                observed_sessions=(_observed_at_session(),),
+            )
             at_transport = _FakeTransport(connected=False, connect_result=True)
             manager._transport = payload  # type: ignore[assignment]
             manager._at_transport = at_transport  # type: ignore[assignment]
@@ -270,6 +340,20 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             self.assertEqual(payload.connected_waits, [])
             self.assertEqual(at_transport.connected_waits, [0.5])
             self.assertEqual(at_transport.heartbeat_waits, [])
+
+        asyncio.run(_run())
+
+    def test_heartbeat_wait_follows_replacement_socket_through_short_gap(self) -> None:
+        async def _run() -> None:
+            manager = self._build_manager()
+            transport = _HeartbeatReplacementTransport()
+            manager._transport = transport  # type: ignore[assignment]
+
+            ok = await manager._async_wait_for_payload_heartbeat(timeout=0.2)
+
+            self.assertTrue(ok)
+            self.assertGreaterEqual(len(transport.heartbeat_waits), 2)
+            self.assertTrue(transport.connected)
 
         asyncio.run(_run())
 
@@ -468,8 +552,13 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_transport_prefers_connected_auxiliary_listener(self) -> None:
         manager = self._build_manager()
+        manager._collector_pn = _OBSERVED_PN
         primary_transport = _FakeTransport(connected=False)
-        auxiliary_transport = _FakeTransport(connected=True)
+        auxiliary_transport = _FakeTransport(
+            connected=True,
+            observed_sessions=(_observed_framed_session(),),
+            listener_key="fake:502",
+        )
         manager._transport = primary_transport  # type: ignore[assignment]
         manager._at_transport = _FakeTransport(connected=False)  # type: ignore[assignment]
         manager._auxiliary_listener_ports = {502}
@@ -534,8 +623,14 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_async_try_connect_accepts_heartbeat_from_auxiliary_listener(self) -> None:
         manager = self._build_manager()
+        manager._collector_pn = _OBSERVED_PN
         primary_transport = _FakeTransport(connected=True, heartbeat_result=False)
-        auxiliary_transport = _FakeTransport(connected=True, heartbeat_result=True)
+        auxiliary_transport = _FakeTransport(
+            connected=True,
+            heartbeat_result=True,
+            observed_sessions=(_observed_framed_session(),),
+            listener_key="fake:502",
+        )
         manager._transport = primary_transport  # type: ignore[assignment]
         manager._at_transport = _FakeTransport(connected=False)  # type: ignore[assignment]
         manager._auxiliary_listener_ports = {502}
@@ -1551,7 +1646,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
     # against a persisted at_text hint.
     def test_live_framed_on_other_listener_overrides_persisted_at_text(self) -> None:
         manager = self._manager(collector_pn=self.FULL_PN)
-        manager._collector_session_protocol = "at_text"
+        manager._expected_collector_session_protocol = "at_text"
         self._install_aux_fakes(manager)
         inventory = [
             self._domain_session(
@@ -1575,7 +1670,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
     # ValueCloud/G-ASCII raw-passthrough transport.
     def test_live_at_text_on_other_listener_keeps_raw_passthrough(self) -> None:
         manager = self._manager(collector_pn=self.FULL_PN)
-        manager._collector_session_protocol = "eybond_framed"
+        manager._expected_collector_session_protocol = "eybond_framed"
         self._install_aux_fakes(manager)
         inventory = [
             self._domain_session(

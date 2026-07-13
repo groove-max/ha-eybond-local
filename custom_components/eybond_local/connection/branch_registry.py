@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
+from .confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 from .models import ConnectionSpec, ConnectionType, EybondConnectionSpec
 from .ui import (
     ConnectionDisplayMetadata,
@@ -80,6 +81,11 @@ def _build_eybond_connection_spec(
         data,
         options,
     )
+    confirmed_evidence = ConfirmedSessionProtocolEvidence.from_entry(
+        data,
+        options,
+        entry_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
+    )
     return EybondConnectionSpec(
         server_ip=str(options.get(CONF_SERVER_IP, data.get(CONF_SERVER_IP, ""))),
         advertised_server_ip=str(
@@ -100,13 +106,14 @@ def _build_eybond_connection_spec(
         collector_ip=str(options.get(CONF_COLLECTOR_IP, data.get(CONF_COLLECTOR_IP, DEFAULT_COLLECTOR_IP))),
         collector_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
         collector_cloud_family=transport_profile.cloud_family,
-        collector_session_protocol=transport_profile.session_protocol,
+        collector_expected_session_protocol=transport_profile.session_protocol,
         collector_identity_strategy=transport_profile.identity_strategy,
         collector_raw_passthrough_bootstrap=transport_profile.raw_passthrough_bootstrap,
         collector_raw_passthrough_frame_format=transport_profile.raw_passthrough_frame_format,
         collector_raw_passthrough_min_interval_ms=(
             transport_profile.raw_passthrough_min_interval_ms
         ),
+        confirmed_session_protocol_evidence=confirmed_evidence,
         discovery_target=str(
             options.get(
                 CONF_DISCOVERY_TARGET,

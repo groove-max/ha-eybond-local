@@ -34,7 +34,6 @@ from ..collector.transport import (
 )
 from ..collector.transport_profile import (
     collector_session_protocol_from_inventory_state,
-    normalize_collector_session_protocol,
 )
 from ..connection.models import EybondConnectionSpec
 from ..const import (
@@ -176,12 +175,17 @@ def _apply_collector_cloud_endpoint_details_to_collector(
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryTarget:
-    """One onboarding discovery target."""
+    """One onboarding discovery target.
+
+    An onboarding target never carries an inferred/expected session protocol: a
+    hint may not arm an active probe or register a confirmed owner. Active probe
+    authority comes ONLY from validated runtime confirmed evidence, and a passive
+    observed session is handled by the existing SessionHandle/registry path.
+    """
 
     ip: str
     source: str
     collector_pn: str = ""
-    collector_session_protocol: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -758,7 +762,6 @@ class OnboardingDetector:
         *,
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
@@ -771,24 +774,26 @@ class OnboardingDetector:
 
         This keeps the BLE handoff path narrow: it probes only the collector IP that
         just received Wi-Fi credentials and does not reopen broadcast discovery.
+
+        There is no raw session-protocol / provenance argument: onboarding never
+        arms an active identity probe from a hint. A silent session is identified
+        only through the existing passive SessionHandle/registry path; if that
+        yields no live evidence the caller sees an honest
+        collector_not_connected / identity-not-confirmed outcome.
         """
 
         collector_ip = str(collector_ip or "").strip()
         collector_pn = str(collector_pn or "").strip()
-        collector_session_protocol = str(
-            normalize_collector_session_protocol(collector_session_protocol)
-        )
 
         if not collector_ip:
             raise ValueError("collector_ip_required")
 
-        if collector_pn or collector_session_protocol:
+        if collector_pn:
             targets = (
                 DiscoveryTarget(
                     ip=collector_ip,
                     source="known_ip",
                     collector_pn=collector_pn,
-                    collector_session_protocol=collector_session_protocol,
                 ),
             )
         else:
@@ -961,8 +966,10 @@ class OnboardingDetector:
         }
         if target.collector_pn:
             transport_kwargs["collector_pn"] = target.collector_pn
-        if target.collector_session_protocol:
-            transport_kwargs["collector_session_protocol"] = target.collector_session_protocol
+        # Onboarding never passes a session protocol: an inferred/expected hint
+        # must not register a durable confirmed owner. The transport observes the
+        # collector's real wire passively; active-probe authority is the runtime's
+        # validated confirmed evidence alone.
         transport = SharedEybondTransport(**transport_kwargs)
         candidate = CollectorCandidate(
             target_ip=target.ip,
@@ -976,8 +983,11 @@ class OnboardingDetector:
         if cleanup_new_shared_connection:
             existing_shared_connection = await transport.async_snapshot_shared_connection()
 
-        await transport.start()
+        # start() is INSIDE the try so a start failure still runs the finally
+        # (releases the shared listener): cleanup covers success / error / cancel
+        # / timeout / start failure alike.
         try:
+            await transport.start()
             probe = await async_send_callback_trigger(
                 bind_ip=self._connection.server_ip,
                 advertised_server_ip=self._connection.effective_advertised_server_ip,

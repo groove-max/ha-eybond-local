@@ -637,6 +637,103 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             (DiscoveryTarget(ip="192.168.1.55", source="known_ip"),),
         )
 
+    def test_handoff_detect_has_no_raw_session_protocol_or_provenance_args(self) -> None:
+        # Architectural guard: onboarding cannot be handed a raw session protocol
+        # or a self-declared provenance/lease -- an inferred hint may not arm an
+        # active probe. Only passive observation + runtime confirmed evidence do.
+        import inspect
+
+        params = set(
+            inspect.signature(OnboardingDetector.async_handoff_detect).parameters
+        )
+        for forbidden in (
+            "collector_session_protocol",
+            "probe_protocol_provenance",
+            "probe_lease",
+        ):
+            self.assertNotIn(forbidden, params)
+
+    async def test_detect_target_builds_transport_without_session_protocol(self) -> None:
+        # _async_detect_target must NOT pass any session protocol / probe lease to
+        # the onboarding transport, so no confirmed owner is registered from a
+        # hint. The FakeTransport accepts only the neutral kwargs; passing a
+        # session-protocol/lease kwarg would raise TypeError.
+        detector = OnboardingDetector(server_ip="192.168.1.50")
+        target = DiscoveryTarget(
+            ip="192.168.1.14", source="known_ip", collector_pn="PN-1"
+        )
+
+        class FakeTransport:
+            instances: list["FakeTransport"] = []
+
+            def __init__(
+                self,
+                *,
+                host: str,
+                port: int,
+                request_timeout: float,
+                heartbeat_interval: float,
+                collector_ip: str,
+                collector_pn: str = "",
+            ) -> None:
+                self.init_kwargs = {
+                    "collector_ip": collector_ip,
+                    "collector_pn": collector_pn,
+                }
+                self.stop_calls = 0
+                self.collector_info = CollectorInfo(remote_ip="")
+                FakeTransport.instances.append(self)
+
+            async def start(self) -> None:
+                return None
+
+            async def stop(self) -> None:
+                self.stop_calls += 1
+
+            def set_collector_ip(self, collector_ip: str) -> None:
+                return None
+
+            async def wait_until_connected(self, timeout: float) -> bool:
+                return False
+
+            async def wait_until_heartbeat(self, timeout: float) -> bool:
+                return False
+
+        with (
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.SharedEybondTransport",
+                FakeTransport,
+            ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
+                new=AsyncMock(
+                    return_value=DiscoveryProbeResult(
+                        target_ip="192.168.1.14",
+                        message="set>server=192.168.1.50:8899;",
+                        local_port=40000,
+                        reply="",
+                        reply_from="",
+                    )
+                ),
+            ),
+        ):
+            result = await detector._async_detect_target(
+                target,
+                discovery_timeout=1.5,
+                connect_timeout=5.0,
+                heartbeat_timeout=2.0,
+            )
+
+        transport = FakeTransport.instances[0]
+        # No session-protocol / lease kwarg was passed to the transport.
+        self.assertEqual(
+            set(transport.init_kwargs), {"collector_ip", "collector_pn"}
+        )
+        # The transport is still stopped when the attempt ends.
+        self.assertEqual(transport.stop_calls, 1)
+        # A silent, non-connecting collector yields an honest outcome.
+        self.assertEqual(result.last_error, "collector_not_connected")
+
     async def test_detect_target_keeps_full_connect_wait_for_known_ip_without_udp_reply(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         target = DiscoveryTarget(ip="192.168.1.14", source="known_ip")

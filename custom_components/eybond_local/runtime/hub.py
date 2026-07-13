@@ -61,6 +61,12 @@ from .link import EybondRuntimeLinkManager, resolve_server_ip
 
 logger = logging.getLogger(__name__)
 
+# A same-identity TCP replacement is allowed one bounded recovery attempt using
+# the existing runtime reconnect budget. This is not a polling/NAT timer: the
+# longer wait is enabled only by an observed owned-session generation change.
+_SESSION_HANDOVER_CONNECT_TIMEOUT = 5.0
+_SESSION_HANDOVER_MAX_GENERATIONS = 3
+
 
 def _prefer_more_complete_collector_pn(current: object, candidate: object) -> str:
     normalized_current = str(current or "").strip()
@@ -345,7 +351,6 @@ def _should_mark_snapshot_disconnected(exc: BaseException) -> bool:
     """Return whether one refresh error should make live sensors unavailable."""
 
     return _error_code(exc) in {
-        "request_timeout",
         "collector_disconnected",
         "collector_not_connected",
         "collector_heartbeat_timeout",
@@ -357,7 +362,6 @@ def _should_force_reconnect(exc: BaseException) -> bool:
     """Return whether one refresh error warrants a forced collector reconnect."""
 
     return _error_code(exc) in {
-        "request_timeout",
         "collector_write_timeout",
     }
 
@@ -540,6 +544,17 @@ class EybondHub:
     """Coordinates runtime link connectivity, driver probing and polling."""
 
     @property
+    def detected_inverter(self) -> DetectedInverter | None:
+        """Return the currently bound detected inverter, if any.
+
+        Exposed so the coordinator can hand the detected model to a driver's
+        ``poll_policy_for`` once identity is known (a catalog driver may pick a
+        model-specific policy). ``None`` before detection.
+        """
+
+        return self._inverter
+
+    @property
     def collector_server_endpoint_rollback_target(self) -> str:
         """Return the rollback endpoint remembered during the active runtime session."""
 
@@ -588,7 +603,12 @@ class EybondHub:
             advertised_server_ip=connection.advertised_server_ip,
             collector_ip=connection.collector_ip,
             collector_pn=connection.collector_pn,
-            collector_session_protocol=connection.collector_session_protocol,
+            # EXPECTED (inferred cloud-family) hint only -- read the explicit
+            # expected field, never the legacy read-only alias, and never as a
+            # confirmed owner.
+            collector_expected_session_protocol=(
+                connection.collector_expected_session_protocol
+            ),
             collector_identity_strategy=connection.collector_identity_strategy,
             collector_raw_passthrough_bootstrap=connection.collector_raw_passthrough_bootstrap,
             collector_raw_passthrough_frame_format=(
@@ -596,6 +616,9 @@ class EybondHub:
             ),
             collector_raw_passthrough_min_interval_ms=(
                 connection.collector_raw_passthrough_min_interval_ms
+            ),
+            confirmed_session_protocol_evidence=getattr(
+                connection, "confirmed_session_protocol_evidence", None
             ),
             tcp_port=connection.tcp_port,
             advertised_tcp_port=connection.advertised_tcp_port,
@@ -643,6 +666,7 @@ class EybondHub:
         self._recovery_streak = 0
         self._reconnect_count = 0
         self._last_recovery_reason = ""
+        self._stable_owned_session_generation = 0
 
     async def async_start(self) -> None:
         """Start the underlying runtime link and discovery loop."""
@@ -710,6 +734,97 @@ class EybondHub:
             except Exception:  # pragma: no cover - defensive
                 return False
         return False
+
+    def confirmed_session_protocol_evidence(self) -> tuple[str, str]:
+        """Return ``(protocol, durable_pn)`` of the confirmed live wire, else ("","").
+
+        Sourced ONLY from a trusted live SessionHandle (the link's confirmed wire
+        binding). The coordinator persists this as durable ``live_session``
+        provenance so a same-PN restart can bootstrap it. Never an inferred hint.
+        """
+
+        binding = getattr(self._link_manager, "confirmed_wire_binding", None)
+        if binding is None:
+            return "", ""
+        protocol = str(getattr(binding, "session_protocol", "") or "").strip().lower()
+        pn = str(getattr(binding, "collector_pn", "") or "").strip()
+        if not protocol or not pn:
+            return "", ""
+        return protocol, pn
+
+    def _owned_session_generation(self) -> int:
+        """Return the registry-owned socket generation, if the link exposes it."""
+
+        return int(getattr(self._link_manager, "owned_session_generation", 0) or 0)
+
+    def _session_handover_active(self) -> bool:
+        """Return whether registry lifecycle evidence shows a replacement."""
+
+        return bool(
+            self.has_confirmed_wire_binding()
+            and self._owned_session_generation()
+            != self._stable_owned_session_generation
+        )
+
+    async def _async_try_connect_for_session_lifecycle(
+        self,
+        *,
+        timeout: float,
+        require_heartbeat: bool = False,
+    ) -> bool:
+        """Connect once normally, or follow a bounded same-PN handover chain.
+
+        Some collectors replace one long-lived socket with a short-lived first
+        replacement and immediately dial again. Each registry-observed session
+        generation gets the normal reconnect budget, capped to a small number
+        of generations. A confirmed binding without a generation change is a
+        normal offline collector and receives no repeated grace windows.
+        """
+
+        handover = self._session_handover_active()
+        attempts = _SESSION_HANDOVER_MAX_GENERATIONS if handover else 1
+        for attempt in range(attempts):
+            generation = self._owned_session_generation()
+            attempt_timeout = (
+                max(float(timeout), _SESSION_HANDOVER_CONNECT_TIMEOUT)
+                if handover
+                else float(timeout)
+            )
+            if await self._link_manager.async_try_connect(
+                timeout=attempt_timeout,
+                require_heartbeat=require_heartbeat,
+            ):
+                return True
+
+            # A handover may have started while the ordinary connect attempt
+            # was already in flight. Promote into lifecycle recovery only on
+            # positive generation evidence, never merely because a binding
+            # exists.
+            handover = self._session_handover_active()
+            if not handover or attempt + 1 >= _SESSION_HANDOVER_MAX_GENERATIONS:
+                return False
+
+            if self._owned_session_generation() == generation:
+                wait_for_change = getattr(
+                    self._link_manager,
+                    "async_wait_for_owned_session_change",
+                    None,
+                )
+                if not callable(wait_for_change):
+                    return False
+                try:
+                    await asyncio.wait_for(
+                        wait_for_change(generation),
+                        timeout=_SESSION_HANDOVER_CONNECT_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    return False
+        return False
+
+    def _mark_owned_session_stable(self) -> None:
+        """Record the owned session generation that completed a driver poll."""
+
+        self._stable_owned_session_generation = self._owned_session_generation()
 
     def set_initial_inverter_binding(
         self,
@@ -941,7 +1056,9 @@ class EybondHub:
 
         if not self._link_manager.connected:
             self._reset_runtime_read_state()
-            ok = await self._link_manager.async_try_connect(timeout=0.75)
+            ok = await self._async_try_connect_for_session_lifecycle(
+                timeout=0.75,
+            )
             if not ok:
                 collector_values = await self._async_read_collector_runtime_values(
                     poll_interval=poll_interval,
@@ -970,7 +1087,10 @@ class EybondHub:
                 self._last_snapshot = snapshot
                 return snapshot
 
-        ok = await self._link_manager.async_try_connect(timeout=1.5, require_heartbeat=True)
+        ok = await self._async_try_connect_for_session_lifecycle(
+            timeout=1.5,
+            require_heartbeat=True,
+        )
         if not ok:
             self._reset_runtime_read_state()
             if self._link_manager.connected:
@@ -1144,7 +1264,78 @@ class EybondHub:
             runtime_values = await _async_read_driver_values()
             _mark_refresh_phase("driver_read")
         except Exception as exc:
-            if _is_retryable_collector_error(exc):
+            if _error_code(exc) == "request_timeout":
+                # This timeout belongs to one inverter/UART payload request.
+                # The collector TCP link and heartbeat may still be perfectly
+                # healthy; tearing that link down turns one missed inverter
+                # reply into a full callback/re-detection outage. Retry once on
+                # the SAME transport, then keep last-known-good values if the
+                # inverter remains silent for this cycle.
+                logger.warning(
+                    "Inverter payload request timed out; retrying without collector reconnect"
+                )
+                try:
+                    runtime_values = await _async_read_driver_values()
+                    _mark_refresh_phase("driver_read_retry_same_session")
+                except Exception as retry_exc:
+                    if _is_retryable_collector_error(retry_exc):
+                        # The retry produced positive transport-failure
+                        # evidence. Only now may connection recovery run.
+                        logger.warning(
+                            "Collector transport failed during payload retry: %s; reconnecting",
+                            retry_exc,
+                        )
+                        try:
+                            self._record_recovery_attempt(reason=_error_code(retry_exc))
+                            await self._async_ensure_connected(
+                                timeout=5.0,
+                                require_heartbeat=True,
+                            )
+                            self._reset_runtime_read_state()
+                            runtime_values = await _async_read_driver_values()
+                        except Exception as reconnect_exc:
+                            logger.warning(
+                                "Runtime refresh failed after collector reconnect: %s",
+                                reconnect_exc,
+                            )
+                            self._reset_runtime_read_state()
+                            self._record_recovery_failure(
+                                reason=_error_code(reconnect_exc)
+                            )
+                            snapshot = self._build_snapshot(
+                                extra_values=collector_values,
+                                last_error=str(reconnect_exc),
+                                connected=(
+                                    False
+                                    if _should_mark_snapshot_disconnected(
+                                        reconnect_exc
+                                    )
+                                    else None
+                                ),
+                            )
+                            self._last_snapshot = snapshot
+                            return snapshot
+                        # Recovery succeeded; continue the normal snapshot path.
+                    else:
+                        logger.warning(
+                            "Inverter payload retry failed without collector link failure: %s",
+                            retry_exc,
+                        )
+                        retained_values = dict(
+                            getattr(self._last_snapshot, "values", {}) or {}
+                        )
+                        retained_values.update(collector_values)
+                        retained_values["runtime_payload_error"] = _error_code(
+                            retry_exc
+                        )
+                        snapshot = self._build_snapshot(
+                            extra_values=retained_values,
+                            last_error=_error_code(retry_exc),
+                            connected=self._link_manager.connected,
+                        )
+                        self._last_snapshot = snapshot
+                        return snapshot
+            elif _is_retryable_collector_error(exc):
                 logger.warning("Runtime refresh failed: %s; retrying after collector reconnect", exc)
                 try:
                     self._record_recovery_attempt(reason=_error_code(exc))
@@ -1203,6 +1394,7 @@ class EybondHub:
             extra_values=merged_values,
             last_error=detect_error or None,
         )
+        self._mark_owned_session_stable()
         _mark_refresh_phase("snapshot_build")
         refresh_phases["collector_metadata_fc"] = self._collector_metadata_fc_last_ms
         refresh_phases["collector_metadata_at"] = self._collector_metadata_at_last_ms
@@ -1878,10 +2070,12 @@ class EybondHub:
         read-only sweep records what each query actually got back.
         """
 
-        session_protocol = str(
-            self._connection.collector_session_protocol or ""
+        # EXPECTED (inferred) hint only -- gates whether to attempt the ASCII
+        # probe at all; it is never treated as confirmed wire evidence here.
+        expected_session_protocol = str(
+            self._connection.collector_expected_session_protocol or ""
         ).strip().lower()
-        if session_protocol != "at_text":
+        if expected_session_protocol != "at_text":
             return None
 
         transport = self._link_manager.transport
@@ -1924,7 +2118,7 @@ class EybondHub:
 
         collector = self._link_manager.collector_info
         return {
-            "session_protocol": session_protocol,
+            "session_protocol": expected_session_protocol,
             "raw_passthrough_frame_format": collector.raw_last_frame_format,
             "raw_request_count": collector.raw_request_count,
             "raw_response_count": collector.raw_response_count,
@@ -2064,16 +2258,16 @@ class EybondHub:
     ) -> None:
         """Ensure there is an active collector connection, retrying discovery if needed."""
 
-        try:
-            await self._link_manager.async_ensure_connected(
-                timeout=timeout,
-                require_heartbeat=require_heartbeat,
-            )
-        except ConnectionError as exc:
-            if require_heartbeat and _error_code(exc) == "collector_heartbeat_timeout":
-                await self._async_recover_heartbeat_timeout(timeout=timeout)
-                return
-            raise
+        ok = await self._async_try_connect_for_session_lifecycle(
+            timeout=timeout,
+            require_heartbeat=require_heartbeat,
+        )
+        if ok:
+            return
+        if require_heartbeat and self._link_manager.connected:
+            await self._async_recover_heartbeat_timeout(timeout=timeout)
+            return
+        raise ConnectionError("collector_not_connected")
 
     async def _async_recover_heartbeat_timeout(self, *, timeout: float) -> None:
         """Drop a stale connected socket and wait for a fresh heartbeat."""

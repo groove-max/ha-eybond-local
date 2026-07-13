@@ -197,6 +197,7 @@ from .onboarding.presentation import (
     scan_result_sort_key,
     scan_result_status_code,
 )
+from .drivers.registry import poll_policy_for_driver_key
 from .connection.callback_ledger import get_callback_trigger_ledger
 from .connection.session_registry import identity_source_is_strong, pn_is_same_identity
 from .onboarding.strategy_verification import (
@@ -254,6 +255,7 @@ CONF_CONFIRM_COLLECTOR_WIFI_APPLY = "confirm_collector_wifi_apply"
 CONF_COLLECTOR_UART_ACTION = "collector_uart_action"
 CONF_COLLECTOR_UART_BAUDRATE = "collector_uart_baudrate"
 CONF_CONFIRM_COLLECTOR_UART_APPLY = "confirm_collector_uart_apply"
+CONF_CONFIRM_REDISCOVER_DEVICES = "confirm_rediscover_devices"
 CONF_SETUP_MODE = "setup_mode"
 CONF_BLE_ADDRESS = "ble_address"
 CONF_BLE_ACTION = "ble_action"
@@ -979,15 +981,26 @@ _HEARTBEAT_INTERVAL_SELECTOR = NumberSelector(
     )
 )
 
-_POLL_INTERVAL_SELECTOR = NumberSelector(
-    NumberSelectorConfig(
-        min=2,
-        max=3600,
-        step=1,
-        unit_of_measurement="s",
-        mode=NumberSelectorMode.BOX,
+
+def _poll_interval_selector(driver_key: object, inverter: object = None) -> NumberSelector:
+    """Build the manual interval selector from the driver's polling policy.
+
+    ``inverter`` is the detected model identity (a ``DriverMatch`` during
+    onboarding) forwarded to the driver so a catalog driver can pick a
+    model-specific policy; ``None`` when identity is not yet known.
+    """
+
+    policy = poll_policy_for_driver_key(driver_key, inverter=inverter)
+    return NumberSelector(
+        NumberSelectorConfig(
+            min=policy.min_manual_interval,
+            max=3600,
+            step=1,
+            unit_of_measurement="s",
+            mode=NumberSelectorMode.BOX,
+        )
     )
-)
+
 
 _PROXY_CAPTURE_DURATION_SELECTOR = NumberSelector(
     NumberSelectorConfig(
@@ -3348,7 +3361,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_POLL_INTERVAL,
                         default=pending.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
-                    ): _POLL_INTERVAL_SELECTOR,
+                    ): _poll_interval_selector(
+                        self._selected_poll_policy_driver_key(),
+                        inverter=self._selected_poll_policy_match(),
+                    ),
                 }
             ),
             errors={},
@@ -4291,6 +4307,24 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._selected_result = result
         self._selected_result_runtime_details_attempted = False
         self._selected_result_collector_capabilities_attempted = False
+
+    def _selected_poll_policy_driver_key(self) -> str:
+        """Return the detected driver that owns onboarding poll limits."""
+
+        result = self._selected_result
+        if result is not None and result.match is not None:
+            return str(result.match.driver_key or DRIVER_HINT_AUTO)
+        return str(self._auto_config.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
+
+    def _selected_poll_policy_match(self):
+        """Return the detected match (model identity) for the poll policy, if any.
+
+        A catalog driver may pick a model-specific policy from it; ``None`` when
+        no match is selected yet.
+        """
+
+        result = self._selected_result
+        return result.match if result is not None else None
 
     @staticmethod
     def _driver_choice_candidates(result: OnboardingResult) -> tuple:
@@ -7214,10 +7248,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 # ---------------------------------------------------------------------------
 
 class ListenerOptionsFlow(OptionsFlow):
-    """Read-only options page for the passive-discovery service entry."""
+    """Service tools for the passive-discovery entry."""
 
     def __init__(self, config_entry) -> None:
         self._config_entry = config_entry
+        self._rediscovery_connected_count = 0
+        self._rediscovery_released_count = 0
 
     async def async_step_init(
         self,
@@ -7229,13 +7265,67 @@ class ListenerOptionsFlow(OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Show the stable named step required by Home Assistant's flow manager."""
+        """Show user-facing passive-discovery maintenance actions."""
+
+        return self.async_show_menu(
+            step_id="listener",
+            menu_options=["rediscover_devices"],
+        )
+
+    async def async_step_rediscover_devices(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Clear transient discovery suppression after explicit confirmation."""
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not bool(user_input.get(CONF_CONFIRM_REDISCOVER_DEVICES)):
+                errors[CONF_CONFIRM_REDISCOVER_DEVICES] = "required"
+            else:
+                from .passive_discovery import get_passive_callback_discovery
+
+                discovery = get_passive_callback_discovery(self.hass)
+                if discovery is None:
+                    errors["base"] = "passive_discovery_unavailable"
+                else:
+                    result = await discovery.async_show_discovered_devices_again()
+                    self._rediscovery_connected_count = (
+                        result.connected_unclaimed_count
+                    )
+                    self._rediscovery_released_count = (
+                        result.suppressed_candidate_count
+                    )
+                    return await self.async_step_rediscover_devices_done()
+
+        return self.async_show_form(
+            step_id="rediscover_devices",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_REDISCOVER_DEVICES,
+                        default=False,
+                    ): BooleanSelector(),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_rediscover_devices_done(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Report the completed refresh before closing the options flow."""
 
         if user_input is not None:
             return self.async_create_entry(data=dict(self._config_entry.options))
         return self.async_show_form(
-            step_id="listener",
+            step_id="rediscover_devices_done",
             data_schema=vol.Schema({}),
+            description_placeholders={
+                "connected_count": str(self._rediscovery_connected_count),
+                "released_count": str(self._rediscovery_released_count),
+            },
         )
 
 class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
@@ -7264,6 +7354,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._collector_uart_last_error = ""
         self._collector_uart_last_result = ""
         self._shadow_learning_state: dict[str, Any] = {}
+
+    def _poll_policy_driver_key(self) -> str:
+        """Return the persisted detected driver that owns poll limits."""
+
+        return str(
+            self._config_entry.options.get(
+                CONF_DRIVER_HINT,
+                self._config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+            )
+            or DRIVER_HINT_AUTO
+        )
 
     def _server_ip_field(self) -> SelectSelector | TextSelector:
         """Return the user-friendly selector for one local server IP."""
@@ -7611,7 +7712,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         }
         if poll_mode == POLL_MODE_MANUAL:
             schema_fields[vol.Required(CONF_POLL_INTERVAL, default=poll_interval)] = (
-                _POLL_INTERVAL_SELECTOR
+                _poll_interval_selector(self._poll_policy_driver_key())
             )
         if not is_bridge:
             # A local bridge dials Home Assistant on its own (inbound), so the
@@ -7777,7 +7878,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                             CONF_POLL_INTERVAL,
                             DEFAULT_POLL_INTERVAL,
                         ),
-                    ): _POLL_INTERVAL_SELECTOR,
+                    ): _poll_interval_selector(self._poll_policy_driver_key()),
                 }
             ),
             errors={},

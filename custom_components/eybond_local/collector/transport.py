@@ -1738,6 +1738,9 @@ class _SharedEybondListener:
         self._at_owner_counts: dict[str, int] = {}
         self._payload_pn_owner_counts: dict[str, int] = {}
         self._at_pn_owner_counts: dict[str, int] = {}
+        # DURABLE runtime confirmed protocol owner (PN-validated live evidence).
+        # This is the ONLY source of active protocol-owner authority: onboarding
+        # never registers an owner from an inferred/expected hint.
         self._session_protocol_owner_counts: dict[str, int] = {}
         self._session_seq = 0
         self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
@@ -2026,6 +2029,14 @@ class _SharedEybondListener:
         return next(iter(unique_candidates.values()))
 
     def _single_registered_session_protocol(self) -> str:
+        """Return the single DURABLE confirmed protocol owner (runtime), else "".
+
+        The confirmed owner (from validated runtime confirmed evidence) is the
+        ONLY thing that authorises an active identity probe. Onboarding registers
+        no owner, so an inferred/expected/cloud-family hint can never drive a
+        probe here. Ambiguous (>1 distinct) or absent fails closed ("").
+        """
+
         protocols = tuple(
             protocol
             for protocol, count in self._session_protocol_owner_counts.items()
@@ -3682,6 +3693,9 @@ class SharedEybondTransport:
         self._heartbeat_interval = float(heartbeat_interval)
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
+        # DURABLE confirmed protocol owner value. Only the runtime passes the
+        # validated confirmed protocol here; onboarding never does, so an
+        # inferred/expected hint can never register a durable confirmed owner.
         self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
         # Registry-mediated claim: the runtime injects a resolver that returns
         # the registry-chosen session id for this collector, so the claim targets
@@ -3865,6 +3879,38 @@ class SharedEybondTransport:
         """Set the runtime's registry-mediated claimed-session-id resolver."""
 
         self._claimed_session_provider = provider
+
+    def set_confirmed_session_protocol(self, protocol: str) -> None:
+        """Set the CONFIRMED session-protocol owner on the shared listener.
+
+        Idempotent. This is the durable-probe-permission counterpart of
+        ``set_negotiated_wire`` (live activation): a confirmed protocol owner lets
+        the listener send a safe identity probe to a SILENT session of this
+        collector. It is distinct from the live wire. Only a confirmed wire
+        (``eybond_framed`` / ``at_text``) may own; anything else clears the owner.
+        The inferred/expected cloud-family protocol must never reach this method.
+
+        Before the listener is acquired this only stores the value (applied at
+        ``start()``). Once acquired it dynamically unregisters the old owner and
+        registers the new one WITHOUT rebuilding the TCP listener; re-setting the
+        same value is a no-op; ``stop()`` unregisters exactly the current value
+        once (no double unregister / leak).
+        """
+
+        normalized = str(protocol or "").strip().lower()
+        if normalized not in ("at_text", "eybond_framed"):
+            normalized = ""
+        if normalized == self._collector_session_protocol:
+            return
+        listener = self._listener
+        if listener is not None:
+            if self._collector_session_protocol:
+                listener.unregister_session_protocol_owner(
+                    self._collector_session_protocol
+                )
+            if normalized:
+                listener.register_session_protocol_owner(normalized)
+        self._collector_session_protocol = normalized
 
     def _resolve_claimed_session_id(self) -> str:
         provider = self._claimed_session_provider
@@ -4533,6 +4579,38 @@ class SharedCollectorAtTransport:
         """Set the runtime's registry-mediated claimed-session-id resolver."""
 
         self._claimed_session_provider = provider
+
+    def set_confirmed_session_protocol(self, protocol: str) -> None:
+        """Set the CONFIRMED session-protocol owner on the shared listener.
+
+        Idempotent. This is the durable-probe-permission counterpart of
+        ``set_negotiated_wire`` (live activation): a confirmed protocol owner lets
+        the listener send a safe identity probe to a SILENT session of this
+        collector. It is distinct from the live wire. Only a confirmed wire
+        (``eybond_framed`` / ``at_text``) may own; anything else clears the owner.
+        The inferred/expected cloud-family protocol must never reach this method.
+
+        Before the listener is acquired this only stores the value (applied at
+        ``start()``). Once acquired it dynamically unregisters the old owner and
+        registers the new one WITHOUT rebuilding the TCP listener; re-setting the
+        same value is a no-op; ``stop()`` unregisters exactly the current value
+        once (no double unregister / leak).
+        """
+
+        normalized = str(protocol or "").strip().lower()
+        if normalized not in ("at_text", "eybond_framed"):
+            normalized = ""
+        if normalized == self._collector_session_protocol:
+            return
+        listener = self._listener
+        if listener is not None:
+            if self._collector_session_protocol:
+                listener.unregister_session_protocol_owner(
+                    self._collector_session_protocol
+                )
+            if normalized:
+                listener.register_session_protocol_owner(normalized)
+        self._collector_session_protocol = normalized
 
     def _resolve_claimed_session_id(self) -> str:
         provider = self._claimed_session_provider

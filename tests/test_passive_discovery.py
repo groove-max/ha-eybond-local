@@ -256,6 +256,83 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
 
+    async def test_user_refresh_republishes_retired_live_session_without_reconnect(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-8899-configured",
+            "peer_ip": "192.168.1.55",
+            "collector_pn": "E500SYN253884199645",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        discovery._listeners[8899] = _FakeListener((session,))
+        discovery._registry.claim(
+            "entry-e500",
+            collector_pn="E500SYN253884199645",
+        )
+        discovery.retire_entry_sessions("entry-e500")
+        discovery._registry.release("entry-e500")
+        await discovery._async_poll_once()
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+        result = await discovery.async_show_discovered_devices_again()
+
+        self.assertEqual(result.connected_unclaimed_count, 1)
+        self.assertEqual(result.suppressed_candidate_count, 1)
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+    async def test_user_refresh_does_not_publish_registry_owned_session(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[18899] = _FakeListener(
+            (
+                {
+                    "session_id": "listener-18899-owned",
+                    "peer_ip": "195.138.86.175",
+                    "collector_pn": "V001020SYN62344022",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                },
+            )
+        )
+        discovery._registry.claim(
+            "entry-pi30",
+            collector_pn="V001020SYN62344022",
+        )
+
+        result = await discovery.async_show_discovered_devices_again()
+
+        self.assertEqual(result.connected_unclaimed_count, 0)
+        self.assertEqual(result.suppressed_candidate_count, 0)
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+    async def test_user_refresh_does_not_duplicate_active_discovery_flow(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[18899] = _FakeListener(
+            (
+                {
+                    "session_id": "listener-18899-active-flow",
+                    "peer_ip": "195.138.86.175",
+                    "collector_pn": "V001020SYN62344022",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                },
+            )
+        )
+        await discovery._async_poll_once()
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+        result = await discovery.async_show_discovered_devices_again()
+
+        self.assertEqual(result.connected_unclaimed_count, 1)
+        self.assertEqual(result.suppressed_candidate_count, 1)
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
     async def test_active_scan_scope_does_not_hide_preexisting_inbound_session(self) -> None:
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)

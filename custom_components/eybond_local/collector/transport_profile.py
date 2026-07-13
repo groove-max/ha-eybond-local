@@ -33,12 +33,6 @@ from .capabilities import (
 )
 
 
-EYBOND_FRAMED_RUNTIME_OWNER_KEYS: frozenset[str] = frozenset(
-    {
-        "modbus_smg",
-        "must_pv_ph18",
-    }
-)
 CONFIRMED_COLLECTOR_SESSION_PROTOCOLS: frozenset[str] = frozenset(
     {"at_text", "eybond_framed"}
 )
@@ -165,22 +159,18 @@ def resolve_collector_transport_profile(
 
     ``virtual_bridge`` is collector metadata/capability only. It must not choose
     inverter payload transport: the live SessionHandle adapter negotiation owns
-    that decision. Runtime owner evidence can still provide an initial fallback;
-    otherwise the cloud family remains a legacy pre-live-observation hint.
+    that decision.
+
+    The ``runtime_owner_key`` (the local inverter driver key) is retained ONLY as
+    a diagnostic provenance field; it must never influence ``session_protocol``,
+    ``identity_strategy``, or any wire/adapter selection. Driver keys deciding
+    transport was the exact coupling removed in the phase-2 refactor. The cloud
+    family remains a legacy pre-live-observation hint that a live SessionHandle
+    always overrides.
     """
 
     normalized_family = known_collector_cloud_family(cloud_family)
     normalized_owner = str(runtime_owner_key or "").strip().lower()
-    if normalized_owner in EYBOND_FRAMED_RUNTIME_OWNER_KEYS:
-        return CollectorTransportProfile(
-            cloud_family=normalized_family,
-            runtime_owner_key=normalized_owner,
-            session_protocol="eybond_framed",
-            identity_strategy="framed_heartbeat_then_fc2_pn",
-            raw_passthrough_bootstrap="",
-            raw_passthrough_frame_format="",
-            raw_passthrough_min_interval_ms=0,
-        )
     return CollectorTransportProfile(
         cloud_family=normalized_family,
         runtime_owner_key=normalized_owner,

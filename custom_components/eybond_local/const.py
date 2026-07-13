@@ -16,6 +16,19 @@ CONF_ADVERTISED_SERVER_IP = "advertised_server_ip"
 CONF_COLLECTOR_IP = "collector_ip"
 CONF_COLLECTOR_PN = "collector_pn"
 CONF_COLLECTOR_CLOUD_FAMILY = "collector_cloud_family"
+# Durable, provider-neutral CONFIRMED collector wire evidence. Written ONLY from
+# a trusted, non-conflicting live SessionHandle whose durable PN matches the
+# entry. It may seed a same-PN reconnect/startup bootstrap; a live SessionHandle
+# always overrides it. Cloud family / endpoint / collector kind / driver key /
+# peer IP can never create it. The legacy ``collector_session_protocol`` field is
+# an INFERRED cloud-family hint (diagnostic only) and must never be treated as
+# confirmed -- migration is fail-closed (no provenance invented for old data).
+CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL = "collector_confirmed_session_protocol"
+CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE = "collector_confirmed_session_protocol_source"
+CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN = "collector_confirmed_session_protocol_pn"
+CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_OBSERVED_AT = "collector_confirmed_session_protocol_observed_at"
+# The only accepted provenance source for confirmed wire evidence.
+COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE = "live_session"
 CONF_COLLECTOR_OPERATION_MODE = "collector_operation_mode"
 CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT = "collector_original_server_endpoint"
 CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT = "collector_original_server_endpoint_observed_at"

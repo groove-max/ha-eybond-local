@@ -65,6 +65,7 @@ def _recommended_interval(
     policy: PollPolicy,
     observed_duration: float,
     fallback_interval: float,
+    minimum_interval: float,
 ) -> float:
     if observed_duration <= 0.0:
         target = fallback_interval
@@ -72,7 +73,7 @@ def _recommended_interval(
         target = observed_duration * max(1.0, float(policy.safety_factor))
     return clamp_interval(
         math.ceil(target),
-        minimum=policy.min_auto_interval,
+        minimum=minimum_interval,
         maximum=policy.max_auto_interval,
     )
 
@@ -94,7 +95,7 @@ class PollScheduler:
     ) -> None:
         self._policy = policy
         self._mode = normalize_poll_mode(mode)
-        self._manual_interval = clamp_interval(manual_interval)
+        self._manual_interval = self._clamp_manual_interval(manual_interval)
         self._effective_interval = self._initial_effective_interval()
         self._durations: list[float] = []
         self._last_decision = self._build_decision(observed_duration=0.0)
@@ -133,7 +134,9 @@ class PollScheduler:
         if mode is not None:
             self._mode = normalize_poll_mode(mode)
         if manual_interval is not None:
-            self._manual_interval = clamp_interval(manual_interval)
+            self._manual_interval = self._clamp_manual_interval(manual_interval)
+        else:
+            self._manual_interval = self._clamp_manual_interval(self._manual_interval)
         self._effective_interval = self._clamp_effective(self._effective_interval)
         if self._mode == POLL_MODE_MANUAL:
             self._effective_interval = self._manual_interval
@@ -168,6 +171,7 @@ class PollScheduler:
             policy=self._policy,
             observed_duration=observed,
             fallback_interval=self._effective_interval,
+            minimum_interval=self._recommendation_minimum_interval(),
         )
         if self._mode == POLL_MODE_AUTO:
             if success:
@@ -203,7 +207,18 @@ class PollScheduler:
                 minimum=self._policy.min_auto_interval,
                 maximum=self._policy.max_auto_interval,
             )
-        return clamp_interval(value)
+        return self._clamp_manual_interval(value)
+
+    def _clamp_manual_interval(self, value: object) -> float:
+        return clamp_interval(
+            value,
+            minimum=self._policy.min_manual_interval,
+        )
+
+    def _recommendation_minimum_interval(self) -> float:
+        if self._mode == POLL_MODE_AUTO:
+            return self._policy.min_auto_interval
+        return self._policy.min_manual_interval
 
     def _smooth_auto_interval(self, target: float) -> float:
         current = self._clamp_effective(self._effective_interval)
@@ -238,6 +253,7 @@ class PollScheduler:
                 policy=self._policy,
                 observed_duration=observed_duration,
                 fallback_interval=self._effective_interval,
+                minimum_interval=self._recommendation_minimum_interval(),
             )
         )
         duration = observed_duration if last_duration is None else last_duration

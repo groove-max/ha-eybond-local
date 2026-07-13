@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..poll_policy import PollPolicy
+
+
 import time
 import logging
 from typing import Any
@@ -51,6 +54,7 @@ class SmartEssLocalDriver(InverterDriver):
     """Runtime driver for SmartESS 0925 Modbus RTU over EyeBond binary tunnel."""
 
     key = "smartess_local"
+    poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
     name = "SmartESS Local / Modbus"
     profile_name = SMARTESS_LOCAL_0925_PROFILE_NAME
     register_schema_name = SMARTESS_LOCAL_0925_SCHEMA_NAME

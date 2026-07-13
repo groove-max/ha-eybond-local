@@ -47,7 +47,6 @@ from ..collector.capabilities import (
 )
 from ..collector.transport_profile import (
     CollectorTransportProfile,
-    EYBOND_FRAMED_RUNTIME_OWNER_KEYS,
     collector_session_protocol_from_inventory_state,
     collector_cloud_family_from_entry_context,
     normalize_collector_session_protocol,
@@ -66,6 +65,11 @@ from ..const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_PN,
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL,
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_OBSERVED_AT,
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN,
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE,
+    COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
     CONF_CONNECTION_STRATEGY,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
@@ -173,7 +177,7 @@ from ..models import (
 from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
-from .poll_policy import poll_policy_for_driver
+from ..drivers.registry import poll_policy_for_driver_key
 from .poll_scheduler import PollDecision, PollScheduler, clamp_interval, normalize_poll_mode
 from ..schema import (
     build_runtime_ui_schema,
@@ -979,7 +983,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             or "auto"
         )
         self._poll_scheduler = PollScheduler(
-            policy=poll_policy_for_driver(self._poll_scheduler_driver_key),
+            policy=poll_policy_for_driver_key(self._poll_scheduler_driver_key),
             mode=self._configured_poll_mode(),
             manual_interval=self._configured_poll_interval_seconds(),
         )
@@ -2234,6 +2238,63 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     self._suppress_entry_reload_count - 1, 0
                 )
 
+    def _persist_confirmed_session_protocol_from_runtime(self) -> None:
+        """Persist the confirmed live wire as durable ``live_session`` evidence.
+
+        Written ONLY from the runtime's confirmed wire binding (a trusted live
+        SessionHandle), and ONLY when the durable PN matches this entry. This is
+        the write side of the fail-closed confirmed-protocol bootstrap: a later
+        same-PN restart seeds it; cloud family / endpoint / driver key / peer IP
+        can never produce it. No-op when unchanged.
+        """
+
+        if getattr(self, "hass", None) is None or getattr(self, "config_entry", None) is None:
+            return
+        evidence = getattr(self._runtime, "confirmed_session_protocol_evidence", None)
+        if not callable(evidence):
+            return
+        try:
+            protocol, pn = evidence()
+        except Exception:  # pragma: no cover - defensive
+            return
+        if not protocol or not pn:
+            return
+        from ..connection.session_registry import pn_is_same_identity, reconcile_pn
+
+        entry_pn = str(self.config_entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
+        if not entry_pn or not pn_is_same_identity(entry_pn, pn):
+            return
+        stored_pn = str(
+            self.config_entry.data.get(CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN, "")
+            or ""
+        ).strip()
+        if (
+            self.config_entry.data.get(CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL) == protocol
+            and self.config_entry.data.get(
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE
+            )
+            == COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE
+            and stored_pn
+            and pn_is_same_identity(stored_pn, pn)
+        ):
+            return
+        # Reaching here means the confirmed protocol/source/PN genuinely changed
+        # (the no-op guard above returned otherwise), so this is NEW live
+        # evidence. Stamp the observation time ONCE here -- it is never rewritten
+        # on an unchanged poll, so it records when the wire was first confirmed.
+        self._persist_connection_axes(
+            updates={
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL: protocol,
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE: (
+                    COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE
+                ),
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN: reconcile_pn(entry_pn, pn),
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_OBSERVED_AT: (
+                    datetime.now(timezone.utc).isoformat()
+                ),
+            }
+        )
+
     def _persist_connection_axes(
         self,
         updates: dict[str, Any] | None = None,
@@ -3057,7 +3118,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         self._poll_scheduler_driver_key = driver_key
         self._poll_scheduler = PollScheduler(
-            policy=poll_policy_for_driver(driver_key),
+            policy=poll_policy_for_driver_key(
+                driver_key, inverter=self._detected_inverter_for_poll_policy()
+            ),
             mode=self._configured_poll_mode(),
             manual_interval=self._configured_poll_interval_seconds(),
         )
@@ -3081,7 +3144,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         if retry_interval <= 0.0:
             return scheduler_interval
-        policy = getattr(self._poll_scheduler, "policy", poll_policy_for_driver(""))
+        policy = getattr(self._poll_scheduler, "policy", poll_policy_for_driver_key(""))
         return clamp_interval(
             retry_interval,
             minimum=policy.min_auto_interval,
@@ -3110,6 +3173,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._poll_non_runtime_retry_interval_seconds = retry_interval
         return retry_interval
 
+    def _detected_inverter_for_poll_policy(self):
+        """Return the bound detected inverter for model-specific policy, if known.
+
+        A catalog driver may pick a model-specific policy from the detected
+        inverter; the runtime just forwards it. ``None`` before identity is known
+        (or before the runtime is attached).
+        """
+
+        runtime = getattr(self, "_runtime", None)
+        return getattr(runtime, "detected_inverter", None)
+
     def _update_poll_scheduler_policy_from_snapshot(self, snapshot: RuntimeSnapshot) -> None:
         values = getattr(snapshot, "values", None)
         if not isinstance(values, dict):
@@ -3117,10 +3191,27 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         driver_key = str(values.get("driver_key") or "").strip()
         if not driver_key:
             return
-        if driver_key == getattr(self, "_poll_scheduler_driver_key", ""):
+        # Resolve the policy with the detected inverter (a catalog driver may pick
+        # a model-specific policy). Reconfigure when the RESOLVED policy changed,
+        # not only when the driver key changed: the same driver can start with a
+        # family/default policy (no identity yet) and later resolve a
+        # model-specific policy for the SAME driver key once the model is known.
+        resolved = poll_policy_for_driver_key(
+            driver_key, inverter=self._detected_inverter_for_poll_policy()
+        )
+        scheduler = getattr(self, "_poll_scheduler", None)
+        current_policy = getattr(scheduler, "policy", None)
+        if (
+            driver_key == getattr(self, "_poll_scheduler_driver_key", "")
+            and resolved == current_policy
+        ):
+            # Same driver AND same resolved policy: nothing to do (avoid a
+            # needless reconfigure). configure() preserves duration samples, but
+            # skipping it entirely keeps the fast path allocation-free.
             return
         self._poll_scheduler_driver_key = driver_key
-        self._poll_scheduler.configure(policy=poll_policy_for_driver(driver_key))
+        # configure() updates the policy while preserving accumulated observations.
+        self._poll_scheduler.configure(policy=resolved)
 
     def _record_poll_cycle_metrics(
         self,
@@ -3241,7 +3332,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     else getattr(
                         getattr(self, "_poll_scheduler", None),
                         "policy",
-                        poll_policy_for_driver(""),
+                        poll_policy_for_driver_key(""),
                     ).min_auto_interval
                 ),
                 "collector_poll_policy_max_interval_seconds": (
@@ -3250,7 +3341,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     else getattr(
                         getattr(self, "_poll_scheduler", None),
                         "policy",
-                        poll_policy_for_driver(""),
+                        poll_policy_for_driver_key(""),
                     ).max_auto_interval
                 ),
                 "runtime_driver_state": runtime_driver_state,
@@ -3456,6 +3547,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "endpoint_reconcile",
             self._async_reconcile_collector_operation_mode_endpoint(snapshot),
         )
+        # Persist the confirmed live wire (durable, PN-validated) so a same-PN
+        # restart can bootstrap it. Pure entry-data write; no reload.
+        self._persist_confirmed_session_protocol_from_runtime()
         snapshot.values["collector_poll_phase_breakdown"] = ", ".join(
             f"{phase}={elapsed_ms}ms"
             for phase, elapsed_ms in sorted(
@@ -4258,7 +4352,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 source_path=bundle_path,
             )
         )
-        download_url = self._absolute_local_download_url(relative_download_url)
+        # Keep browser-facing downloads on the same Home Assistant origin that
+        # opened the frontend.  Turning this into an absolute URL here would
+        # force LAN/WireGuard users through the configured external endpoint.
+        download_url = relative_download_url
         await self._async_clear_proxy_capture_session_state()
         if request_refresh:
             await self.async_request_refresh()
@@ -4977,8 +5074,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         observed_protocol = self._observed_collector_session_protocol()
         if not observed_protocol or observed_protocol == resolved.session_protocol:
             return resolved
-        if resolved.runtime_owner_key in EYBOND_FRAMED_RUNTIME_OWNER_KEYS:
-            return resolved
+        # Live observation is always stronger than the bootstrap hint. The driver
+        # (runtime owner) key must never veto an observed protocol -- that was the
+        # phase-2 driver->transport coupling that is now removed.
         if observed_protocol == "at_text":
             return CollectorTransportProfile(
                 cloud_family=resolved.cloud_family,
@@ -7242,9 +7340,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         except OSError:
             return "", ""
 
-        absolute_url = self._absolute_local_download_url(relative_url)
         self._proxy_trace_download_manifest_path = normalized_manifest_path
-        self._proxy_trace_download_details = (bundle_path, absolute_url)
+        self._proxy_trace_download_details = (bundle_path, relative_url)
         return self._proxy_trace_download_details
 
     def _publish_tooling_values(self, **values: Any) -> None:

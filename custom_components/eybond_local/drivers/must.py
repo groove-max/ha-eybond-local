@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..poll_policy import PollPolicy
+
+
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
@@ -25,6 +28,7 @@ class MustPvPh18Driver(InverterDriver):
     """Driver for MUST PV/PH18 Modbus devices."""
 
     key = "must_pv_ph18"
+    poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
     name = "MUST PV/PH18"
     profile_name = "must_pv_ph18/base.json"
 

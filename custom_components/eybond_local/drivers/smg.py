@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..poll_policy import PollPolicy
+
+
 from datetime import datetime
 from typing import Any
 
@@ -57,6 +60,12 @@ from .catalog_identity import (
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
 
 
+SMG_MODBUS_POLL_POLICY = PollPolicy(
+    min_auto_interval=3.0,
+    max_auto_interval=60.0,
+)
+
+
 class CapabilityPreWriteReadError(RuntimeError):
     """A masked write's read-modify-write failed on its PRE-WRITE read.
 
@@ -109,6 +118,7 @@ class SmgModbusDriver(InverterDriver):
     """Bench-safe SMG probe and runtime reader."""
 
     key = "modbus_smg"
+    poll_policy = SMG_MODBUS_POLL_POLICY
     name = "SMG / Modbus"
 
     @property

@@ -254,6 +254,7 @@ from custom_components.eybond_local.config_flow import (
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED,
     _get_ipv4_interfaces,
     _flatten_sections,
+    _poll_interval_selector,
 )
 from custom_components.eybond_local.support.bundle import build_support_bundle_payload
 from custom_components.eybond_local.support.package import (
@@ -463,6 +464,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options.hass = _FakeHass()
         options.context = {}
         return options
+
+    def test_pi30_manual_poll_selector_uses_driver_policy_floor(self) -> None:
+        selector = _poll_interval_selector("pi30")
+
+        self.assertEqual(selector.config.kwargs["min"], 2)
 
     def test_selected_result_with_driver_choice_promotes_selected_match(self) -> None:
         flow = self._make_flow()
@@ -794,7 +800,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"], {"entry_role": "listener"})
         self.assertEqual(flow._test_unique_id, "eybond_local:listener")
 
-    async def test_listener_entry_uses_read_only_options_flow(self) -> None:
+    async def test_listener_entry_exposes_friendly_rediscovery_action(self) -> None:
         entry = types.SimpleNamespace(
             data={"entry_role": "listener"},
             options={},
@@ -804,11 +810,52 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options_flow.async_step_init()
 
         self.assertEqual(type(options_flow).__name__, "ListenerOptionsFlow")
-        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "listener")
+        self.assertEqual(result["menu_options"], ["rediscover_devices"])
         self.assertTrue(callable(getattr(options_flow, "async_step_listener", None)))
-        submitted = await options_flow.async_step_listener({})
-        self.assertEqual(submitted["type"], "create_entry")
+
+    async def test_listener_rediscovery_requires_confirmation_and_reports_result(self) -> None:
+        entry = types.SimpleNamespace(
+            data={"entry_role": "listener"},
+            options={},
+        )
+        options_flow = EybondLocalConfigFlow.async_get_options_flow(entry)
+        options_flow.hass = _FakeHass()
+        service = types.SimpleNamespace(
+            async_show_discovered_devices_again=AsyncMock(
+                return_value=types.SimpleNamespace(
+                    connected_unclaimed_count=3,
+                    suppressed_candidate_count=2,
+                )
+            )
+        )
+
+        unconfirmed = await options_flow.async_step_rediscover_devices(
+            {"confirm_rediscover_devices": False}
+        )
+        self.assertEqual(
+            unconfirmed["errors"],
+            {"confirm_rediscover_devices": "required"},
+        )
+
+        with patch(
+            "custom_components.eybond_local.passive_discovery.get_passive_callback_discovery",
+            return_value=service,
+        ):
+            completed = await options_flow.async_step_rediscover_devices(
+                {"confirm_rediscover_devices": True}
+            )
+
+        service.async_show_discovered_devices_again.assert_awaited_once_with()
+        self.assertEqual(completed["type"], "form")
+        self.assertEqual(completed["step_id"], "rediscover_devices_done")
+        self.assertEqual(
+            completed["description_placeholders"],
+            {"connected_count": "3", "released_count": "2"},
+        )
+        closed = await options_flow.async_step_rediscover_devices_done({})
+        self.assertEqual(closed["type"], "create_entry")
 
     async def test_collector_network_routes_to_bluetooth_setup_when_collector_is_not_connected(self) -> None:
         flow = self._make_flow()

@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import importlib
 import importlib.util
+from datetime import datetime
 from pathlib import Path
 import sys
 import tempfile
@@ -107,6 +108,11 @@ def _install_coordinator_stubs() -> None:
     const.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY = "collector_original_server_endpoint_profile_key"
     const.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE = "collector_original_server_endpoint_source"
     const.CONF_COLLECTOR_PN = "collector_pn"
+    const.CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL = "collector_confirmed_session_protocol"
+    const.CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_OBSERVED_AT = "collector_confirmed_session_protocol_observed_at"
+    const.CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN = "collector_confirmed_session_protocol_pn"
+    const.CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE = "collector_confirmed_session_protocol_source"
+    const.COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE = "live_session"
     const.CONF_CONNECTION_TYPE = "connection_type"
     const.CONF_CONNECTION_MODE = "connection_mode"
     const.CONF_CONTROL_MODE = "control_mode"
@@ -191,6 +197,36 @@ def _install_coordinator_stubs() -> None:
     drivers_registry = _ensure_module("custom_components.eybond_local.drivers.registry")
     drivers_registry.get_driver = lambda *args, **kwargs: None
     drivers_registry.all_write_capabilities = lambda *args, **kwargs: []
+    # A realistic test double for the neutral policy resolver: mirrors what each
+    # real driver declares via ``poll_policy_for`` (the coordinator only consumes
+    # the resolved policy, so the double encodes the expected driver mapping).
+    # The concrete policies now live in the driver modules; the neutral contract
+    # exports only PollPolicy + DEFAULT, so the double builds the envelopes here.
+    from custom_components.eybond_local.poll_policy import (
+        DEFAULT_POLL_POLICY as _DEFAULT_POLL_POLICY,
+        PollPolicy as _PollPolicy,
+    )
+
+    _SMG_POLICY = _PollPolicy(min_auto_interval=3.0, max_auto_interval=60.0)
+    _FAST_POLICY = _PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
+    _PI30_POLICY = _PollPolicy(
+        min_auto_interval=2.0, max_auto_interval=120.0, min_manual_interval=2.0
+    )
+    _STUB_DRIVER_POLICIES = {
+        "modbus_smg": _SMG_POLICY,
+        "srne_modbus": _FAST_POLICY,
+        "must_pv_ph18": _FAST_POLICY,
+        "smartess_local": _FAST_POLICY,
+        # eybond_g_ascii / pi18 inherit the neutral default (ASCII == DEFAULT).
+        "eybond_g_ascii": _DEFAULT_POLL_POLICY,
+        "pi18": _DEFAULT_POLL_POLICY,
+        "pi30": _PI30_POLICY,
+    }
+    drivers_registry.poll_policy_for_driver_key = (
+        lambda driver_key="", inverter=None: _STUB_DRIVER_POLICIES.get(
+            str(driver_key or "").strip(), _DEFAULT_POLL_POLICY
+        )
+    )
 
     fixtures_utils = _ensure_module("custom_components.eybond_local.fixtures.utils")
     fixtures_utils.anonymize_fixture_json = lambda *args, **kwargs: None
@@ -2649,6 +2685,51 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertTrue(values["proxy_capture_can_start"])
 
         asyncio.run(_run())
+
+    def test_proxy_trace_manifest_download_keeps_same_origin_relative_url(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._proxy_trace_download_manifest_path = ""
+            coordinator._proxy_trace_download_details = ("", "")
+
+            async def _async_add_executor_job(func):
+                return func()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                manifest_path = Path(tmp) / "manifest.json"
+                manifest_path.write_text("{}", encoding="utf-8")
+                coordinator.hass = types.SimpleNamespace(
+                    config=types.SimpleNamespace(config_dir=tmp),
+                    async_add_executor_job=_async_add_executor_job,
+                )
+                bundle_path = Path(tmp) / "capture.zip"
+                relative_url = "/local/eybond_local/proxy_traces/capture.zip"
+                with patch.object(
+                    self.coordinator_module,
+                    "export_proxy_trace_bundle",
+                    return_value=bundle_path,
+                ), patch.object(
+                    self.coordinator_module,
+                    "publish_proxy_trace_download_copy",
+                    return_value=(bundle_path, relative_url),
+                ):
+                    result = await coordinator._async_proxy_trace_manifest_download_details(
+                        str(manifest_path)
+                    )
+
+            self.assertEqual(result, (str(bundle_path), relative_url))
+
+        asyncio.run(_run())
+
+    def test_proxy_download_paths_do_not_call_removed_absolute_url_helper(self) -> None:
+        self.assertNotIn(
+            "_absolute_local_download_url",
+            self.coordinator_module.EybondLocalCoordinator.async_stop_proxy_capture.__code__.co_names,
+        )
+        self.assertNotIn(
+            "_absolute_local_download_url",
+            self.coordinator_module.EybondLocalCoordinator._async_proxy_trace_manifest_download_details.__code__.co_names,
+        )
 
     def test_collector_device_info_prefers_more_complete_configured_pn(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -6693,7 +6774,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._runtime_operation_lock = asyncio.Lock()
             coordinator._poll_scheduler_driver_key = "auto"
             coordinator._poll_scheduler = self.coordinator_module.PollScheduler(
-                policy=self.coordinator_module.poll_policy_for_driver("auto"),
+                policy=self.coordinator_module.poll_policy_for_driver_key("auto"),
                 mode="auto",
                 manual_interval=10,
             )
@@ -6913,7 +6994,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._runtime_operation_lock = asyncio.Lock()
             coordinator._poll_scheduler_driver_key = "auto"
             coordinator._poll_scheduler = self.coordinator_module.PollScheduler(
-                policy=self.coordinator_module.poll_policy_for_driver("auto"),
+                policy=self.coordinator_module.poll_policy_for_driver_key("auto"),
                 mode="manual",
                 manual_interval=10,
             )
@@ -7089,6 +7170,147 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator._poll_scheduler_driver_key, "modbus_smg")
         self.assertEqual(coordinator._poll_scheduler.policy.min_auto_interval, 3)
         self.assertEqual(coordinator._poll_scheduler.effective_interval, 3)
+
+    def test_poll_scheduler_applies_model_specific_policy_for_same_driver_key(self) -> None:
+        # A catalog driver keeps the SAME driver key but resolves a different
+        # policy once the model/variant is known. The scheduler must switch even
+        # though the driver key did not change (the old early-return bug applied
+        # only the family/default policy forever).
+        from custom_components.eybond_local.poll_policy import PollPolicy
+
+        fast = PollPolicy(min_auto_interval=2.0, max_auto_interval=30.0)
+        slow = PollPolicy(min_auto_interval=20.0, max_auto_interval=200.0)
+
+        def _model_aware_resolver(driver_key="", inverter=None):
+            if str(driver_key or "").strip() != "modbus_catalog":
+                return PollPolicy(min_auto_interval=10.0, max_auto_interval=120.0)
+            return fast if getattr(inverter, "variant_key", "") == "fast" else slow
+
+        original = self.coordinator_module.poll_policy_for_driver_key
+        self.coordinator_module.poll_policy_for_driver_key = _model_aware_resolver
+        try:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={},
+                options={"poll_mode": "auto", "poll_interval": 10},
+            )
+            coordinator._poll_scheduler_driver_key = "auto"
+            # Scheduler created BEFORE model identity is known.
+            coordinator._runtime = types.SimpleNamespace(detected_inverter=None)
+            coordinator._ensure_poll_scheduler()
+
+            # First snapshot: driver known, no model yet -> family/default policy.
+            coordinator._update_poll_scheduler_policy_from_snapshot(
+                self.RuntimeSnapshot(values={"driver_key": "modbus_catalog"})
+            )
+            self.assertEqual(coordinator._poll_scheduler_driver_key, "modbus_catalog")
+            self.assertEqual(coordinator._poll_scheduler.policy.min_auto_interval, 20)
+
+            # Accumulate observations; they must survive the policy switch.
+            for _ in range(5):
+                coordinator._poll_scheduler.observe(0.7)
+            samples_before = coordinator._poll_scheduler._durations[-1]
+
+            # The SAME driver later resolves a model-specific (variant) policy.
+            coordinator._runtime.detected_inverter = types.SimpleNamespace(
+                variant_key="fast"
+            )
+            coordinator._update_poll_scheduler_policy_from_snapshot(
+                self.RuntimeSnapshot(values={"driver_key": "modbus_catalog"})
+            )
+
+            # Switched despite the unchanged driver key, samples preserved.
+            self.assertEqual(coordinator._poll_scheduler_driver_key, "modbus_catalog")
+            self.assertEqual(coordinator._poll_scheduler.policy.min_auto_interval, 2)
+            self.assertEqual(coordinator._poll_scheduler._durations[-1], samples_before)
+        finally:
+            self.coordinator_module.poll_policy_for_driver_key = original
+
+    def test_persist_confirmed_session_protocol_is_pn_validated_and_live_sourced(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()  # non-None gate
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_pn": "PNALPHA-FULL-0001"}
+        )
+        recorded: dict = {}
+        coordinator._persist_connection_axes = (
+            lambda updates=None, **kwargs: recorded.update(updates or {})
+        )
+
+        # Matching PN + live evidence -> persisted with live_session provenance.
+        coordinator._runtime = types.SimpleNamespace(
+            confirmed_session_protocol_evidence=lambda: (
+                "eybond_framed",
+                "PNALPHA-FULL-0001",
+            )
+        )
+        coordinator._persist_confirmed_session_protocol_from_runtime()
+        self.assertEqual(
+            recorded.get("collector_confirmed_session_protocol"), "eybond_framed"
+        )
+        self.assertEqual(
+            recorded.get("collector_confirmed_session_protocol_source"), "live_session"
+        )
+        self.assertEqual(
+            recorded.get("collector_confirmed_session_protocol_pn"), "PNALPHA-FULL-0001"
+        )
+
+        # A DIFFERENT PN is never persisted.
+        recorded.clear()
+        coordinator._runtime = types.SimpleNamespace(
+            confirmed_session_protocol_evidence=lambda: ("eybond_framed", "PNBETA-FULL-0002")
+        )
+        coordinator._persist_confirmed_session_protocol_from_runtime()
+        self.assertEqual(recorded, {})
+
+        # No confirmed evidence -> nothing persisted.
+        coordinator._runtime = types.SimpleNamespace(
+            confirmed_session_protocol_evidence=lambda: ("", "")
+        )
+        coordinator._persist_confirmed_session_protocol_from_runtime()
+        self.assertEqual(recorded, {})
+
+    def test_persist_confirmed_session_protocol_stamps_observed_at_only_on_new_evidence(
+        self,
+    ) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_pn": "PNALPHA-FULL-0001"}
+        )
+        recorded: dict = {}
+        coordinator._persist_connection_axes = (
+            lambda updates=None, **kwargs: recorded.update(updates or {})
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            confirmed_session_protocol_evidence=lambda: (
+                "eybond_framed",
+                "PNALPHA-FULL-0001",
+            )
+        )
+
+        # NEW evidence: an observed-at UTC timestamp is stamped exactly once.
+        coordinator._persist_confirmed_session_protocol_from_runtime()
+        observed_at = recorded.get("collector_confirmed_session_protocol_observed_at")
+        self.assertTrue(observed_at)
+        # A real ISO-8601 UTC timestamp (parseable, tz-aware).
+        parsed = datetime.fromisoformat(observed_at)
+        self.assertIsNotNone(parsed.tzinfo)
+
+        # The evidence is now already persisted (unchanged): a later poll must be
+        # a pure no-op -- the timestamp is NOT rewritten each refresh.
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_pn": "PNALPHA-FULL-0001",
+                "collector_confirmed_session_protocol": "eybond_framed",
+                "collector_confirmed_session_protocol_source": "live_session",
+                "collector_confirmed_session_protocol_pn": "PNALPHA-FULL-0001",
+                "collector_confirmed_session_protocol_observed_at": observed_at,
+            }
+        )
+        recorded.clear()
+        coordinator._persist_confirmed_session_protocol_from_runtime()
+        self.assertEqual(recorded, {})
 
     def test_fixed_rate_poll_scheduler_sets_remaining_post_refresh_delay(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..poll_policy import PollPolicy
+
+
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
@@ -16,6 +19,7 @@ class SrneModbusDriver(InverterDriver):
     """Read-only driver for SRNE-compatible Modbus devices."""
 
     key = "srne_modbus"
+    poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
     name = "SRNE / Modbus"
 
     @property

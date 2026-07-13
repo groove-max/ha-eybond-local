@@ -83,6 +83,56 @@ class _StaleHeartbeatThenRecoveredLinkManager(_FakeLinkManager):
         return True
 
 
+class _OwnedSessionHandoverLinkManager(_FakeLinkManager):
+    """Expose a registry generation change before reconnecting the same collector."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.owned_session_generation = 1
+        self.connect_timeouts: list[float] = []
+
+    def has_confirmed_wire_binding(self) -> bool:
+        return True
+
+    async def async_try_connect(
+        self,
+        *,
+        timeout: float,
+        require_heartbeat: bool = False,
+    ) -> bool:
+        self.connect_timeouts.append(float(timeout))
+        if not self.connected and timeout < 5.0:
+            return False
+        self.connected = True
+        return True
+
+
+class _DoubleReplacementLinkManager(_OwnedSessionHandoverLinkManager):
+    """First replacement disappears; the next generation becomes usable."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_first_handover_generation = True
+
+    async def async_try_connect(
+        self,
+        *,
+        timeout: float,
+        require_heartbeat: bool = False,
+    ) -> bool:
+        self.connect_timeouts.append(float(timeout))
+        if (
+            not self.connected
+            and self.owned_session_generation == 2
+            and self.fail_first_handover_generation
+        ):
+            self.fail_first_handover_generation = False
+            self.owned_session_generation = 3
+            return False
+        self.connected = True
+        return True
+
+
 class _ProxyRouteLinkManager(_FakeLinkManager):
     def __init__(self) -> None:
         super().__init__()
@@ -178,6 +228,25 @@ class _TimeoutThenSuccessDriver:
             "output_power": 420,
             "battery_average_power": -180,
         }
+
+
+class _TimeoutThenDisconnectedDriver:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.calls += 1
+        if self.calls == 1:
+            raise ModbusError("request_timeout")
+        raise ConnectionError("collector_not_connected")
 
 
 class _IllegalDataValueDriver:
@@ -490,7 +559,7 @@ class HubSnapshotTests(unittest.TestCase):
                 discovery_interval=30,
                 heartbeat_interval=60,
                 request_timeout=5.0,
-                collector_session_protocol="at_text",
+                collector_expected_session_protocol="at_text",
             ),
         )
         hub._link_manager = _FakeLinkManager()
@@ -854,7 +923,7 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.values["battery_average_power"], -144.0)
         self.assertEqual(snapshot.values["battery_power"], -144.0)
 
-    def test_async_refresh_marks_snapshot_disconnected_on_request_timeout(self) -> None:
+    def test_async_refresh_keeps_collector_connected_on_inverter_request_timeout(self) -> None:
         async def _run() -> None:
             hub = EybondHub(
                 connection=EybondConnectionSpec(
@@ -886,13 +955,14 @@ class HubSnapshotTests(unittest.TestCase):
 
             snapshot = await hub.async_refresh(poll_interval=3.0)
 
-            self.assertFalse(snapshot.connected)
+            self.assertTrue(snapshot.connected)
             self.assertEqual(snapshot.last_error, "request_timeout")
             self.assertEqual(snapshot.values["output_power"], 50)
             self.assertEqual(snapshot.values["battery_power"], -71)
-            self.assertEqual(snapshot.values["runtime_recovery_streak"], 1)
-            self.assertGreater(snapshot.values["runtime_backoff_seconds"], 0)
-            self.assertEqual(hub._link_manager.reset_calls, 1)
+            self.assertEqual(snapshot.values["runtime_recovery_streak"], 0)
+            self.assertEqual(snapshot.values["runtime_backoff_seconds"], 0)
+            self.assertEqual(snapshot.values["runtime_payload_error"], "request_timeout")
+            self.assertEqual(hub._link_manager.reset_calls, 0)
             self.assertEqual(hub._driver.calls, 2)
 
         asyncio.run(_run())
@@ -1778,7 +1848,7 @@ class HubWriteBlockerTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_async_refresh_skips_repeated_timeout_during_backoff(self) -> None:
+    def test_async_refresh_repeated_payload_timeout_does_not_enter_backoff(self) -> None:
         async def _run() -> None:
             hub = EybondHub(
                 connection=EybondConnectionSpec(
@@ -1805,13 +1875,13 @@ class HubWriteBlockerTests(unittest.TestCase):
             first = await hub.async_refresh(poll_interval=3.0)
             second = await hub.async_refresh(poll_interval=3.0)
 
-            self.assertFalse(first.connected)
-            self.assertFalse(second.connected)
+            self.assertTrue(first.connected)
+            self.assertTrue(second.connected)
             self.assertEqual(second.last_error, "request_timeout")
-            self.assertEqual(hub._driver.calls, 2)
-            self.assertEqual(hub._link_manager.reset_calls, 1)
-            self.assertEqual(second.values["runtime_recovery_streak"], 1)
-            self.assertGreater(second.values["runtime_backoff_seconds"], 0)
+            self.assertEqual(hub._driver.calls, 4)
+            self.assertEqual(hub._link_manager.reset_calls, 0)
+            self.assertEqual(second.values["runtime_recovery_streak"], 0)
+            self.assertEqual(second.values["runtime_backoff_seconds"], 0)
 
         asyncio.run(_run())
 
@@ -2192,7 +2262,7 @@ class HubWriteBlockerTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_async_refresh_recovers_after_request_timeout_reconnect(self) -> None:
+    def test_async_refresh_retries_request_timeout_without_reconnect(self) -> None:
         async def _run() -> None:
             hub = EybondHub(
                 connection=EybondConnectionSpec(
@@ -2223,8 +2293,8 @@ class HubWriteBlockerTests(unittest.TestCase):
             self.assertEqual(snapshot.values["output_power"], 420)
             self.assertEqual(snapshot.values["battery_power"], -180)
             self.assertEqual(snapshot.values["runtime_recovery_streak"], 0)
-            self.assertEqual(snapshot.values["runtime_reconnect_count"], 1)
-            self.assertEqual(hub._link_manager.reset_calls, 1)
+            self.assertEqual(snapshot.values["runtime_reconnect_count"], 0)
+            self.assertEqual(hub._link_manager.reset_calls, 0)
 
         asyncio.run(_run())
 
@@ -2242,7 +2312,7 @@ class HubAtTextAsciiProbeTests(unittest.TestCase):
                 discovery_interval=30,
                 heartbeat_interval=60,
                 request_timeout=5.0,
-                collector_session_protocol=session_protocol,
+                collector_expected_session_protocol=session_protocol,
             ),
         )
 
@@ -2387,8 +2457,8 @@ class RuntimeStateMachineTests(unittest.TestCase):
             self.assertIsNotNone(snapshot.inverter)
             self.assertEqual(snapshot.inverter.serial_number, self._SERIAL)
             self.assertEqual(snapshot.inverter.model_name, self._MODEL)
-            self.assertFalse(snapshot.connected)
-            self.assertEqual(snapshot.values["runtime_poll_state"], "offline")
+            self.assertTrue(snapshot.connected)
+            self.assertNotEqual(snapshot.values["runtime_poll_state"], "offline")
             self.assertEqual(
                 snapshot.values["runtime_last_driver_bound_identity"],
                 "modbus_smg|SMG 6200|92632500000001",
@@ -2509,6 +2579,52 @@ class RuntimeStateMachineTests(unittest.TestCase):
             self.assertEqual(snapshot.inverter.serial_number, self._SERIAL)
             self.assertEqual(snapshot.values["runtime_driver_state"], "driver_bound")
             self.assertEqual(snapshot.values["runtime_poll_state"], "polling")
+
+        asyncio.run(_run())
+
+    def test_owned_session_replacement_gets_one_bounded_handover_grace(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            link = _OwnedSessionHandoverLinkManager()
+            hub._link_manager = link
+            hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+
+            # Establish the generation that completed a normal driver poll.
+            initial = await hub.async_refresh(poll_interval=3.0)
+            self.assertTrue(initial.connected)
+            self.assertEqual(hub._stable_owned_session_generation, 1)
+
+            # The same PN replaces its TCP socket. The regular 0.75s connect
+            # budget is insufficient in this fake; lifecycle evidence grants
+            # exactly one bounded 5s handover attempt for generation 2.
+            link.connected = False
+            link.owned_session_generation = 2
+            recovered = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertTrue(recovered.connected)
+            self.assertEqual(recovered.values["runtime_driver_state"], "driver_bound")
+            self.assertNotEqual(recovered.values["runtime_poll_state"], "offline")
+            self.assertIn(5.0, link.connect_timeouts)
+            self.assertEqual(hub._stable_owned_session_generation, 2)
+
+        asyncio.run(_run())
+
+    def test_double_replacement_recovers_per_owned_session_generation(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            link = _DoubleReplacementLinkManager()
+            hub._link_manager = link
+            hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+            await hub.async_refresh(poll_interval=3.0)
+
+            link.connected = False
+            link.owned_session_generation = 2
+            recovered = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertTrue(recovered.connected)
+            self.assertEqual(recovered.values["runtime_driver_state"], "driver_bound")
+            self.assertEqual(hub._stable_owned_session_generation, 3)
+            self.assertGreaterEqual(link.connect_timeouts.count(5.0), 2)
 
         asyncio.run(_run())
 

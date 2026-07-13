@@ -49,6 +49,19 @@ class TranslationShapeTests(unittest.TestCase):
                 self.assertIn("connection_strategy_callback_on_demand", dynamic)
                 self.assertIn("connection_strategy_bridge_note", dynamic)
 
+    def test_listener_rediscovery_action_is_translated(self) -> None:
+        for path in TRANSLATION_FILES:
+            with self.subTest(path=path.name):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                steps = payload["options"]["step"]
+                self.assertIn("rediscover_devices", steps["listener"]["menu_options"])
+                self.assertIn("rediscover_devices", steps)
+                self.assertIn("rediscover_devices_done", steps)
+                self.assertIn(
+                    "confirm_rediscover_devices",
+                    steps["rediscover_devices"]["data"],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

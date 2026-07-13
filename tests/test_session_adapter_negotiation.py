@@ -19,6 +19,7 @@ from custom_components.eybond_local.connection.session_handle import (
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
     ADAPTER_FRAMED_COLLECTOR_COMMANDS,
     ADAPTER_FRAMED_FORWARD,
+    ADAPTER_NONE,
     ADAPTER_RAW_PASSTHROUGH,
     ConfirmedWireBinding,
     WIRE_AT_TEXT,
@@ -33,6 +34,16 @@ from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
     SESSION_STATE_CLOSED,
     reconcile_pn,
+)
+from custom_components.eybond_local.connection.confirmed_session_protocol import (
+    ConfirmedSessionProtocolEvidence,
+)
+from custom_components.eybond_local.connection.models import EybondConnectionSpec
+from custom_components.eybond_local.const import (
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL,
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN,
+    CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE,
+    COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
 )
 from custom_components.eybond_local.runtime.hub import _reconcile_durable_collector_pn
 from custom_components.eybond_local.runtime.link import (
@@ -83,11 +94,21 @@ class _FakeAtTransport:
         return RawSerialLinkRoute(protocol=payload_family)
 
 
-def _bare_link(*, collector_pn, collector_ip, persisted_protocol, sessions):
+def _bare_link(
+    *,
+    collector_pn,
+    collector_ip,
+    persisted_protocol,
+    sessions,
+    confirmed_protocol="",
+    confirmed_pn="",
+):
     link = object.__new__(EybondRuntimeLinkManager)
     link._collector_pn = collector_pn
     link._collector_ip = collector_ip
-    link._collector_session_protocol = persisted_protocol
+    # persisted_protocol is the INFERRED (cloud-family) expected hint: diagnostic
+    # only, it must never drive the adapter/probe/owner.
+    link._expected_collector_session_protocol = persisted_protocol
     link._transport = _FakeTransport(sessions)
     link._at_transport = _FakeAtTransport()
     link._unavailable_payload_transport = _UnavailablePayloadTransport()
@@ -99,6 +120,23 @@ def _bare_link(*, collector_pn, collector_ip, persisted_protocol, sessions):
     link._session_registry = CallbackSessionRegistry(
         sessions_source=link._iter_observed_sessions,
     )
+    # Exercise the REAL evidence validator + seeding + PN validation exactly as
+    # the branch registry does: a persisted record only bootstraps when it is a
+    # validated ``live_session`` confirmed-protocol record for the same durable
+    # PN. Anything else yields no evidence -> no binding (fail-closed).
+    evidence = None
+    if confirmed_protocol or confirmed_pn:
+        evidence = ConfirmedSessionProtocolEvidence.from_record(
+            {
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL: confirmed_protocol,
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE: (
+                    COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE
+                ),
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN: confirmed_pn,
+            },
+            entry_pn=collector_pn,
+        )
+    link._seed_confirmed_wire_binding_from_evidence(evidence)
     return link
 
 
@@ -304,15 +342,19 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
                 payload_family="pi30_ascii",
             )
 
-    def test_unobserved_session_falls_back_to_persisted_hint(self) -> None:
-        link = _bare_link(
-            collector_pn=FULL_PN, collector_ip="", persisted_protocol="at_text", sessions=[]
-        )
-        self.assertTrue(link._uses_at_text_payload())
-        link_framed = _bare_link(
-            collector_pn=FULL_PN, collector_ip="", persisted_protocol="eybond_framed", sessions=[]
-        )
-        self.assertFalse(link_framed._uses_at_text_payload())
+    def test_unobserved_session_is_fail_closed_not_inferred_hint(self) -> None:
+        # Phase-2 fail-closed: an inferred/persisted (cloud-family) protocol MUST
+        # NOT drive the adapter. With no observed live session and no confirmed
+        # evidence, the adapter fails closed to ADAPTER_NONE (never framed, never
+        # the persisted at_text hint).
+        for hint in ("at_text", "eybond_framed", "", "zzz"):
+            link = _bare_link(
+                collector_pn=FULL_PN, collector_ip="", persisted_protocol=hint, sessions=[]
+            )
+            self.assertEqual(
+                link._inverter_forward_adapter(), ADAPTER_NONE, f"hint={hint!r}"
+            )
+            self.assertFalse(link._uses_at_text_payload())
 
     def test_peer_ip_does_not_leak_another_collectors_wire(self) -> None:
         # Two collectors on the same peer IP: the link for FULL_PN must negotiate
@@ -538,7 +580,7 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
             )
         )
         self.assertFalse(changed)
-        self.assertEqual(link._collector_session_protocol, "eybond_framed")
+        self.assertEqual(link._expected_collector_session_protocol, "eybond_framed")
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
 
     # Conflict + attempted bootstrap reconcile: a live conflict blocks the rebuild
@@ -573,7 +615,7 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
             )
         )
         self.assertFalse(changed)
-        self.assertEqual(link._collector_session_protocol, "eybond_framed")
+        self.assertEqual(link._expected_collector_session_protocol, "eybond_framed")
         # Conflict is still surfaced; bootstrap not applied.
         self.assertTrue(link._live_session_handle().conflict)
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_NONE)
@@ -959,6 +1001,455 @@ class ProductionBindingAdoptionLifecycleTests(unittest.TestCase):
             binding.inverter_forward_adapter,
             ADAPTER_INVERTER_FRAMED_FC4,
         )
+
+
+class TransportIndependenceTests(unittest.TestCase):
+    """Live adapter negotiation depends ONLY on the observed session signals.
+
+    Phase-2 invariant: the same wire observation yields the same adapters
+    regardless of driver_key, collector kind, hostname, cloud family, or peer IP.
+    ``negotiate_session_adapters`` does not even accept those as inputs; this
+    proves that structurally (varying peer IP, the only such field present) and
+    behaviourally.
+    """
+
+    def _adapters(self, handle):
+        return (
+            handle.wire_framing,
+            handle.collector_management_adapter,
+            handle.inverter_forward_adapter,
+            handle.proxy_adapter,
+            handle.conflict,
+        )
+
+    def test_same_framed_observation_same_adapters_across_peer_ips(self) -> None:
+        base = self._adapters(
+            negotiate_session_adapters(
+                _observed("s1", FULL_PN, peer_ip="203.0.113.1",
+                          state="routed_framed", source="framed_heartbeat")
+            )
+        )
+        for peer in ("198.51.100.9", "10.0.0.2", "192.0.2.50", "203.0.113.1"):
+            other = self._adapters(
+                negotiate_session_adapters(
+                    _observed("sX", FULL_PN, peer_ip=peer,
+                              state="routed_framed", source="framed_heartbeat")
+                )
+            )
+            self.assertEqual(other, base)
+        # And it is the framed adapter set.
+        self.assertEqual(base[0], WIRE_FRAMED)
+        self.assertEqual(base[2], ADAPTER_INVERTER_FRAMED_FC4)
+
+    def test_same_at_observation_same_adapters_across_peer_ips(self) -> None:
+        base = self._adapters(
+            negotiate_session_adapters(
+                _observed("s1", FULL_PN, peer_ip="203.0.113.1",
+                          state="routed_at_text", source="at_dtupn")
+            )
+        )
+        for peer in ("198.51.100.9", "10.0.0.2"):
+            other = self._adapters(
+                negotiate_session_adapters(
+                    _observed("sX", FULL_PN, peer_ip=peer,
+                              state="routed_at_text", source="at_dtupn")
+                )
+            )
+            self.assertEqual(other, base)
+        self.assertEqual(base[0], WIRE_AT_TEXT)
+        self.assertEqual(base[2], ADAPTER_INVERTER_RAW_PASSTHROUGH)
+
+    def test_negotiation_signature_takes_no_driver_or_provider_inputs(self) -> None:
+        # Structural guard: driver_key / cloud_family / collector_kind / hostname
+        # are not parameters of the live negotiation at all.
+        import inspect
+
+        params = set(inspect.signature(negotiate_session_adapters).parameters)
+        for forbidden in ("driver_key", "cloud_family", "collector_kind", "hostname", "peer_ip"):
+            self.assertNotIn(forbidden, params)
+
+
+class PersistedConfirmedProtocolBootstrapTests(unittest.TestCase):
+    """Only PN-validated CONFIRMED-live evidence may bootstrap a pre-live adapter.
+
+    Inferred cloud-family protocol never does; a mismatched PN is fail-closed;
+    and a live SessionHandle always overrides the persisted confirmed protocol.
+    """
+
+    def test_persisted_confirmed_framed_bootstraps_framed(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",  # inferred hint (ignored)
+            sessions=[],  # no live session yet
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4
+        )
+        self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
+
+    def test_persisted_confirmed_at_bootstraps_at(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",  # inferred hint (ignored)
+            sessions=[],
+            confirmed_protocol="at_text",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
+        self.assertTrue(link.confirmed_wire_binding.uses_at_text_wire)
+
+    def test_persisted_confirmed_short_pn_bootstraps_full_pn_entry(self) -> None:
+        # Short/full PN reconciliation via the registry helper: a confirmed
+        # short PN for the same identity seeds the full-PN entry.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=SHORT_PN,
+        )
+        self.assertEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4
+        )
+        self.assertEqual(link.confirmed_wire_binding.collector_pn, FULL_PN)
+
+    def test_confirmed_protocol_with_different_pn_is_ignored(self) -> None:
+        # Confirmed evidence for a DIFFERENT collector must never bootstrap this
+        # entry: fail-closed.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=OTHER_FULL_PN,
+        )
+        self.assertIsNone(link.confirmed_wire_binding)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_NONE)
+
+    def test_confirmed_evidence_requires_pn(self) -> None:
+        # No PN => cannot confirm; fail-closed.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn="",
+        )
+        self.assertIsNone(link.confirmed_wire_binding)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_NONE)
+
+    def test_invalid_source_evidence_never_reaches_the_binding(self) -> None:
+        # A persisted record whose provenance is NOT live_session yields NO
+        # validated evidence, so the link is seeded with None and never
+        # bootstraps a binding -- the invalid record can never reach the link.
+        evidence = ConfirmedSessionProtocolEvidence.from_record(
+            {
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL: "eybond_framed",
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN: FULL_PN,
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE: "cloud_family",
+            },
+            entry_pn=FULL_PN,
+        )
+        self.assertIsNone(evidence)
+
+        link = object.__new__(EybondRuntimeLinkManager)
+        link._collector_pn = FULL_PN
+        link._confirmed_wire_binding = None
+        link._seed_confirmed_wire_binding_from_evidence(evidence)
+        self.assertIsNone(link._confirmed_wire_binding)
+
+    def test_direct_spec_protocol_without_evidence_does_not_bootstrap(self) -> None:
+        # A directly-constructed ConnectionSpec may carry an expected protocol
+        # string but NO validated evidence object. The expected protocol alone
+        # must never bootstrap a confirmed binding.
+        spec = EybondConnectionSpec(
+            server_ip="192.0.2.10",
+            tcp_port=8899,
+            udp_port=58899,
+            collector_pn=FULL_PN,
+            collector_expected_session_protocol="eybond_framed",
+            confirmed_session_protocol_evidence=None,
+            discovery_interval=30,
+            heartbeat_interval=60,
+            request_timeout=5.0,
+        )
+        self.assertIsNone(spec.confirmed_session_protocol_evidence)
+
+        link = object.__new__(EybondRuntimeLinkManager)
+        link._collector_pn = spec.collector_pn
+        link._confirmed_wire_binding = None
+        link._seed_confirmed_wire_binding_from_evidence(
+            spec.confirmed_session_protocol_evidence
+        )
+        self.assertIsNone(link._confirmed_wire_binding)
+
+    def test_live_wire_overrides_persisted_confirmed_protocol(self) -> None:
+        # A live SessionHandle is always stronger than persisted confirmed
+        # evidence: a live AT session overrides a persisted confirmed framed one.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[
+                _observed("live", FULL_PN, state="routed_at_text", source="at_dtupn")
+            ],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertTrue(link.session_handle.observed)
+        self.assertEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
+
+    def test_confirmed_only_protocol_is_handed_to_transport_not_inferred(self) -> None:
+        # The link hands ONLY the confirmed protocol to the shared listener, so
+        # an inferred cloud-family hint can never register a probe owner.
+        inferred = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",  # inferred only
+            sessions=[],
+        )
+        self.assertEqual(inferred._confirmed_session_protocol(), "")
+        confirmed = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[],
+            confirmed_protocol="eybond_framed",
+            confirmed_pn=FULL_PN,
+        )
+        self.assertEqual(confirmed._confirmed_session_protocol(), "eybond_framed")
+
+
+class _ConfirmedProtocolSpyTransport:
+    """Transport double that records the durable confirmed-protocol owner.
+
+    Models the transport end of the runtime->transport plumbing: the runtime
+    hands the CONFIRMED wire down via set_confirmed_session_protocol; a real
+    transport would (un)register the listener owner. ``rebuild_calls`` proves the
+    owner is applied WITHOUT tearing the transport down.
+    """
+
+    def __init__(self, sessions=(), listener_key="spy:0"):
+        self._sessions = tuple(dict(s) for s in sessions)
+        self._listener_key = listener_key
+        self.connected = True
+        self.collector_info = types.SimpleNamespace(remote_ip="", heartbeat_fresh=False)
+        self.confirmed_calls: list[str] = []
+        self.owner = ""
+        self.rebuild_calls = 0
+
+    @property
+    def listener_key(self):
+        return self._listener_key
+
+    def observed_collector_sessions(self):
+        return self._sessions
+
+    def select_payload_route(self, route, *, payload_family=""):
+        return route
+
+    def set_confirmed_session_protocol(self, protocol):
+        self.confirmed_calls.append(str(protocol or ""))
+        self.owner = str(protocol or "")
+
+    async def start(self):
+        self.rebuild_calls += 1
+
+    async def stop(self):
+        pass
+
+
+class LinkAppliesConfirmedProtocolToTransportsTests(unittest.TestCase):
+    """Adopting a trusted live wire pushes the confirmed protocol to transports.
+
+    The single binding writer ``_adopt_trusted_live_binding`` re-asserts the
+    confirmed session-protocol owner on the primary AND auxiliary-surface
+    transports, so a later silent same-PN reconnect is probeable -- with no
+    listener rebuild and never using the inferred/expected protocol.
+    """
+
+    def _spy_link(self, observed):
+        payload = _ConfirmedProtocolSpyTransport(
+            sessions=[observed] if observed else [], listener_key="spy:payload"
+        )
+        at = _ConfirmedProtocolSpyTransport(sessions=[], listener_key="spy:at")
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            # persisted/inferred hint is at_text: it must NEVER become the owner.
+            persisted_protocol="at_text",
+            sessions=[observed] if observed else [],
+        )
+        link._transport = payload
+        link._at_transport = at
+        return link, payload, at
+
+    def test_framed_live_wire_registers_confirmed_owner_no_rebuild(self) -> None:
+        observed = _observed(
+            "s1", FULL_PN, state="routed_framed", source="framed_heartbeat"
+        )
+        link, payload, at = self._spy_link(observed)
+        # No confirmed evidence yet -> no owner on either transport.
+        self.assertEqual(payload.owner, "")
+        self.assertEqual(at.owner, "")
+
+        link._adopt_trusted_live_binding()  # explicit observation event
+
+        # Primary AND auxiliary surfaces both get the CONFIRMED wire (not the
+        # inferred at_text hint), applied without a rebuild.
+        self.assertEqual(payload.owner, "eybond_framed")
+        self.assertEqual(at.owner, "eybond_framed")
+        self.assertEqual(payload.rebuild_calls, 0)
+        self.assertEqual(at.rebuild_calls, 0)
+
+    def test_at_live_wire_registers_confirmed_owner_no_rebuild(self) -> None:
+        observed = _observed(
+            "s1", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn"
+        )
+        link, payload, at = self._spy_link(observed)
+        link._adopt_trusted_live_binding()
+        self.assertEqual(payload.owner, "at_text")
+        self.assertEqual(at.owner, "at_text")
+        self.assertEqual(payload.rebuild_calls, 0)
+
+    def test_durable_pn_change_clears_confirmed_owner(self) -> None:
+        observed = _observed(
+            "s1", FULL_PN, state="routed_framed", source="framed_heartbeat"
+        )
+        link, payload, at = self._spy_link(observed)
+        link._adopt_trusted_live_binding()
+        self.assertEqual(payload.owner, "eybond_framed")
+
+        # The entry's durable PN changes to a different collector and the live
+        # session is gone: the stale binding is dropped and the owner cleared.
+        link._collector_pn = OTHER_FULL_PN
+        _set_sessions(link, [])
+        link._adopt_trusted_live_binding()
+        self.assertEqual(payload.owner, "")
+        self.assertEqual(at.owner, "")
+        # Still no rebuild -- ownership churn never tears the listener down.
+        self.assertEqual(payload.rebuild_calls, 0)
+
+    def test_inferred_expected_protocol_never_becomes_owner(self) -> None:
+        # A link with ONLY an inferred at_text hint and no live session confirms
+        # nothing: the transports are never given an owner.
+        link, payload, at = self._spy_link(None)
+        link._adopt_trusted_live_binding()
+        self.assertEqual(payload.owner, "")
+        self.assertEqual(at.owner, "")
+        # The inferred value is never among the applied confirmed protocols.
+        self.assertNotIn("at_text", payload.confirmed_calls)
+
+
+class SeedTrustBoundaryFailClosedTests(unittest.TestCase):
+    """The seed path is a fail-closed trust boundary, not a duck-typed shortcut.
+
+    Regression for the review blocker: a forged object (a ``SimpleNamespace`` or a
+    genuine instance built via the raw constructor with a bad source / unknown
+    protocol / empty PN) used to create a ``ConfirmedWireBinding``. It must not.
+    """
+
+    def _seed(self, evidence, *, entry_pn=FULL_PN):
+        link = object.__new__(EybondRuntimeLinkManager)
+        link._collector_pn = entry_pn
+        link._confirmed_wire_binding = None
+        link._seed_confirmed_wire_binding_from_evidence(evidence)
+        return link._confirmed_wire_binding
+
+    def test_duck_typed_namespace_does_not_seed_binding(self) -> None:
+        forged = types.SimpleNamespace(
+            protocol="eybond_framed", collector_pn=FULL_PN, source="cloud_family"
+        )
+        self.assertIsNone(self._seed(forged))
+
+    def test_duck_typed_namespace_with_live_source_still_rejected(self) -> None:
+        # Even a namespace that mimics a perfect live record is rejected: it is
+        # not a real ConfirmedSessionProtocolEvidence instance.
+        forged = types.SimpleNamespace(
+            protocol="eybond_framed", collector_pn=FULL_PN, source="live_session"
+        )
+        self.assertIsNone(self._seed(forged))
+
+    def test_forged_instance_with_cloud_family_source_does_not_seed(self) -> None:
+        forged = ConfirmedSessionProtocolEvidence(
+            protocol="eybond_framed", collector_pn=FULL_PN, source="cloud_family"
+        )
+        self.assertIsNone(self._seed(forged))
+
+    def test_forged_instance_with_unknown_protocol_does_not_seed(self) -> None:
+        forged = ConfirmedSessionProtocolEvidence(
+            protocol="pi30", collector_pn=FULL_PN, source="live_session"
+        )
+        self.assertIsNone(self._seed(forged))
+
+    def test_forged_instance_with_empty_pn_does_not_seed(self) -> None:
+        forged = ConfirmedSessionProtocolEvidence(
+            protocol="eybond_framed", collector_pn="", source="live_session"
+        )
+        self.assertIsNone(self._seed(forged))
+
+    def test_direct_spec_cannot_smuggle_forged_evidence(self) -> None:
+        # A directly-constructed ConnectionSpec drops a forged object to None at
+        # the field boundary, so it can never even reach the link seed.
+        forged = types.SimpleNamespace(
+            protocol="eybond_framed", collector_pn=FULL_PN, source="live_session"
+        )
+        spec = EybondConnectionSpec(
+            server_ip="192.0.2.10",
+            tcp_port=8899,
+            udp_port=58899,
+            collector_pn=FULL_PN,
+            confirmed_session_protocol_evidence=forged,
+            discovery_interval=30,
+            heartbeat_interval=60,
+            request_timeout=5.0,
+        )
+        self.assertIsNone(spec.confirmed_session_protocol_evidence)
+        self.assertIsNone(self._seed(spec.confirmed_session_protocol_evidence))
+
+    def test_valid_live_evidence_still_bootstraps_binding(self) -> None:
+        valid = ConfirmedSessionProtocolEvidence.from_record(
+            {
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL: "eybond_framed",
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN: FULL_PN,
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE: (
+                    COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE
+                ),
+            },
+            entry_pn=FULL_PN,
+        )
+        binding = self._seed(valid)
+        self.assertIsNotNone(binding)
+        self.assertTrue(binding.uses_framed_wire)
+        self.assertEqual(binding.collector_pn, FULL_PN)
+
+    def test_short_full_pn_reconciliation_preserved_through_seed(self) -> None:
+        # Entry full PN, confirmed short PN of the same identity -> full PN kept.
+        valid = ConfirmedSessionProtocolEvidence.from_record(
+            {
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL: "at_text",
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN: SHORT_PN,
+                CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE: (
+                    COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE
+                ),
+            },
+            entry_pn=FULL_PN,
+        )
+        binding = self._seed(valid, entry_pn=FULL_PN)
+        self.assertIsNotNone(binding)
+        self.assertTrue(binding.uses_at_text_wire)
+        self.assertEqual(binding.collector_pn, FULL_PN)
 
 
 if __name__ == "__main__":

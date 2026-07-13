@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 import inspect
 import logging
 import time
@@ -45,6 +46,14 @@ _LISTENER_HOST = "0.0.0.0"
 _POLL_INTERVAL_SECONDS = 2.0
 _WEAK_IDENTITY_SETTLE_SECONDS = 6.0
 _STOP_LISTENER_RELEASE_TIMEOUT_SECONDS = 4.0
+
+
+@dataclass(frozen=True)
+class PassiveDiscoveryRefreshResult:
+    """Summary of one user-requested passive-discovery refresh."""
+
+    connected_unclaimed_count: int
+    suppressed_candidate_count: int
 
 
 try:
@@ -155,6 +164,41 @@ class PassiveCallbackDiscovery:
             key = _session_inventory_key(candidate.raw)
             if key:
                 self._probe_suppressed_sessions.add(key)
+
+    async def async_show_discovered_devices_again(
+        self,
+    ) -> PassiveDiscoveryRefreshResult:
+        """Forget temporary publication suppression and immediately re-poll.
+
+        This intentionally resets only the in-memory, edge-triggered discovery
+        history. Durable config entries, registry ownership, active config
+        flows, and active scan scopes remain authoritative, so configured
+        collectors cannot be duplicated and an in-progress scan keeps owning
+        the sockets it caused.
+        """
+
+        unclaimed = tuple(self._registry.list_unclaimed_sessions())
+        suppressed_candidate_count = 0
+        for candidate in unclaimed:
+            session = dict(candidate.raw)
+            collector_pn = str(session.get("collector_pn") or "").strip()
+            port = int(session.get("listener_port") or 0)
+            if (
+                _session_inventory_key(session) in self._probe_suppressed_sessions
+                or (
+                    collector_pn
+                    and self._already_notified(port, collector_pn, session=session)
+                )
+            ):
+                suppressed_candidate_count += 1
+
+        self._notified.clear()
+        self._probe_suppressed_sessions.clear()
+        await self._async_poll_once()
+        return PassiveDiscoveryRefreshResult(
+            connected_unclaimed_count=len(unclaimed),
+            suppressed_candidate_count=suppressed_candidate_count,
+        )
 
     def _observed_session_keys(self) -> set[str]:
         return {

@@ -10,6 +10,7 @@ from ..const import (
     CONF_CONNECTION_TYPE,
     CONNECTION_TYPE_EYBOND,
 )
+from .confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 
 
 ConnectionType = Literal["eybond"]
@@ -34,11 +35,20 @@ class EybondConnectionSpec(ConnectionSpec):
     collector_ip: str
     collector_pn: str
     collector_cloud_family: str
-    collector_session_protocol: str
+    # INFERRED (cloud-family) callback-session protocol hint. Diagnostic ONLY --
+    # never an authority for wire/adapter/probe. Renamed to make that explicit;
+    # ``collector_session_protocol`` remains a read-only compatibility alias.
+    collector_expected_session_protocol: str
     collector_identity_strategy: str
     collector_raw_passthrough_bootstrap: str
     collector_raw_passthrough_frame_format: str
     collector_raw_passthrough_min_interval_ms: int
+    # CONFIRMED-live wire evidence, typed so the field itself is the guarantee:
+    # the constructor drops anything that is not a genuine
+    # ``ConfirmedSessionProtocolEvidence`` to ``None``, and the seed path
+    # re-validates provenance again at its trust boundary. A direct ConnectionSpec
+    # construction therefore cannot inject a duck-typed/forged confirmed protocol.
+    confirmed_session_protocol_evidence: ConfirmedSessionProtocolEvidence | None
     discovery_target: str
     discovery_interval: int
     heartbeat_interval: int
@@ -55,11 +65,12 @@ class EybondConnectionSpec(ConnectionSpec):
         collector_ip: str = "",
         collector_pn: str = "",
         collector_cloud_family: str = "",
-        collector_session_protocol: str = "",
+        collector_expected_session_protocol: str = "",
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
         collector_raw_passthrough_min_interval_ms: int = 0,
+        confirmed_session_protocol_evidence: ConfirmedSessionProtocolEvidence | None = None,
         discovery_target: str = "",
         discovery_interval: int,
         heartbeat_interval: int,
@@ -74,7 +85,11 @@ class EybondConnectionSpec(ConnectionSpec):
         object.__setattr__(self, "collector_ip", collector_ip)
         object.__setattr__(self, "collector_pn", collector_pn)
         object.__setattr__(self, "collector_cloud_family", collector_cloud_family)
-        object.__setattr__(self, "collector_session_protocol", collector_session_protocol)
+        object.__setattr__(
+            self,
+            "collector_expected_session_protocol",
+            collector_expected_session_protocol,
+        )
         object.__setattr__(self, "collector_identity_strategy", collector_identity_strategy)
         object.__setattr__(
             self,
@@ -91,10 +106,34 @@ class EybondConnectionSpec(ConnectionSpec):
             "collector_raw_passthrough_min_interval_ms",
             max(0, int(collector_raw_passthrough_min_interval_ms or 0)),
         )
+        # Type invariant enforced here: only a genuine validated evidence
+        # instance is stored; a forged/duck-typed object is dropped to None so it
+        # can never reach the seed path. Provenance (source/protocol/PN/identity)
+        # is re-validated again at the seed trust boundary.
+        object.__setattr__(
+            self,
+            "confirmed_session_protocol_evidence",
+            confirmed_session_protocol_evidence
+            if isinstance(
+                confirmed_session_protocol_evidence, ConfirmedSessionProtocolEvidence
+            )
+            else None,
+        )
         object.__setattr__(self, "discovery_target", discovery_target)
         object.__setattr__(self, "discovery_interval", int(discovery_interval))
         object.__setattr__(self, "heartbeat_interval", int(heartbeat_interval))
         object.__setattr__(self, "request_timeout", float(request_timeout))
+
+    @property
+    def collector_session_protocol(self) -> str:
+        """Read-only compatibility alias for the INFERRED expected protocol.
+
+        Diagnostic only. Generic runtime logic must use
+        ``collector_expected_session_protocol`` (inferred) or the validated
+        ``confirmed_session_protocol_evidence`` -- never this alias as authority.
+        """
+
+        return self.collector_expected_session_protocol
 
     @property
     def effective_advertised_server_ip(self) -> str:

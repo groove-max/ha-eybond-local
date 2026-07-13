@@ -290,12 +290,30 @@
       "diagnostic_commands_unavailable": "The integration runtime is not loaded, so diagnostic commands cannot run.",
       "diagnostic_commands_failed": "The diagnostic scenario failed unexpectedly. Check the Home Assistant log.",
       "shadow_learning_failed": "Control discovery action failed. Check details and confirmations, then try again.",
+      "passive_discovery_unavailable": "Background discovery is not running. Reload the integration and try again.",
       "invalid_selection": "The selected option is no longer available."
     },
     "step": {
       "listener": {
         "title": "Background discovery",
-        "description": "This service entry keeps EyeBond callback listeners active even when no collectors are configured. Remove the entry to disable background discovery."
+        "description": "This service entry keeps EyeBond callback listeners active even when no collectors are configured. Remove the entry to disable background discovery.",
+        "menu_options": {
+          "rediscover_devices": "Show discovered devices again"
+        }
+      },
+      "rediscover_devices": {
+        "title": "Show discovered devices again",
+        "description": "EyeBond Local remembers a live collector after offering it once, so a cancelled or removed device does not immediately reappear. Clear only this temporary history and check currently connected collectors again. Configured devices, active setup flows, and connections are not removed or interrupted.",
+        "data": {
+          "confirm_rediscover_devices": "Clear the temporary discovery history and check connected collectors now"
+        },
+        "data_description": {
+          "confirm_rediscover_devices": "Eligible collectors will reappear in Home Assistant discovery without restarting Home Assistant or the collector."
+        }
+      },
+      "rediscover_devices_done": {
+        "title": "Discovery refreshed",
+        "description": "The temporary discovery history was cleared. EyeBond Local checked {connected_count} currently connected, unconfigured collector(s); {released_count} had been hidden by the current session filter. Eligible devices should now appear in Home Assistant discovery."
       },
       "init": {
         "title": "EyeBond Local Options",

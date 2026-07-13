@@ -15,6 +15,7 @@ from ..models import (
     ProbeTarget,
     WriteCapability,
 )
+from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
 
 
 class InverterDriver(ABC):
@@ -32,6 +33,30 @@ class InverterDriver(ABC):
     capability_groups: tuple[CapabilityGroup, ...] = ()
     write_capabilities: tuple[WriteCapability, ...] = ()
     capability_presets: tuple[CapabilityPreset, ...] = ()
+
+    # A driver with a single, model-independent timing envelope just sets this
+    # class attribute (e.g. ``poll_policy = PI30_POLL_POLICY`` in pi30.py). A
+    # driver whose policy depends on the detected model overrides
+    # ``poll_policy_for`` instead. The base default is the neutral policy.
+    poll_policy: PollPolicy = DEFAULT_POLL_POLICY
+
+    def poll_policy_for(
+        self,
+        inverter: DetectedInverter | None = None,
+    ) -> PollPolicy:
+        """Return the adaptive polling policy for this driver / detected model.
+
+        The base returns the declared ``poll_policy`` class attribute. It is a
+        method (not just the attribute) so a single catalog driver can serve
+        several models with different timing envelopes by overriding it and
+        reading model identity from ``inverter``. The argument is any object that
+        exposes model identity (a ``DetectedInverter`` at runtime, or a
+        ``DriverMatch`` during onboarding -- both carry ``variant_key`` /
+        ``model_name``), or ``None`` before identity is known. The runtime never
+        selects the policy -- it only consumes the returned value.
+        """
+
+        return self.poll_policy
 
     @property
     def profile_metadata(self):

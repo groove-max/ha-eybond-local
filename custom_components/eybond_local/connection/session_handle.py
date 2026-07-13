@@ -268,6 +268,41 @@ class ConfirmedWireBinding:
             identity_sources=handle.identity_sources,
         )
 
+    @classmethod
+    def from_confirmed_protocol(
+        cls,
+        *,
+        collector_pn: str,
+        session_protocol: str,
+    ) -> "ConfirmedWireBinding | None":
+        """Build a confirmed binding from a durable PN + a CONFIRMED protocol.
+
+        Used to seed a same-PN reconnect/startup bootstrap from persisted
+        confirmed-live evidence. Returns ``None`` unless a durable PN is supplied
+        and ``session_protocol`` is a known confirmed wire (``eybond_framed`` /
+        ``at_text``). The caller is responsible for having validated the
+        provenance (must be ``live_session``) and that the PN matches the entry.
+        """
+
+        durable = str(collector_pn or "").strip()
+        protocol = str(session_protocol or "").strip().lower()
+        if not durable:
+            return None
+        if protocol == "eybond_framed":
+            wire = WIRE_FRAMED
+        elif protocol == "at_text":
+            wire = WIRE_AT_TEXT
+        else:
+            return None
+        collector_adapter, inverter_adapter, proxy_adapter = _adapters_for_wire(wire)
+        return cls(
+            collector_pn=durable,
+            wire_framing=wire,
+            collector_management_adapter=collector_adapter,
+            inverter_forward_adapter=inverter_adapter,
+            proxy_adapter=proxy_adapter,
+        )
+
 
 def _normalize_wire_signal(value: object) -> str:
     normalized = str(value or "").strip().lower()

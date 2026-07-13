@@ -9,6 +9,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Added a **Show discovered devices again** action to the
+  **EyeBond Local — Discovery** entry. It clears only temporary in-memory
+  discovery suppression and immediately rechecks connected, unconfigured
+  collectors without restarting Home Assistant or the collector.
 - Added a persistent **EyeBond Local — Discovery** service entry so passive
   callback discovery remains available after all collector entries are removed
   and across Home Assistant restarts.
@@ -19,6 +23,9 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- PI30 polling now uses its own measured `2s` lower bound instead of inheriting
+  the generic ASCII `10s` floor. Manual recommendations use the same
+  driver-owned policy and therefore reflect the observed cycle duration.
 - Kept one passive-discovery flow alive while a short collector PN is enriched
   to its full PN, instead of replacing the flow underneath the Home Assistant UI.
 - Fixed the failed inbound-verification and discovery-listener options steps so

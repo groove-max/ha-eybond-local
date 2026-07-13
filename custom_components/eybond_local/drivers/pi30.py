@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..poll_policy import PollPolicy
+
+
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -49,6 +52,17 @@ from .catalog_probe import (
     async_probe_ascii_catalog_signature,
     catalog_model_name,
     evidence_providers_from_transport,
+)
+
+
+PI30_POLL_POLICY = PollPolicy(
+    # A normal PI30 refresh is one compact ASCII exchange, routinely
+    # completed in ~1.5s even through a remote reverse-TCP bridge. Keep one
+    # integer-second scheduling step plus the normal safety factor rather
+    # than the conservative floor for broad ASCII polling.
+    min_auto_interval=2.0,
+    max_auto_interval=120.0,
+    min_manual_interval=2.0,
 )
 
 
@@ -149,6 +163,7 @@ class Pi30Driver(InverterDriver):
     """PI30 probe, runtime reader, and command-based controller."""
 
     key = "pi30"
+    poll_policy = PI30_POLL_POLICY
     name = "PI30 / ASCII"
 
     @property

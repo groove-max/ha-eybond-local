@@ -28,6 +28,7 @@ from ..models import (
     WriteCapability,
     decimals_for_divisor,
 )
+from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
 from .base import InverterDriver
 from .modbus_catalog import ModbusCatalogDriver
 from .must import MustPvPh18Driver
@@ -75,6 +76,25 @@ def get_driver(driver_key: str) -> InverterDriver:
         if driver.key == driver_key:
             return driver
     raise KeyError(driver_key)
+
+
+def poll_policy_for_driver_key(driver_key: object, inverter=None) -> PollPolicy:
+    """Resolve the adaptive polling policy for a driver key (composition point).
+
+    The runtime holds no catalog of driver policies: it passes the driver key
+    (and optionally the detected model) here, and each driver declares its own
+    policy via ``poll_policy_for``. Before a driver is known -- ``auto`` or an
+    unregistered key -- the neutral default applies.
+    """
+
+    key = str(driver_key or "").strip()
+    if not key or key == DRIVER_HINT_AUTO:
+        return DEFAULT_POLL_POLICY
+    try:
+        driver = get_driver(key)
+    except KeyError:
+        return DEFAULT_POLL_POLICY
+    return driver.poll_policy_for(inverter)
 
 
 def iter_replay_drivers(driver_hint: str) -> tuple[InverterDriver, ...]:
