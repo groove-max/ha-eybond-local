@@ -12,9 +12,20 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.pi30 import Pi30Driver
+from custom_components.eybond_local.drivers.read_result import (
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.drivers.registry import driver_options, get_driver
 from custom_components.eybond_local.models import CollectorInfo, ProbeTarget
 from custom_components.eybond_local.payload.pi30 import crc16_xmodem
+
+
+async def _read_values(driver, *args, **kwargs):
+    """Call async_read_values and return the value dict (unwraps DriverReadResult)."""
+
+    result = await driver.async_read_values(*args, **kwargs)
+    return result.values if isinstance(result, DriverReadResult) else result
 
 
 def _frame(payload: str) -> bytes:
@@ -299,7 +310,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert inverter is not None
-        values = await driver.async_read_values(transport, inverter)
+        values = await _read_values(driver, transport, inverter)
 
         self.assertEqual(values["operating_mode"], "Line")
         self.assertEqual(values["output_active_power"], 924)
@@ -334,14 +345,17 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert inverter is not None
-        values = await driver.async_read_values(transport, inverter)
+        values = await _read_values(driver, transport, inverter)
 
         self.assertEqual(values["operating_mode"], "Line")
         self.assertNotIn("alarm_status", values)
         self.assertEqual(values["pv_generation_sum"], 12345)
         self.assertNotIn("tracker_temperature", values)
 
-    async def test_read_values_groups_runtime_commands_by_poll_class(self) -> None:
+    async def test_read_values_runs_single_sequential_cycle_every_poll(self) -> None:
+        # Batch 2: no fast/medium/slow grouping. Every runtime poll runs ONE
+        # sequential cycle of all reachable, not-unsupported commands -- there are
+        # no empty cycles and no fast-only cycles.
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
         inverter = await Pi30Driver().async_probe(
@@ -375,90 +389,30 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         )
         runtime_state: dict[str, object] = {}
 
-        first_values = await driver.async_read_values(
-            transport,
-            inverter,
-            runtime_state=runtime_state,
-            poll_interval=10.0,
-            now_monotonic=100.0,
-        )
+        full_sequence = [
+            "QPIGS", "QMOD", "QPIWS", "Q1",
+            "QET", "QLT", "QT",
+            "QEY2026", "QEM202604", "QED20260407",
+            "QLY2026", "QLM202604", "QLD20260407",
+        ]
 
-        self.assertIn("alarm_status", first_values)
-        self.assertIn("pv_generation_sum", first_values)
-        self.assertEqual(
-            transport.commands,
-            [
-                "QPIGS",
-                "QMOD",
-                "QPIWS",
-                "Q1",
-                "QET",
-                "QLT",
-                "QT",
-                "QEY2026",
-                "QEM202604",
-                "QED20260407",
-                "QLY2026",
-                "QLM202604",
-                "QLD20260407",
-            ],
-        )
+        # Poll THREE times with advancing time; the sequence is identical every
+        # time (no cadence, no empty cycle, no fast-only cycle).
+        for t in (100.0, 110.0, 130.0):
+            transport.commands.clear()
+            values = await _read_values(
+                driver, transport, inverter,
+                runtime_state=runtime_state, poll_interval=10.0, now_monotonic=t,
+            )
+            self.assertEqual(transport.commands, full_sequence)
+            # All command families present in every cycle.
+            self.assertIn("alarm_status", values)  # QPIWS
+            self.assertIn("inverter_charge_state", values)  # Q1
+            self.assertIn("pv_generation_sum", values)  # energy
+            self.assertEqual(values["operating_mode"], "Line")
 
-        transport.commands.clear()
-        second_values = await driver.async_read_values(
-            transport,
-            inverter,
-            runtime_state=runtime_state,
-            poll_interval=10.0,
-            now_monotonic=110.0,
-        )
-
-        self.assertEqual(second_values["operating_mode"], "Line")
-        self.assertNotIn("alarm_status", second_values)
-        self.assertNotIn("pv_generation_sum", second_values)
-        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
-
-        transport.commands.clear()
-        third_values = await driver.async_read_values(
-            transport,
-            inverter,
-            runtime_state=runtime_state,
-            poll_interval=10.0,
-            now_monotonic=130.0,
-        )
-
-        self.assertIn("alarm_status", third_values)
-        self.assertNotIn("pv_generation_sum", third_values)
-        self.assertEqual(transport.commands, ["QPIGS", "QMOD", "QPIWS", "Q1"])
-
-        transport.commands.clear()
-        fourth_values = await driver.async_read_values(
-            transport,
-            inverter,
-            runtime_state=runtime_state,
-            poll_interval=10.0,
-            now_monotonic=160.0,
-        )
-
-        self.assertIn("pv_generation_sum", fourth_values)
-        self.assertEqual(
-            transport.commands,
-            [
-                "QPIGS",
-                "QMOD",
-                "QPIWS",
-                "Q1",
-                "QET",
-                "QLT",
-                "QT",
-                "QEY2026",
-                "QEM202604",
-                "QED20260407",
-                "QLY2026",
-                "QLM202604",
-                "QLD20260407",
-            ],
-        )
+        # No grouped scheduler state remains.
+        self.assertNotIn("pi30_group_last_polled", runtime_state)
 
     async def test_read_values_stops_retrying_unsupported_commands(self) -> None:
         driver = Pi30Driver()
@@ -486,13 +440,13 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
 
         # Four full cycles collect the failure strikes.
         for index in range(4):
-            await driver.async_read_values(
+            await _read_values(driver,
                 transport, inverter, runtime_state=runtime_state,
                 poll_interval=10.0, now_monotonic=100.0 * (index + 1),
             )
 
         transport.commands.clear()
-        values = await driver.async_read_values(
+        values = await _read_values(driver,
             transport, inverter, runtime_state=runtime_state,
             poll_interval=10.0, now_monotonic=500.0,
         )
@@ -504,7 +458,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         # The set is permanent: no timer-based re-probe. An explicit re-check
         # (the diagnostic button) clears the cache and probes everything again.
         transport.commands.clear()
-        await driver.async_read_values(
+        await _read_values(driver,
             transport, inverter, runtime_state=runtime_state,
             poll_interval=10.0, now_monotonic=500.0 + 100_000.0,
         )
@@ -516,7 +470,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
 
         clear_unsupported_commands(runtime_state)
         transport.commands.clear()
-        await driver.async_read_values(
+        await _read_values(driver,
             transport, inverter, runtime_state=runtime_state,
             poll_interval=10.0, now_monotonic=500.0 + 100_100.0,
         )

@@ -84,6 +84,23 @@ class PollSchedulerTests(unittest.TestCase):
         self.assertEqual(decision.effective_interval, 2)
         self.assertEqual(decision.recommended_interval, 2)
 
+    def test_pi30_single_full_cycle_settles_near_six_seconds(self) -> None:
+        # Composition: after Batch 2, a PI30 poll is one honest ~4.6 s full cycle.
+        # The NEUTRAL scheduler (no PI30 branch) turns a stable 4.6 s observed cost
+        # into a safe ~6 s interval: ceil(4.6 * 1.3 safety) = 6.
+        scheduler = PollScheduler(
+            policy=PI30_POLL_POLICY,
+            mode=POLL_MODE_AUTO,
+            manual_interval=3,
+        )
+
+        decisions = [scheduler.observe(4.6) for _ in range(12)]
+
+        self.assertEqual(decisions[-1].recommended_interval, 6)
+        self.assertEqual(decisions[-1].effective_interval, 6)
+        # And it never dips below the safe cost while the cycle stays ~4.6 s.
+        self.assertGreaterEqual(min(d.effective_interval for d in decisions[3:]), 4.6)
+
     def test_auto_allows_smg_three_second_interval(self) -> None:
         scheduler = PollScheduler(
             policy=SMG_MODBUS_POLL_POLICY,

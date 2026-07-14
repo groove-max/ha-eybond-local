@@ -247,12 +247,20 @@ def parse_q1(payload: str) -> dict[str, Any]:
 
 
 def parse_energy_counter(payload: str, *, key: str) -> dict[str, int]:
-    """Decode one integer energy counter payload."""
+    """Decode one integer energy counter payload.
+
+    A non-integer payload is a parser failure, not a Python error: it is
+    normalized to :class:`Pi30Error` with a clear code so the caller treats it
+    exactly like any other command failure (no broad ``except``).
+    """
 
     text = payload.strip()
     if not text:
         raise Pi30Error("energy_counter_empty")
-    return {key: int(text)}
+    try:
+        return {key: int(text)}
+    except ValueError as exc:
+        raise Pi30Error("energy_counter_not_int") from exc
 
 
 def parse_qt_clock(payload: str) -> dict[str, str]:
@@ -487,6 +495,21 @@ _Q1_LAYOUT_27: tuple[tuple[str | None, str], ...] = (
     (None, "int"),
     (None, "int"),
 )
+
+def qpiws_output_keys() -> frozenset[str]:
+    """Return the runtime value keys produced by :func:`parse_qpiws`."""
+
+    return frozenset({"alarm_bits_raw", "alarm_active", "qpiws_bit_count"})
+
+
+def q1_output_keys() -> frozenset[str]:
+    """Return the union of named fields across every Q1 layout."""
+
+    keys: set[str] = set()
+    for layout in (_Q1_LAYOUT_13, _Q1_LAYOUT_17, _Q1_LAYOUT_22, _Q1_LAYOUT_27):
+        keys.update(name for name, _kind in layout if name)
+    return frozenset(keys)
+
 
 _QFLAG_KEY_MAP = {
     "a": "buzzer_enabled",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from ..poll_policy import PollPolicy
 
 
@@ -31,6 +33,8 @@ from ..payload.pi30 import (
     parse_qpiws,
     parse_qt_clock,
     parse_serial_number,
+    q1_output_keys,
+    qpiws_output_keys,
 )
 from ..metadata.compiled_detection_catalog import (
     RESOLUTION_COMPATIBLE_GROUP,
@@ -41,6 +45,7 @@ from ..metadata.compiled_detection_catalog import (
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .read_result import DriverReadMode, DriverReadResult
 from .support_probe import SupportProbeRequest
 from .command_support import (
     apply_unsupported_diagnostics,
@@ -48,6 +53,8 @@ from .command_support import (
     commit_cycle_failures as _commit_cycle_failures,
     record_command_failure as _record_command_failure,
     record_command_success as _record_command_success,
+    unsupported_commands as _unsupported_commands,
+    unsupported_diagnostics_removed_keys as _unsupported_diagnostics_removed_keys,
 )
 from .catalog_probe import (
     async_probe_ascii_catalog,
@@ -77,16 +84,12 @@ class Pi30CommandSpec:
     optional: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class Pi30PollGroup:
-    """One grouped PI30 polling class with its own cadence."""
-
-    key: str
-    specs: tuple[Pi30CommandSpec, ...] = ()
-    include_energy: bool = False
-    minimum_interval: float = 0.0
-    interval_multiplier: float = 1.0
-
+# One PI30 runtime poll executes this fixed sequence in a single pass: the
+# required live metrics, then the optional QPIWS / Q1 (auto-skipped when finally
+# unsupported), then the reachable energy chain. There is NO fast/medium/slow
+# grouping and NO empty cycle -- every poll does one honest, fully-reachable
+# sequential pass, so its wall-clock is the real full-cycle cost the neutral auto
+# poll policy sees.
 _RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
     Pi30CommandSpec(command="QPIGS", parser=parse_qpigs),
     Pi30CommandSpec(command="QMOD", parser=parse_qmod),
@@ -94,20 +97,11 @@ _RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
     Pi30CommandSpec(command="Q1", parser=parse_q1, optional=True),
 )
 
-_FAST_RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
+# A minimal subset read only during onboarding to enrich the confirmation UI --
+# not a runtime cadence.
+_ONBOARDING_RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
     Pi30CommandSpec(command="QPIGS", parser=parse_qpigs),
     Pi30CommandSpec(command="QMOD", parser=parse_qmod),
-)
-
-_MEDIUM_RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
-    Pi30CommandSpec(command="QPIWS", parser=parse_qpiws, optional=True),
-    Pi30CommandSpec(command="Q1", parser=parse_q1, optional=True),
-)
-
-_PI30_RUNTIME_GROUPS: tuple[Pi30PollGroup, ...] = (
-    Pi30PollGroup(key="fast", specs=_FAST_RUNTIME_COMMAND_SPECS, minimum_interval=5.0, interval_multiplier=1.0),
-    Pi30PollGroup(key="medium", specs=_MEDIUM_RUNTIME_COMMAND_SPECS, minimum_interval=30.0, interval_multiplier=3.0),
-    Pi30PollGroup(key="slow", include_energy=True, minimum_interval=60.0, interval_multiplier=6.0),
 )
 
 _PI30_BOOL_COMMANDS: dict[str, str] = {
@@ -302,9 +296,9 @@ class Pi30Driver(InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> DriverReadResult:
         session = self._session(transport, inverter.probe_target)
-        values = await _async_collect_runtime_values(
+        values, removed_keys, diagnostics = await _async_collect_runtime_values(
             session,
             runtime_state=runtime_state,
             poll_interval=poll_interval,
@@ -316,7 +310,21 @@ class Pi30Driver(InverterDriver):
                 _schema_for_inverter(inverter, self.register_schema_name),
             )
         )
-        return values
+        # Always DELTA. PI30 runs a single sequential cycle of all reachable
+        # commands, but the result is never a *proven* complete snapshot: optional
+        # commands (QPIWS/Q1) may fail transiently, known-unsupported commands are
+        # skipped, the energy chain early-exits, and any command's request+parse
+        # can fail -- so PI30 does not claim FULL. Omitted values are simply not in
+        # this cycle (never stale detection duplicates); a final unsupported
+        # verdict invalidates a command's values via the explicit ``removed_keys``
+        # contract. The first cycle fills the empty cache with every value it
+        # successfully read; later cycles overlay onto last-good.
+        return DriverReadResult(
+            values=values,
+            mode=DriverReadMode.DELTA,
+            removed_keys=removed_keys,
+            diagnostics=diagnostics,
+        )
 
     async def async_read_onboarding_values(
         self,
@@ -324,7 +332,7 @@ class Pi30Driver(InverterDriver):
         inverter: DetectedInverter,
     ) -> dict[str, Any]:
         session = self._session(transport, inverter.probe_target)
-        values = await _async_collect_values(session, _FAST_RUNTIME_COMMAND_SPECS)
+        values = await _async_collect_values(session, _ONBOARDING_RUNTIME_COMMAND_SPECS)
         values.update(
             _translate_runtime_metadata(
                 values,
@@ -437,55 +445,276 @@ def _support_commands() -> tuple[str, ...]:
     )
 
 
+# The full universe of PI30 runtime commands (by STABLE cache key). It bounds
+# the full-cycle-cost estimate and completeness accounting. A single cycle runs
+# every reachable, not-unsupported command; a command may still be absent from a
+# given cycle because it is unsupported or unreachable behind an unsupported
+# prerequisite. Dynamic energy commands embed the date on the wire but are
+# counted under these stable keys.
+_PI30_FULL_CYCLE_COMMAND_KEYS: tuple[str, ...] = (
+    "QPIGS",
+    "QMOD",
+    "QPIWS",
+    "Q1",
+    "QET",
+    "QLT",
+    "QT",
+    "QEY",
+    "QEM",
+    "QED",
+    "QLY",
+    "QLM",
+    "QLD",
+)
+
+# Dynamic energy commands (year/month/day) depend on QT's clock token; the whole
+# energy chain depends on QET (its early exit stops QLT / QT / dynamic). These
+# gate the reachability used to invalidate energy values below.
+_PI30_ENERGY_DYNAMIC_COMMANDS: tuple[str, ...] = ("QEY", "QEM", "QED", "QLY", "QLM", "QLD")
+_PI30_ENERGY_ALL_COMMANDS: tuple[str, ...] = ("QET", "QLT", "QT", *_PI30_ENERGY_DYNAMIC_COMMANDS)
+
+
+def _pi30_command_output_keys() -> dict[str, frozenset[str]]:
+    """Command (stable cache key) -> the runtime value keys it owns.
+
+    Ownership lives here next to the specs/parsers (never in the hub): it maps
+    each optional command to the direct parser keys AND any value derived from
+    them, so a command that reaches a final unsupported verdict can invalidate
+    exactly the keys it produced. Q1/QPIWS key sets are derived from the payload
+    layouts so they cannot drift from the parsers.
+    """
+
+    return {
+        "QPIWS": qpiws_output_keys() | frozenset({"alarm_status"}),
+        "Q1": q1_output_keys() | frozenset({"inverter_charge_state"}),
+        "QET": frozenset({"pv_generation_sum"}),
+        "QLT": frozenset({"ac_in_generation_sum"}),
+        "QT": frozenset(),  # no direct value; gates the dynamic commands
+        "QEY": frozenset({"pv_generation_year"}),
+        "QEM": frozenset({"pv_generation_month"}),
+        "QED": frozenset({"pv_generation_day"}),
+        "QLY": frozenset({"ac_in_generation_year"}),
+        "QLM": frozenset({"ac_in_generation_month"}),
+        "QLD": frozenset({"ac_in_generation_day"}),
+    }
+
+
+def _pi30_removed_keys_for_unsupported(unsupported: frozenset[str]) -> frozenset[str]:
+    """Return the value keys to invalidate given the final-unsupported set.
+
+    A command finally verdicted unsupported no longer produces its values, so a
+    DELTA must drop them. Energy-chain reachability (current sequence, unchanged)
+    is honoured: a final-unsupported QET makes the WHOLE energy chain unreachable;
+    a final-unsupported QT makes only the dynamic year/month/day values
+    unreachable while QET/QLT totals stay valid.
+    """
+
+    output = _pi30_command_output_keys()
+    removed: set[str] = set()
+    for command in unsupported:
+        removed |= output.get(command, frozenset())
+    if "QET" in unsupported:
+        for command in _PI30_ENERGY_ALL_COMMANDS:
+            removed |= output.get(command, frozenset())
+    elif "QT" in unsupported:
+        for command in _PI30_ENERGY_DYNAMIC_COMMANDS:
+            removed |= output.get(command, frozenset())
+    return frozenset(removed)
+
+
+def _record_pi30_command_stat(
+    runtime_state: dict[str, Any] | None,
+    cache_key: str,
+    wire_command: str,
+    duration_ms: int,
+    outcome: str,
+    command_timings: list[tuple[str, str, int, str]] | None,
+) -> None:
+    """Record one command's real outcome for truthful runtime diagnostics.
+
+    ``cache_key`` is the STABLE key (e.g. ``QEY``); ``wire_command`` is what was
+    actually sent (e.g. ``QEY2026``). A skipped (known-unsupported) command is
+    NOT counted as attempted. ``last_duration_ms`` tracks the last REAL attempt
+    (ok / timeout / error), so a full-cycle estimate reflects timeouts too. This
+    is diagnostics only and never influences scheduling.
+    """
+
+    if command_timings is not None:
+        command_timings.append((cache_key, wire_command, duration_ms, outcome))
+    if runtime_state is None:
+        return
+    stats = runtime_state.setdefault("pi30_command_stats", {})
+    entry = stats.get(cache_key)
+    if entry is None:
+        entry = {
+            "attempted": 0,
+            "succeeded": 0,
+            "timeout": 0,
+            "error": 0,
+            "skipped": 0,
+            "last_duration_ms": None,
+            "max_duration_ms": 0,
+            "last_outcome": "",
+            "last_wire_command": "",
+        }
+        stats[cache_key] = entry
+    entry["last_wire_command"] = wire_command
+    entry["last_outcome"] = outcome
+    if outcome == "skipped":
+        entry["skipped"] += 1
+        return
+    entry["attempted"] += 1
+    if outcome == "ok":
+        entry["succeeded"] += 1
+    elif outcome == "timeout":
+        entry["timeout"] += 1
+    elif outcome == "error":
+        entry["error"] += 1
+    entry["last_duration_ms"] = duration_ms
+    entry["max_duration_ms"] = max(int(entry["max_duration_ms"]), duration_ms)
+
+
+def _command_outcome(exc: BaseException) -> str:
+    return "timeout" if "timeout" in str(exc).lower() else "error"
+
+
 async def _async_collect_values(
     session: Pi30Session,
     specs: tuple[Pi30CommandSpec, ...],
     *,
     runtime_state: dict[str, Any] | None = None,
     now_monotonic: float | None = None,
+    command_timings: list[tuple[str, str, int, str]] | None = None,
 ) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
     for spec in specs:
         if spec.optional and _command_skipped_as_unsupported(runtime_state, spec.command):
+            _record_pi30_command_stat(
+                runtime_state, spec.command, spec.command, 0, "skipped", command_timings
+            )
             continue
+        started = time.monotonic()
         try:
             payload = await session.request(spec.command)
             values.update(spec.parser(payload))
-        except Pi30Error:
+        except Pi30Error as exc:
+            duration_ms = int(round((time.monotonic() - started) * 1000.0))
+            _record_pi30_command_stat(
+                runtime_state, spec.command, spec.command, duration_ms, _command_outcome(exc), command_timings
+            )
             if not spec.optional:
                 raise
             _record_command_failure(runtime_state, spec.command)
         else:
+            duration_ms = int(round((time.monotonic() - started) * 1000.0))
+            _record_pi30_command_stat(
+                runtime_state, spec.command, spec.command, duration_ms, "ok", command_timings
+            )
             _record_command_success(runtime_state, spec.command)
 
     return values
 
 
-def _group_interval(group: Pi30PollGroup, poll_interval: float) -> float:
-    """Resolve one effective group interval from the base poll interval."""
+def _pi30_unreachable_commands(unsupported: frozenset[str]) -> frozenset[str]:
+    """Return the commands made unreachable by a finally-unsupported prerequisite.
 
-    return max(group.minimum_interval, poll_interval * group.interval_multiplier)
+    Mirrors the energy-chain gating exactly (unchanged sequence): a final QET
+    verdict makes QLT / QT and every dynamic command unreachable; a final QT
+    verdict makes only the clock-token dynamic commands unreachable. A command
+    that is itself unsupported is reported as unsupported, not unreachable.
+    """
+
+    unreachable: set[str] = set()
+    if "QET" in unsupported:
+        unreachable |= {"QLT", "QT", *_PI30_ENERGY_DYNAMIC_COMMANDS}
+    elif "QT" in unsupported:
+        unreachable |= set(_PI30_ENERGY_DYNAMIC_COMMANDS)
+    return frozenset(unreachable - unsupported)
 
 
-def _should_poll_group(
-    runtime_state: dict[str, Any],
-    group: Pi30PollGroup,
+def _build_pi30_read_meta(
     *,
-    poll_interval: float,
-    now_monotonic: float,
-) -> bool:
-    """Return whether one PI30 polling group is due."""
+    runtime_state: dict[str, Any] | None,
+    command_timings: list[tuple[str, str, int, str]],
+    cycle_wall_ms: int,
+) -> dict[str, Any]:
+    """Return truthful structured diagnostics for one single-cycle PI30 poll.
 
-    group_times = runtime_state.setdefault("pi30_group_last_polled", {})
-    last_polled = group_times.get(group.key)
-    if last_polled is None:
-        group_times[group.key] = now_monotonic
-        return True
-    if now_monotonic - float(last_polled) >= _group_interval(group, poll_interval):
-        group_times[group.key] = now_monotonic
-        return True
-    return False
+    ``command_timings`` entries are ``(cache_key, wire_command, duration_ms,
+    outcome)`` in the ACTUAL executed order. ``cycle_wall_ms`` is the wall-clock
+    of the whole single sequential cycle. The read mode is always DELTA; the
+    full-cycle estimate is reachability-aware (see :func:`_pi30_unreachable_commands`).
+    """
+
+    attempted = [t for t in command_timings if t[3] != "skipped"]
+    skipped = [t for t in command_timings if t[3] == "skipped"]
+
+    diagnostics: dict[str, Any] = {
+        "pi30_poll_mode": DriverReadMode.DELTA.value,
+        # Actual wire commands executed this cycle, in order (dynamic energy names
+        # included).
+        "pi30_poll_commands": ", ".join(wire for _k, wire, _ms, _o in attempted),
+        # Known-unsupported commands skipped this cycle, kept separate.
+        "pi30_poll_skipped_commands": ", ".join(cache_key for cache_key, _w, _ms, _o in skipped),
+        "pi30_poll_command_durations_ms": ", ".join(
+            f"{wire}={ms}:{outcome}" for _k, wire, ms, outcome in attempted
+        ),
+        # Wall-clock of the whole single cycle (not a sum of pieces).
+        "pi30_poll_total_ms": cycle_wall_ms,
+        "pi30_poll_attempted": len(attempted),  # only actually-sent commands
+        "pi30_poll_skipped": len(skipped),
+        "pi30_poll_succeeded": sum(1 for _k, _w, _ms, o in attempted if o == "ok"),
+        "pi30_poll_timeout": sum(1 for _k, _w, _ms, o in attempted if o == "timeout"),
+        "pi30_poll_error": sum(1 for _k, _w, _ms, o in attempted if o == "error"),
+    }
+
+    if runtime_state is None:
+        return diagnostics
+
+    stats = runtime_state.get("pi30_command_stats", {})
+    if stats:
+        diagnostics["pi30_command_cumulative"] = ", ".join(
+            f"{key}:att{e['attempted']}/ok{e['succeeded']}/to{e['timeout']}"
+            f"/err{e['error']}/sk{e['skipped']}"
+            f"/last{e['last_duration_ms'] if e['last_duration_ms'] is not None else '-'}ms"
+            f"/max{e['max_duration_ms']}ms/{e['last_outcome'] or '-'}"
+            for key, e in sorted(stats.items())
+        )
+
+    # Reachability-aware full-cycle estimate. A command's LAST REAL duration
+    # (ok / timeout / error) feeds the estimate; NO duration is invented for a
+    # command that was skipped-unsupported or is unreachable behind a
+    # finally-unsupported prerequisite. "Expected" is the set of reachable,
+    # not-unsupported commands, so the estimate is complete once every reachable
+    # command has a measured duration -- unreachable commands are reported
+    # separately and never counted as unmeasured.
+    unsupported = frozenset(_unsupported_commands(runtime_state))
+    unreachable = _pi30_unreachable_commands(unsupported)
+
+    def _measured(key: str) -> bool:
+        entry = stats.get(key)
+        return isinstance(entry, dict) and entry["last_duration_ms"] is not None
+
+    reachable = [
+        key
+        for key in _PI30_FULL_CYCLE_COMMAND_KEYS
+        if key not in unsupported and key not in unreachable
+    ]
+    measured_reachable = [key for key in reachable if _measured(key)]
+    unmeasured = [key for key in reachable if not _measured(key)]
+
+    diagnostics["pi30_estimated_full_cycle_ms"] = sum(
+        int(stats[key]["last_duration_ms"]) for key in measured_reachable
+    )
+    diagnostics["pi30_estimated_full_cycle_measured_commands"] = len(measured_reachable)
+    diagnostics["pi30_full_cycle_expected_commands"] = len(reachable)
+    diagnostics["pi30_full_cycle_unmeasured_commands"] = ", ".join(unmeasured)
+    diagnostics["pi30_full_cycle_unreachable_commands"] = ", ".join(sorted(unreachable))
+    diagnostics["pi30_full_cycle_estimate_complete"] = not unmeasured
+    diagnostics["pi30_known_unsupported_commands"] = ", ".join(sorted(unsupported))
+
+    return diagnostics
 
 
 async def _async_collect_runtime_values(
@@ -494,43 +723,57 @@ async def _async_collect_runtime_values(
     runtime_state: dict[str, Any] | None,
     poll_interval: float | None,
     now_monotonic: float | None,
-) -> dict[str, Any]:
-    """Collect PI30 runtime values using grouped polling when configured."""
+) -> tuple[dict[str, Any], frozenset[str], dict[str, Any]]:
+    """Run ONE PI30 runtime poll as a single sequential command cycle.
 
-    if runtime_state is None or poll_interval is None or now_monotonic is None:
-        values = await _async_collect_values(session, _RUNTIME_COMMAND_SPECS)
-        values.update(await _async_collect_energy_values(session))
-        return values
+    There is no fast/medium/slow scheduling and no empty cycle: every poll
+    executes QPIGS, QMOD, then the optional QPIWS / Q1 (auto-skipped when finally
+    unsupported), then the reachable energy chain (existing order + early-exit),
+    back to back with no artificial pause. The result is always a DELTA (see
+    :meth:`Pi30Driver.async_read_values`): a transient failure keeps last-good and
+    a final unsupported verdict invalidates the command's values via
+    ``removed_keys``. ``poll_interval`` / ``now_monotonic`` are accepted for the
+    driver contract but no longer gate anything -- the whole-cycle wall-clock is
+    the honest cost the neutral auto poll policy consumes.
+    """
 
-    values: dict[str, Any] = {}
-    for group in _PI30_RUNTIME_GROUPS:
-        if not _should_poll_group(
-            runtime_state,
-            group,
-            poll_interval=poll_interval,
-            now_monotonic=now_monotonic,
-        ):
-            continue
-        if group.specs:
-            values.update(
-                await _async_collect_values(
-                    session,
-                    group.specs,
-                    runtime_state=runtime_state,
-                    now_monotonic=now_monotonic,
+    command_timings: list[tuple[str, str, int, str]] = []
+    cycle_started = time.monotonic()
+
+    values = await _async_collect_values(
+        session, _RUNTIME_COMMAND_SPECS, runtime_state=runtime_state, command_timings=command_timings
+    )
+    values.update(
+        await _async_collect_energy_values(
+            session, runtime_state=runtime_state, command_timings=command_timings
+        )
+    )
+
+    cycle_wall_ms = int(round((time.monotonic() - cycle_started) * 1000.0))
+
+    removed_keys: frozenset[str] = frozenset()
+    if runtime_state is not None:
+        _commit_cycle_failures(runtime_state)
+        apply_unsupported_diagnostics(values, runtime_state)
+        # Invalidate values owned by any command that reached a FINAL unsupported
+        # verdict (incl. energy-chain reachability) plus the ephemeral unsupported
+        # diagnostics key when the set is empty. Never remove a value read THIS cycle.
+        removed_keys = frozenset(
+            (
+                _pi30_removed_keys_for_unsupported(
+                    frozenset(_unsupported_commands(runtime_state))
                 )
+                | _unsupported_diagnostics_removed_keys(runtime_state)
             )
-        if group.include_energy:
-            values.update(
-                await _async_collect_energy_values(
-                    session,
-                    runtime_state=runtime_state,
-                    now_monotonic=now_monotonic,
-                )
-            )
-    _commit_cycle_failures(runtime_state)
-    apply_unsupported_diagnostics(values, runtime_state)
-    return values
+            - set(values)
+        )
+
+    diagnostics = _build_pi30_read_meta(
+        runtime_state=runtime_state,
+        command_timings=command_timings,
+        cycle_wall_ms=cycle_wall_ms,
+    )
+    return values, removed_keys, diagnostics
 
 
 async def _async_collect_energy_values(
@@ -538,38 +781,65 @@ async def _async_collect_energy_values(
     *,
     runtime_state: dict[str, Any] | None = None,
     now_monotonic: float | None = None,
+    command_timings: list[tuple[str, str, int, str]] | None = None,
 ) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
-    async def _request(command: str, cache_key: str) -> str | None:
-        # Dynamic commands embed the current date, so they are cached under a
-        # stable prefix key instead of the literal command.
+    async def _atomic(
+        command: str,
+        cache_key: str,
+        parse: Callable[[str], dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Run request+parse as ONE command operation.
+
+        The command counts as ``ok`` only after BOTH the transport response and
+        a successful parse; a transport failure OR a parser failure is recorded
+        as timeout/error (never ``ok``) and staged as a command failure. The
+        measured duration covers the whole request+parse operation. Dynamic
+        commands embed the date on the wire but are tracked under the stable
+        ``cache_key``.
+        """
+
         if _command_skipped_as_unsupported(runtime_state, cache_key):
+            _record_pi30_command_stat(
+                runtime_state, cache_key, command, 0, "skipped", command_timings
+            )
             return None
+        started = time.monotonic()
         try:
             payload = await session.request(command)
-        except Pi30Error:
+            parsed = parse(payload)
+        except Pi30Error as exc:
+            duration_ms = int(round((time.monotonic() - started) * 1000.0))
+            _record_pi30_command_stat(
+                runtime_state, cache_key, command, duration_ms, _command_outcome(exc), command_timings
+            )
             _record_command_failure(runtime_state, cache_key)
             return None
+        duration_ms = int(round((time.monotonic() - started) * 1000.0))
+        _record_pi30_command_stat(
+            runtime_state, cache_key, command, duration_ms, "ok", command_timings
+        )
         _record_command_success(runtime_state, cache_key)
-        return payload
+        return parsed
 
-    payload = await _request("QET", "QET")
-    if payload is None:
+    # QET gates the whole chain: a transient failure (transport OR malformed
+    # payload) stops this cycle and keeps last-good values.
+    parsed = await _atomic("QET", "QET", lambda p: parse_energy_counter(p, key="pv_generation_sum"))
+    if parsed is None:
         return values
-    values.update(parse_energy_counter(payload, key="pv_generation_sum"))
+    values.update(parsed)
 
-    payload = await _request("QLT", "QLT")
-    if payload is not None:
-        values.update(parse_energy_counter(payload, key="ac_in_generation_sum"))
+    # QLT is independent of QT/dynamic: its failure must NOT block them.
+    parsed = await _atomic("QLT", "QLT", lambda p: parse_energy_counter(p, key="ac_in_generation_sum"))
+    if parsed is not None:
+        values.update(parsed)
 
-    payload = await _request("QT", "QT")
-    if payload is None:
+    # QT gates only the clock-token dynamic commands: its failure stops just them.
+    parsed = await _atomic("QT", "QT", parse_qt_clock)
+    if parsed is None:
         return values
-    try:
-        clock_token = parse_qt_clock(payload)["clock_token"]
-    except Pi30Error:
-        return values
+    clock_token = parsed["clock_token"]
 
     dynamic_specs = (
         (f"QEY{clock_token[:4]}", "QEY", "pv_generation_year"),
@@ -580,13 +850,13 @@ async def _async_collect_energy_values(
         (f"QLD{clock_token[:8]}", "QLD", "ac_in_generation_day"),
     )
     for command, cache_key, key in dynamic_specs:
-        payload = await _request(command, cache_key)
-        if payload is None:
-            continue
-        try:
-            values.update(parse_energy_counter(payload, key=key))
-        except Pi30Error:
-            continue
+        # A malformed single dynamic command fails only itself; the loop
+        # continues so independent dynamic commands still run.
+        parsed = await _atomic(
+            command, cache_key, lambda p, key=key: parse_energy_counter(p, key=key)
+        )
+        if parsed is not None:
+            values.update(parsed)
 
     return values
 
