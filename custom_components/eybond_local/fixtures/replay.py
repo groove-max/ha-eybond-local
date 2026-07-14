@@ -59,7 +59,12 @@ async def detect_fixture_payload(
 async def read_fixture_values(context: FixtureReplayContext) -> dict[str, Any]:
     """Read runtime values through the detected driver using fixture transport."""
 
-    return await context.driver.async_read_values(context.transport, context.inverter)
+    from ..drivers.read_result import coerce_driver_read_result
+
+    raw = await context.driver.async_read_values(context.transport, context.inverter)
+    return coerce_driver_read_result(
+        raw, driver_key=getattr(context.inverter, "driver_key", "")
+    ).values
 
 
 async def apply_fixture_preset(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..link_transport import PayloadLinkTransport
 from ..models import (
@@ -19,6 +19,9 @@ from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
 from .support_marker import DriverSupportMarker
 from .support_probe import SupportProbeRequest
 from .write_error import EMPTY_WRITE_ERROR_CLASSIFICATION, WriteErrorClassification
+
+if TYPE_CHECKING:
+    from .read_result import DriverReadResult
 
 
 class InverterDriver(ABC):
@@ -170,8 +173,24 @@ class InverterDriver(ABC):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
-        """Read and decode the current inverter state."""
+    ) -> "dict[str, Any] | DriverReadResult":
+        """Read and decode the current inverter state.
+
+        A driver returns either:
+
+        * a bare ``dict`` -- interpreted as a FULL runtime snapshot (the legacy
+          contract; the runtime replaces its measurement state with it), or
+        * a :class:`~.read_result.DriverReadResult` -- an explicit FULL or DELTA
+          update. A driver whose cycle may omit some measurements (e.g. PI30,
+          whose optional/energy commands can fail transiently, be skipped as
+          unsupported, or early-exit) MUST return ``DELTA`` so the runtime
+          overlays the read values onto the last-good ones instead of reverting
+          the omitted ones to detection-time defaults, and invalidates removed
+          values explicitly via ``removed_keys``.
+
+        The runtime never guesses full-vs-delta from the driver key; the mode is
+        carried in the typed result.
+        """
 
     async def async_read_onboarding_values(
         self,
@@ -180,7 +199,10 @@ class InverterDriver(ABC):
     ) -> dict[str, Any]:
         """Read only the values needed to enrich onboarding confirmation UI."""
 
-        return await self.async_read_values(transport, inverter)
+        from .read_result import coerce_driver_read_result
+
+        raw = await self.async_read_values(transport, inverter)
+        return coerce_driver_read_result(raw, driver_key=self.key).values
 
     @abstractmethod
     async def async_write_capability(

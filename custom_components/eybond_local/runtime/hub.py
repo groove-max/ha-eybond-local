@@ -36,6 +36,11 @@ from ..collector.management import (
     select_collector_management_adapter,
 )
 from ..drivers.base import InverterDriver
+from ..drivers.read_result import (
+    DriverReadMode,
+    DriverReadResult,
+    coerce_driver_read_result,
+)
 from ..drivers.command_support import (
     apply_unsupported_diagnostics,
     clear_unsupported_commands,
@@ -518,6 +523,26 @@ class EybondHub:
         self._snapshot_observer: Callable[[RuntimeSnapshot], None] | None = None
         self._last_snapshot = RuntimeSnapshot()
         self._runtime_read_state: dict[str, Any] = {}
+        # Last-good runtime MEASUREMENT values, kept strictly separate from
+        # ``DetectedInverter.details`` (detection/bootstrap), collector metadata,
+        # identity/config fields, and diagnostics. A driver DELTA overlays here;
+        # a FULL replaces it. ``_runtime_measurement_owned_keys`` is every key the
+        # runtime has ever measured for the current inverter identity, so detection
+        # ``details`` can never re-seed a key the runtime already owns. The cache is
+        # bound to ``_runtime_measurement_identity`` (driver|model|serial) and is
+        # invalidated only when that durable identity actually changes -- a plain
+        # reconnect of the same PN/driver keeps the last-good values.
+        self._runtime_measurement_values: dict[str, Any] = {}
+        self._runtime_measurement_owned_keys: set[str] = set()
+        # Keys the PREVIOUS identity owned. When the binding changes they are
+        # remembered here so the next snapshot also purges them from the carried
+        # ``_last_snapshot`` (not just from the cache), then they are re-provided
+        # by the new identity's detection details / cache if still relevant.
+        self._stale_runtime_owned_keys: set[str] = set()
+        self._runtime_measurement_identity: str = ""
+        self._runtime_measurement_last_mode: str = ""
+        self._runtime_measurement_fresh_count: int = 0
+        self._runtime_measurement_reused_count: int = 0
         self._persistent_unsupported_commands: tuple[str, ...] = ()
         # Collector-metadata TELEMETRY ownership lives entirely in the service:
         # the generic hub owns neither the wire, the cadence, the caches, nor the
@@ -713,6 +738,7 @@ class EybondHub:
             return
         self._driver = driver
         self._inverter = inverter
+        self._accept_inverter_binding_identity()
         details = getattr(inverter, "details", {}) or {}
         self._inverter_binding_needs_live_detection_refresh = (
             str(details.get("runtime_detection_status") or "").strip()
@@ -1124,7 +1150,7 @@ class EybondHub:
         async def _async_read_driver_values() -> dict[str, object]:
             loop = asyncio.get_running_loop()
             started = loop.time()
-            values = await self._driver.async_read_values(
+            raw = await self._driver.async_read_values(
                 self._link_manager.transport,
                 self._inverter,
                 runtime_state=self._runtime_read_state,
@@ -1132,7 +1158,16 @@ class EybondHub:
                 now_monotonic=loop.time() if poll_interval is not None else None,
             )
             duration = max(0.0, loop.time() - started)
-            runtime_values = dict(values)
+            # Typed contract: a bare dict means FULL; a DriverReadResult carries
+            # its own FULL/DELTA mode. The measurement VALUES are folded into the
+            # hub's last-good cache and applied in _build_snapshot; only driver
+            # diagnostics + the poll duration flow through here.
+            result = coerce_driver_read_result(
+                raw, driver_key=getattr(self._inverter, "driver_key", "")
+            )
+            self._resolve_runtime_measurements(result)
+            runtime_values: dict[str, object] = dict(result.diagnostics)
+            runtime_values.update(self._runtime_measurement_diagnostics())
             runtime_values["collector_poll_duration_ms"] = int(round(duration * 1000.0))
             return runtime_values
 
@@ -1328,6 +1363,76 @@ class EybondHub:
                 self._runtime_read_state,
                 self._persistent_unsupported_commands,
             )
+
+    def _reset_runtime_measurement_cache(self) -> None:
+        """Drop last-good runtime measurements (a different device/driver)."""
+
+        self._runtime_measurement_values = {}
+        self._runtime_measurement_owned_keys = set()
+        self._runtime_measurement_last_mode = ""
+        self._runtime_measurement_fresh_count = 0
+        self._runtime_measurement_reused_count = 0
+
+    def _accept_inverter_binding_identity(self) -> None:
+        """The single binding/cache lifecycle boundary.
+
+        Invoked the MOMENT a new driver/inverter binding is accepted -- never
+        lazily on the first successful read -- so a bind whose first read fails
+        (or a snapshot built before any read) can never surface the previous
+        device's measurements. If the durable identity (``driver|model|serial``)
+        actually changed, the previous identity's owned keys are marked stale so
+        the next snapshot also purges them from the carried ``_last_snapshot``,
+        and the measurement cache is cleared. A reconnect or learned-overlay
+        refresh of the SAME identity is a no-op, so last-good values survive.
+        """
+
+        token = _inverter_identity_signature(self._inverter)
+        if token == self._runtime_measurement_identity:
+            return
+        self._stale_runtime_owned_keys |= self._runtime_measurement_owned_keys
+        self._reset_runtime_measurement_cache()
+        self._runtime_measurement_identity = token
+
+    def _resolve_runtime_measurements(
+        self, result: "DriverReadResult"
+    ) -> dict[str, Any]:
+        """Fold one typed driver read result into the last-good measurement cache.
+
+        FULL replaces the cache (missing keys are dropped); DELTA overlays the
+        given values and removes ``removed_keys`` while retaining every other
+        last-good value. ``details`` is never consulted here. Identity lifecycle
+        is owned by :meth:`_accept_inverter_binding_identity` (the bind boundary),
+        never re-derived here.
+        """
+
+        fresh_keys = set(result.values)
+        if result.mode is DriverReadMode.FULL:
+            self._runtime_measurement_values = dict(result.values)
+            reused = 0
+        else:
+            self._runtime_measurement_values.update(result.values)
+            for key in result.removed_keys:
+                self._runtime_measurement_values.pop(key, None)
+            reused = len(set(self._runtime_measurement_values) - fresh_keys)
+        self._runtime_measurement_owned_keys.update(fresh_keys)
+        self._runtime_measurement_owned_keys.update(result.removed_keys)
+        self._runtime_measurement_last_mode = result.mode.value
+        self._runtime_measurement_fresh_count = len(fresh_keys)
+        self._runtime_measurement_reused_count = reused
+        return dict(self._runtime_measurement_values)
+
+    def _runtime_measurement_diagnostics(self) -> dict[str, object]:
+        """Return neutral fresh/reused/mode diagnostics for the runtime snapshot."""
+
+        return {
+            "runtime_read_mode": self._runtime_measurement_last_mode,
+            "runtime_measurement_fresh_count": self._runtime_measurement_fresh_count,
+            "runtime_measurement_reused_count": self._runtime_measurement_reused_count,
+            "runtime_measurement_value_count": len(self._runtime_measurement_values),
+            "runtime_measurement_owned_key_count": len(
+                self._runtime_measurement_owned_keys
+            ),
+        }
 
     def set_persistent_unsupported_commands(self, commands: tuple[str, ...]) -> None:
         """Install the persisted unsupported-command set for this device.
@@ -2306,6 +2411,7 @@ class EybondHub:
         self._inverter_identity_conflict = ""
         self._driver = context.driver
         self._inverter = context.inverter
+        self._accept_inverter_binding_identity()
         self._inverter_binding_needs_live_detection_refresh = False
         self._inverter_binding_refresh_attempts = 0
         # The overlay merge is applied in _build_snapshot (every refresh, once the
@@ -2472,18 +2578,30 @@ class EybondHub:
         preserve_inverter_values: bool = False,
     ) -> RuntimeSnapshot:
         generated_canonical_keys: set[str] = set()
+        runtime_owned_keys: set[str] = set()
         if self._inverter is not None and not preserve_inverter_values:
             generated_canonical_keys = {
                 description.key
                 for description in canonical_measurements_for_driver(self._inverter.driver_key)
             }
+        if not preserve_inverter_values:
+            # ALL runtime-owned keys (current identity's + the previous identity's
+            # stale keys) are dropped from the carried snapshot, then the current
+            # runtime cache is re-applied below. This removes canonical AND
+            # non-canonical / raw / optional driver values that a FULL snapshot,
+            # a DELTA ``removed_keys``, or an identity change no longer includes --
+            # generically, never via a driver-specific key list.
+            runtime_owned_keys = (
+                self._runtime_measurement_owned_keys | self._stale_runtime_owned_keys
+            )
 
+        stripped_keys = generated_canonical_keys | runtime_owned_keys
         values = {
             key: value
             for key, value in self._last_snapshot.values.items()
             if (
                 not key.startswith("capability_block_")
-                and key not in generated_canonical_keys
+                and key not in stripped_keys
                 and key not in _VOLATILE_COLLECTOR_VALUE_KEYS
             )
         }
@@ -2739,7 +2857,22 @@ class EybondHub:
                 values["write_capabilities"] = ", ".join(
                     capability.key for capability in self._inverter.capabilities
                 )
-            values.update(self._inverter.details)
+            # Detection ``details`` are bootstrap/config ONLY. They seed values
+            # before the first runtime poll, but they must never re-seed a key
+            # the runtime measurement cache already owns -- that is exactly the
+            # revert-to-detection bug (e.g. battery_voltage 27.3 -> 27.2). Once a
+            # key has been measured for this identity it is owned by the cache.
+            owned = self._runtime_measurement_owned_keys
+            if owned:
+                for key, value in self._inverter.details.items():
+                    if key not in owned:
+                        values[key] = value
+            else:
+                values.update(self._inverter.details)
+            # Last-good runtime measurements are authoritative for their keys on
+            # EVERY snapshot build (including error / last-known-good paths), so a
+            # cycle that omitted a measurement keeps the previous live value.
+            values.update(self._runtime_measurement_values)
 
         if extra_values:
             values.update(extra_values)

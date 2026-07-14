@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from ..canonical_telemetry import apply_canonical_measurements
+from ..drivers.read_result import coerce_driver_read_result
 from ..collector.at_runtime import query_runtime_collector_at_values
 from ..collector.capabilities import (
     collector_capability_profile,
@@ -1544,10 +1545,13 @@ class OnboardingDetector:
                 details["collector_bridge_version"] = hardware_token.version
 
         try:
-            runtime_values = await deadline.wait_for(
+            runtime_read = await deadline.wait_for(
                 context.driver.async_read_values(transport, context.inverter),
                 timeout_seconds=policy.driver_onboarding_read_timeout,
             )
+            runtime_values = coerce_driver_read_result(
+                runtime_read, driver_key=context.inverter.driver_key
+            ).values
         except Exception as exc:
             logger.debug(
                 "Onboarding inverter runtime read failed model=%s serial=%s error=%s",
