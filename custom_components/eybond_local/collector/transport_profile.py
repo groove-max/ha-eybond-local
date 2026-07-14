@@ -188,6 +188,60 @@ def resolve_collector_transport_profile(
     )
 
 
+# A live-observed callback session protocol IMPLIES its transport profile. This
+# protocol -> (identity strategy, raw-passthrough bootstrap/frame/interval) map is
+# transport POLICY and lives here, in the transport-profile authority, never in
+# the runtime coordinator. ``reset_min_interval`` selects between keeping the
+# cloud-family base interval (AT text) and clearing it (framed).
+_OBSERVED_SESSION_PROTOCOL_PROFILES: dict[str, dict[str, object]] = {
+    "at_text": {
+        "identity_strategy": "at_dtupn",
+        "raw_passthrough_bootstrap": "uart_write_same_value",
+        "raw_passthrough_frame_format": "transparent",
+        "reset_min_interval": False,
+    },
+    "eybond_framed": {
+        "identity_strategy": "framed_heartbeat_then_fc2_pn",
+        "raw_passthrough_bootstrap": "",
+        "raw_passthrough_frame_format": "",
+        "reset_min_interval": True,
+    },
+}
+
+
+def apply_observed_collector_session_protocol(
+    base: CollectorTransportProfile,
+    observed_protocol: object,
+) -> CollectorTransportProfile:
+    """Return the transport profile a LIVE-observed session protocol implies.
+
+    Live observation is always stronger than the cloud-family bootstrap hint, so
+    a confirmed observed protocol replaces the base profile's protocol-specific
+    fields. Returns ``base`` unchanged when there is no observation, the
+    observation matches the base, or the observed protocol is unknown. The
+    runtime coordinator passes the observed protocol; the map itself is owned
+    here so the neutral runtime holds no protocol->policy table.
+    """
+
+    protocol = str(observed_protocol or "").strip().lower()
+    if not protocol or protocol == base.session_protocol:
+        return base
+    override = _OBSERVED_SESSION_PROTOCOL_PROFILES.get(protocol)
+    if override is None:
+        return base
+    return CollectorTransportProfile(
+        cloud_family=base.cloud_family,
+        runtime_owner_key=base.runtime_owner_key,
+        session_protocol=protocol,
+        identity_strategy=str(override["identity_strategy"]),
+        raw_passthrough_bootstrap=str(override["raw_passthrough_bootstrap"]),
+        raw_passthrough_frame_format=str(override["raw_passthrough_frame_format"]),
+        raw_passthrough_min_interval_ms=(
+            0 if override["reset_min_interval"] else base.raw_passthrough_min_interval_ms
+        ),
+    )
+
+
 def framed_collector_transport_profile(
     *,
     cloud_family: object = "",

@@ -46,7 +46,7 @@ from ..collector.capabilities import (
     collector_profile_entry_fields,
 )
 from ..collector.transport_profile import (
-    CollectorTransportProfile,
+    apply_observed_collector_session_protocol,
     collector_session_protocol_from_inventory_state,
     collector_cloud_family_from_entry_context,
     normalize_collector_session_protocol,
@@ -5220,33 +5220,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             runtime_owner_key=self._collector_runtime_owner_key(),
             virtual_bridge=self._collector_is_virtual_bridge(),
         )
-        observed_protocol = self._observed_collector_session_protocol()
-        if not observed_protocol or observed_protocol == resolved.session_protocol:
-            return resolved
-        # Live observation is always stronger than the bootstrap hint. The driver
-        # (runtime owner) key must never veto an observed protocol -- that was the
-        # phase-2 driver->transport coupling that is now removed.
-        if observed_protocol == "at_text":
-            return CollectorTransportProfile(
-                cloud_family=resolved.cloud_family,
-                runtime_owner_key=resolved.runtime_owner_key,
-                session_protocol="at_text",
-                identity_strategy="at_dtupn",
-                raw_passthrough_bootstrap="uart_write_same_value",
-                raw_passthrough_frame_format="transparent",
-                raw_passthrough_min_interval_ms=resolved.raw_passthrough_min_interval_ms,
-            )
-        if observed_protocol == "eybond_framed":
-            return CollectorTransportProfile(
-                cloud_family=resolved.cloud_family,
-                runtime_owner_key=resolved.runtime_owner_key,
-                session_protocol="eybond_framed",
-                identity_strategy="framed_heartbeat_then_fc2_pn",
-                raw_passthrough_bootstrap="",
-                raw_passthrough_frame_format="",
-                raw_passthrough_min_interval_ms=0,
-            )
-        return resolved
+        # A live-observed session protocol is stronger than the cloud-family
+        # bootstrap hint; the protocol -> transport-profile map is owned by the
+        # transport-profile authority, not the coordinator.
+        return apply_observed_collector_session_protocol(
+            resolved, self._observed_collector_session_protocol()
+        )
 
     def _observed_collector_session_protocol(self) -> str:
         """Return a positive callback-session protocol observed from this entry.

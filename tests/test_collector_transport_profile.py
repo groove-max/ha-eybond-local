@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.transport_profile import (
+    apply_observed_collector_session_protocol,
     collector_cloud_family_from_entry_context,
     resolve_collector_transport_profile,
     resolve_collector_transport_profile_from_entry_context,
@@ -116,6 +117,52 @@ class CollectorTransportProfileTests(unittest.TestCase):
                 {},
             ).session_protocol,
             "at_text",
+        )
+
+
+class ObservedSessionProtocolOverrideTests(unittest.TestCase):
+    """The protocol -> transport-profile map lives in the transport-profile
+    authority (moved out of the runtime coordinator). Characterizes the exact
+    behavior that was previously hand-coded in the coordinator."""
+
+    def _base(self, family: str):
+        return resolve_collector_transport_profile(cloud_family=family, runtime_owner_key="")
+
+    def test_no_observation_returns_base(self) -> None:
+        base = self._base("smartess_at")
+        self.assertIs(apply_observed_collector_session_protocol(base, ""), base)
+
+    def test_matching_observation_returns_base(self) -> None:
+        base = self._base("smartess_at")  # session_protocol == at_text
+        self.assertIs(apply_observed_collector_session_protocol(base, "at_text"), base)
+
+    def test_unknown_observation_returns_base(self) -> None:
+        base = self._base("smartess_at")
+        self.assertIs(apply_observed_collector_session_protocol(base, "mystery"), base)
+
+    def test_observed_framed_overrides_at_text_base(self) -> None:
+        base = self._base("smartess_at")  # at_text base
+        profile = apply_observed_collector_session_protocol(base, "eybond_framed")
+        self.assertEqual(profile.session_protocol, "eybond_framed")
+        self.assertEqual(profile.identity_strategy, "framed_heartbeat_then_fc2_pn")
+        self.assertEqual(profile.raw_passthrough_bootstrap, "")
+        self.assertEqual(profile.raw_passthrough_frame_format, "")
+        self.assertEqual(profile.raw_passthrough_min_interval_ms, 0)
+        # Diagnostic provenance fields are preserved.
+        self.assertEqual(profile.cloud_family, base.cloud_family)
+        self.assertEqual(profile.runtime_owner_key, base.runtime_owner_key)
+
+    def test_observed_at_text_overrides_framed_base_keeping_base_interval(self) -> None:
+        base = self._base("legacy_binary")  # framed base
+        self.assertEqual(base.session_protocol, "eybond_framed")
+        profile = apply_observed_collector_session_protocol(base, "at_text")
+        self.assertEqual(profile.session_protocol, "at_text")
+        self.assertEqual(profile.identity_strategy, "at_dtupn")
+        self.assertEqual(profile.raw_passthrough_bootstrap, "uart_write_same_value")
+        self.assertEqual(profile.raw_passthrough_frame_format, "transparent")
+        # AT-text keeps the cloud-family base min interval (not reset to 0).
+        self.assertEqual(
+            profile.raw_passthrough_min_interval_ms, base.raw_passthrough_min_interval_ms
         )
 
 

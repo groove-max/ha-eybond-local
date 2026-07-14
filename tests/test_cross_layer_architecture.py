@@ -1,0 +1,136 @@
+"""Cross-layer architecture guards (Phase 6 final audit).
+
+Focused invariants that survived the responsibility-boundary refactor:
+
+* provider provenance-inference set and the provider registry cannot drift;
+* a provider never returns another provider's control-discovery runner;
+* the observed-protocol -> transport-profile map lives in the transport-profile
+  authority, not the runtime coordinator;
+* the collector-management adapter and inverter-forward adapter are selected only
+  from negotiated session evidence -- never cloud family / hostname / peer IP.
+
+AST/attribute checks are used instead of brittle whole-file string scans wherever
+possible.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import sys
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from custom_components.eybond_local.support import cloud_evidence as cloud_evidence_module  # noqa: E402
+from custom_components.eybond_local.support import (  # noqa: E402
+    cloud_evidence_providers as providers_module,
+)
+from custom_components.eybond_local.support.cloud_evidence_providers import (  # noqa: E402
+    resolve_cloud_evidence_provider,
+    supported_cloud_evidence_providers,
+)
+
+_CC = REPO_ROOT / "custom_components" / "eybond_local"
+_COORDINATOR = _CC / "runtime" / "coordinator.py"
+_TRANSPORT_PROFILE = _CC / "collector" / "transport_profile.py"
+
+
+def _code_identifiers(source: str) -> set[str]:
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, ast.keyword) and node.arg:
+            names.add(node.arg)
+    return names
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+class ProviderAuthorityDriftGuardTests(unittest.TestCase):
+    def test_provenance_set_matches_provider_registry(self) -> None:
+        # The provenance-inference known set (cloud_evidence, a lower layer) and
+        # the provider registry (cloud_evidence_providers) MUST enumerate the same
+        # providers. If they drift, a new provider's records would be judged
+        # unknown-provenance and its own load_latest would refuse them.
+        registry = set(supported_cloud_evidence_providers())
+        provenance = set(cloud_evidence_module._KNOWN_EVIDENCE_PROVIDERS)
+        self.assertEqual(
+            registry,
+            provenance,
+            msg="provider registry and provenance-inference set drifted",
+        )
+
+    def test_provider_registry_is_the_only_impl_map(self) -> None:
+        self.assertEqual(set(providers_module._PROVIDERS), set(supported_cloud_evidence_providers()))
+
+
+class ProviderControlDiscoveryIsolationGuardTests(unittest.TestCase):
+    def test_provider_returns_only_its_own_control_discovery_runner(self) -> None:
+        for provider_id in (*supported_cloud_evidence_providers(), "nope", ""):
+            provider = resolve_cloud_evidence_provider(provider_id)
+            runner = provider.control_discovery_runner()
+            # A provider never hands out a FOREIGN provider's runner: the runner
+            # is either its own or the fail-closed unavailable runner (id "").
+            self.assertIn(
+                runner.provider_id,
+                {provider.provider_id, ""},
+                msg=f"{provider_id!r} returned foreign runner {runner.provider_id!r}",
+            )
+            # An unsupported provider must not expose a usable runner.
+            if not provider.provider_id:
+                self.assertFalse(provider.control_discovery_available)
+
+
+class TransportProfileAuthorityGuardTests(unittest.TestCase):
+    def test_coordinator_holds_no_protocol_transport_policy_map(self) -> None:
+        source = _read(_COORDINATOR)
+        identifiers = _code_identifiers(source)
+        # The coordinator delegates the observed-protocol -> profile map; it must
+        # not construct the profile nor hold the protocol-policy literals.
+        self.assertNotIn("CollectorTransportProfile", identifiers)
+        self.assertIn("apply_observed_collector_session_protocol", identifiers)
+        for literal in ('"at_dtupn"', '"uart_write_same_value"', '"framed_heartbeat_then_fc2_pn"'):
+            self.assertNotIn(
+                literal, source, msg=f"coordinator must not hold transport-policy literal {literal}"
+            )
+
+    def test_transport_profile_authority_owns_the_map(self) -> None:
+        source = _read(_TRANSPORT_PROFILE)
+        for literal in ("at_dtupn", "uart_write_same_value", "framed_heartbeat_then_fc2_pn"):
+            self.assertIn(literal, source)
+
+
+class AdapterSelectionAuthorityGuardTests(unittest.TestCase):
+    def test_adapter_selection_uses_no_family_host_or_ip(self) -> None:
+        import custom_components.eybond_local.runtime.link as link_module
+
+        for method_name in ("_collector_management_selection", "_inverter_forward_adapter"):
+            method = getattr(link_module.EybondRuntimeLinkManager, method_name)
+            source = "\n".join(
+                line[4:] if line.startswith("    ") else line
+                for line in inspect.getsource(method).splitlines()
+            )
+            identifiers = _code_identifiers(source)
+            for token in ("cloud_family", "hostname", "peer_ip", "remote_ip", "collector_kind"):
+                offenders = {name for name in identifiers if token in name}
+                self.assertEqual(
+                    offenders,
+                    set(),
+                    msg=f"{method_name} must not select by {token!r}: {offenders}",
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
