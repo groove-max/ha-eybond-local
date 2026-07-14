@@ -18,6 +18,7 @@ from ..models import (
 from ..payload.pi30 import (
     Pi30Error,
     Pi30Session,
+    build_request as build_pi30_request,
     parse_energy_counter,
     parse_firmware_version,
     parse_model_number,
@@ -40,6 +41,7 @@ from ..metadata.compiled_detection_catalog import (
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
+from .support_probe import SupportProbeRequest
 from .command_support import (
     apply_unsupported_diagnostics,
     command_skipped_as_unsupported as _command_skipped_as_unsupported,
@@ -159,12 +161,29 @@ _CATALOG_PARSERS = {
 }
 
 
+# The bounded read-only ASCII support-probe commands PI30 owns. Order and set
+# are fixed here (moved out of the runtime hub); do not expand the sweep.
+_PI30_SUPPORT_PROBE_COMMANDS: tuple[str, ...] = ("QPI", "QMOD", "QPIGS", "QPIRI", "QID")
+
+
 class Pi30Driver(InverterDriver):
     """PI30 probe, runtime reader, and command-based controller."""
 
     key = "pi30"
     poll_policy = PI30_POLL_POLICY
     name = "PI30 / ASCII"
+
+    def support_probe_plan(self) -> tuple[SupportProbeRequest, ...]:
+        """Return the fixed PI30 read-only ASCII support-probe requests."""
+
+        return tuple(
+            SupportProbeRequest(
+                payload_family="pi30_ascii",
+                command=command,
+                request=build_pi30_request(command),
+            )
+            for command in _PI30_SUPPORT_PROBE_COMMANDS
+        )
 
     @property
     def signature_timeout(self) -> float:

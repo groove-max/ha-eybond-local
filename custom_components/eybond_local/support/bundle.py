@@ -10,8 +10,6 @@ from typing import Any
 from ..const import LOCAL_METADATA_DIR, LOCAL_SUPPORT_PACKAGES_DIR
 
 
-_SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
-_SMG_READ_ONLY_PROFILE_NAME = "modbus_smg/family_fallback.json"
 _COLLECTOR_VALUE_PREFIXES = (
     "collector_",
     "proxy_capture_",
@@ -310,51 +308,6 @@ def _catalog_detection_payload(
     return None
 
 
-def is_read_only_unverified_smg_family(
-    *,
-    variant_key: str = "",
-    profile_name: str = "",
-    effective_owner_key: str = "",
-) -> bool:
-    """Return whether one runtime path is the read-only unverified SMG family state."""
-
-    normalized_variant_key = str(variant_key or "").strip()
-    normalized_profile_name = str(profile_name or "").strip()
-    normalized_owner_key = str(effective_owner_key or "").strip()
-    if normalized_owner_key and normalized_owner_key != "modbus_smg":
-        return False
-    return (
-        normalized_variant_key == _SMG_FAMILY_FALLBACK_VARIANT
-        or normalized_profile_name == _SMG_READ_ONLY_PROFILE_NAME
-    )
-
-
-def build_support_marker(
-    *,
-    variant_key: str = "",
-    profile_name: str = "",
-    effective_owner_key: str = "",
-) -> dict[str, Any] | None:
-    """Return one machine-readable support marker for special runtime states."""
-
-    if not is_read_only_unverified_smg_family(
-        variant_key=variant_key,
-        profile_name=profile_name,
-        effective_owner_key=effective_owner_key,
-    ):
-        return None
-    return {
-        "key": "read_only_unverified_smg_family",
-        "label": "Read-only unverified SMG family",
-        "read_only": True,
-        "verification": "unverified",
-        "summary": (
-            "Read-only SMG-family metadata is active. "
-            "Built-in writes are intentionally disabled until a verified model-specific mapping exists."
-        ),
-    }
-
-
 def build_support_bundle_payload(
     *,
     entry_id: str,
@@ -375,15 +328,15 @@ def build_support_bundle_payload(
     raw_register_schema_name: str = "",
     smartess_protocol_asset_id: str = "",
     smartess_profile_key: str = "",
+    support_marker: dict[str, Any] | None = None,
     cloud_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build one machine-readable support bundle payload."""
+    """Build one machine-readable support bundle payload.
 
-    support_marker = build_support_marker(
-        variant_key=variant_key,
-        profile_name=profile_name,
-        effective_owner_key=effective_owner_key,
-    )
+    ``support_marker`` is the authoritative, driver-produced marker payload (or
+    ``None``). This layer only embeds it -- it never infers a special runtime
+    state from driver key, variant key or profile path.
+    """
 
     source_metadata = {
         "profile_name": profile_name,
@@ -461,6 +414,7 @@ def export_support_bundle(
     raw_register_schema_name: str = "",
     smartess_protocol_asset_id: str = "",
     smartess_profile_key: str = "",
+    support_marker: dict[str, Any] | None = None,
     cloud_evidence: dict[str, Any] | None = None,
     overwrite: bool = False,
 ) -> Path:
@@ -485,6 +439,7 @@ def export_support_bundle(
         raw_register_schema_name=raw_register_schema_name,
         smartess_protocol_asset_id=smartess_protocol_asset_id,
         smartess_profile_key=smartess_profile_key,
+        support_marker=support_marker,
         cloud_evidence=cloud_evidence,
     )
 

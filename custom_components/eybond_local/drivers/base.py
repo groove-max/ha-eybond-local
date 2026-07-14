@@ -16,6 +16,9 @@ from ..models import (
     WriteCapability,
 )
 from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
+from .support_marker import DriverSupportMarker
+from .support_probe import SupportProbeRequest
+from .write_error import EMPTY_WRITE_ERROR_CLASSIFICATION, WriteErrorClassification
 
 
 class InverterDriver(ABC):
@@ -89,6 +92,48 @@ class InverterDriver(ABC):
         from ..metadata.register_schema_loader import load_register_schema
 
         return load_register_schema(self.register_schema_name)
+
+    def classify_write_error(
+        self,
+        capability: WriteCapability,
+        exc: BaseException,
+        *,
+        operating_mode: object = None,
+    ) -> WriteErrorClassification:
+        """Classify a failed capability write. Base drivers have no opinion.
+
+        Protocol policy: a driver that understands its wire error format (e.g. a
+        Modbus driver) overrides this -- typically by mixing in a shared
+        classifier -- to return a durable blocker or a user-facing error. The
+        neutral runtime only consumes the returned verdict.
+        """
+
+        return EMPTY_WRITE_ERROR_CLASSIFICATION
+
+    def support_probe_plan(self) -> tuple[SupportProbeRequest, ...]:
+        """Return bounded read-only support-probe requests. Base: none.
+
+        A driver whose inverters answer a raw diagnostic sweep (e.g. ASCII query
+        commands) owns and builds its request bytes here. The hub is a neutral
+        executor and never constructs protocol requests itself.
+        """
+
+        return ()
+
+    def support_marker(
+        self,
+        *,
+        variant_key: str = "",
+        profile_name: str = "",
+    ) -> DriverSupportMarker | None:
+        """Return a special support-state marker for this bound identity, if any.
+
+        Base drivers expose no special marker. A driver that owns a read-only /
+        unverified fallback state decides it here from its own model identity;
+        the support layers only render the returned neutral marker.
+        """
+
+        return None
 
     async def async_capture_support_evidence(
         self,

@@ -21,6 +21,7 @@ from ..models import (
 from ..payload.modbus import ModbusSession, to_signed_16
 from ..payload.register_decode import decode_block as shared_decode_block
 from .base import InverterDriver
+from .modbus_write_error import ModbusWriteErrorMixin
 from .command_support import (
     apply_unsupported_diagnostics,
     command_skipped_as_unsupported,
@@ -50,7 +51,7 @@ _SMARTESS_0925_CONFIG_STATE_REGISTER_RANGE = range(4535, 4553)
 _LOGGER = logging.getLogger(__name__)
 
 
-class SmartEssLocalDriver(InverterDriver):
+class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
     """Runtime driver for SmartESS 0925 Modbus RTU over EyeBond binary tunnel."""
 
     key = "smartess_local"

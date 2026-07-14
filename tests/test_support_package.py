@@ -15,7 +15,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+from custom_components.eybond_local.drivers.registry import (
+    support_marker as driver_support_marker,
+)
 from custom_components.eybond_local.support.bundle import build_support_bundle_payload
+
+
+def _smg_marker_payload(*, variant_key: str = "", profile_name: str = ""):
+    """Return the authoritative SMG driver marker payload (or None)."""
+
+    marker = driver_support_marker(
+        "modbus_smg", variant_key=variant_key, profile_name=profile_name
+    )
+    return marker.as_payload() if marker is not None else None
 from custom_components.eybond_local.support.download import (
     async_register_support_package_download_view,
     resolve_support_package_download_path,
@@ -556,6 +568,10 @@ class SupportPackageTests(unittest.TestCase):
                 profile_name="modbus_smg/family_fallback.json",
                 register_schema_name="modbus_smg/base.json",
                 variant_key="family_fallback",
+                support_marker=_smg_marker_payload(
+                    variant_key="family_fallback",
+                    profile_name="modbus_smg/family_fallback.json",
+                ),
             )
 
             result = export_support_package(

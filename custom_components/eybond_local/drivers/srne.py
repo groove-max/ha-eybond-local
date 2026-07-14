@@ -16,7 +16,12 @@ from .base import InverterDriver
 
 
 class SrneModbusDriver(InverterDriver):
-    """Read-only driver for SRNE-compatible Modbus devices."""
+    """Read-only driver for SRNE-compatible Modbus devices.
+
+    This driver never issues capability writes (``async_write_capability`` always
+    raises ``unsupported_capability``), so it must NOT opt into Modbus write-error
+    classification -- it keeps the neutral base (empty) classification.
+    """
 
     key = "srne_modbus"
     poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)

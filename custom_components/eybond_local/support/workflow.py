@@ -5,10 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..control_policy import normalize_confidence
-from .bundle import is_read_only_unverified_smg_family
-
-
-_SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
+from ..drivers.support_marker import DriverSupportWorkflow
 
 
 def _workflow_state(
@@ -71,11 +68,17 @@ def build_support_workflow_state(
     smartess_protocol_asset_id: str = "",
     smartess_profile_key: str = "",
     smartess_collector_version: str = "",
+    support_marker_workflow: DriverSupportWorkflow | None = None,
 ) -> dict[str, str]:
-    """Return one compact support workflow status and the recommended next step."""
+    """Return one compact support workflow status and the recommended next step.
+
+    ``support_marker_workflow`` is the authoritative, driver-produced workflow
+    guidance for a special runtime state (or ``None``). This layer only renders
+    it -- it never infers a special state from driver key, variant key or
+    profile path.
+    """
 
     confidence = normalize_confidence(detection_confidence)
-    normalized_variant_key = str(variant_key or "").strip()
     owner_known = any(
         str(value or "").strip()
         for value in (effective_owner_key, effective_owner_name)
@@ -160,30 +163,20 @@ def build_support_workflow_state(
             ),
         )
 
-    if is_read_only_unverified_smg_family(
-        variant_key=normalized_variant_key,
-        profile_name=profile_name,
-        effective_owner_key=effective_owner_key,
-    ):
+    if support_marker_workflow is not None:
+        # Authoritative driver-owned guidance for a special runtime state
+        # (e.g. an SMG read-only unverified fallback). Rendered field-by-field
+        # from the typed contract -- never by unpacking an arbitrary mapping.
         return _workflow_state(
-            level="family_fallback",
-            level_label="Read-only unverified SMG family",
-            summary=(
-                "This inverter is using read-only unverified SMG-family metadata. "
-                "Built-in writes are intentionally disabled until the exact model is verified."
-            ),
-            next_action=(
-                "Create a support archive and send the ZIP file to the developer. "
-                "This will help confirm the exact SMG-family model and move it beyond the read-only fallback."
-            ),
-            primary_action="create_support_package",
-            step_1="Create a support archive.",
-            step_2="Send the ZIP file to the developer.",
-            step_3="Treat the current SMG support as read-only until the exact model is verified.",
-            advanced_hint=(
-                "Do not create local writable drafts for this device yet. "
-                "The current fallback is intentionally read-only and unverified."
-            ),
+            level=support_marker_workflow.level,
+            level_label=support_marker_workflow.level_label,
+            summary=support_marker_workflow.summary,
+            next_action=support_marker_workflow.next_action,
+            primary_action=support_marker_workflow.primary_action,
+            step_1=support_marker_workflow.step_1,
+            step_2=support_marker_workflow.step_2,
+            step_3=support_marker_workflow.step_3,
+            advanced_hint=support_marker_workflow.advanced_hint,
         )
 
     if confidence == "high":

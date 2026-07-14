@@ -10,7 +10,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+from custom_components.eybond_local.drivers.registry import (
+    support_marker as driver_support_marker,
+)
 from custom_components.eybond_local.support.workflow import build_support_workflow_state
+
+
+def _smg_marker_workflow(*, variant_key: str = "", profile_name: str = ""):
+    """Return the authoritative SMG driver marker workflow (or None)."""
+
+    marker = driver_support_marker(
+        "modbus_smg", variant_key=variant_key, profile_name=profile_name
+    )
+    return marker.workflow if marker is not None else None
 
 
 class SupportWorkflowTests(unittest.TestCase):
@@ -58,6 +70,10 @@ class SupportWorkflowTests(unittest.TestCase):
             detection_confidence="medium",
             profile_source_scope="builtin",
             schema_source_scope="builtin",
+            support_marker_workflow=_smg_marker_workflow(
+                variant_key="family_fallback",
+                profile_name="modbus_smg/family_fallback.json",
+            ),
         )
 
         self.assertEqual(workflow["level"], "family_fallback")
@@ -95,6 +111,10 @@ class SupportWorkflowTests(unittest.TestCase):
             detection_confidence="medium",
             profile_source_scope="builtin",
             schema_source_scope="builtin",
+            support_marker_workflow=_smg_marker_workflow(
+                variant_key="doc_backed_variant",
+                profile_name="modbus_smg/family_fallback.json",
+            ),
         )
 
         self.assertEqual(workflow["level"], "family_fallback")

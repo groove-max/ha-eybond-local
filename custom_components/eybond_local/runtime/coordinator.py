@@ -170,6 +170,7 @@ from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
 from ..drivers.registry import poll_policy_for_driver_key, serial_is_stable
+from ..drivers.registry import support_marker as driver_support_marker
 from .poll_scheduler import PollDecision, PollScheduler, clamp_interval, normalize_poll_mode
 from ..schema import (
     build_runtime_ui_schema,
@@ -7605,11 +7606,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot = snapshot or self.data
         metadata = self.effective_metadata
         collector = snapshot.collector
+        marker = self._driver_support_marker(snapshot.inverter, metadata)
         workflow = build_support_workflow_state(
             has_inverter=snapshot.inverter is not None,
             variant_key=getattr(snapshot.inverter, "variant_key", ""),
             profile_name=metadata.profile_name,
             effective_owner_key=metadata.effective_owner_key,
+            support_marker_workflow=marker.workflow if marker is not None else None,
             effective_owner_name=metadata.effective_owner_name,
             smartess_family_name=metadata.smartess_family_name,
             detection_confidence=self.detection_confidence,
@@ -7846,6 +7849,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if inverter is not None:
             values["ui_schema"] = build_runtime_ui_schema(inverter, self.data.values)
             inverter_payload = self._inverter_payload(inverter)
+        marker = self._driver_support_marker(inverter, metadata)
         return build_support_bundle_payload(
             entry_id=self.config_entry.entry_id,
             entry_title=self._support_context_title(),
@@ -7865,7 +7869,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             raw_register_schema_name=metadata.raw_register_schema_name,
             smartess_protocol_asset_id=getattr(smartess_protocol, "asset_id", ""),
             smartess_profile_key=getattr(smartess_protocol, "profile_key", ""),
+            support_marker=marker.as_payload() if marker is not None else None,
             cloud_evidence=cloud_evidence,
+        )
+
+    @staticmethod
+    def _driver_support_marker(inverter: Any, metadata: Any):
+        """Resolve the authoritative driver support marker for this identity.
+
+        The owning driver (by ``inverter.driver_key``) decides any special
+        support state; the runtime only projects the neutral marker. Returns
+        ``None`` when there is no inverter or no special state.
+        """
+
+        if inverter is None:
+            return None
+        return driver_support_marker(
+            getattr(inverter, "driver_key", ""),
+            variant_key=str(getattr(inverter, "variant_key", "") or ""),
+            profile_name=str(getattr(metadata, "profile_name", "") or ""),
         )
 
     def _collector_payload(self) -> dict[str, Any] | None:

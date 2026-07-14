@@ -17,7 +17,6 @@ from ..const import (
     LOCAL_REGISTER_SCHEMAS_DIR,
     LOCAL_SUPPORT_PACKAGES_DIR,
 )
-from .bundle import build_support_marker
 from .masking import mask_numeric_identifiers
 from .shadow_learning_review_model import build_control_discovery_evidence
 
@@ -258,6 +257,8 @@ def _support_bundle_cloud_evidence(support_bundle: dict[str, Any]) -> dict[str, 
 def _support_bundle_support_marker(
     support_bundle: dict[str, Any],
 ) -> dict[str, Any] | None:
+    # The authoritative marker is produced upstream (driver -> bundle) and only
+    # read here. This layer never reconstructs a special runtime state.
     source_metadata = support_bundle.get("source_metadata") if isinstance(support_bundle, dict) else None
     if not isinstance(source_metadata, dict):
         return None
@@ -266,11 +267,7 @@ def _support_bundle_support_marker(
     if isinstance(support_marker, dict):
         return support_marker
 
-    return build_support_marker(
-        variant_key=str(source_metadata.get("variant_key", "") or ""),
-        profile_name=str(source_metadata.get("profile_name", "") or ""),
-        effective_owner_key=str(source_metadata.get("effective_owner_key", "") or ""),
-    )
+    return None
 
 
 def _archive_support_bundle_payload(support_bundle: dict[str, Any]) -> dict[str, Any]:

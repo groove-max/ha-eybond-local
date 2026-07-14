@@ -233,6 +233,11 @@ def _install_coordinator_stubs() -> None:
         ).strip()
         != "smartess_0925"
     )
+    # Neutral support-marker resolver double: the coordinator only projects the
+    # driver's verdict, so the double returns no special marker.
+    drivers_registry.support_marker = (
+        lambda driver_key="", variant_key="", profile_name="": None
+    )
 
     fixtures_utils = _ensure_module("custom_components.eybond_local.fixtures.utils")
     fixtures_utils.anonymize_fixture_json = lambda *args, **kwargs: None

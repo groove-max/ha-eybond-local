@@ -24,6 +24,7 @@ from custom_components.eybond_local.models import (
     ProbeTarget,
     RuntimeSnapshot,
 )
+from custom_components.eybond_local.drivers.modbus_write_error import ModbusWriteErrorMixin
 from custom_components.eybond_local.payload.modbus import ModbusError
 from custom_components.eybond_local.runtime.hub import EybondHub
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
@@ -324,7 +325,7 @@ class _TimeoutThenDisconnectedDriver:
         raise ConnectionError("collector_not_connected")
 
 
-class _IllegalDataValueDriver:
+class _IllegalDataValueDriver(ModbusWriteErrorMixin):
     def __init__(self) -> None:
         self.read_calls = 0
         self.write_calls = 0

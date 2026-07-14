@@ -42,6 +42,8 @@ from ..metadata.device_catalog_loader import (
     resolve_support_capture_policy,
 )
 from .base import InverterDriver
+from .modbus_write_error import ModbusWriteErrorMixin
+from .support_marker import DriverSupportMarker, DriverSupportWorkflow
 from .capability_codec import (
     decode_capability_value as _decode_capability_value,
     encode_capability_words as _encode_capability_words,
@@ -58,6 +60,48 @@ from .catalog_identity import (
 
 
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
+_SMG_FAMILY_FALLBACK_PROFILE_NAME = "modbus_smg/family_fallback.json"
+
+
+def _smg_family_fallback_support_marker() -> DriverSupportMarker:
+    """Return the read-only unverified SMG-family support marker.
+
+    The SMG driver is the single authority for this special state. The marker's
+    ``as_payload`` is the archive-stable bundle marker; ``workflow`` carries the
+    ready-to-render support-workflow guidance so the support layers need no SMG
+    knowledge.
+    """
+
+    return DriverSupportMarker(
+        key="read_only_unverified_smg_family",
+        label="Read-only unverified SMG family",
+        read_only=True,
+        verification="unverified",
+        summary=(
+            "Read-only SMG-family metadata is active. "
+            "Built-in writes are intentionally disabled until a verified model-specific mapping exists."
+        ),
+        workflow=DriverSupportWorkflow(
+            level="family_fallback",
+            level_label="Read-only unverified SMG family",
+            summary=(
+                "This inverter is using read-only unverified SMG-family metadata. "
+                "Built-in writes are intentionally disabled until the exact model is verified."
+            ),
+            next_action=(
+                "Create a support archive and send the ZIP file to the developer. "
+                "This will help confirm the exact SMG-family model and move it beyond the read-only fallback."
+            ),
+            primary_action="create_support_package",
+            step_1="Create a support archive.",
+            step_2="Send the ZIP file to the developer.",
+            step_3="Treat the current SMG support as read-only until the exact model is verified.",
+            advanced_hint=(
+                "Do not create local writable drafts for this device yet. "
+                "The current fallback is intentionally read-only and unverified."
+            ),
+        ),
+    )
 
 
 SMG_MODBUS_POLL_POLICY = PollPolicy(
@@ -114,12 +158,32 @@ def _attach_descriptor_decision_shadow_details(
         device_catalog["descriptor_decision"] = report
 
 
-class SmgModbusDriver(InverterDriver):
+class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
     """Bench-safe SMG probe and runtime reader."""
 
     key = "modbus_smg"
     poll_policy = SMG_MODBUS_POLL_POLICY
     name = "SMG / Modbus"
+
+    def support_marker(
+        self,
+        *,
+        variant_key: str = "",
+        profile_name: str = "",
+    ) -> DriverSupportMarker | None:
+        """Return the read-only unverified marker for the SMG family fallback.
+
+        Authoritative SMG model policy: the family-fallback variant (or its
+        family-fallback profile) is intentionally read-only until a verified
+        model-specific mapping exists.
+        """
+
+        if (
+            str(variant_key or "").strip() == _SMG_FAMILY_FALLBACK_VARIANT
+            or str(profile_name or "").strip() == _SMG_FAMILY_FALLBACK_PROFILE_NAME
+        ):
+            return _smg_family_fallback_support_marker()
+        return None
 
     @property
     def probe_timeout(self) -> float:

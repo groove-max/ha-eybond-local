@@ -14,6 +14,7 @@ from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
 from ..payload.register_decode import decode_ascii_word, read_spec_set_values
 from .base import InverterDriver
+from .modbus_write_error import ModbusWriteErrorMixin
 from .capability_codec import (
     decode_capability_value,
     encode_capability_words,
@@ -24,7 +25,7 @@ from .capability_codec import (
 _MODEL_PREFIXES = ("PV", "PH", "EP")
 
 
-class MustPvPh18Driver(InverterDriver):
+class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
     """Driver for MUST PV/PH18 Modbus devices."""
 
     key = "must_pv_ph18"

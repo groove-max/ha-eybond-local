@@ -47,9 +47,7 @@ from ..onboarding.driver_detection import async_detect_inverter
 from ..link_models import EybondLinkRoute
 from ..link_transport import async_send_payload, select_payload_route
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
-from ..payload.ascii_line import build_ascii_line_request
-from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
-from ..payload.pi30 import build_request as build_pi30_request
+from ..payload.modbus import ModbusSession, to_signed_16
 from ..runtime_labels import runtime_path_label
 from .collector_metadata import (
     CollectorMetadataRefreshResult,
@@ -131,8 +129,8 @@ RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE = "collector_offline"
 RUNTIME_DRIVER_STATE_DRIVER_UNBOUND = "driver_unbound"
 
 # Bounded per-command timeout for the at_text support-archive ASCII probe;
-# generous enough for a 2400-baud QPIRI response, small enough that the six
-# probe commands stay under half a minute even in total silence.
+# generous enough for a slow 2400-baud line response, small enough that the
+# driver-provided probe commands stay under half a minute even in total silence.
 _AT_TEXT_ASCII_PROBE_TIMEOUT = 3.0
 RUNTIME_DRIVER_STATE_DRIVER_BOUND = "driver_bound"
 
@@ -368,124 +366,6 @@ def _normalize_collector_server_endpoint(endpoint: str) -> str:
     )
 
 
-def _modbus_exception_code(exc: BaseException) -> int | None:
-    """Parse one Modbus exception code from an error string."""
-
-    if not isinstance(exc, ModbusError):
-        return None
-
-    text = str(exc)
-    if not text.startswith("exception_code:"):
-        return None
-    try:
-        return int(text.split(":", 1)[1])
-    except ValueError:
-        return None
-
-
-def _blocker_from_write_error(
-    capability: WriteCapability,
-    exc: BaseException,
-    *,
-    operating_mode: object,
-) -> CapabilityBlocker | None:
-    """Return one structured runtime blocker for a write failure, if applicable."""
-
-    exception_code = _modbus_exception_code(exc)
-    if exception_code is None:
-        return None
-
-    capability_name = capability.display_name
-    safe_modes = ", ".join(capability.safe_operating_modes)
-
-    if exception_code == 1:
-        return CapabilityBlocker(
-            code="illegal_function",
-            reason=(
-                f"The inverter does not expose writable access for {capability_name!r} "
-                "through this protocol."
-            ),
-            suggested_action=(
-                "Leave this control disabled for the current firmware, or retry after "
-                "updating the driver/profile."
-            ),
-            exception_code=exception_code,
-            clear_on="redetect",
-        )
-    if exception_code == 2:
-        return CapabilityBlocker(
-            code="illegal_data_address",
-            reason=(
-                f"The inverter reported register {capability.register} for "
-                f"{capability_name!r} as unavailable."
-            ),
-            suggested_action=(
-                "This register is likely absent on the current model or firmware. "
-                "Leave it disabled unless a later probe confirms support."
-            ),
-            exception_code=exception_code,
-            clear_on="redetect",
-        )
-    if exception_code == 7:
-        if (
-            capability.unsafe_while_running
-            and operating_mode
-            and operating_mode not in capability.safe_operating_modes
-        ):
-            return CapabilityBlocker(
-                code="mode_restricted",
-                reason=(
-                    f"The inverter rejected writes to {capability_name!r} while "
-                    f"operating mode is {operating_mode!r}."
-                ),
-                suggested_action=(
-                    "Retry after switching the inverter into a safe mode for this setting: "
-                    f"{safe_modes}."
-                ),
-                exception_code=exception_code,
-                clear_on="mode_change",
-            )
-        return CapabilityBlocker(
-            code="unsupported_or_locked",
-            reason=(
-                f"The inverter rejected writes to {capability_name!r}. "
-                "This register appears locked or unsupported by the current firmware."
-            ),
-            suggested_action=(
-                "Keep this control disabled for now, or retry after a firmware/profile update."
-            ),
-            exception_code=exception_code,
-            clear_on="redetect",
-        )
-    return None
-
-
-def _friendly_write_error(
-    capability: WriteCapability,
-    exc: BaseException,
-) -> ValueError | None:
-    """Return one user-facing write error that should not persist as a blocker."""
-
-    exception_code = _modbus_exception_code(exc)
-    if exception_code != 3:
-        return None
-
-    native_minimum = capability.native_minimum
-    native_maximum = capability.native_maximum
-    if native_minimum is not None and native_maximum is not None:
-        allowed_range = f"Allowed profile range: {native_minimum} to {native_maximum}."
-    elif native_minimum is not None:
-        allowed_range = f"Allowed profile minimum: {native_minimum}."
-    elif native_maximum is not None:
-        allowed_range = f"Allowed profile maximum: {native_maximum}."
-    else:
-        allowed_range = "The inverter may enforce a narrower range than the current profile metadata."
-
-    return ValueError(
-        f"illegal_data_value:{capability.key}:"
-        f"The inverter rejected {capability.display_name!r} as out of range. "
-        f"{allowed_range}"
-    )
 
 
 def _should_confirm_write(capability: WriteCapability) -> bool:
@@ -1639,22 +1519,21 @@ class EybondHub:
                     )
                     await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
                     continue
-                friendly_error = _friendly_write_error(capability, exc)
-                if friendly_error is not None:
-                    raise friendly_error from exc
-                blocker = _blocker_from_write_error(
+                classification = self._driver.classify_write_error(
                     capability,
                     exc,
                     operating_mode=snapshot.values.get("operating_mode"),
                 )
-                if blocker:
+                if classification.user_error is not None:
+                    raise classification.user_error from exc
+                if classification.blocker is not None:
                     logger.warning(
                         "Blocking capability %s after write failure: %s (%s)",
                         capability_key,
-                        blocker.reason,
-                        blocker.code,
+                        classification.blocker.reason,
+                        classification.blocker.code,
                     )
-                    self._write_blockers[capability_key] = blocker
+                    self._write_blockers[capability_key] = classification.blocker
                 raise
 
         if written_value is None:
@@ -2155,41 +2034,42 @@ class EybondHub:
 
         transport = self._link_manager.transport
         attempts: list[dict[str, object]] = []
-        for payload_family, command, request in (
-            ("pi30_ascii", "QPI", build_pi30_request("QPI")),
-            ("pi30_ascii", "QMOD", build_pi30_request("QMOD")),
-            ("pi30_ascii", "QPIGS", build_pi30_request("QPIGS")),
-            ("pi30_ascii", "QPIRI", build_pi30_request("QPIRI")),
-            ("pi30_ascii", "QID", build_pi30_request("QID")),
-            ("eybond_g_ascii", "GPV", build_ascii_line_request("GPV")),
-        ):
-            route = select_payload_route(
-                transport,
-                EybondLinkRoute(devcode=1, collector_addr=255),
-                payload_family=payload_family,
-            )
-            attempt: dict[str, object] = {
-                "payload_family": payload_family,
-                "command": command,
-                "request_hex": request.hex(),
-            }
-            try:
-                response = await async_send_payload(
+        # Detection may have failed, so ``self._driver`` may be unbound: gather
+        # read-only probe plans from every driver via the registry. The commands
+        # are protocol policy owned by each driver; the hub only executes them.
+        for driver in iter_drivers(DRIVER_HINT_AUTO):
+            for probe in driver.support_probe_plan():
+                route = select_payload_route(
                     transport,
-                    request,
-                    route=route,
-                    request_timeout=_AT_TEXT_ASCII_PROBE_TIMEOUT,
+                    EybondLinkRoute(devcode=1, collector_addr=255),
+                    payload_family=probe.payload_family,
                 )
-            except asyncio.TimeoutError:
-                attempt["error"] = "request_timeout"
-            except Exception as exc:
-                attempt["error"] = str(exc)
-            else:
-                attempt["response_hex"] = response.hex()
-                attempt["response_ascii"] = response.decode(
-                    "ascii", errors="replace"
-                )
-            attempts.append(attempt)
+                attempt: dict[str, object] = {
+                    # The owning driver is authoritative here (registry
+                    # iteration), so record its key as probe provenance rather
+                    # than trusting a duplicated field on the descriptor.
+                    "driver_key": driver.key,
+                    "payload_family": probe.payload_family,
+                    "command": probe.command,
+                    "request_hex": probe.request.hex(),
+                }
+                try:
+                    response = await async_send_payload(
+                        transport,
+                        probe.request,
+                        route=route,
+                        request_timeout=_AT_TEXT_ASCII_PROBE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    attempt["error"] = "request_timeout"
+                except Exception as exc:
+                    attempt["error"] = str(exc)
+                else:
+                    attempt["response_hex"] = response.hex()
+                    attempt["response_ascii"] = response.decode(
+                        "ascii", errors="replace"
+                    )
+                attempts.append(attempt)
 
         collector = self._link_manager.collector_info
         return {

@@ -33,10 +33,12 @@ from ..models import (
 from ..payload.ascii_line import (
     AsciiLineError,
     AsciiLineSession,
+    build_ascii_line_request,
     parse_ascii_line_response,
     parse_space_fields,
 )
 from .base import InverterDriver
+from .support_probe import SupportProbeRequest
 from .command_support import (
     apply_unsupported_diagnostics,
     command_skipped_as_unsupported,
@@ -157,6 +159,17 @@ class EybondGAsciiDriver(InverterDriver):
     capability_groups = ()
     write_capabilities = ()
     capability_presets = ()
+
+    def support_probe_plan(self) -> tuple[SupportProbeRequest, ...]:
+        """Return the fixed G-ASCII read-only support-probe request (GPV)."""
+
+        return (
+            SupportProbeRequest(
+                payload_family="eybond_g_ascii",
+                command="GPV",
+                request=build_ascii_line_request("GPV"),
+            ),
+        )
 
     async def async_probe_signature(self, transport, target: ProbeTarget) -> bool:
         session = self._session(transport, target)

@@ -34,6 +34,7 @@ from ..payload.register_decode import (
     read_spec_set_values,
 )
 from .base import InverterDriver
+from .modbus_write_error import ModbusWriteErrorMixin
 from .capability_codec import (
     decode_capability_value,
     encode_capability_words,
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 PROTOCOL_KEY = "modbus_catalog"
 
 
-class ModbusCatalogDriver(InverterDriver):
+class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
     """Generic read-only driver executing catalog device packs over Modbus."""
 
     key = PROTOCOL_KEY

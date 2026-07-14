@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from ..canonical_telemetry import all_canonical_measurements, canonical_measurements_for_driver
 from ..collector.entity_scope import is_collector_entity_key
@@ -39,6 +40,9 @@ from .smg import SmgModbusDriver
 from .srne import SrneModbusDriver
 from .eybond_g_ascii import EybondGAsciiDriver
 
+if TYPE_CHECKING:
+    from .support_marker import DriverSupportMarker
+
 _DRIVERS: tuple[InverterDriver, ...] = (
     SmgModbusDriver(),
     SrneModbusDriver(),
@@ -72,6 +76,34 @@ def serial_is_stable(driver_key: object, inverter=None) -> bool:
     except Exception:
         return True
     return bool(driver.serial_is_stable(inverter))
+
+
+def support_marker(
+    driver_key: object,
+    *,
+    variant_key: str = "",
+    profile_name: str = "",
+) -> "DriverSupportMarker | None":
+    """Dispatch the special support-state marker to the OWNING driver.
+
+    The registry holds no model allow list: whether a detected identity is in a
+    special support state (e.g. an SMG read-only unverified fallback) is the
+    selected driver's own policy (``InverterDriver.support_marker``, default
+    ``None``). An unknown or empty driver key yields no marker.
+
+    Only an unknown driver key (``KeyError``) is treated as "no marker". Any
+    error raised by an existing driver's ``support_marker`` implementation
+    propagates -- it is a real defect and must not be silently swallowed.
+    """
+
+    key = str(driver_key or "").strip()
+    if not key:
+        return None
+    try:
+        driver = get_driver(key)
+    except KeyError:
+        return None
+    return driver.support_marker(variant_key=variant_key, profile_name=profile_name)
 
 
 def driver_options() -> list[str]:
