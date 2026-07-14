@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from ..const import BUILTIN_SCHEMA_PREFIX
-from ..support.cloud_evidence import load_latest_cloud_evidence
 from .local_metadata import (
     _dump_json,
     _ensure_can_write,
@@ -135,28 +134,6 @@ def create_smartess_known_family_draft(
     schema_destination.write_text(_dump_json(schema_raw), encoding="utf-8")
 
     return profile_destination, schema_destination
-
-
-def latest_smartess_known_family_draft_plan(
-    *,
-    config_dir: Path,
-    entry_id: str = "",
-    collector_pn: str = "",
-    smartess_protocol_asset_id: str = "",
-    smartess_profile_key: str = "",
-) -> SmartEssKnownFamilyDraftPlan | None:
-    """Resolve one draft plan against the latest matching cloud evidence."""
-
-    record = load_latest_cloud_evidence(
-        config_dir,
-        entry_id=entry_id,
-        collector_pn=collector_pn,
-    )
-    return resolve_smartess_known_family_draft_plan(
-        smartess_protocol_asset_id=smartess_protocol_asset_id,
-        smartess_profile_key=smartess_profile_key,
-        cloud_evidence=record.payload if record is not None else None,
-    )
 
 
 def _plan_from_catalog_entry(entry, *, reason: str) -> SmartEssKnownFamilyDraftPlan:

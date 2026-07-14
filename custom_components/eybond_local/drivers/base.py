@@ -58,6 +58,18 @@ class InverterDriver(ABC):
 
         return self.poll_policy
 
+    def serial_is_stable(self, inverter: DetectedInverter | None = None) -> bool:
+        """Return whether this driver/model exposes a STABLE device serial.
+
+        Model policy owned by the driver: most inverters report a stable serial,
+        so the base returns ``True``. A family that has no stable serial (so a
+        captured serial must not be persisted as the entry's detected serial)
+        overrides this and reads model identity from ``inverter``. The runtime
+        only consumes the neutral answer -- it never encodes a variant rule.
+        """
+
+        return True
+
     @property
     def profile_metadata(self):
         """Return effective declarative capability metadata when available."""

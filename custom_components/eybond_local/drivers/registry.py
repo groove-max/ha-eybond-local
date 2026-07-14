@@ -55,6 +55,25 @@ _EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = ()
 _COLLECTOR_ONLY_BASE_SENSOR_EXTRA_KEYS: frozenset[str] = frozenset({"last_error"})
 
 
+def serial_is_stable(driver_key: object, inverter=None) -> bool:
+    """Dispatch the stable-serial question to the OWNING driver.
+
+    The registry holds no variant allow/deny set: whether a model exposes a
+    stable device serial is the selected driver's own policy
+    (``InverterDriver.serial_is_stable``, default ``True``). An unknown driver
+    key keeps the neutral default.
+    """
+
+    key = str(driver_key or "").strip()
+    if not key:
+        return True
+    try:
+        driver = get_driver(key)
+    except Exception:
+        return True
+    return bool(driver.serial_is_stable(inverter))
+
+
 def driver_options() -> list[str]:
     """Return user-facing driver hints."""
 

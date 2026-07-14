@@ -186,8 +186,6 @@ from .metadata.local_metadata import (
     resolve_local_metadata_rollback_paths,
 )
 from .naming import installation_title
-from .metadata.profile_loader import load_driver_profile
-from .metadata.smartess_draft import resolve_smartess_known_family_draft_plan
 from .models import CollectorCandidate, CollectorInfo, OnboardingResult
 from .onboarding.detection import DiscoveryTarget
 from .onboarding.factory import create_onboarding_manager
@@ -214,36 +212,21 @@ from .onboarding.timeouts import (
     deep_scan_timeout_seconds as _onboarding_deep_scan_timeout_seconds,
     manual_probe_timeout_seconds as _onboarding_manual_probe_timeout_seconds,
 )
-from .smartess_cloud import classify_smartess_cloud_error
-from .smartess_cloud import (
-    DEFAULT_LEARN_NUMERIC_VALUE,
-    SessionCredentials,
-    build_device_detail_action,
-    build_device_settings_action,
-    build_learn_settings_plan,
-    fetch_device_bundle_for_collector,
-    fetch_signed_action,
-    login_with_password,
+from .support.cloud_evidence_providers import (
+    CloudEvidenceContext,
+    CloudEvidenceOnboardingAssist,
+    CloudEvidenceSettingHighlight,
+    resolve_cloud_evidence_provider,
 )
-from .support.cloud_evidence import fetch_and_export_smartess_device_bundle_cloud_evidence
 from .support.collector_registry import remember_collector_original_endpoint
 from .support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
 from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
-from .support.read_learning_binder import bind_cloud_labels_to_registers
-from .support.shadow_learning_orchestrator import (
-    async_orchestrate_shadow_learning_settings,
-    orchestrate_shadow_learning_settings,
-)
-from .support.valuecloud_shadow_learning_orchestrator import (
-    async_orchestrate_valuecloud_shadow_learning,
-)
 from .support.shadow_learning_proxy import route_status_indicates_control_write_ready
 from .support.shadow_learning_overlay_generator import generate_shadow_learning_overlay_drafts
 from .support.shadow_learning_review_model import (
     build_activation_selection,
     default_learned_control_label,
 )
-from . import valuecloud_cloud as valuecloud_cloud_module
 
 CONF_RESULT_KEY = "result_key"
 _SCAN_RESULTS_ACTION_REFRESH = "action:refresh_scan"
@@ -383,44 +366,11 @@ def _is_user_selectable_scan_interface(ifname: str) -> bool:
     return not normalized.startswith(_INTERNAL_SCAN_INTERFACE_PREFIXES)
 
 
-@dataclass(slots=True)
-class _SmartEssCloudSettingHighlight:
-    """Compact preview for one SmartESS cloud field shown during onboarding."""
-
-    title: str
-    bucket: str = ""
-    current_value: str = ""
-    register: int | None = None
-
-
-@dataclass(slots=True)
-class _SmartEssCloudAssistState:
-    """One saved SmartESS cloud-assist result for the current onboarding flow."""
-
-    collector_pn: str
-    evidence_path: str = ""
-    inferred_asset_id: str = ""
-    inferred_profile_key: str = ""
-    inferred_driver_key: str = ""
-    inferred_family_label: str = ""
-    inferred_reason: str = ""
-    exact_field_count: int = 0
-    probable_field_count: int = 0
-    cloud_only_field_count: int = 0
-    current_values_included: bool = False
-    total_field_count: int = 0
-    mapped_field_count: int = 0
-    fields_with_current_value: int = 0
-    device_pn: str = ""
-    device_sn: str = ""
-    device_name: str = ""
-    device_alias: str = ""
-    device_status: str = ""
-    device_brand: str = ""
-    device_devcode: int | None = None
-    device_devaddr: int | None = None
-    detail_sections: tuple[str, ...] = ()
-    highlight_settings: tuple[_SmartEssCloudSettingHighlight, ...] = ()
+# The onboarding-assist result + its highlight rows are provider-neutral DTOs
+# built entirely by the active provider (SmartESS). The flow only renders them;
+# these compatibility aliases keep the existing render/apply call sites unchanged.
+_SmartEssCloudSettingHighlight = CloudEvidenceSettingHighlight
+_SmartEssCloudAssistState = CloudEvidenceOnboardingAssist
 
 
 @asynccontextmanager
@@ -761,150 +711,6 @@ def _apply_smartess_cloud_assist_metadata(
     ):
         data[CONF_DRIVER_HINT] = assist_state.inferred_driver_key
 
-
-def _smartess_cloud_bundle_payload(evidence: dict[str, Any]) -> dict[str, Any]:
-    payload = evidence.get("payload") if isinstance(evidence, dict) else None
-    return payload if isinstance(payload, dict) else {}
-
-
-def _smartess_cloud_device_preview(evidence: dict[str, Any]) -> dict[str, Any]:
-    identity = evidence.get("device_identity") if isinstance(evidence, dict) else None
-    identity = identity if isinstance(identity, dict) else {}
-    normalized = _smartess_cloud_bundle_payload(evidence).get("normalized")
-    normalized = normalized if isinstance(normalized, dict) else {}
-    normalized_list = normalized.get("device_list")
-    normalized_list = normalized_list if isinstance(normalized_list, dict) else {}
-    devices = normalized_list.get("devices")
-    devices = devices if isinstance(devices, list) else []
-
-    device_preview: dict[str, Any] = {}
-    identity_pn = str(identity.get("pn") or "").strip()
-    identity_sn = str(identity.get("sn") or "").strip()
-    for item in devices:
-        if not isinstance(item, dict):
-            continue
-        item_pn = str(item.get("pn") or "").strip()
-        item_sn = str(item.get("sn") or "").strip()
-        if identity_pn and item_pn == identity_pn:
-            device_preview = item
-            break
-        if identity_sn and item_sn == identity_sn:
-            device_preview = item
-            break
-    if not device_preview:
-        for item in devices:
-            if isinstance(item, dict):
-                device_preview = item
-                break
-
-    return {
-        "pn": identity_pn or str(device_preview.get("pn") or "").strip(),
-        "sn": identity_sn or str(device_preview.get("sn") or "").strip(),
-        "devcode": identity.get("devcode") if identity.get("devcode") not in (None, "") else device_preview.get("devcode"),
-        "devaddr": identity.get("devaddr") if identity.get("devaddr") not in (None, "") else device_preview.get("devaddr"),
-        "name": str(device_preview.get("devName") or "").strip(),
-        "alias": str(device_preview.get("devalias") or "").strip(),
-        "status": str(device_preview.get("status") or "").strip(),
-        "brand": str(device_preview.get("brand") or "").strip(),
-    }
-
-
-def _smartess_cloud_detail_sections(evidence: dict[str, Any]) -> tuple[str, ...]:
-    summary = evidence.get("summary") if isinstance(evidence, dict) else None
-    summary = summary if isinstance(summary, dict) else {}
-    normalized = _smartess_cloud_bundle_payload(evidence).get("normalized")
-    normalized = normalized if isinstance(normalized, dict) else {}
-    normalized_detail = normalized.get("device_detail")
-    normalized_detail = normalized_detail if isinstance(normalized_detail, dict) else {}
-    section_counts = normalized_detail.get("section_counts")
-    section_counts = section_counts if isinstance(section_counts, dict) else {}
-
-    previews: list[str] = []
-    if section_counts:
-        for key in sorted(section_counts):
-            previews.append(f"{key} ({section_counts[key]})")
-    else:
-        detail_sections = summary.get("detail_sections")
-        if isinstance(detail_sections, list):
-            previews.extend(str(item).strip() for item in detail_sections if str(item).strip())
-    return tuple(previews)
-
-
-def _smartess_cloud_highlight_settings(
-    evidence: dict[str, Any],
-    *,
-    limit: int = 5,
-) -> tuple[_SmartEssCloudSettingHighlight, ...]:
-    normalized = _smartess_cloud_bundle_payload(evidence).get("normalized")
-    normalized = normalized if isinstance(normalized, dict) else {}
-    normalized_settings = normalized.get("device_settings")
-    normalized_settings = normalized_settings if isinstance(normalized_settings, dict) else {}
-    fields = normalized_settings.get("fields")
-    fields = fields if isinstance(fields, list) else []
-
-    bucket_priority = {"exact_0925": 0, "probable_0925": 1, "cloud_only": 2}
-
-    def _register_for_field(field: dict[str, Any]) -> int | None:
-        binding = field.get("binding")
-        if isinstance(binding, dict):
-            register = binding.get("register")
-            if isinstance(register, int):
-                return register
-        register = field.get("asset_register")
-        if isinstance(register, int):
-            return register
-        return None
-
-    def _choice_label(field: dict[str, Any], value: Any) -> str:
-        choices = field.get("choices")
-        if not isinstance(choices, list):
-            return ""
-        value_text = str(value)
-        for choice in choices:
-            if not isinstance(choice, dict):
-                continue
-            if choice.get("value") == value:
-                return str(choice.get("label") or "").strip()
-            if str(choice.get("raw_value") or "") == value_text:
-                return str(choice.get("label") or "").strip()
-        return ""
-
-    def _current_value_preview(field: dict[str, Any]) -> str:
-        if not field.get("has_current_value"):
-            return ""
-        current_value = field.get("current_value")
-        label = _choice_label(field, current_value)
-        if label:
-            return label
-        text = str(current_value).strip()
-        if not text:
-            return ""
-        unit = str(field.get("unit") or "").strip()
-        return f"{text} {unit}".strip()
-
-    candidates = [field for field in fields if isinstance(field, dict) and str(field.get("title") or "").strip()]
-    candidates.sort(
-        key=lambda field: (
-            0 if field.get("has_current_value") else 1,
-            bucket_priority.get(str(field.get("bucket") or ""), 9),
-            0 if _register_for_field(field) is not None else 1,
-            str(field.get("title") or "").lower(),
-        )
-    )
-
-    highlights: list[_SmartEssCloudSettingHighlight] = []
-    for field in candidates:
-        highlights.append(
-            _SmartEssCloudSettingHighlight(
-                title=str(field.get("title") or "").strip(),
-                bucket=str(field.get("bucket") or "").strip(),
-                current_value=_current_value_preview(field),
-                register=_register_for_field(field),
-            )
-        )
-        if len(highlights) >= limit:
-            break
-    return tuple(highlights)
 
 
 class _TranslationBundleMixin:
@@ -3207,7 +3013,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             except Exception as exc:
                 self._smartess_cloud_assist_last_error = str(exc)
                 self._smartess_cloud_assist_last_error_code = (
-                    classify_smartess_cloud_error(exc)
+                    resolve_cloud_evidence_provider("smartess").classify_error(exc)
                 )
                 errors["base"] = "smartess_cloud_assist_failed"
             else:
@@ -5889,61 +5695,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not collector_pn:
             raise RuntimeError("smartess_collector_pn_not_available")
 
-        record = await self.hass.async_add_executor_job(
-            lambda: fetch_and_export_smartess_device_bundle_cloud_evidence(
-                config_dir=self._config_dir_path(),
-                username=username,
-                password=password,
-                collector_pn=collector_pn,
-                source="smartess_cloud_onboarding",
-            )
-        )
+        # Gather the explicit hints (data), then let the SmartESS provider fetch,
+        # interpret, and normalize. The flow imports no provider client / draft
+        # resolver and parses no raw provider payload.
         asset_id, profile_key = self._smartess_detected_hint_values(result)
-        plan = resolve_smartess_known_family_draft_plan(
-            smartess_protocol_asset_id=asset_id,
-            smartess_profile_key=profile_key,
-            cloud_evidence=record.payload,
-        )
-        inferred_driver_key = ""
-        if plan is not None and plan.source_profile_name:
-            try:
-                inferred_driver_key = str(
-                    load_driver_profile(plan.source_profile_name).driver_key or ""
-                ).strip()
-            except Exception:
-                inferred_driver_key = ""
-
-        summary = dict(record.payload.get("summary") or {})
-        device_preview = _smartess_cloud_device_preview(record.payload)
-        normalized_settings = _smartess_cloud_bundle_payload(record.payload).get("normalized")
-        normalized_settings = normalized_settings if isinstance(normalized_settings, dict) else {}
-        normalized_settings = normalized_settings.get("device_settings") if isinstance(normalized_settings, dict) else {}
-        normalized_settings = normalized_settings if isinstance(normalized_settings, dict) else {}
-        return _SmartEssCloudAssistState(
+        context = CloudEvidenceContext(
+            config_dir=self._config_dir_path(),
+            entry_id="",
             collector_pn=collector_pn,
-            evidence_path=str(record.path),
-            inferred_asset_id=plan.asset_id if plan is not None else "",
-            inferred_profile_key=plan.profile_key if plan is not None else "",
-            inferred_driver_key=inferred_driver_key,
-            inferred_family_label=plan.driver_label if plan is not None else "",
-            inferred_reason=plan.reason if plan is not None else "",
-            exact_field_count=int(summary.get("settings_exact_0925_field_count") or 0),
-            probable_field_count=int(summary.get("settings_probable_0925_field_count") or 0),
-            cloud_only_field_count=int(summary.get("settings_cloud_only_field_count") or 0),
-            current_values_included=bool(summary.get("settings_current_values_included", False)),
-            total_field_count=int(normalized_settings.get("field_count") or summary.get("settings_field_count") or 0),
-            mapped_field_count=int(normalized_settings.get("mapped_field_count") or summary.get("settings_mapped_field_count") or 0),
-            fields_with_current_value=int(normalized_settings.get("fields_with_current_value") or 0),
-            device_pn=str(device_preview.get("pn") or "").strip(),
-            device_sn=str(device_preview.get("sn") or "").strip(),
-            device_name=str(device_preview.get("name") or "").strip(),
-            device_alias=str(device_preview.get("alias") or "").strip(),
-            device_status=str(device_preview.get("status") or "").strip(),
-            device_brand=str(device_preview.get("brand") or "").strip(),
-            device_devcode=device_preview.get("devcode") if device_preview.get("devcode") not in ("", None) else None,
-            device_devaddr=device_preview.get("devaddr") if device_preview.get("devaddr") not in ("", None) else None,
-            detail_sections=_smartess_cloud_detail_sections(record.payload),
-            highlight_settings=_smartess_cloud_highlight_settings(record.payload),
+            protocol_asset_id=asset_id,
+            protocol_profile_key=profile_key,
+        )
+        provider = resolve_cloud_evidence_provider("smartess")
+        return await self.hass.async_add_executor_job(
+            lambda: provider.build_onboarding_assist(
+                context, username=username, password=password
+            )
         )
 
     def _current_connection_type(self) -> str:
@@ -8296,7 +8063,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             )
 
         provider = self._control_discovery_cloud_provider(coordinator)
-        if provider not in {"smartess", "valuecloud"}:
+        provider_impl = resolve_cloud_evidence_provider(provider)
+        if not provider_impl.control_discovery_available:
             raise RuntimeError(
                 self._tr(
                     "common.dynamic.control_discovery_provider_not_supported",
@@ -8319,18 +8087,30 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if not self._shadow_learning_route_accepts_control(coordinator):
             raise RuntimeError("shadow_learning_session_not_ready")
 
-        if provider == "valuecloud":
-            identity, result, read_bindings = await self._async_execute_valuecloud_control_discovery(
-                coordinator,
-                username=username,
-                password=password,
-            )
-        else:
-            identity, result, read_bindings = await self._async_execute_smartess_control_discovery(
-                coordinator,
-                username=username,
-                password=password,
-            )
+        # The active provider owns login/fetch/parse/action/orchestrate; the flow
+        # passes progress + observation callbacks and updates its own UI state via
+        # the identity/learning hooks. It imports no provider HTTP client.
+        observation_source = self._shadow_learning_observation_source(coordinator)
+        runner = provider_impl.control_discovery_runner()
+        outcome = await runner.async_run(
+            executor=self.hass.async_add_executor_job,
+            collector_pn=str(coordinator.smartess_collector_pn or ""),
+            username=username,
+            password=password,
+            fallback_identity=self._shadow_learning_cloud_identity(coordinator),
+            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
+            progress=self._set_control_discovery_progress,
+            orchestrator_callbacks=self._shadow_learning_orchestrator_callbacks(
+                coordinator, observation_source
+            ),
+            on_identity=lambda identity: self._on_control_discovery_identity(
+                coordinator, identity
+            ),
+            on_learning=self._on_control_discovery_learning,
+        )
+        identity = outcome.identity
+        result = outcome.result
+        read_bindings = outcome.read_bindings
 
         self._shadow_learning_state["orchestration"] = result
         plan = result.get("plan") if isinstance(result, dict) else None
@@ -8444,171 +8224,19 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             }
         return None
 
-    async def _async_execute_smartess_control_discovery(
-        self,
-        coordinator,
-        *,
-        username: str,
-        password: str,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
-        """Execute SmartESS-specific cloud control discovery."""
+    def _on_control_discovery_identity(self, coordinator, identity: dict[str, Any]) -> None:
+        """Record the resolved cloud identity + publish artifacts (flow UI state)."""
 
-        self._set_control_discovery_progress(0.18, "fetching")
-        cloud_bundle = await self.hass.async_add_executor_job(
-            lambda: fetch_device_bundle_for_collector(
-                username=username,
-                password=password,
-                collector_pn=str(coordinator.smartess_collector_pn or ""),
-            )
-        )
-        identity = (
-            self._shadow_learning_cloud_identity_from_bundle(cloud_bundle)
-            or self._shadow_learning_cloud_identity(coordinator)
-        )
-        if identity is None:
-            raise RuntimeError("shadow_learning_identity_unavailable")
         self._shadow_learning_state["identity"] = identity
         self._publish_shadow_learning_artifacts(coordinator)
 
-        _login_envelope, cloud_session = await self.hass.async_add_executor_job(
-            lambda: login_with_password(username=username, password=password)
-        )
-        settings_dat = self._shadow_learning_settings_dat_from_bundle(cloud_bundle)
-        if settings_dat is None:
-            settings_envelope = await self.hass.async_add_executor_job(
-                lambda: fetch_signed_action(
-                    action=build_device_settings_action(
-                        pn=identity["pn"],
-                        sn=identity["sn"],
-                        devcode=identity["devcode"],
-                        devaddr=identity["devaddr"],
-                    ),
-                    session=SessionCredentials(
-                        token=cloud_session.token,
-                        secret=cloud_session.secret,
-                        uid=cloud_session.uid,
-                        usr=cloud_session.usr,
-                        role=cloud_session.role,
-                        expire=cloud_session.expire,
-                    ),
-                ),
-            )
-            settings_dat = settings_envelope.dat
+    def _on_control_discovery_learning(self) -> None:
+        """Mark the shadow session as learning (flow UI state)."""
 
-        observation_source = self._shadow_learning_observation_source(coordinator)
         self._shadow_learning_state["session"] = {
             **dict(self._shadow_learning_state.get("session") or {}),
             "status": "learning",
         }
-        self._set_control_discovery_progress(0.30, "testing")
-        result = await async_orchestrate_shadow_learning_settings(
-            settings_dat=settings_dat,
-            session=cloud_session,
-            pn=identity["pn"],
-            sn=identity["sn"],
-            devcode=identity["devcode"],
-            devaddr=identity["devaddr"],
-            dry_run=False,
-            confirm_cloud_write=True,
-            shadow_session_state="ready",
-            field_ids=[],
-            include_numeric=True,
-            all_choice_values=True,
-            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
-            continue_on_error=True,
-            delay_seconds=0.0,
-            **self._shadow_learning_orchestrator_callbacks(coordinator, observation_source),
-        )
-
-        read_map = result.get("read_map")
-        read_bindings: dict[str, Any] | None = None
-        if isinstance(read_map, dict) and read_map.get("registers"):
-            read_bindings = await self._async_bind_session_read_labels(
-                cloud_session=cloud_session,
-                identity=identity,
-                read_map=read_map,
-            )
-            if read_bindings:
-                self._shadow_learning_state["read_bindings"] = read_bindings
-        return identity, result, read_bindings
-
-    async def _async_execute_valuecloud_control_discovery(
-        self,
-        coordinator,
-        *,
-        username: str,
-        password: str,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
-        """Execute ValueCloud-specific cloud control discovery."""
-
-        self._set_control_discovery_progress(0.18, "fetching")
-        _login_envelope, cloud_session = await self.hass.async_add_executor_job(
-            lambda: valuecloud_cloud_module.login_with_password(
-                username=username,
-                password=password,
-            )
-        )
-        cloud_bundle = await self.hass.async_add_executor_job(
-            lambda: valuecloud_cloud_module.fetch_device_bundle_for_collector_with_session(
-                session=cloud_session,
-                collector_pn=str(coordinator.smartess_collector_pn or ""),
-            )
-        )
-        identity = (
-            self._shadow_learning_cloud_identity_from_bundle(cloud_bundle)
-            or self._shadow_learning_cloud_identity(coordinator)
-        )
-        if identity is None:
-            raise RuntimeError("shadow_learning_identity_unavailable")
-        self._shadow_learning_state["identity"] = identity
-        self._publish_shadow_learning_artifacts(coordinator)
-
-        normalized = cloud_bundle.get("normalized") if isinstance(cloud_bundle, dict) else None
-        batch_control = (
-            normalized.get("batch_control")
-            if isinstance(normalized, dict) and isinstance(normalized.get("batch_control"), dict)
-            else None
-        )
-        control_strategy = (
-            normalized.get("control_strategy")
-            if isinstance(normalized, dict) and isinstance(normalized.get("control_strategy"), dict)
-            else None
-        )
-        device_ctrl = (
-            normalized.get("device_ctrl")
-            if isinstance(normalized, dict) and isinstance(normalized.get("device_ctrl"), dict)
-            else None
-        )
-        if not isinstance(batch_control, dict) and not isinstance(control_strategy, dict) and not isinstance(device_ctrl, dict):
-            raise RuntimeError("valuecloud_batch_control_unavailable")
-
-        observation_source = self._shadow_learning_observation_source(coordinator)
-        self._shadow_learning_state["session"] = {
-            **dict(self._shadow_learning_state.get("session") or {}),
-            "status": "learning",
-        }
-        self._set_control_discovery_progress(0.30, "testing")
-        result = await async_orchestrate_valuecloud_shadow_learning(
-            batch_control=batch_control,
-            control_strategy=control_strategy,
-            device_ctrl=device_ctrl,
-            session=cloud_session,
-            pn=identity["pn"],
-            sn=identity["sn"],
-            devcode=identity["devcode"],
-            devaddr=identity["devaddr"],
-            dry_run=False,
-            confirm_cloud_write=True,
-            shadow_session_state="ready",
-            field_ids=[],
-            include_numeric=True,
-            all_choice_values=True,
-            max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
-            continue_on_error=True,
-            delay_seconds=0.0,
-            **self._shadow_learning_orchestrator_callbacks(coordinator, observation_source),
-        )
-        return identity, result, None
 
     def _shadow_learning_orchestrator_callbacks(self, coordinator, observation_source) -> dict[str, Any]:
         """Return shared shadow-observation callbacks for provider runners."""
@@ -8651,48 +8279,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             "on_progress": _on_test_progress,
         }
-
-    async def _async_bind_session_read_labels(
-        self,
-        *,
-        cloud_session: SessionCredentials,
-        identity: dict[str, Any],
-        read_map: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        """Correlate the cloud's labeled sensors against the session read map."""
-
-        registers = read_map.get("registers")
-        if not isinstance(registers, dict) or not registers:
-            return None
-        # The whole correlation is best-effort: the caller treats read-label
-        # binding as supplemental, so NOTHING here (cloud fetch, parsing, or the
-        # value-correlation binder) may fail the discovery run after the probe
-        # sweep already succeeded.
-        try:
-            envelope = await self.hass.async_add_executor_job(
-                lambda: fetch_signed_action(
-                    action=build_device_detail_action(
-                        pn=str(identity.get("pn") or ""),
-                        sn=str(identity.get("sn") or ""),
-                        devcode=int(identity.get("devcode") or 0),
-                        devaddr=int(identity.get("devaddr") or 1),
-                    ),
-                    session=cloud_session,
-                )
-            )
-            dat = envelope.dat if isinstance(envelope.dat, dict) else {}
-            pars = dat.get("pars") if isinstance(dat.get("pars"), dict) else {}
-            sensors: list[dict[str, Any]] = []
-            for items in pars.values():
-                if isinstance(items, list):
-                    sensors.extend(item for item in items if isinstance(item, dict))
-            if not sensors:
-                return None
-            report = bind_cloud_labels_to_registers(sensors=sensors, registers=registers)
-            return report.to_json_dict()
-        except Exception as exc:
-            logger.debug("Read-label binding failed during learning session: %s", exc)
-            return None
 
     async def _async_generate_control_discovery_overlay(
         self,
@@ -9746,17 +9332,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
     @staticmethod
     def _control_discovery_cloud_provider(coordinator) -> str:
-        provider = str(getattr(coordinator, "cloud_evidence_provider", "") or "").strip().lower()
-        if provider:
-            return provider
-        family = str(getattr(coordinator, "collector_cloud_family", "") or "").strip().lower()
-        if "value" in family:
-            return "valuecloud"
-        if "smartess" in family:
-            return "smartess"
-        # Historical entries only had the SmartESS-specific cloud-learning
-        # implementation, so unknown legacy entries keep the previous behavior.
-        return "smartess"
+        # The coordinator resolves cloud family through the catalog.  The flow
+        # consumes that resolved provider id verbatim: no substring heuristic
+        # and no legacy SmartESS default may become a second policy authority.
+        return str(
+            getattr(coordinator, "cloud_evidence_provider", "") or ""
+        ).strip().lower()
 
     def _control_discovery_cloud_provider_label(self, coordinator) -> str:
         provider = self._control_discovery_cloud_provider(coordinator)
@@ -9901,22 +9482,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             return None
         return {"field": [dict(item) for item in fields if isinstance(item, dict)]}
 
-    def _shadow_learning_settings_dat_from_bundle(
-        self, bundle: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        """Return raw SmartESS settings dat from a live device bundle."""
-
-        if not isinstance(bundle, dict):
-            return None
-        responses = bundle.get("responses")
-        if not isinstance(responses, dict):
-            return None
-        settings = responses.get("device_settings")
-        if not isinstance(settings, dict):
-            return None
-        dat = settings.get("dat")
-        return dict(dat) if isinstance(dat, dict) else None
-
     def _shadow_learning_cloud_identity(self, coordinator) -> dict[str, Any] | None:
         record = self._cached_cloud_evidence_record(coordinator)
         if record is None:
@@ -9942,32 +9507,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if callable(latest):
             return latest()
         return None
-
-    def _shadow_learning_cloud_identity_from_bundle(
-        self, bundle: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        """Return pn/sn/devcode/devaddr from a live SmartESS device bundle."""
-
-        if not isinstance(bundle, dict):
-            return None
-        request = bundle.get("request")
-        if not isinstance(request, dict):
-            return None
-        params = request.get("params")
-        if not isinstance(params, dict):
-            return None
-        pn = str(params.get("pn") or "").strip()
-        sn = str(params.get("sn") or "").strip()
-        devcode = _coerce_int(params.get("devcode"))
-        devaddr = _coerce_int(params.get("devaddr"))
-        if not pn or not sn or devcode is None or devaddr is None:
-            return None
-        return {
-            "pn": pn,
-            "sn": sn,
-            "devcode": devcode,
-            "devaddr": devaddr,
-        }
 
     def _shadow_learning_observed_writes(self, coordinator) -> tuple[Any, ...]:
         handler = self._shadow_learning_observation_source(coordinator)

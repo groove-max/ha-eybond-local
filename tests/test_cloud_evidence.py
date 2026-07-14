@@ -12,13 +12,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+from custom_components.eybond_local.support import cloud_evidence_providers as providers
 from custom_components.eybond_local.support.cloud_evidence import (
     build_cloud_evidence_payload,
     export_cloud_evidence,
-    fetch_and_export_device_bundle_cloud_evidence,
     fetch_and_export_smartess_device_bundle_cloud_evidence,
     fetch_and_export_valuecloud_device_bundle_cloud_evidence,
+    infer_evidence_provider,
     load_latest_cloud_evidence,
+)
+from custom_components.eybond_local.support.cloud_evidence_providers import (
+    CloudEvidenceContext,
+    resolve_cloud_evidence_provider,
 )
 
 
@@ -236,24 +241,175 @@ class CloudEvidenceTests(unittest.TestCase):
             self.assertEqual(record.payload["summary"]["parameter_field_count"], 7)
             self.assertEqual(record.payload["summary"]["optional_action_error_count"], 1)
 
-    def test_generic_fetch_and_export_dispatches_valuecloud(self) -> None:
+    def test_registry_is_single_provider_selection_authority(self) -> None:
+        # The provider-string dispatcher is gone; the registry selects the
+        # provider and only ValueCloud's fetch runs for a ValueCloud context.
+        context = CloudEvidenceContext(
+            config_dir=Path("/tmp"), entry_id="e", collector_pn="A0000000000001"
+        )
+        with patch.object(
+            providers, "fetch_and_export_valuecloud_device_bundle_cloud_evidence",
+            return_value="sentinel",
+        ) as vc_fetch, patch.object(
+            providers, "fetch_and_export_smartess_device_bundle_cloud_evidence",
+        ) as smartess_fetch:
+            out = resolve_cloud_evidence_provider("valuecloud").export(
+                context, username="test-user", password="secret"
+            )
+        self.assertEqual(out, "sentinel")
+        vc_fetch.assert_called_once()
+        smartess_fetch.assert_not_called()
+
+
+class EvidenceProvenanceTests(unittest.TestCase):
+    def test_new_records_carry_explicit_provider(self) -> None:
+        payload = build_cloud_evidence_payload(
+            source="x", payload={}, provider="smartess"
+        )
+        self.assertEqual(payload["provider"], "smartess")
+        self.assertEqual(infer_evidence_provider(payload), "smartess")
+
+    def test_legacy_source_prefix_inference(self) -> None:
+        # An old record with no explicit provider is still readable via source.
+        self.assertEqual(
+            infer_evidence_provider({"source": "smartess_cloud_diagnostics"}), "smartess"
+        )
+        self.assertEqual(
+            infer_evidence_provider({"source": "valuecloud_cloud_diagnostics"}), "valuecloud"
+        )
+        self.assertEqual(
+            infer_evidence_provider({"summary": {"provider": "valuecloud"}}), "valuecloud"
+        )
+
+    def test_unknown_provenance_is_empty(self) -> None:
+        self.assertEqual(infer_evidence_provider({"source": "mystery"}), "")
+        self.assertEqual(infer_evidence_provider({}), "")
+
+    def test_explicit_provider_is_strictly_authoritative(self) -> None:
+        # A tampered/contradictory record: explicit provider "unknown" must NOT
+        # fall back to the smartess source prefix.
+        self.assertEqual(
+            infer_evidence_provider(
+                {"provider": "unknown", "source": "smartess_cloud_diagnostics"}
+            ),
+            "",
+        )
+        # Present-but-empty explicit provider also fails closed, no fallback.
+        self.assertEqual(
+            infer_evidence_provider(
+                {"provider": "", "source": "smartess_cloud_diagnostics"}
+            ),
+            "",
+        )
+        # A known explicit provider wins over a contradictory source.
+        self.assertEqual(
+            infer_evidence_provider(
+                {"provider": "valuecloud", "source": "smartess_cloud_diagnostics"}
+            ),
+            "valuecloud",
+        )
+
+    def test_summary_provider_only_when_top_level_absent(self) -> None:
+        # Legacy record: no top-level provider key -> summary marker is used.
+        self.assertEqual(
+            infer_evidence_provider({"summary": {"provider": "smartess"}}), "smartess"
+        )
+        # Summary marker present-but-unknown fails closed (no source fallback).
+        self.assertEqual(
+            infer_evidence_provider(
+                {"summary": {"provider": "unknown"}, "source": "smartess_cloud_diagnostics"}
+            ),
+            "",
+        )
+
+    def test_provider_scoped_load_refuses_foreign_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_dir = Path(temp_dir)
-            with patch(
-                "custom_components.eybond_local.support.cloud_evidence.fetch_and_export_valuecloud_device_bundle_cloud_evidence",
-                return_value="sentinel",
-            ) as fetch:
-                record = fetch_and_export_device_bundle_cloud_evidence(
-                    provider="valuecloud",
-                    config_dir=config_dir,
-                    username="test-user",
-                    password="secret",
-                    collector_pn="A0000000000001",
-                    source="valuecloud_cloud_diagnostics",
-                )
+            # Both providers export evidence for the SAME entry/PN.
+            smartess = build_cloud_evidence_payload(
+                source="smartess_cloud_diagnostics", payload={}, provider="smartess",
+                entry_id="entry-1", collector_pn="A0000000000001",
+            )
+            valuecloud = build_cloud_evidence_payload(
+                source="valuecloud_cloud_diagnostics", payload={}, provider="valuecloud",
+                entry_id="entry-1", collector_pn="A0000000000001",
+            )
+            export_cloud_evidence(config_dir=config_dir, evidence=smartess)
+            export_cloud_evidence(config_dir=config_dir, evidence=valuecloud)
 
-            self.assertEqual(record, "sentinel")
-            fetch.assert_called_once()
+            smartess_record = load_latest_cloud_evidence(
+                config_dir, entry_id="entry-1", collector_pn="A0000000000001",
+                provider="smartess",
+            )
+            valuecloud_record = load_latest_cloud_evidence(
+                config_dir, entry_id="entry-1", collector_pn="A0000000000001",
+                provider="valuecloud",
+            )
+            # Each provider gets ONLY its own record -- no cross-provider leak.
+            self.assertIsNotNone(smartess_record)
+            self.assertEqual(infer_evidence_provider(smartess_record.payload), "smartess")
+            self.assertIsNotNone(valuecloud_record)
+            self.assertEqual(infer_evidence_provider(valuecloud_record.payload), "valuecloud")
+
+    def test_unknown_provenance_load_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            mystery = build_cloud_evidence_payload(
+                source="mystery_source", payload={},
+                entry_id="entry-1", collector_pn="A0000000000001",
+            )
+            export_cloud_evidence(config_dir=config_dir, evidence=mystery)
+            self.assertIsNone(
+                load_latest_cloud_evidence(
+                    config_dir, entry_id="entry-1", collector_pn="A0000000000001",
+                    provider="smartess",
+                )
+            )
+
+    def test_unknown_provenance_export_does_not_prune_known_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            known = build_cloud_evidence_payload(
+                source="smartess_cloud_diagnostics",
+                payload={},
+                provider="smartess",
+                entry_id="entry-1",
+                collector_pn="A0000000000001",
+            )
+            known_path = export_cloud_evidence(config_dir=config_dir, evidence=known)
+            mystery = build_cloud_evidence_payload(
+                source="mystery_source",
+                payload={},
+                entry_id="entry-1",
+                collector_pn="A0000000000001",
+            )
+            export_cloud_evidence(config_dir=config_dir, evidence=mystery)
+            self.assertTrue(known_path.exists())
+            self.assertIsNotNone(
+                load_latest_cloud_evidence(
+                    config_dir,
+                    entry_id="entry-1",
+                    collector_pn="A0000000000001",
+                    provider="smartess",
+                )
+            )
+
+    def test_provider_load_latest_is_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            export_cloud_evidence(
+                config_dir=config_dir,
+                evidence=build_cloud_evidence_payload(
+                    source="valuecloud_cloud_diagnostics", payload={}, provider="valuecloud",
+                    entry_id="entry-1", collector_pn="A0000000000001",
+                ),
+            )
+            context = CloudEvidenceContext(
+                config_dir=config_dir, entry_id="entry-1", collector_pn="A0000000000001"
+            )
+            # SmartESS provider refuses the ValueCloud record; ValueCloud accepts it.
+            self.assertIsNone(resolve_cloud_evidence_provider("smartess").load_latest(context))
+            self.assertIsNotNone(resolve_cloud_evidence_provider("valuecloud").load_latest(context))
 
 
 if __name__ == "__main__":

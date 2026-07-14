@@ -147,5 +147,31 @@ class DriverPollPolicyContractTests(unittest.TestCase):
             )
 
 
+class VariantSerialStabilityTests(unittest.TestCase):
+    """The 'family has no stable serial' rule is driver/model policy, not runtime.
+
+    The registry only DISPATCHES to the owning driver; it holds no variant set.
+    """
+
+    def test_smartess_0925_family_has_no_stable_serial(self) -> None:
+        inverter = types.SimpleNamespace(variant_key="smartess_0925")
+        self.assertFalse(registry.serial_is_stable("smartess_local", inverter))
+
+    def test_non_0925_smartess_variant_has_stable_serial(self) -> None:
+        inverter = types.SimpleNamespace(variant_key="smartess_0912")
+        self.assertTrue(registry.serial_is_stable("smartess_local", inverter))
+
+    def test_other_drivers_default_stable(self) -> None:
+        for driver_key in ("modbus_smg", "pi30", "", "unknown_driver"):
+            self.assertTrue(
+                registry.serial_is_stable(driver_key, types.SimpleNamespace(variant_key=""))
+            )
+
+    def test_registry_holds_no_variant_literal(self) -> None:
+        import inspect
+
+        self.assertNotIn("smartess_0925", inspect.getsource(registry))
+
+
 if __name__ == "__main__":
     unittest.main()

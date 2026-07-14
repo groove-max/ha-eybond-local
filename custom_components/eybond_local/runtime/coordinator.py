@@ -157,16 +157,8 @@ from ..metadata.register_schema_loader import (
     load_register_schema,
 )
 from ..naming import collector_display_name
-from ..metadata.smartess_draft import (
-    SmartEssKnownFamilyDraftPlan,
-    create_smartess_known_family_draft,
-    resolve_smartess_known_family_draft_plan,
-)
-from ..metadata.smartess_smg_bridge import (
-    SmartEssSmgBridgePlan,
-    create_smartess_smg_bridge_draft,
-    resolve_smartess_smg_bridge_plan,
-)
+from ..metadata.smartess_draft import SmartEssKnownFamilyDraftPlan
+from ..metadata.smartess_smg_bridge import SmartEssSmgBridgePlan
 from ..models import (
     CapabilityPreset,
     DetectedInverter,
@@ -177,7 +169,7 @@ from ..models import (
 from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
-from ..drivers.registry import poll_policy_for_driver_key
+from ..drivers.registry import poll_policy_for_driver_key, serial_is_stable
 from .poll_scheduler import PollDecision, PollScheduler, clamp_interval, normalize_poll_mode
 from ..schema import (
     build_runtime_ui_schema,
@@ -185,9 +177,12 @@ from ..schema import (
     preset_write_exposure_allowed,
 )
 from ..support.bundle import build_support_bundle_payload, export_support_bundle
-from ..support.cloud_evidence import (
-    fetch_and_export_device_bundle_cloud_evidence,
-    load_latest_cloud_evidence,
+from ..support.cloud_evidence_providers import (
+    DRAFT_KIND_KNOWN_FAMILY,
+    DRAFT_KIND_SMG_BRIDGE,
+    CloudEvidenceContext,
+    cloud_evidence_provider_supported,
+    resolve_cloud_evidence_provider,
 )
 from ..support.collector_registry import (
     get_collector_registry_record,
@@ -965,6 +960,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._tooling_values: dict[str, Any] = {}
         self._cached_smartess_cloud_evidence_record = None
         self._cached_smartess_cloud_evidence_warmed = False
+        # The provider the cached record belongs to; a runtime provider change
+        # makes the cache stale so it is never reused for the new provider.
+        self._cached_cloud_evidence_provider = ""
         self._cached_effective_metadata = None
         self._cached_proxy_capture_session_state = None
         self._cached_shadow_learning_session_state = None
@@ -2744,7 +2742,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 updated_data[CONF_DETECTED_SERIAL] = detected_serial
             if (
                 not detected_serial
-                and variant_key == "smartess_0925"
+                and not serial_is_stable(driver_key, inverter)
                 and str(updated_data.get(CONF_DETECTED_SERIAL) or "").strip()
             ):
                 updated_data[CONF_DETECTED_SERIAL] = ""
@@ -6057,27 +6055,95 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     @property
     def smartess_cloud_export_available(self) -> bool:
-        """Return whether SmartESS cloud export can be attempted for this entry."""
+        """Return whether SmartESS cloud export can be attempted for this entry.
 
-        return (
-            bool(self.smartess_collector_pn)
-            and resolve_collector_cloud_provider(self.collector_cloud_family) == "smartess"
-        )
+        Backward-compatible SmartESS-named surface (config-flow reads it). Derived
+        from the neutral contract -- no provider request/interpretation policy.
+        """
+
+        return self.cloud_evidence_provider == "smartess" and self.cloud_evidence_export_available
 
     @property
     def cloud_evidence_provider(self) -> str:
-        """Return the account/cloud provider used for support cloud evidence."""
+        """Return the account/cloud provider used for support cloud evidence.
+
+        Provider RESOLUTION (cloud family -> provider id) is catalog-driven and
+        provider-neutral; the coordinator only reads the resolved id.
+        """
 
         return resolve_collector_cloud_provider(self.collector_cloud_family)
 
     @property
     def cloud_evidence_export_available(self) -> bool:
-        """Return whether provider-specific cloud evidence can be attempted."""
+        """Return whether provider-specific cloud evidence can be attempted.
 
-        return bool(self.smartess_collector_pn) and self.cloud_evidence_provider in {
-            "smartess",
-            "valuecloud",
-        }
+        Asks the neutral provider REGISTRY whether the resolved provider is
+        supported (no hardcoded allow-list in the coordinator) and a collector PN
+        is available. Deliberately lightweight -- it never resolves effective
+        metadata, so it is safe to call from sync config-flow form rendering.
+        """
+
+        return bool(self.smartess_collector_pn) and cloud_evidence_provider_supported(
+            self.cloud_evidence_provider
+        )
+
+    def _cloud_evidence_provider_impl(self):
+        """Return the neutral cloud-evidence provider implementation (registry)."""
+
+        return resolve_cloud_evidence_provider(self.cloud_evidence_provider)
+
+    def _cloud_evidence_context(self) -> CloudEvidenceContext:
+        """Assemble the neutral cloud-evidence context from live runtime/config state.
+
+        A bag of already-resolved DATA the active provider may read; the
+        coordinator interprets none of it. No peer IP / hostname / collector kind.
+        """
+
+        hass = getattr(self, "hass", None)
+        config = getattr(hass, "config", None)
+        # ``config_dir`` is only consumed by export/draft (which always have a live
+        # hass); a resolve-only path (draft-plan property) may run without one.
+        config_dir = Path(str(getattr(config, "config_dir", "") or "."))
+        collector = getattr(self.data, "collector", None)
+        entry_data = getattr(self.config_entry, "data", {}) or {}
+        # Gather the explicit protocol hints (data, not policy) once, here, so the
+        # provider receives normalized fields instead of the raw collector /
+        # config-entry mapping.
+        protocol_asset_id = str(
+            getattr(collector, "smartess_protocol_asset_id", "")
+            or entry_data.get(CONF_SMARTESS_PROTOCOL_ASSET_ID, "")
+            or ""
+        ).strip()
+        protocol_profile_key = str(
+            getattr(collector, "smartess_protocol_profile_key", "")
+            or entry_data.get(CONF_SMARTESS_PROFILE_KEY, "")
+            or ""
+        ).strip()
+        return CloudEvidenceContext(
+            config_dir=config_dir,
+            entry_id=self.config_entry.entry_id,
+            collector_pn=self.smartess_collector_pn,
+            protocol_asset_id=protocol_asset_id,
+            protocol_profile_key=protocol_profile_key,
+            effective_owner_key=self.effective_owner_key,
+            effective_profile_name=self.effective_profile_name,
+            effective_register_schema_name=self.effective_register_schema_name,
+            effective_profile_path=str(
+                getattr(self.effective_profile_metadata, "source_path", "") or ""
+            ),
+            effective_register_schema_path=str(
+                getattr(self.effective_register_schema_metadata, "source_path", "") or ""
+            ),
+        )
+
+    def _cloud_evidence_draft_candidate(self, kind: str):
+        """Return the neutral draft candidate of one kind, or None."""
+
+        return self._cloud_evidence_provider_impl().draft_candidate(
+            self._cloud_evidence_context(),
+            self._latest_smartess_cloud_evidence_record(),
+            kind,
+        )
 
     @property
     def smartess_cloud_evidence_path(self) -> str:
@@ -6627,35 +6693,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     @property
     def smartess_known_family_draft_plan(self) -> SmartEssKnownFamilyDraftPlan | None:
-        """Return one safe SmartESS known-family draft plan when available."""
+        """Return one safe SmartESS known-family draft plan when available.
 
-        collector = self.data.collector
-        record = self._latest_smartess_cloud_evidence_record()
-        return resolve_smartess_known_family_draft_plan(
-            smartess_protocol_asset_id=(
-                getattr(collector, "smartess_protocol_asset_id", "")
-                or str(self.config_entry.data.get(CONF_SMARTESS_PROTOCOL_ASSET_ID, "") or "")
-            ),
-            smartess_profile_key=(
-                getattr(collector, "smartess_protocol_profile_key", "")
-                or str(self.config_entry.data.get(CONF_SMARTESS_PROFILE_KEY, "") or "")
-            ),
-            cloud_evidence=record.payload if record is not None else None,
-        )
+        Backward-compatible SmartESS-named surface; the plan is RESOLVED behind
+        the provider contract (which owns the SmartESS asset-field gathering).
+        """
+
+        candidate = self._cloud_evidence_draft_candidate(DRAFT_KIND_KNOWN_FAMILY)
+        return candidate.plan if candidate is not None else None
 
     @property
     def smartess_smg_bridge_plan(self) -> SmartEssSmgBridgePlan | None:
-        """Return one safe SmartESS-backed SMG bridge plan when available."""
+        """Return one safe SmartESS-backed SMG bridge plan when available.
 
-        record = self._latest_smartess_cloud_evidence_record()
-        return resolve_smartess_smg_bridge_plan(
-            effective_owner_key=self.effective_owner_key,
-            source_profile_name=self.effective_profile_name,
-            source_schema_name=self.effective_register_schema_name,
-            source_profile_path=str(getattr(self.effective_profile_metadata, "source_path", "") or ""),
-            source_schema_path=str(getattr(self.effective_register_schema_metadata, "source_path", "") or ""),
-            cloud_evidence=record.payload if record is not None else None,
-        )
+        The SMG/model decision lives entirely in the SmartESS provider +
+        ``metadata/smartess_smg_bridge``; the coordinator only reads the result.
+        """
+
+        candidate = self._cloud_evidence_draft_candidate(DRAFT_KIND_SMG_BRIDGE)
+        return candidate.plan if candidate is not None else None
 
     async def async_export_smartess_cloud_evidence(
         self,
@@ -6663,7 +6719,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         username: str,
         password: str,
     ) -> str:
-        """Fetch and persist one SmartESS cloud-evidence bundle for this entry."""
+        """Fetch and persist one SmartESS cloud-evidence bundle for this entry.
+
+        Backward-compatible SmartESS-named entry point; delegates to the neutral
+        export after asserting the SmartESS provider is active.
+        """
 
         if self.cloud_evidence_provider != "smartess":
             raise RuntimeError(
@@ -6680,36 +6740,44 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         username: str,
         password: str,
     ) -> str:
-        """Fetch and persist one provider-specific cloud-evidence bundle for this entry."""
+        """Fetch and persist one provider-specific cloud-evidence bundle for this entry.
 
-        collector_pn = self.smartess_collector_pn
-        if not collector_pn:
+        The coordinator owns only HA orchestration (executor job, cache, notify);
+        WHICH provider and HOW it fetches live entirely behind the neutral
+        contract. Credentials are ephemeral arguments -- never cached or logged.
+        """
+
+        context = self._cloud_evidence_context()
+        if not context.collector_pn:
             raise RuntimeError("cloud_evidence_collector_pn_not_available")
-        provider = self.cloud_evidence_provider
-        if provider not in {"smartess", "valuecloud"}:
-            raise RuntimeError(f"cloud_evidence_provider_not_supported:{provider or 'unknown'}")
+        # Capture the provider impl + its id + context BEFORE the await: the
+        # active cloud family may change while the executor job runs, so the
+        # cache must be stamped with the FETCHING provider (never a re-read
+        # dynamic value). If the active provider changed by the time this
+        # completes, ``_latest_..._record`` sees the mismatch and the result
+        # stays invisible to the new provider (and to support bundles).
+        provider = self._cloud_evidence_provider_impl()
+        provider_id = provider.provider_id
+        if not provider.export_available(context):
+            raise RuntimeError(
+                f"cloud_evidence_provider_not_supported:{self.cloud_evidence_provider or 'unknown'}"
+            )
 
         record = await self.hass.async_add_executor_job(
-            lambda: fetch_and_export_device_bundle_cloud_evidence(
-                provider=provider,
-                config_dir=Path(self.hass.config.config_dir),
-                username=username,
-                password=password,
-                collector_pn=collector_pn,
-                source=f"{provider}_cloud_diagnostics",
-                entry_id=self.config_entry.entry_id,
-            )
+            lambda: provider.export(context, username=username, password=password)
         )
         self._cached_smartess_cloud_evidence_record = record
+        self._cached_cloud_evidence_provider = provider_id
         self._cached_smartess_cloud_evidence_warmed = True
-        self._publish_tooling_values(
-            cloud_evidence_path=str(record.path),
-            local_metadata_status=(
-                "SmartESS cloud evidence exported"
-                if provider == "smartess"
-                else "Cloud evidence exported"
-            ),
-        )
+        # The export belongs to the provider captured before the await.  If
+        # live detection changed provider in the meantime, retain the correctly
+        # stamped (and therefore hidden) cache but do not publish its path/status
+        # as tooling state for the newly active provider.
+        if self.cloud_evidence_provider == provider_id:
+            self._publish_tooling_values(
+                cloud_evidence_path=str(record.path),
+                local_metadata_status=provider.export_status_label,
+            )
         return str(record.path)
 
     async def async_export_support_bundle(self) -> str:
@@ -7125,28 +7193,37 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         await self.hass.config_entries.async_reload(self.config_entry.entry_id)
         return tuple(str(path) for path in removed_paths)
 
-    async def async_create_smartess_known_family_draft_named(
+    async def _async_create_cloud_evidence_draft(
         self,
-        output_profile_name: str | None = None,
-        output_schema_name: str | None = None,
+        kind: str,
+        output_profile_name: str | None,
+        output_schema_name: str | None,
         *,
-        overwrite: bool = True,
+        overwrite: bool,
+        missing_plan_error: str,
+        status: str,
     ) -> tuple[str, str]:
-        """Create local profile/schema drafts from latest SmartESS known-family evidence."""
+        """Create one local draft pair from the active provider's candidate.
+
+        The coordinator owns only HA orchestration (executor + tooling values);
+        the draft DECISION (known-family / SMG bridge / model rules) lives behind
+        the provider contract.
+        """
 
         record = self._latest_smartess_cloud_evidence_record()
         if record is None:
             raise RuntimeError("smartess_cloud_evidence_not_available")
-
-        plan = self.smartess_known_family_draft_plan
-        if plan is None:
-            raise RuntimeError("smartess_known_family_not_resolved")
+        provider = self._cloud_evidence_provider_impl()
+        context = self._cloud_evidence_context()
+        candidate = provider.draft_candidate(context, record, kind)
+        if candidate is None:
+            raise RuntimeError(missing_plan_error)
 
         profile_path, schema_path = await self.hass.async_add_executor_job(
-            lambda: create_smartess_known_family_draft(
-                config_dir=Path(self.hass.config.config_dir),
-                plan=plan,
-                cloud_evidence=record.payload,
+            lambda: provider.create_draft(
+                context,
+                record,
+                candidate,
                 output_profile_name=output_profile_name,
                 output_schema_name=output_schema_name,
                 overwrite=overwrite,
@@ -7156,9 +7233,27 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             cloud_evidence_path=str(record.path),
             local_profile_draft_path=str(profile_path),
             local_schema_draft_path=str(schema_path),
-            local_metadata_status="SmartESS local draft created",
+            local_metadata_status=status,
         )
         return str(profile_path), str(schema_path)
+
+    async def async_create_smartess_known_family_draft_named(
+        self,
+        output_profile_name: str | None = None,
+        output_schema_name: str | None = None,
+        *,
+        overwrite: bool = True,
+    ) -> tuple[str, str]:
+        """Create local profile/schema drafts from latest SmartESS known-family evidence."""
+
+        return await self._async_create_cloud_evidence_draft(
+            DRAFT_KIND_KNOWN_FAMILY,
+            output_profile_name,
+            output_schema_name,
+            overwrite=overwrite,
+            missing_plan_error="smartess_known_family_not_resolved",
+            status="SmartESS local draft created",
+        )
 
     async def async_create_smartess_smg_bridge_named(
         self,
@@ -7169,62 +7264,58 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> tuple[str, str]:
         """Create one SmartESS-backed SMG bridge draft pair."""
 
-        record = self._latest_smartess_cloud_evidence_record()
-        if record is None:
-            raise RuntimeError("smartess_cloud_evidence_not_available")
-
-        plan = self.smartess_smg_bridge_plan
-        if plan is None:
-            raise RuntimeError("smartess_smg_bridge_not_resolved")
-
-        profile_path, schema_path = await self.hass.async_add_executor_job(
-            lambda: create_smartess_smg_bridge_draft(
-                config_dir=Path(self.hass.config.config_dir),
-                plan=plan,
-                cloud_evidence=record.payload,
-                output_profile_name=output_profile_name,
-                output_schema_name=output_schema_name,
-                overwrite=overwrite,
-            )
+        return await self._async_create_cloud_evidence_draft(
+            DRAFT_KIND_SMG_BRIDGE,
+            output_profile_name,
+            output_schema_name,
+            overwrite=overwrite,
+            missing_plan_error="smartess_smg_bridge_not_resolved",
+            status="SmartESS SMG bridge created",
         )
-        self._publish_tooling_values(
-            cloud_evidence_path=str(record.path),
-            local_profile_draft_path=str(profile_path),
-            local_schema_draft_path=str(schema_path),
-            local_metadata_status="SmartESS SMG bridge created",
-        )
-        return str(profile_path), str(schema_path)
 
     def _latest_smartess_cloud_evidence_record(self):
-        """Return the latest SmartESS cloud-evidence record for this entry.
+        """Return the cached cloud-evidence record OWNED BY THE ACTIVE PROVIDER.
 
-        Reads from the in-memory cache populated by ``_async_warm_smartess_cloud_evidence_cache``
-        and the export helpers. Sync callers (config-flow form rendering, sync
-        properties) get a cached value without doing blocking disk IO on the
-        event loop.
+        Reads from the in-memory cache populated by the warm/export helpers. If
+        the active provider changed since the cache was populated, the cached
+        record belongs to the previous provider and is ignored (a fresh warm will
+        repopulate it), so one provider's evidence never leaks to another.
         """
 
+        if self._cached_cloud_evidence_provider != self.cloud_evidence_provider:
+            return None
         return self._cached_smartess_cloud_evidence_record
 
     def _load_latest_smartess_cloud_evidence_record_blocking(self):
-        """Return the latest SmartESS cloud-evidence record by reading disk.
+        """Return the latest evidence record via the ACTIVE PROVIDER (executor-only).
 
-        Must only be called from an executor thread (or a sync test path).
+        Routes through the provider contract so provenance validation + provider
+        scoping happen in one place; the coordinator never reads the disk loader
+        directly. Resolves the provider at call time -- use only for a synchronous
+        read; the async warm path binds the provider up-front to avoid a race.
         """
 
-        return load_latest_cloud_evidence(
-            Path(self.hass.config.config_dir),
-            entry_id=self.config_entry.entry_id,
-            collector_pn=self.smartess_collector_pn,
+        return self._cloud_evidence_provider_impl().load_latest(
+            self._cloud_evidence_context()
         )
 
     async def _async_warm_smartess_cloud_evidence_cache(self) -> None:
-        """Refresh the cached SmartESS cloud-evidence record from disk."""
+        """Refresh the cached cloud-evidence record from disk via the provider.
 
+        The provider impl + id + context are captured BEFORE the executor await so
+        the record that is cached is the one THIS provider loaded, stamped with
+        THIS provider's id -- a mid-flight active-provider change cannot make it
+        visible to the new provider.
+        """
+
+        provider = self._cloud_evidence_provider_impl()
+        provider_id = provider.provider_id
+        context = self._cloud_evidence_context()
         record = await self.hass.async_add_executor_job(
-            self._load_latest_smartess_cloud_evidence_record_blocking
+            lambda: provider.load_latest(context)
         )
         self._cached_smartess_cloud_evidence_record = record
+        self._cached_cloud_evidence_provider = provider_id
         self._cached_smartess_cloud_evidence_warmed = True
 
     def _warm_effective_metadata_cache_blocking(self):

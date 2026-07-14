@@ -227,6 +227,12 @@ def _install_coordinator_stubs() -> None:
             str(driver_key or "").strip(), _DEFAULT_POLL_POLICY
         )
     )
+    drivers_registry.serial_is_stable = (
+        lambda driver_key="", inverter=None: str(
+            getattr(inverter, "variant_key", "") or ""
+        ).strip()
+        != "smartess_0925"
+    )
 
     fixtures_utils = _ensure_module("custom_components.eybond_local.fixtures.utils")
     fixtures_utils.anonymize_fixture_json = lambda *args, **kwargs: None
@@ -379,13 +385,25 @@ def _install_coordinator_stubs() -> None:
     support_bundle.export_support_bundle = lambda *args, **kwargs: None
 
     support_cloud = _ensure_module("custom_components.eybond_local.support.cloud_evidence")
-    support_cloud.fetch_and_export_device_bundle_cloud_evidence = (
-        lambda *args, **kwargs: None
+    support_cloud.infer_evidence_provider = lambda payload: (
+        str((payload or {}).get("provider") or "").strip().lower()
+        if isinstance(payload, dict)
+        else ""
     )
     support_cloud.fetch_and_export_smartess_device_bundle_cloud_evidence = (
         lambda *args, **kwargs: None
     )
+    support_cloud.fetch_and_export_valuecloud_device_bundle_cloud_evidence = (
+        lambda *args, **kwargs: None
+    )
     support_cloud.load_latest_cloud_evidence = lambda *args, **kwargs: None
+
+    class _CloudEvidenceRecord:  # minimal stand-in for the neutral provider module
+        def __init__(self, path="", payload=None) -> None:
+            self.path = path
+            self.payload = payload
+
+    support_cloud.CloudEvidenceRecord = _CloudEvidenceRecord
 
     support_package = _ensure_module("custom_components.eybond_local.support.package")
     support_package.export_support_package = lambda *args, **kwargs: None
@@ -875,6 +893,124 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(coordinator.cloud_evidence_provider, "")
         self.assertFalse(coordinator.cloud_evidence_export_available)
+
+    def test_cached_evidence_ignored_when_active_provider_changes(self) -> None:
+        # The active provider is SmartESS, but the cached record was loaded for
+        # ValueCloud: the cache is ignored so one provider's evidence never leaks
+        # (also what keeps a support bundle from embedding foreign evidence).
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_pn": "E5000020000000", "collector_cloud_family": "smartess_at"},
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={})
+        cached_record = types.SimpleNamespace(path="/x.json", payload={"provider": "valuecloud"})
+        coordinator._cached_smartess_cloud_evidence_record = cached_record
+        coordinator._cached_cloud_evidence_provider = "valuecloud"
+
+        self.assertEqual(coordinator.cloud_evidence_provider, "smartess")
+        # Stale (foreign-provider) cache -> not returned.
+        self.assertIsNone(coordinator._latest_smartess_cloud_evidence_record())
+
+        # Once the cache belongs to the active provider it is returned again.
+        coordinator._cached_cloud_evidence_provider = "smartess"
+        self.assertIs(coordinator._latest_smartess_cloud_evidence_record(), cached_record)
+
+    def test_warm_cache_race_stamps_fetching_provider_not_reread(self) -> None:
+        # The active cloud family changes WHILE the (SmartESS) load runs: the
+        # cache must be stamped with the fetching provider so the result stays
+        # invisible to the new provider (no re-read of a dynamic value).
+        async def _run() -> None:
+            from custom_components.eybond_local.support.cloud_evidence_providers import (
+                CloudEvidenceContext,
+            )
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"collector_pn": "E1", "collector_cloud_family": "smartess_at"},
+                options={},
+            )
+            coordinator.data = self.RuntimeSnapshot(values={})
+            coordinator._cached_smartess_cloud_evidence_record = None
+            coordinator._cached_cloud_evidence_provider = ""
+            coordinator._cached_smartess_cloud_evidence_warmed = False
+
+            record = types.SimpleNamespace(path="/x.json", payload={"provider": "smartess"})
+
+            def _load_latest(_context):
+                coordinator.config_entry.data["collector_cloud_family"] = "valuecloud_at"
+                return record
+
+            coordinator._cloud_evidence_provider_impl = lambda: types.SimpleNamespace(
+                provider_id="smartess", load_latest=_load_latest
+            )
+            coordinator._cloud_evidence_context = lambda: CloudEvidenceContext(
+                config_dir=Path("."), entry_id="e", collector_pn="E1"
+            )
+
+            async def _executor(fn, *args):
+                return fn(*args)
+
+            coordinator.hass = types.SimpleNamespace(async_add_executor_job=_executor)
+
+            await coordinator._async_warm_smartess_cloud_evidence_cache()
+
+            self.assertEqual(coordinator._cached_cloud_evidence_provider, "smartess")
+            self.assertIs(coordinator._cached_smartess_cloud_evidence_record, record)
+            self.assertEqual(coordinator.cloud_evidence_provider, "valuecloud")
+            self.assertIsNone(coordinator._latest_smartess_cloud_evidence_record())
+
+        asyncio.run(_run())
+
+    def test_export_provider_change_does_not_publish_foreign_tooling_path(self) -> None:
+        async def _run() -> None:
+            from custom_components.eybond_local.support.cloud_evidence_providers import (
+                CloudEvidenceContext,
+            )
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={"collector_pn": "E1", "collector_cloud_family": "smartess_at"},
+                options={},
+            )
+            coordinator.data = self.RuntimeSnapshot(values={})
+            coordinator._cached_smartess_cloud_evidence_record = None
+            coordinator._cached_cloud_evidence_provider = ""
+            coordinator._cached_smartess_cloud_evidence_warmed = False
+            published: list[dict[str, object]] = []
+            record = types.SimpleNamespace(path="/smartess.json", payload={"provider": "smartess"})
+
+            def _export(_context, *, username, password):
+                coordinator.config_entry.data["collector_cloud_family"] = "valuecloud_at"
+                return record
+
+            provider = types.SimpleNamespace(
+                provider_id="smartess",
+                export_available=lambda _context: True,
+                export=_export,
+                export_status_label="SmartESS cloud evidence exported",
+            )
+            coordinator._cloud_evidence_provider_impl = lambda: provider
+            coordinator._cloud_evidence_context = lambda: CloudEvidenceContext(
+                config_dir=Path("."), entry_id="e", collector_pn="E1"
+            )
+            coordinator._publish_tooling_values = lambda **kwargs: published.append(kwargs)
+
+            async def _executor(fn, *args):
+                return fn(*args)
+
+            coordinator.hass = types.SimpleNamespace(async_add_executor_job=_executor)
+            result = await coordinator.async_export_cloud_evidence(
+                username="u", password="p"
+            )
+
+            self.assertEqual(result, "/smartess.json")
+            self.assertEqual(coordinator._cached_cloud_evidence_provider, "smartess")
+            self.assertEqual(coordinator.cloud_evidence_provider, "valuecloud")
+            self.assertIsNone(coordinator._latest_smartess_cloud_evidence_record())
+            self.assertEqual(published, [])
+
+        asyncio.run(_run())
 
     def test_diagnostic_waits_for_in_progress_runtime_refresh(self) -> None:
         async def _run() -> None:

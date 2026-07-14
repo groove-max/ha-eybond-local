@@ -214,6 +214,7 @@ _install_homeassistant_stubs()
 
 
 import custom_components.eybond_local.config_flow as config_flow_module
+import custom_components.eybond_local.support.cloud_control_discovery as cloud_control_discovery_module
 from custom_components.eybond_local.config_flow import (
     BLE_ACTION_APPLY,
     BLE_ACTION_RESCAN,
@@ -5276,7 +5277,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
             flow._smartess_cloud_assist_mode = "auto"
             with patch(
-                "custom_components.eybond_local.config_flow.fetch_and_export_smartess_device_bundle_cloud_evidence",
+                "custom_components.eybond_local.support.cloud_evidence_providers.fetch_and_export_smartess_device_bundle_cloud_evidence",
                 return_value=CloudEvidenceRecord(
                     path=Path("/config/eybond_local/cloud_evidence/onboarding.json"),
                     payload=evidence,
@@ -8110,7 +8111,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             fetch_kwargs["return_value"] = bundle
         return (
             patch.object(
-                config_flow_module,
+                cloud_control_discovery_module,
                 "login_with_password",
                 return_value=(
                     object(),
@@ -8124,9 +8125,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     ),
                 ),
             ),
-            patch.object(config_flow_module, "fetch_device_bundle_for_collector", **fetch_kwargs),
             patch.object(
-                config_flow_module,
+                cloud_control_discovery_module,
+                "fetch_device_bundle_for_collector",
+                **fetch_kwargs,
+            ),
+            patch.object(
+                cloud_control_discovery_module,
                 "async_orchestrate_shadow_learning_settings",
                 side_effect=lambda **kwargs: captured.update(kwargs) or dict(orchestration),
             ),
@@ -8222,17 +8227,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             orchestrate_p as smartess_orchestrate_mock,
             overlay_p as overlay_mock,
             patch.object(
-                config_flow_module.valuecloud_cloud_module,
+                cloud_control_discovery_module.valuecloud_cloud_module,
                 "login_with_password",
                 return_value=(object(), valuecloud_session),
             ) as valuecloud_login_mock,
             patch.object(
-                config_flow_module.valuecloud_cloud_module,
+                cloud_control_discovery_module.valuecloud_cloud_module,
                 "fetch_device_bundle_for_collector_with_session",
                 return_value=valuecloud_bundle,
             ) as valuecloud_fetch_mock,
             patch.object(
-                config_flow_module,
+                cloud_control_discovery_module,
                 "async_orchestrate_valuecloud_shadow_learning",
                 side_effect=lambda **kwargs: captured.update(kwargs)
                 or {

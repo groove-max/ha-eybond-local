@@ -62,6 +62,17 @@ class SmartEssLocalDriver(InverterDriver):
     signature_timeout = 4.0
     probe_targets = _SMARTESS_0925_PROBE_TARGETS
 
+    def serial_is_stable(self, inverter=None) -> bool:
+        """The SmartESS 0925 family exposes no stable device serial.
+
+        A serial read from a 0925 device must never be persisted as the entry's
+        detected serial. Non-0925 variants served by this driver keep the neutral
+        default (stable).
+        """
+
+        variant_key = str(getattr(inverter, "variant_key", "") or "").strip()
+        return variant_key != SMARTESS_LOCAL_0925_VARIANT
+
     @property
     def measurements(self):
         schema = self.register_schema_metadata

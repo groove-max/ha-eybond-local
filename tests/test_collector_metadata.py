@@ -460,11 +460,12 @@ class IdentityAwareCacheTests(unittest.TestCase):
     def test_short_to_full_pn_enrichment_preserves_cache(self) -> None:
         async def _run():
             service = CollectorMetadataService()
-            # Short PN (>= 10 chars) that is a prefix of the fuller PN read later.
-            r1 = _routeset(framed=_framed_route(_reader({"x": 1})), identity="V0012340000")
+            # Synthetic short PN (exactly the 10-char prefix-match minimum) that is
+            # a prefix of the fuller allowlisted synthetic PN read later.
+            r1 = _routeset(framed=_framed_route(_reader({"x": 1})), identity="V000000000")
             await service.async_refresh(r1, poll_interval=10.0)
             short_identity = service.identity
-            r2 = _routeset(framed=_framed_route(_reader({"x": 2})), identity="V00123400009999")
+            r2 = _routeset(framed=_framed_route(_reader({"x": 2})), identity="V0000000000001")
             result = await service.async_refresh(r2, poll_interval=10.0)
             return short_identity, service.identity, result.merged_values
 
