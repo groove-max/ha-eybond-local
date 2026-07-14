@@ -789,6 +789,56 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator._suppress_entry_reload_count, 0)
         self.assertFalse(coordinator.consume_entry_reload_suppression())
 
+    def test_legacy_metadata_channel_migrates_out_of_driver_option(self) -> None:
+        # A legacy entry persisted the AT-metadata dead-channel verdict inside the
+        # driver negative-cache option under a ``collector:`` namespace. It must
+        # migrate into the dedicated metadata option and leave the driver option.
+        entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={},
+            options={
+                "driver_unsupported_commands": ["GLINE", "collector:at_metadata"],
+                "driver_unsupported_commands_version": 2,
+            },
+        )
+        updates: list[dict[str, object]] = []
+
+        def _async_update_entry(config_entry, **kwargs) -> bool:
+            updates.append(dict(kwargs))
+            if "options" in kwargs:
+                config_entry.options = dict(kwargs["options"])
+            return True
+
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry),
+        )
+
+        coordinator = self.coordinator_module.EybondLocalCoordinator(hass, entry)
+
+        # The runtime reports the migrated dead channel from its OWN health store
+        # (a stub here; the real hub split is covered in test_hub).
+        coordinator._runtime = types.SimpleNamespace(
+            collector_metadata_dead_channels=lambda: ("collector:at_metadata",)
+        )
+
+        # The one-time option rewrite happens on the first persist pass: the
+        # legacy ``collector:`` key leaves the driver option and lands in the
+        # dedicated metadata option.
+        coordinator._maybe_persist_metadata_dead_channels()
+        self.assertEqual(entry.options.get("driver_unsupported_commands"), ["GLINE"])
+        self.assertEqual(
+            entry.options.get("collector_metadata_dead_channels"),
+            ["collector:at_metadata"],
+        )
+        self.assertEqual(
+            entry.options.get("collector_metadata_dead_channels_version"), 1
+        )
+
+        # Idempotent: a settled entry produces no further write.
+        updates.clear()
+        coordinator._maybe_persist_metadata_dead_channels()
+        self.assertEqual(updates, [])
+
     def test_smartess_cloud_export_available_keeps_smartess_profiles(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(

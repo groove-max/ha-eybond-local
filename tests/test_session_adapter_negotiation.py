@@ -117,6 +117,7 @@ def _bare_link(
     link._auxiliary_listener_ports = set()
     link._runtime_claim_pn = None
     link._confirmed_wire_binding = None
+    link._owned_session_generation = 0
     link._session_registry = CallbackSessionRegistry(
         sessions_source=link._iter_observed_sessions,
     )
@@ -1637,6 +1638,150 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
         self.assertEqual(
             at_link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS
         )
+
+
+class CollectorMetadataRouteAuthorityTests(unittest.TestCase):
+    """The metadata-route facade is decided by trusted session evidence only."""
+
+    def test_framed_live_session_routes_framed_metadata_only(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[
+                _observed(
+                    "s1", FULL_PN, state="routed_framed",
+                    shape="eybond_framed_or_binary", source="framed_heartbeat",
+                )
+            ],
+        )
+        routes = link.collector_metadata_routes()
+        self.assertIsNotNone(routes.framed)
+        # A framed wire reads param 6 in its normal sweep -> no separate bootstrap
+        # channel (the bootstrap probe exists only for an AT-shaped ESP bridge).
+        self.assertIsNone(routes.bootstrap)
+        self.assertEqual(routes.provenance, "live")
+        # Ownership anchor is the CLAIMED session id, never the peer IP: the route
+        # carries the registry-claimed session id ("s1"), not "203.0.113.9".
+        self.assertEqual(routes.session_id, "s1")
+        self.assertEqual(routes.framed.session_id, "s1")
+        self.assertFalse(hasattr(routes.framed, "peer_ip"))
+
+    def test_at_text_live_session_routes_at_and_bootstrap(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="eybond_framed",
+            sessions=[
+                _observed("s2", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn")
+            ],
+        )
+        routes = link.collector_metadata_routes()
+        self.assertIsNone(routes.framed)
+        self.assertIsNotNone(routes.at)
+        self.assertIsNotNone(routes.bootstrap)
+        self.assertEqual(routes.provenance, "live")
+
+    def test_conflicting_live_session_routes_no_metadata_channels(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="at_text",
+            sessions=[
+                _observed(
+                    "s1", FULL_PN, state="routed_at_text",
+                    shape="eybond_framed", source="at_dtupn",
+                )
+            ],
+        )
+        routes = link.collector_metadata_routes()
+        self.assertIsNone(routes.framed)
+        self.assertIsNone(routes.at)
+        self.assertIsNone(routes.bootstrap)
+        self.assertEqual(routes.provenance, "conflict")
+
+    def test_configured_ip_without_claim_offers_no_bootstrap_route(self) -> None:
+        # A configured collector target is a CONNECTION address, not ownership
+        # evidence: with no registry-claimed session it yields NO metadata route.
+        link = _bare_link(
+            collector_pn="",
+            collector_ip="192.0.2.10",
+            persisted_protocol="",
+            sessions=[],
+        )
+        link._transport.connected = False
+        link._at_transport.connected = False
+        self.assertFalse(link._collector_bootstrap_claimable())
+        routes = link.collector_metadata_routes()
+        self.assertIsNone(routes.bootstrap)
+        self.assertFalse(routes.has_any_channel)
+
+    def test_claimed_session_offers_bootstrap_route(self) -> None:
+        # Registry ownership (a claimed session id) IS the bootstrap authority.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="192.0.2.10",
+            persisted_protocol="",
+            sessions=[],
+        )
+        link._transport.connected = False
+        link._at_transport.connected = False
+        link._claimed_session_id = lambda: "listener-18899-7"  # registry-owned
+        self.assertTrue(link._collector_bootstrap_claimable())
+        routes = link.collector_metadata_routes()
+        self.assertIsNotNone(routes.bootstrap)
+        self.assertEqual(routes.provenance, "bootstrap_claimable")
+        self.assertEqual(routes.session_id, "listener-18899-7")
+        self.assertEqual(routes.identity, FULL_PN)
+
+    def test_ambiguous_pn_less_sessions_fail_closed(self) -> None:
+        # Two unidentified sessions at one peer IP: the registry produces no
+        # claimed session id (it never picks the first), so no metadata route.
+        link = _bare_link(
+            collector_pn="",
+            collector_ip="192.0.2.10",
+            persisted_protocol="",
+            sessions=[
+                _observed("s1", "", peer_ip="203.0.113.9", state="parked_waiting_for_identity"),
+                _observed("s2", "", peer_ip="203.0.113.9", state="parked_waiting_for_identity"),
+            ],
+        )
+        link._transport.connected = False
+        link._at_transport.connected = False
+        self.assertEqual(link._claimed_session_id(), "")
+        self.assertFalse(link._collector_bootstrap_claimable())
+        self.assertFalse(link.collector_metadata_routes().has_any_channel)
+
+    def test_foreign_pn_is_not_this_entrys_claim(self) -> None:
+        # A strong foreign PN session is never this entry's claimed session, so it
+        # never yields a bootstrap route for this entry.
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="192.0.2.10",
+            persisted_protocol="",
+            sessions=[
+                _observed("s-foreign", OTHER_FULL_PN, state="routed_at_text", source="at_dtupn"),
+            ],
+        )
+        link._transport.connected = False
+        link._at_transport.connected = False
+        self.assertEqual(link._claimed_session_id(), "")
+        self.assertFalse(link.collector_metadata_routes().has_any_channel)
+
+    def test_collector_only_without_claim_offers_nothing(self) -> None:
+        link = _bare_link(
+            collector_pn="",
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[],
+        )
+        link._transport.connected = False
+        link._at_transport.connected = False
+        routes = link.collector_metadata_routes()
+        self.assertIsNone(routes.framed)
+        self.assertIsNone(routes.at)
+        self.assertIsNone(routes.bootstrap)
+        self.assertFalse(routes.has_any_channel)
 
 
 if __name__ == "__main__":

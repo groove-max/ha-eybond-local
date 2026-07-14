@@ -41,12 +41,71 @@ class _FakeLinkManager:
         )
         self.transport = object()
         self.collector_at_transport = None
+        # Stand-in for the configured collector target the real link uses to gate
+        # a disconnected collector-only bootstrap read. Non-empty by default (the
+        # base fake is used connected, so it is irrelevant there); the ambiguous
+        # link fake blanks it to model an unconfigured collector.
+        self.configured_collector_ip = "192.168.1.14"
 
     async def async_try_connect(self, *, timeout: float, require_heartbeat: bool = False) -> bool:
         if require_heartbeat and not self.heartbeat_result:
             return False
         self.connected = True
         return self.connected
+
+    def collector_metadata_routes(self):
+        """Reproduce the pre-service transport selection for characterization.
+
+        The real link decides metadata routes from trusted session evidence; this
+        test fake preserves the historical hasattr/collector_ip gating so the hub
+        characterization tests still exercise the exact same channel selection.
+        """
+
+        from custom_components.eybond_local.collector.metadata import (
+            build_collector_metadata_routes,
+        )
+
+        missing = object()
+        collector_ip = str(getattr(self, "configured_collector_ip", "") or "").strip()
+        active_transport = getattr(self, "active_transport", missing)
+        if active_transport is missing:
+            transport = self.transport if self.connected else None
+        else:
+            transport = active_transport
+            if transport is None and not self.connected and collector_ip:
+                transport = getattr(self, "transport", None)
+        active_at = getattr(self, "active_collector_at_transport", missing)
+        if active_at is missing:
+            at_transport = getattr(self, "collector_at_transport", None)
+        else:
+            at_transport = active_at
+            if at_transport is None and not self.connected and collector_ip:
+                at_transport = getattr(self, "collector_at_transport", None)
+        allow_disconnected = (
+            at_transport is not None and not self.connected and bool(collector_ip)
+        )
+        fc_ok = transport is not None and hasattr(transport, "async_send_collector")
+        at_usable = at_transport is not None and (
+            getattr(at_transport, "connected", False) or allow_disconnected
+        )
+        framed = transport if fc_ok else None
+        at = at_transport if at_usable else None
+        bootstrap = (
+            at_transport
+            if (
+                not fc_ok
+                and at_usable
+                and hasattr(at_transport, "async_query_bridge_hardware_version")
+            )
+            else None
+        )
+        return build_collector_metadata_routes(
+            framed_transport=framed,
+            at_transport=at,
+            bootstrap_transport=bootstrap,
+            generation=int(getattr(self, "owned_session_generation", 0) or 0),
+            provenance="live" if self.connected else "bootstrap_claimable",
+        )
 
     async def async_ensure_connected(
         self,
@@ -503,6 +562,9 @@ class _AmbiguousActiveLinkManager(_FakeLinkManager):
         self.collector_at_transport = at_transport
         self.active_transport = None
         self.active_collector_at_transport = None
+        # No configured collector target: the disconnected collector-only read is
+        # not allowed, so an ambiguous inactive session yields no metadata reads.
+        self.configured_collector_ip = ""
 
     async def async_try_connect(self, *, timeout: float, require_heartbeat: bool = False) -> bool:
         return False
@@ -2120,22 +2182,25 @@ class HubWriteBlockerTests(unittest.TestCase):
                 ),
             )
 
-            class _DeadAtTransport:
+            # Dead-channel truth (Phase-4 semantics): a channel becomes dead when
+            # it DELIVERS commands over a live link yet answers with no metadata
+            # (blank values), NOT when it times out (that is a transport error).
+            class _EmptyAnsweringAtTransport:
                 connected = True
 
                 def __init__(self) -> None:
-                    self.queries = 0
+                    self.sweeps = 0
+                    self._pending = False
 
                 async def async_query(self, command: str):
-                    self.queries += 1
-                    raise asyncio.TimeoutError()
+                    if not self._pending:
+                        self.sweeps += 1
+                        self._pending = True
+                    if command == "INTPARA49":  # last command in the sweep
+                        self._pending = False
+                    return CollectorAtResponse(command=command, value="", raw=f"AT+{command}:")
 
-            from custom_components.eybond_local.drivers.command_support import (
-                commit_cycle_failures,
-                record_command_success,
-            )
-
-            at_transport = _DeadAtTransport()
+            at_transport = _EmptyAnsweringAtTransport()
             link = _FakeLinkManager()
             link.collector_at_transport = at_transport
             link.transport = _CollectorQueryTransport(
@@ -2144,30 +2209,27 @@ class HubWriteBlockerTests(unittest.TestCase):
             hub._link_manager = link
 
             for _ in range(4):
-                # Force each attempt through the cadence gate, emulate a
-                # cycle where the framed side answered, and commit.
+                # Force each attempt through the cadence gate.
                 hub._collector_at_runtime_last_attempt_monotonic = -1000.0
                 hub._collector_runtime_last_refresh_monotonic = -1000.0
                 await hub._async_read_collector_runtime_values(poll_interval=10.0)
-                record_command_success(hub._runtime_read_state, "collector:fc_metadata")
-                commit_cycle_failures(hub._runtime_read_state)
 
-            learned_queries = at_transport.queries
-            self.assertGreaterEqual(learned_queries, 4)
+            learned_sweeps = at_transport.sweeps
+            self.assertGreaterEqual(learned_sweeps, 4)
 
-            # Next attempt: the channel verdict blocks the sweep entirely,
-            # even with the cadence forced open.
+            # Dead: the channel verdict blocks the sweep entirely, even with the
+            # cadence forced open.
             hub._collector_at_runtime_last_attempt_monotonic = -1000.0
             hub._collector_runtime_last_refresh_monotonic = -1000.0
             await hub._async_read_collector_runtime_values(poll_interval=10.0)
-            self.assertEqual(at_transport.queries, learned_queries)
+            self.assertEqual(at_transport.sweeps, learned_sweeps)
 
             # The re-check path clears the verdict and probes again.
             hub.clear_unsupported_command_cache()
             hub._collector_at_runtime_last_attempt_monotonic = -1000.0
             hub._collector_runtime_last_refresh_monotonic = -1000.0
             await hub._async_read_collector_runtime_values(poll_interval=10.0)
-            self.assertEqual(at_transport.queries, learned_queries + 1)
+            self.assertEqual(at_transport.sweeps, learned_sweeps + 1)
 
         asyncio.run(_run())
 
@@ -2204,6 +2266,45 @@ class HubWriteBlockerTests(unittest.TestCase):
         self.assertFalse(
             command_skipped_as_unsupported(hub._runtime_read_state, "QPIWS")
         )
+
+    def _metadata_hub(self) -> "EybondHub":
+        return EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+
+    def test_persistent_unsupported_commands_filter_out_metadata_channels(self) -> None:
+        from custom_components.eybond_local.drivers.command_support import (
+            command_skipped_as_unsupported,
+        )
+
+        hub = self._metadata_hub()
+        hub.set_persistent_unsupported_commands(("QPIWS", "collector:at_metadata"))
+        # The driver negative cache gets the real command but NOT the metadata key.
+        self.assertTrue(command_skipped_as_unsupported(hub._runtime_read_state, "QPIWS"))
+        self.assertFalse(
+            command_skipped_as_unsupported(hub._runtime_read_state, "collector:at_metadata")
+        )
+
+    def test_metadata_dead_channels_seed_and_revive(self) -> None:
+        hub = self._metadata_hub()
+        hub.set_persistent_metadata_dead_channels(("collector:at_metadata",))
+        self.assertEqual(
+            hub.collector_metadata_dead_channels(), ("collector:at_metadata",)
+        )
+        self.assertTrue(hub._collector_metadata_service.at_channel_disabled())
+        # The re-check action revives the metadata channel (separate store).
+        hub.clear_unsupported_command_cache()
+        self.assertEqual(hub.collector_metadata_dead_channels(), ())
+        self.assertFalse(hub._collector_metadata_service.at_channel_disabled())
 
     def test_async_refresh_keeps_bound_inverter_offline_when_framed_link_is_missing(self) -> None:
         async def _run() -> None:

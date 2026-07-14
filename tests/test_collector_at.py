@@ -131,7 +131,7 @@ class CollectorAtTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_runtime_query_never_sends_vdtu_from_family_hint(self) -> None:
+    def test_runtime_query_never_sends_vdtu(self) -> None:
         class _Transport:
             commands: list[str]
 
@@ -145,11 +145,10 @@ class CollectorAtTests(unittest.TestCase):
                 return parse_at_response(f"AT+{command}:")
 
         async def _run() -> None:
+            # The AT reader takes no cloud-family argument: the sweep is a fixed
+            # read-only set and cloud family never selects a command.
             transport = _Transport()
-            values = await query_runtime_collector_at_values(
-                transport,
-                collector_cloud_family="valuecloud_at",
-            )
+            values = await query_runtime_collector_at_values(transport)
 
             self.assertNotIn("VDTU", transport.commands)
 

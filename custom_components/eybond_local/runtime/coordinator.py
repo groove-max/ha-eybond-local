@@ -264,6 +264,15 @@ _EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY = "effective_metadata_snapshot"
 _UNSUPPORTED_COMMANDS_OPTION_KEY = "driver_unsupported_commands"
 _UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY = "driver_unsupported_commands_version"
 _UNSUPPORTED_COMMANDS_OPTION_VERSION = 2
+# Collector-metadata dead channels persist SEPARATELY from the driver's
+# unsupported-command set: a metadata channel being unanswered is a fact about
+# the collector metadata surface, not the inverter command set.
+_METADATA_DEAD_CHANNELS_OPTION_KEY = "collector_metadata_dead_channels"
+_METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY = "collector_metadata_dead_channels_version"
+_METADATA_DEAD_CHANNELS_OPTION_VERSION = 1
+# Legacy: metadata channel verdicts used to ride the driver negative cache under
+# a ``collector:`` namespace. Migrated out on load (idempotent).
+_LEGACY_METADATA_CHANNEL_PREFIX = "collector:"
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
 _POLL_INTERVAL_MIN_SECONDS = 2
 _POLL_INTERVAL_MAX_SECONDS = 3600
@@ -888,7 +897,45 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             and persisted_unsupported_version == _UNSUPPORTED_COMMANDS_OPTION_VERSION
             and isinstance(persisted_unsupported, (list, tuple))
         ):
+            # The runtime filters ``collector:`` keys out of the driver table.
             set_unsupported(tuple(persisted_unsupported))
+        # Metadata dead channels seed from the dedicated option AND (one-time
+        # migration) any legacy ``collector:`` keys still riding the driver
+        # option. The option REWRITE that strips them from the driver table +
+        # writes the dedicated option happens on the first persist cycle
+        # (``_maybe_persist_metadata_dead_channels``) so no entry write races the
+        # coordinator constructor.
+        set_dead_channels = getattr(
+            self._runtime,
+            "set_persistent_metadata_dead_channels",
+            None,
+        )
+        if callable(set_dead_channels):
+            dead_channels: set[str] = set()
+            persisted_dead_channels = entry.options.get(_METADATA_DEAD_CHANNELS_OPTION_KEY)
+            persisted_dead_channels_version = entry.options.get(
+                _METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY
+            )
+            if (
+                persisted_dead_channels_version == _METADATA_DEAD_CHANNELS_OPTION_VERSION
+                and isinstance(persisted_dead_channels, (list, tuple))
+            ):
+                dead_channels.update(
+                    str(channel).strip()
+                    for channel in persisted_dead_channels
+                    if str(channel).strip()
+                )
+            if (
+                persisted_unsupported_version == _UNSUPPORTED_COMMANDS_OPTION_VERSION
+                and isinstance(persisted_unsupported, (list, tuple))
+            ):
+                dead_channels.update(
+                    str(channel).strip()
+                    for channel in persisted_unsupported
+                    if str(channel).strip().startswith(_LEGACY_METADATA_CHANNEL_PREFIX)
+                )
+            if dead_channels:
+                set_dead_channels(tuple(sorted(dead_channels)))
         super().__init__(
             hass,
             logger,
@@ -3119,6 +3166,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 scheduler_mode=decision.mode,
             )
             self._maybe_persist_unsupported_commands(snapshot)
+            self._maybe_persist_metadata_dead_channels()
             return snapshot
 
     def _configured_poll_interval_seconds(self) -> int:
@@ -3733,8 +3781,78 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             ", ".join(commands),
         )
 
+    def _maybe_persist_metadata_dead_channels(self) -> None:
+        """Persist the metadata dead-channel set + migrate legacy driver keys.
+
+        The dead set is read from the runtime (its own metadata health store),
+        NOT from the driver negative cache. The same pass performs the one-time
+        legacy migration: any ``collector:`` key still riding the driver option
+        is stripped from it. Idempotent -- a settled entry produces no write.
+        """
+
+        runtime = getattr(self, "_runtime", None)
+        getter = getattr(runtime, "collector_metadata_dead_channels", None)
+        if not callable(getter):
+            return
+        try:
+            current = sorted(
+                {str(channel).strip() for channel in getter() if str(channel).strip()}
+            )
+        except Exception:  # pragma: no cover - defensive
+            return
+
+        options = dict(self.config_entry.options)
+        changed = False
+
+        # One-time migration: strip legacy ``collector:`` keys out of the driver
+        # negative cache option so metadata verdicts stop riding it.
+        stored_driver = options.get(_UNSUPPORTED_COMMANDS_OPTION_KEY)
+        if isinstance(stored_driver, (list, tuple)):
+            kept = [
+                key
+                for key in (str(command).strip() for command in stored_driver)
+                if key and not key.startswith(_LEGACY_METADATA_CHANNEL_PREFIX)
+            ]
+            had = [key for key in (str(c).strip() for c in stored_driver) if key]
+            if len(kept) != len(had):
+                options[_UNSUPPORTED_COMMANDS_OPTION_KEY] = kept
+                changed = True
+
+        stored_meta = options.get(_METADATA_DEAD_CHANNELS_OPTION_KEY)
+        stored_meta_version = options.get(_METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY)
+        already = (
+            stored_meta_version == _METADATA_DEAD_CHANNELS_OPTION_VERSION
+            and isinstance(stored_meta, (list, tuple))
+            and sorted(str(c).strip() for c in stored_meta if str(c).strip()) == current
+        )
+        if not already:
+            if current:
+                options[_METADATA_DEAD_CHANNELS_OPTION_KEY] = current
+                options[_METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY] = (
+                    _METADATA_DEAD_CHANNELS_OPTION_VERSION
+                )
+                changed = True
+            elif (
+                _METADATA_DEAD_CHANNELS_OPTION_KEY in options
+                or _METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY in options
+            ):
+                options.pop(_METADATA_DEAD_CHANNELS_OPTION_KEY, None)
+                options.pop(_METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY, None)
+                changed = True
+
+        if changed:
+            self._async_update_entry_without_reload(options=options)
+            logger.info(
+                "Persisted collector metadata dead channels for this device: %s",
+                ", ".join(current) or "(none)",
+            )
+
     async def async_recheck_supported_commands(self) -> None:
-        """Forget the learned unsupported-command set and re-probe everything."""
+        """Forget the learned unsupported-command set and re-probe everything.
+
+        Clears BOTH the inverter command negative cache and the metadata channel
+        health (their separate stores), and removes both persisted options.
+        """
 
         clear_cache = getattr(self._runtime, "clear_unsupported_command_cache", None)
         if callable(clear_cache):
@@ -3744,7 +3862,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         removed_version = (
             options.pop(_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY, None) is not None
         )
-        if removed_commands or removed_version:
+        removed_meta = options.pop(_METADATA_DEAD_CHANNELS_OPTION_KEY, None) is not None
+        removed_meta_version = (
+            options.pop(_METADATA_DEAD_CHANNELS_OPTION_VERSION_KEY, None) is not None
+        )
+        if removed_commands or removed_version or removed_meta or removed_meta_version:
             self._async_update_entry_without_reload(options=options)
         await self.async_request_refresh()
 

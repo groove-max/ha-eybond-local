@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Protocol
 
 from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
+from .collector_wire import CollectorWireError
+from .metadata_result import (
+    OUTCOME_COMMAND_ERROR,
+    OUTCOME_EMPTY,
+    OUTCOME_PARTIAL,
+    OUTCOME_SUCCESS,
+    OUTCOME_TRANSPORT_ERROR,
+    CollectorMetadataChannelReadResult,
+)
 from .signal import merge_collector_signal_values, normalize_signal_strength
-from .smartess_local import CollectorQueryResponse, SmartEssLocalSession, resolve_protocol_descriptor
+from .smartess_local import CollectorQueryResponse, resolve_protocol_descriptor
+
+# Delivery failures (link unusable) vs. a malformed response (command error) vs.
+# a well-formed unsupported parameter (skipped): only the last two are collector
+# facts; a delivery failure is a link fact.
+_FRAMED_TRANSPORT_FAILURES = (
+    asyncio.TimeoutError,
+    TimeoutError,
+    OSError,
+    ConnectionError,
+    EOFError,
+    asyncio.IncompleteReadError,
+    asyncio.LimitOverrunError,
+)
+
+
+class CollectorMetadataQuerySession(Protocol):
+    """Minimal provider-neutral FC=2 read contract used by metadata polling."""
+
+    async def query_collector(self, *parameters: int) -> CollectorQueryResponse:
+        ...
+
+
+def _framed_decoded_has_metadata(decoded: dict[str, object]) -> bool:
+    return any(str(value).strip() != "" for value in decoded.values())
 
 
 CollectorValueDecoder = Callable[[CollectorQueryResponse], dict[str, object]]
@@ -157,24 +191,89 @@ RUNTIME_COLLECTOR_PARAMETERS: tuple[CollectorParameterDefinition, ...] = tuple(
 )
 
 
-async def query_runtime_collector_values(
-    session: SmartEssLocalSession,
+async def read_runtime_collector_values(
+    session: CollectorMetadataQuerySession,
     *,
     parameters: tuple[CollectorParameterDefinition, ...] = RUNTIME_COLLECTOR_PARAMETERS,
-) -> dict[str, object]:
-    """Read a safe read-only collector runtime metadata set via FC=2."""
+) -> CollectorMetadataChannelReadResult:
+    """Read the FC=2 read-only collector metadata set with a structured outcome.
+
+    Outcome semantics:
+
+    * a delivery failure (timeout/disconnect/OSError) -> ``transport_error``;
+    * a malformed response -> ``command_error``;
+    * a well-formed unsupported parameter (``code != 0``) is skipped, not a
+      failure;
+    * some parameters answered with metadata + a delivery/command error ->
+      ``partial``; all clean with metadata -> ``success``; none -> ``empty``.
+    """
 
     values: dict[str, object] = {}
+    attempted = 0
+    successful = 0
+    failed = 0
+    transport_failed = False
+    command_failed = False
+    safe_code = ""
     for definition in parameters:
         if definition.sensitive_read:
             continue
         if definition.decode is None:
             continue
+        attempted += 1
         try:
             response = await session.query_collector(definition.parameter)
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except _FRAMED_TRANSPORT_FAILURES as exc:  # noqa: BLE001 - typed code only
+            transport_failed = True
+            failed += 1
+            safe_code = safe_code or type(exc).__name__
+            continue
+        except CollectorWireError as exc:  # malformed / unparseable response
+            command_failed = True
+            failed += 1
+            safe_code = safe_code or str(exc).split(":", 1)[0]
+            continue
+        except Exception:  # noqa: BLE001 - one bad parameter is skipped
+            failed += 1
             continue
         if response.code != 0:
+            # Well-formed "unsupported/not-set" -> skip, not a failure.
             continue
-        merge_collector_signal_values(values, definition.decode(response))
-    return values
+        decoded = definition.decode(response)
+        if decoded:
+            merge_collector_signal_values(values, decoded)
+        if _framed_decoded_has_metadata(decoded):
+            successful += 1
+    has_metadata = successful > 0
+    if has_metadata and not (transport_failed or command_failed):
+        outcome = OUTCOME_SUCCESS
+    elif has_metadata:
+        outcome = OUTCOME_PARTIAL
+    elif command_failed:
+        outcome = OUTCOME_COMMAND_ERROR
+    elif transport_failed:
+        outcome = OUTCOME_TRANSPORT_ERROR
+    else:
+        outcome = OUTCOME_EMPTY
+    return CollectorMetadataChannelReadResult(
+        values=values if outcome in (OUTCOME_SUCCESS, OUTCOME_PARTIAL) else {},
+        outcome=outcome,
+        safe_error_code=safe_code,
+        attempted_commands=attempted,
+        successful_commands=successful,
+        failed_commands=failed,
+    )
+
+
+async def query_runtime_collector_values(
+    session: CollectorMetadataQuerySession,
+    *,
+    parameters: tuple[CollectorParameterDefinition, ...] = RUNTIME_COLLECTOR_PARAMETERS,
+) -> dict[str, object]:
+    """Compatibility dict wrapper over :func:`read_runtime_collector_values`."""
+
+    return (
+        await read_runtime_collector_values(session, parameters=parameters)
+    ).values

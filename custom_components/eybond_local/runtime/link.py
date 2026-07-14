@@ -17,6 +17,10 @@ from ..collector.cloud_family import (
     select_preferred_collector_cloud_family,
 )
 from ..collector.discovery import DiscoveryAnnouncer, async_send_callback_trigger
+from ..collector.metadata import (
+    CollectorMetadataRouteSet,
+    build_collector_metadata_routes,
+)
 from ..connection.confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 from ..connection.session_handle import (
     ADAPTER_NONE,
@@ -2349,6 +2353,96 @@ class EybondRuntimeLinkManager:
         """Return the management-adapter selection provenance (see the resolver)."""
 
         return self._collector_management_selection()[1]
+
+    def _collector_bootstrap_claimable(self) -> bool:
+        """Return whether a pre-heartbeat collector-only bootstrap read is allowed.
+
+        A collector-only ESP produces no inverter heartbeat until it has an
+        inverter, so its identity (FC=2 param 6) must be readable before a live
+        payload wire is observed. That read is allowed ONLY on a socket the entry
+        already OWNS through the registry -- i.e. a registry-claimed session id.
+        The configured collector target is a connection address, NOT ownership
+        evidence: it does not prove any pending socket belongs to this entry, and
+        two PN-less entries behind one NAT/public target would resolve to the same
+        socket, so it must never by itself yield a metadata route. The claimed
+        session id is PN/identity-scoped by the registry, so a foreign strong PN
+        is never claimed and an ambiguous PN-less collector yields no claim (and
+        therefore no route).
+        """
+
+        if self.connected:
+            return False
+        return bool(str(self._claimed_session_id() or "").strip())
+
+    def collector_metadata_routes(self) -> CollectorMetadataRouteSet:
+        """Return the metadata channel routes for this entry's owned collector.
+
+        Public route-authority facade for collector-metadata TELEMETRY. It is the
+        ONE place framed/AT metadata channels are selected, built from trusted,
+        owned session evidence -- the live observed ``SessionHandle`` (or the
+        ``ConfirmedWireBinding`` during a handover gap), plus registry ownership
+        for the collector-only bootstrap. It never routes by collector kind,
+        cloud family, hostname, peer IP, driver key, or an inferred/persisted
+        protocol without confirmed evidence.
+
+        Dual-channel: a framed base metadata channel and an AT supplemental
+        metadata channel can be routed simultaneously. The bootstrap channel is
+        offered only when no framed metadata channel is available (a framed wire
+        reads param 6 in its normal sweep).
+        """
+
+        generation = self._owned_session_generation
+        session_id = self._claimed_session_id()
+        handle = self._live_session_handle()
+        if handle.conflict:
+            # A contradictory live wire fails closed: no metadata channels, and
+            # the stale confirmed binding is NOT reported as effective.
+            return CollectorMetadataRouteSet(
+                generation=generation,
+                session_id=session_id,
+                provenance="conflict",
+            )
+
+        if handle.observed:
+            provenance = "live"
+        elif self._effective_wire_binding() is not None:
+            provenance = "confirmed_binding"
+        else:
+            provenance = "unavailable"
+
+        # ``active_transport`` is the connected framed payload transport (None on
+        # an at_text/raw wire, since the payload rides the AT session there);
+        # ``active_collector_at_transport`` is the connected AT transport. Their
+        # presence already encodes the negotiated wire via the fail-closed
+        # inverter-forward adapter, so metadata channel selection follows the wire
+        # without re-deriving it from any discriminator.
+        framed_transport = self.active_transport
+        at_transport = self.active_collector_at_transport
+
+        if (
+            framed_transport is None
+            and at_transport is None
+            and self._collector_bootstrap_claimable()
+        ):
+            # Pre-heartbeat collector-only bootstrap: route the AT/bootstrap read
+            # to the claimable raw AT transport (it carries the registry-mediated
+            # pending-socket claim internally).
+            at_transport = self._at_transport
+            if provenance == "unavailable":
+                provenance = "bootstrap_claimable"
+
+        return build_collector_metadata_routes(
+            framed_transport=framed_transport,
+            at_transport=at_transport,
+            bootstrap_transport=at_transport,
+            generation=generation,
+            session_id=session_id,
+            provenance=provenance,
+            # Durable collector identity (PN) keys the service cache/health; a
+            # short PN later enriched to the full PN is the SAME identity. Never
+            # the peer IP.
+            identity=str(self._collector_pn or "").strip(),
+        )
 
     @property
     def session_handle(self) -> SessionHandle:

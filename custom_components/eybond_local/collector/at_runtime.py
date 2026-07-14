@@ -9,7 +9,33 @@ from typing import Callable, Protocol
 
 from .at import CollectorAtResponse
 from .cloud_family import collector_cloud_family_observation_from_endpoint
+from .metadata_result import (
+    OUTCOME_EMPTY,
+    OUTCOME_PARTIAL,
+    OUTCOME_SUCCESS,
+    OUTCOME_TRANSPORT_ERROR,
+    CollectorMetadataChannelReadResult,
+)
 from .signal import merge_collector_signal_values, normalize_signal_strength
+
+# Delivery failures (as opposed to a command the collector simply did not
+# answer): these mean the link is unusable, not that the commands are
+# unsupported, so they must never accrue a dead-channel strike.
+_AT_TRANSPORT_FAILURES = (
+    asyncio.TimeoutError,
+    TimeoutError,
+    OSError,
+    ConnectionError,
+    EOFError,
+    asyncio.IncompleteReadError,
+    asyncio.LimitOverrunError,
+)
+
+
+def _decoded_has_metadata(decoded: dict[str, object]) -> bool:
+    """Return whether a decoded response carries at least one non-blank value."""
+
+    return any(str(value).strip() != "" for value in decoded.values())
 
 class CollectorAtQueryTransport(Protocol):
     """Minimal read-only collector AT transport contract."""
@@ -118,24 +144,88 @@ RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
 )
 
 
-async def query_runtime_collector_at_values(
+async def read_runtime_collector_at_values(
     transport: CollectorAtQueryTransport,
-    *,
-    collector_cloud_family: str = "",
-) -> dict[str, object]:
-    """Read a safe read-only collector metadata set over the plain AT session."""
+) -> CollectorMetadataChannelReadResult:
+    """Read the read-only collector AT metadata set with a structured outcome.
+
+    The cloud-family observation is derived from the collector's own endpoint
+    reply (``CLDSRVHOST1``); it is never an input, so this reader takes no
+    cloud-family argument and cloud family never selects the channel.
+
+    Outcome semantics (dead-channel truth):
+
+    * a timeout/disconnect BEFORE any metadata -> ``transport_error`` (no strike:
+      the link is unusable, not the commands unsupported);
+    * a timeout/disconnect AFTER some metadata -> ``partial`` (fresh, no strike);
+      one timeout ends the sweep so a dead link costs one request timeout, not
+      twelve;
+    * every command delivered but none carried metadata -> ``empty`` (a strike:
+      the collector answered but does not support this channel);
+    * an individual unsupported/rejected command is skipped, not fatal.
+
+    The raw response/value is never placed in ``safe_error_code``.
+    """
 
     values: dict[str, object] = {}
+    attempted = 0
+    successful = 0
+    failed = 0
+    timed_out = False
+    transport_failed = False
+    safe_code = ""
     for definition in RUNTIME_COLLECTOR_AT_DEFINITIONS:
+        attempted += 1
         try:
             response = await transport.async_query(definition.command)
+        except asyncio.CancelledError:
+            raise
         except (asyncio.TimeoutError, TimeoutError):
-            # A dead AT link times out for every command: this sweep is 12
-            # commands, so marching on burns a full request timeout per
-            # command (~60s per cycle). One timeout ends the sweep; the
-            # values already collected are kept.
+            timed_out = True
+            transport_failed = True
+            safe_code = "at_response_timeout"
             break
-        except Exception:
+        except _AT_TRANSPORT_FAILURES as exc:  # noqa: BLE001 - typed code only
+            transport_failed = True
+            safe_code = type(exc).__name__
+            break
+        except Exception:  # noqa: BLE001 - one unsupported command is skipped
+            failed += 1
             continue
-        merge_collector_signal_values(values, definition.decode(response))
-    return values
+        decoded = definition.decode(response)
+        if decoded:
+            merge_collector_signal_values(values, decoded)
+        if _decoded_has_metadata(decoded):
+            successful += 1
+    has_metadata = successful > 0
+    if transport_failed and not has_metadata:
+        outcome = OUTCOME_TRANSPORT_ERROR
+    elif transport_failed:
+        outcome = OUTCOME_PARTIAL
+    elif has_metadata:
+        outcome = OUTCOME_SUCCESS
+    else:
+        outcome = OUTCOME_EMPTY
+    # Only carry values forward on a fresh outcome; a delivered-but-blank sweep
+    # (``empty``) is a dead-channel strike, not cache-worthy blank state.
+    return CollectorMetadataChannelReadResult(
+        values=values if outcome in (OUTCOME_SUCCESS, OUTCOME_PARTIAL) else {},
+        outcome=outcome,
+        safe_error_code=safe_code,
+        attempted_commands=attempted,
+        successful_commands=successful,
+        failed_commands=failed,
+        timed_out=timed_out,
+    )
+
+
+async def query_runtime_collector_at_values(
+    transport: CollectorAtQueryTransport,
+) -> dict[str, object]:
+    """Compatibility dict wrapper over :func:`read_runtime_collector_at_values`.
+
+    Kept for onboarding/config-flow/tests that only need the decoded values; the
+    runtime metadata service uses the structured reader.
+    """
+
+    return (await read_runtime_collector_at_values(transport)).values

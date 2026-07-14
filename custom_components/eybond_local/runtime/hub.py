@@ -18,16 +18,6 @@ from ..const import (
 )
 from ..connection.models import EybondConnectionSpec
 from ..connection.session_handle import ADAPTER_COLLECTOR_AT_COMMANDS
-from ..collector.at_runtime import query_runtime_collector_at_values
-from ..collector.collector_wire import (
-    CollectorWireManagementSession,
-    QUERY_HARDWARE_VERSION,
-    parse_query_collector_response,
-)
-from ..collector.parameter_registry import (
-    COLLECTOR_PARAMETER_DEFINITION_BY_ID,
-    query_runtime_collector_values,
-)
 from ..collector.capabilities import (
     collector_capability_profile_from_runtime,
     parse_esp_collector_hardware_token,
@@ -49,10 +39,7 @@ from ..drivers.base import InverterDriver
 from ..drivers.command_support import (
     apply_unsupported_diagnostics,
     clear_unsupported_commands,
-    command_skipped_as_unsupported,
     commit_cycle_failures,
-    record_command_failure,
-    record_command_success,
     seed_unsupported_commands,
 )
 from ..drivers.registry import iter_drivers
@@ -64,6 +51,10 @@ from ..payload.ascii_line import build_ascii_line_request
 from ..payload.modbus import ModbusError, ModbusSession, to_signed_16
 from ..payload.pi30 import build_request as build_pi30_request
 from ..runtime_labels import runtime_path_label
+from .collector_metadata import (
+    CollectorMetadataRefreshResult,
+    CollectorMetadataService,
+)
 from .link import EybondRuntimeLinkManager, resolve_server_ip
 
 logger = logging.getLogger(__name__)
@@ -138,11 +129,6 @@ def _split_collector_endpoint(endpoint: object) -> tuple[str, int | None, str]:
 _DEFAULT_PROXY_CAPTURE_PORT = DEFAULT_COLLECTOR_SERVER_PORT
 RUNTIME_DRIVER_STATE_COLLECTOR_OFFLINE = "collector_offline"
 RUNTIME_DRIVER_STATE_DRIVER_UNBOUND = "driver_unbound"
-# One learned per-device fact: whether this collector answers the AT metadata
-# channel at all. Framed collectors tunnel AT via raw passthrough, and only
-# some firmwares support it — the channel is probed empirically and the
-# verdict persists (cleared by the "Re-check Supported Commands" button).
-_AT_METADATA_CHANNEL_KEY = "collector:at_metadata"
 
 # Bounded per-command timeout for the at_text support-archive ASCII probe;
 # generous enough for a 2400-baud QPIRI response, small enough that the six
@@ -604,7 +590,6 @@ class EybondHub:
         self._driver_hint = driver_hint
         self._connection = connection
         self._connection_mode = connection_mode
-        self._collector_cloud_family = str(connection.collector_cloud_family or "").strip().lower()
         self._link_manager = EybondRuntimeLinkManager(
             server_ip=connection.server_ip,
             advertised_server_ip=connection.advertised_server_ip,
@@ -654,17 +639,18 @@ class EybondHub:
         self._last_snapshot = RuntimeSnapshot()
         self._runtime_read_state: dict[str, Any] = {}
         self._persistent_unsupported_commands: tuple[str, ...] = ()
-        self._collector_runtime_values: dict[str, object] = {}
-        self._collector_runtime_last_refresh_monotonic = 0.0
-        self._collector_fc_bootstrap_last_attempt_monotonic = 0.0
-        self._collector_at_runtime_values: dict[str, object] = {}
-        self._collector_at_runtime_last_refresh_monotonic = 0.0
-        self._collector_at_runtime_last_attempt_monotonic = 0.0
-        self._collector_runtime_values_dirty = True
+        # Collector-metadata TELEMETRY ownership lives entirely in the service:
+        # the generic hub owns neither the wire, the cadence, the caches, nor the
+        # dead-channel verdict. It reads the negotiated metadata routes from the
+        # link (route authority) and consumes one normalized result. The service
+        # keeps its OWN channel health -- separate from the driver's
+        # unsupported-command negative cache.
+        self._collector_metadata_service = CollectorMetadataService(
+            generation_provider=self._owned_session_generation,
+        )
         self._collector_runtime_read_fresh = False
         self._collector_outage_caches_cleared = False
-        self._collector_metadata_fc_last_ms = 0
-        self._collector_metadata_at_last_ms = 0
+        self._last_collector_metadata_result: CollectorMetadataRefreshResult | None = None
         self._collector_last_server_endpoint_before_change = ""
         # Last collector-management operation record (non-sensitive) for support
         # diagnostics; populated by ``_run_management_operation``.
@@ -1406,10 +1392,10 @@ class EybondHub:
         )
         self._mark_owned_session_stable()
         _mark_refresh_phase("snapshot_build")
-        refresh_phases["collector_metadata_fc"] = self._collector_metadata_fc_last_ms
-        refresh_phases["collector_metadata_at"] = self._collector_metadata_at_last_ms
-        self._collector_metadata_fc_last_ms = 0
-        self._collector_metadata_at_last_ms = 0
+        metadata_result = self._last_collector_metadata_result
+        if metadata_result is not None:
+            refresh_phases["collector_metadata_fc"] = metadata_result.framed_duration_ms
+            refresh_phases["collector_metadata_at"] = metadata_result.at_duration_ms
         snapshot.values["runtime_refresh_phase_breakdown"] = ", ".join(
             f"{phase}={elapsed_ms}ms"
             for phase, elapsed_ms in sorted(
@@ -1425,184 +1411,28 @@ class EybondHub:
         poll_interval: float | None,
         force_liveness: bool = False,
     ) -> dict[str, object]:
-        """Best-effort collector-side metadata refresh over FC=2 and plain AT helpers.
+        """Refresh collector-side metadata via the metadata service (thin delegate).
 
-        Sets ``_collector_runtime_read_fresh`` when at least one management
-        query returned data during this call (not from cache).
-
-        ``force_liveness`` guarantees one real command exchange this call —
-        the cheap framed FC query when available, otherwise the AT query —
-        without forcing the full metadata sweep out of cache.
+        The hub knows nothing about FC parameter numbers, AT command names,
+        transport methods, channel selection, bootstrap encoding, or channel
+        cadence/cache/dead-channel internals: it reads the negotiated metadata
+        routes from the link (route authority) and hands them to the service,
+        then consumes one normalized result. Sets ``_collector_runtime_read_fresh``
+        when at least one channel returned live data this call.
         """
 
-        self._collector_runtime_read_fresh = False
-        missing = object()
-        active_transport = getattr(self._link_manager, "active_transport", missing)
-        if active_transport is missing:
-            transport = self._link_manager.transport if self._link_manager.connected else None
-        else:
-            transport = active_transport
-            if (
-                transport is None
-                and not self._link_manager.connected
-                and str(self._connection.collector_ip or "").strip()
-            ):
-                # Collector-side metadata must be readable before an inverter
-                # heartbeat exists (collector-only bridge bootstrap): the
-                # esp-collector identity token lives in FC=2 param 6, but a fresh
-                # bridge without an inverter produces no framed inverter heartbeat
-                # yet. Route by the configured collector IP and let the shared
-                # transport claim a pending callback socket if one is available.
-                transport = getattr(self._link_manager, "transport", None)
-
-        active_at_transport = getattr(self._link_manager, "active_collector_at_transport", missing)
-        if active_at_transport is missing:
-            at_transport = getattr(self._link_manager, "collector_at_transport", None)
-        else:
-            at_transport = active_at_transport
-            if (
-                at_transport is None
-                and not self._link_manager.connected
-                and str(self._connection.collector_ip or "").strip()
-            ):
-                at_transport = getattr(self._link_manager, "collector_at_transport", None)
-        allow_disconnected_at_query = (
-            at_transport is not None
-            and not self._link_manager.connected
-            and str(self._connection.collector_ip or "").strip()
+        routes = self._link_manager.collector_metadata_routes()
+        result = await self._collector_metadata_service.async_refresh(
+            routes,
+            poll_interval=poll_interval,
+            force_liveness=force_liveness,
         )
-
-        # This is a best-effort collector-metadata TELEMETRY read with its own
-        # dual-channel cadence/cache; it is NOT the collector-management action
-        # surface (endpoint/apply/reboot -- those go through the negotiated
-        # CollectorManagementAdapter). The FC read uses the NEUTRAL collector
-        # wire session; the transport-capability probe below is a metadata-channel
-        # gate, not an action-path selector.
-        now_monotonic = asyncio.get_running_loop().time()
-        refresh_interval = max(float(poll_interval or 0.0) * 3.0, 30.0)
-        force_refresh = bool(self._collector_runtime_values_dirty)
-        fc_transport_available = transport is not None and hasattr(transport, "async_send_collector")
-        force_fc_refresh = force_refresh or (force_liveness and fc_transport_available)
-        force_at_refresh = force_refresh or (force_liveness and not fc_transport_available)
-        if fc_transport_available and (
-            force_fc_refresh
-            or not self._collector_runtime_values
-            or now_monotonic - self._collector_runtime_last_refresh_monotonic >= refresh_interval
-        ):
-            fc_query_started = asyncio.get_running_loop().time()
-            try:
-                values = await query_runtime_collector_values(
-                    CollectorWireManagementSession(transport)
-                )
-            except Exception as exc:
-                logger.debug("Collector runtime FC query failed: %s", exc)
-            else:
-                if values:
-                    self._collector_runtime_values = dict(values)
-                    self._collector_runtime_last_refresh_monotonic = now_monotonic
-                    self._collector_runtime_read_fresh = True
-                    record_command_success(self._runtime_read_state, "collector:fc_metadata")
-            self._collector_metadata_fc_last_ms = int(
-                round((asyncio.get_running_loop().time() - fc_query_started) * 1000.0)
-            )
-
-        at_fc_bootstrap_available = (
-            not fc_transport_available
-            and at_transport is not None
-            and hasattr(at_transport, "async_query_bridge_hardware_version")
-            and (
-                getattr(at_transport, "connected", False)
-                or allow_disconnected_at_query
-            )
-        )
-        fc_bootstrap_due = (
-            now_monotonic - self._collector_fc_bootstrap_last_attempt_monotonic
-            >= refresh_interval
-        )
-        if (
-            at_fc_bootstrap_available
-            and "collector_hardware_version" not in self._collector_runtime_values
-            and (force_refresh or fc_bootstrap_due)
-        ):
-            self._collector_fc_bootstrap_last_attempt_monotonic = now_monotonic
-            fc_query_started = asyncio.get_running_loop().time()
-            try:
-                _header, payload = await at_transport.async_query_bridge_hardware_version()
-                response = parse_query_collector_response(payload)
-                values = {}
-                if response.code == 0 and response.parameter == QUERY_HARDWARE_VERSION:
-                    decoder = COLLECTOR_PARAMETER_DEFINITION_BY_ID[QUERY_HARDWARE_VERSION].decode
-                    if decoder is not None:
-                        values = decoder(response)
-            except Exception as exc:
-                logger.debug("Collector bridge hardware-version bootstrap query failed: %s", exc)
-            else:
-                if values:
-                    self._collector_runtime_values.update(values)
-                    self._collector_runtime_read_fresh = True
-                    record_command_success(
-                        self._runtime_read_state,
-                        "collector:fc_metadata_bootstrap",
-                    )
-            self._collector_metadata_fc_last_ms = max(
-                self._collector_metadata_fc_last_ms,
-                int(round((asyncio.get_running_loop().time() - fc_query_started) * 1000.0)),
-            )
-
-        at_values_stale = (
-            not self._collector_at_runtime_values
-            or now_monotonic - self._collector_at_runtime_last_refresh_monotonic >= refresh_interval
-        )
-        at_attempt_due = (
-            now_monotonic - self._collector_at_runtime_last_attempt_monotonic >= refresh_interval
-        )
-        at_channel_supported = not command_skipped_as_unsupported(
-            self._runtime_read_state,
-            _AT_METADATA_CHANNEL_KEY,
-        )
-        if at_transport is not None and at_channel_supported and (
-            getattr(at_transport, "connected", False)
-            or allow_disconnected_at_query
-        ) and (
-            force_at_refresh
-            or (at_values_stale and at_attempt_due)
-        ):
-            self._collector_at_runtime_last_attempt_monotonic = now_monotonic
-            at_query_started = asyncio.get_running_loop().time()
-            try:
-                values = await query_runtime_collector_at_values(
-                    at_transport,
-                    collector_cloud_family=self._collector_cloud_family,
-                )
-            except Exception as exc:
-                logger.debug("Collector runtime AT query failed: %s", exc)
-            else:
-                if values:
-                    self._collector_at_runtime_values = dict(values)
-                    self._collector_at_runtime_last_refresh_monotonic = now_monotonic
-                    self._collector_runtime_read_fresh = True
-                    record_command_success(
-                        self._runtime_read_state, _AT_METADATA_CHANNEL_KEY
-                    )
-                else:
-                    record_command_failure(
-                        self._runtime_read_state, _AT_METADATA_CHANNEL_KEY
-                    )
-            self._collector_metadata_at_last_ms = int(
-                round((asyncio.get_running_loop().time() - at_query_started) * 1000.0)
-            )
-
-        self._collector_runtime_values_dirty = False
-        return self._combined_collector_runtime_values()
+        self._last_collector_metadata_result = result
+        self._collector_runtime_read_fresh = result.fresh
+        return result.merged_values
 
     def _clear_collector_runtime_value_caches(self) -> None:
-        self._collector_runtime_values.clear()
-        self._collector_runtime_last_refresh_monotonic = 0.0
-        self._collector_fc_bootstrap_last_attempt_monotonic = 0.0
-        self._collector_at_runtime_values.clear()
-        self._collector_at_runtime_last_refresh_monotonic = 0.0
-        self._collector_at_runtime_last_attempt_monotonic = 0.0
-        self._collector_runtime_values_dirty = True
+        self._collector_metadata_service.invalidate()
 
     def _reset_runtime_read_state(self) -> None:
         """Clear per-session read state, re-seeding the persisted facts.
@@ -1620,23 +1450,52 @@ class EybondHub:
             )
 
     def set_persistent_unsupported_commands(self, commands: tuple[str, ...]) -> None:
-        """Install the persisted unsupported-command set for this device."""
+        """Install the persisted unsupported-command set for this device.
+
+        Any ``collector:``-namespaced metadata channel key is filtered out and
+        never seeded into the DRIVER negative cache: metadata channel health is
+        the metadata service's own state, persisted separately. This is
+        belt-and-suspenders for a config entry not yet migrated -- the coordinator
+        splits and migrates the persisted set, but a stray metadata key here is
+        still kept out of the driver table.
+        """
 
         self._persistent_unsupported_commands = tuple(
-            str(command or "").strip()
-            for command in commands
-            if str(command or "").strip()
+            command
+            for command in (str(command or "").strip() for command in commands)
+            if command and not command.startswith("collector:")
         )
         seed_unsupported_commands(
             self._runtime_read_state,
             self._persistent_unsupported_commands,
         )
 
+    def set_persistent_metadata_dead_channels(self, channels: tuple[str, ...]) -> None:
+        """Install the persisted metadata dead-channel set for this device."""
+
+        self._collector_metadata_service.seed_dead_channels(
+            tuple(
+                channel
+                for channel in (str(channel or "").strip() for channel in channels)
+                if channel
+            )
+        )
+
+    def collector_metadata_dead_channels(self) -> tuple[str, ...]:
+        """Return the metadata dead-channel set for config-entry persistence."""
+
+        return self._collector_metadata_service.dead_channels()
+
     def clear_unsupported_command_cache(self) -> None:
-        """Forget the unsupported set so the next cycles re-probe everything."""
+        """Forget both negative caches so the next cycles re-probe everything.
+
+        The "Re-check supported commands" action revives inverter commands AND
+        metadata channels; they are cleared through their SEPARATE stores.
+        """
 
         self._persistent_unsupported_commands = ()
         clear_unsupported_commands(self._runtime_read_state)
+        self._collector_metadata_service.clear_channel_health()
 
     def invalidate_collector_runtime_values(self) -> None:
         """Drop cached collector-side values so the next refresh reads them live."""
@@ -1669,9 +1528,52 @@ class EybondHub:
         self._clear_collector_runtime_value_caches()
 
     def _combined_collector_runtime_values(self) -> dict[str, object]:
-        values = dict(self._collector_runtime_values)
-        values.update(self._collector_at_runtime_values)
-        return values
+        return self._collector_metadata_service.merged_values()
+
+    # --- Compatibility delegates -------------------------------------------------
+    # Thin views over the metadata service so tests/diagnostics can read (and
+    # legacy call sites can seed) the caches WITHOUT the hub holding a second copy
+    # of the state. The service remains the single source of truth.
+
+    @property
+    def _collector_runtime_values(self) -> dict[str, object]:
+        return self._collector_metadata_service.framed_values
+
+    @_collector_runtime_values.setter
+    def _collector_runtime_values(self, value: dict[str, object]) -> None:
+        self._collector_metadata_service.framed_values = value
+
+    @property
+    def _collector_at_runtime_values(self) -> dict[str, object]:
+        return self._collector_metadata_service.at_values
+
+    @_collector_at_runtime_values.setter
+    def _collector_at_runtime_values(self, value: dict[str, object]) -> None:
+        self._collector_metadata_service.at_values = value
+
+    @property
+    def _collector_runtime_values_dirty(self) -> bool:
+        return self._collector_metadata_service.dirty
+
+    @_collector_runtime_values_dirty.setter
+    def _collector_runtime_values_dirty(self, value: bool) -> None:
+        self._collector_metadata_service.dirty = value
+
+    @property
+    def _collector_runtime_last_refresh_monotonic(self) -> float:
+        return self._collector_metadata_service.framed_last_refresh_monotonic
+
+    @_collector_runtime_last_refresh_monotonic.setter
+    def _collector_runtime_last_refresh_monotonic(self, value: float) -> None:
+        self._collector_metadata_service.framed_last_refresh_monotonic = value
+
+    @property
+    def _collector_at_runtime_last_attempt_monotonic(self) -> float:
+        return self._collector_metadata_service.at_last_attempt_monotonic
+
+    @_collector_at_runtime_last_attempt_monotonic.setter
+    def _collector_at_runtime_last_attempt_monotonic(self, value: float) -> None:
+        self._collector_metadata_service.at_last_attempt_monotonic = value
 
     def _publish_intermediate_snapshot(
         self,
@@ -1911,6 +1813,117 @@ class EybondHub:
             )
         return diagnostics
 
+    def collector_metadata_diagnostics(self) -> dict[str, object]:
+        """Return non-sensitive collector-metadata TELEMETRY diagnostics.
+
+        Delegates to the metadata service (routes / provenance / generation /
+        per-channel outcome+duration / cache age+dirty / dead channels). Never
+        includes endpoint values, Wi-Fi credentials, or raw AT payloads.
+        """
+
+        routes = None
+        routes_getter = getattr(self._link_manager, "collector_metadata_routes", None)
+        if callable(routes_getter):
+            try:
+                routes = routes_getter()
+            except Exception:  # pragma: no cover - defensive during diagnostics
+                routes = None
+        return self._collector_metadata_service.diagnostics(routes)
+
+    def _apply_collector_metadata_diagnostics(self, values: dict[str, object]) -> None:
+        """Flatten metadata diagnostics into snapshot values for the support bundle.
+
+        Safe, structured flat fields only -- counts / ages / typed error codes /
+        per-channel failure counts / partial flags -- never endpoint values,
+        credentials, raw AT payloads, or peer IP.
+        """
+
+        try:
+            diagnostics = self.collector_metadata_diagnostics()
+        except Exception:  # pragma: no cover - defensive during snapshot build
+            return
+        routes = [r for r in (diagnostics.get("routes") or []) if isinstance(r, dict)]
+        channel_ids = [str(r.get("channel_id", "")) for r in routes if r.get("channel_id")]
+        values["collector_metadata_route_channels"] = ", ".join(channel_ids)
+        values["collector_metadata_route_provenance"] = str(
+            diagnostics.get("route_provenance", "")
+        )
+        values["collector_metadata_session_generation"] = diagnostics.get(
+            "session_generation", 0
+        )
+        values["collector_metadata_identity_known"] = bool(
+            diagnostics.get("identity_known", False)
+        )
+        values["collector_metadata_identity_transitions"] = diagnostics.get(
+            "identity_transitions", 0
+        )
+
+        def _join(pairs: list[str]) -> str:
+            return ", ".join(pairs)
+
+        statuses = [f"{r['channel_id']}={r.get('status', '')}" for r in routes if r.get("channel_id")]
+        if statuses:
+            values["collector_metadata_channel_status"] = _join(statuses)
+        durations = [
+            f"{r['channel_id']}={r.get('duration_ms', 0)}ms"
+            for r in routes
+            if r.get("channel_id") and r.get("duration_ms")
+        ]
+        if durations:
+            values["collector_metadata_channel_duration_ms"] = _join(durations)
+        errors = [
+            f"{r['channel_id']}={r.get('error_code', '')}"
+            for r in routes
+            if r.get("channel_id") and r.get("error_code")
+        ]
+        if errors:
+            values["collector_metadata_channel_errors"] = _join(errors)
+        commands = [
+            f"{r['channel_id']}={r.get('successful_commands', 0)}/{r.get('attempted_commands', 0)}"
+            for r in routes
+            if r.get("channel_id") and r.get("attempted_commands")
+        ]
+        if commands:
+            values["collector_metadata_channel_commands"] = _join(commands)
+        failures = [
+            f"{r['channel_id']}={r.get('consecutive_failures', 0)}"
+            for r in routes
+            if r.get("channel_id") and r.get("consecutive_failures")
+        ]
+        if failures:
+            values["collector_metadata_channel_failures"] = _join(failures)
+        partial = [
+            str(r["channel_id"]) for r in routes if r.get("channel_id") and r.get("partial")
+        ]
+        if partial:
+            values["collector_metadata_partial_channels"] = _join(partial)
+
+        refresh = diagnostics.get("refresh") or {}
+        if isinstance(refresh, dict):
+            values["collector_metadata_last_read_fresh"] = bool(
+                refresh.get("last_read_fresh", False)
+            )
+        cache = diagnostics.get("cache") or {}
+        if isinstance(cache, dict):
+            values["collector_metadata_cache_dirty"] = bool(cache.get("dirty", False))
+            values["collector_metadata_framed_cache_keys"] = cache.get("framed_cached_keys", 0)
+            values["collector_metadata_at_cache_keys"] = cache.get("at_cached_keys", 0)
+            framed_age = cache.get("framed_age_seconds")
+            if framed_age is not None:
+                values["collector_metadata_framed_age_seconds"] = framed_age
+            at_age = cache.get("at_age_seconds")
+            if at_age is not None:
+                values["collector_metadata_at_age_seconds"] = at_age
+        dead = [d for d in (diagnostics.get("dead_channels") or []) if isinstance(d, dict)]
+        dead_ids = [str(d.get("channel_id", "")) for d in dead if d.get("channel_id")]
+        if dead_ids:
+            values["collector_metadata_dead_channels"] = ", ".join(dead_ids)
+            values["collector_metadata_dead_channel_detail"] = ", ".join(
+                f"{d['channel_id']}={d.get('consecutive_failures', 0)}/{d.get('threshold', 0)}"
+                for d in dead
+                if d.get("channel_id")
+            )
+
     async def _run_management_operation(self, name: str, operation):
         """Execute one management operation, recording non-sensitive diagnostics.
 
@@ -1997,18 +2010,17 @@ class EybondHub:
         if result.previous_endpoint and result.previous_endpoint != normalized_endpoint:
             self._collector_last_server_endpoint_before_change = result.previous_endpoint
 
-        # The hub caches the EFFECTIVE endpoint (real readback if the collector
-        # echoed it, else the requested value it just wrote): the hub knows what
-        # it requested, so this is honest -- it never fabricates the result's
-        # ``readback_endpoint``.
-        self._collector_runtime_values["collector_server_endpoint"] = (
-            result.readback_endpoint or result.requested_endpoint
-        )
+        # Overlay the EFFECTIVE endpoint (real readback if the collector echoed
+        # it, else the requested value it just wrote) as authoritative action
+        # state: the hub knows what it requested, so this is honest -- it never
+        # fabricates the result's ``readback_endpoint``. The service marks the
+        # framed cache fresh so the next cadence-gated sweep does not clobber it.
+        overlay: dict[str, object] = {
+            "collector_server_endpoint": result.readback_endpoint or result.requested_endpoint
+        }
         if result.reboot_or_apply_required:
-            self._collector_runtime_values["collector_reboot_required"] = (
-                result.reboot_or_apply_required
-            )
-        self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
+            overlay["collector_reboot_required"] = result.reboot_or_apply_required
+        self._collector_metadata_service.apply_authoritative_values(overlay)
         return self._collector_endpoint_write_result_to_dict(result)
 
     async def async_apply_collector_changes(self) -> dict[str, object]:
@@ -2051,11 +2063,12 @@ class EybondHub:
             "read_endpoint_state", adapter.async_read_endpoint_state
         )
 
+        overlay: dict[str, object] = {}
         if state.current_endpoint:
-            self._collector_runtime_values["collector_server_endpoint"] = state.current_endpoint
+            overlay["collector_server_endpoint"] = state.current_endpoint
         if state.reboot_required:
-            self._collector_runtime_values["collector_reboot_required"] = state.reboot_required
-        self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
+            overlay["collector_reboot_required"] = state.reboot_required
+        self._collector_metadata_service.apply_authoritative_values(overlay)
         return {
             "current_endpoint": state.current_endpoint,
             "reboot_required": state.reboot_required,
@@ -2290,10 +2303,10 @@ class EybondHub:
             ),
         )
 
+        overlay: dict[str, object] = {"collector_reboot_required": "0"}
         if result.current_endpoint:
-            self._collector_runtime_values["collector_server_endpoint"] = result.current_endpoint
-        self._collector_runtime_values["collector_reboot_required"] = "0"
-        self._collector_runtime_last_refresh_monotonic = asyncio.get_running_loop().time()
+            overlay["collector_server_endpoint"] = result.current_endpoint
+        self._collector_metadata_service.apply_authoritative_values(overlay)
         return {
             "status": "applied" if action == "apply" else "reboot_triggered",
             "action": action,
@@ -2772,6 +2785,10 @@ class EybondHub:
             values["collector_management_last_error_code"] = op.get("error_code", "")
             values["collector_management_last_duration_ms"] = op.get("duration_ms", 0)
             values["collector_management_last_timestamp"] = op.get("timestamp", 0.0)
+        # Non-sensitive collector-metadata TELEMETRY diagnostics: channel routes /
+        # provenance / generation / per-channel outcome+duration / cache dirty /
+        # dead channels (NEVER endpoint values, credentials, or raw payloads).
+        self._apply_collector_metadata_diagnostics(values)
         # Collector Devcode is STABLE identity: the heartbeat frame's devcode.
         # 0x0000 is a valid devcode, so gate on ``is not None`` and NEVER fall
         # back to the volatile last-frame devcode -- that alternates with every
