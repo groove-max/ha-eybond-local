@@ -14,6 +14,7 @@ from pathlib import Path
 import types
 import unittest
 
+from custom_components.eybond_local import _ENTRY_SCHEMA_VERSION
 from custom_components.eybond_local import const as C
 from custom_components.eybond_local.connection import connection_policy as cp
 from custom_components.eybond_local.connection.session_registry import (
@@ -403,6 +404,8 @@ class MigrationInvariantTests(unittest.TestCase):
                 target.version = kwargs["version"]
             if "data" in kwargs:
                 target.data = dict(kwargs["data"])
+            if "options" in kwargs:
+                target.options = dict(kwargs["options"])
 
         hass = types.SimpleNamespace(
             config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry)
@@ -411,7 +414,7 @@ class MigrationInvariantTests(unittest.TestCase):
         entry._last_updates = updates
         return result
 
-    def test_v1_entry_migrates_to_v3_and_persists_axes(self) -> None:
+    def test_v1_entry_migrates_to_current_schema_and_persists_axes(self) -> None:
         entry = types.SimpleNamespace(
             entry_id="e1",
             version=1,
@@ -419,7 +422,7 @@ class MigrationInvariantTests(unittest.TestCase):
             options={},
         )
         self.assertTrue(self._run_migrate(entry))
-        self.assertEqual(entry.version, 3)
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
         self.assertEqual(
             entry.data[C.CONF_CONNECTION_STRATEGY],
             C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
@@ -446,26 +449,189 @@ class MigrationInvariantTests(unittest.TestCase):
             C.ENDPOINT_CONTROL_INTEGRATION_MANAGED,
         )
 
-    def test_v2_entry_migrates_up_to_v3(self) -> None:
-        # A v2 entry is carried forward to v3 (the corrective re-migration).
+    def test_v2_entry_migrates_up_to_current_schema(self) -> None:
+        # A v2 entry is carried forward through every later step.
         entry = types.SimpleNamespace(
             entry_id="e3", version=2, data={}, options={}
         )
         self.assertTrue(self._run_migrate(entry))
-        self.assertEqual(entry.version, 3)
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
 
-    def test_v3_entry_is_not_re_migrated(self) -> None:
+    def test_current_schema_entry_is_not_re_migrated(self) -> None:
         entry = types.SimpleNamespace(
-            entry_id="e3b", version=3, data={}, options={}
+            entry_id="e3b", version=_ENTRY_SCHEMA_VERSION, data={}, options={}
         )
         self.assertTrue(self._run_migrate(entry))
-        self.assertEqual(entry.version, 3)
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
 
     def test_future_version_is_refused(self) -> None:
         entry = types.SimpleNamespace(
-            entry_id="e4", version=4, data={}, options={}
+            entry_id="e4", version=_ENTRY_SCHEMA_VERSION + 1, data={}, options={}
         )
         self.assertFalse(self._run_migrate(entry))
+
+
+class CanonicalConnectionStrategyOwnerTests(unittest.TestCase):
+    """entry.data is the single canonical owner of connection_strategy (v4).
+
+    Before v4 there were two writers: the options form wrote the strategy into
+    entry.options while the explicit endpoint actions wrote it into entry.data,
+    and the resolver read options FIRST -- so a stale options copy silently
+    shadowed a successful HA-only / Cloud+HA action.
+    """
+
+    def test_data_is_authoritative_over_stale_options(self) -> None:
+        # The exact old bug: a Cloud+HA action wrote callback_on_demand into data
+        # while a stale options copy still said inbound. data must win.
+        data = {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
+        options = {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND}
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, options),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    def test_options_are_only_a_pre_migration_fallback(self) -> None:
+        # data has no value yet (pre-migration entry) -> options is honored.
+        self.assertEqual(
+            cp.resolve_connection_strategy(
+                {}, {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
+            ),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    def test_legacy_resolver_reproduces_old_options_first_semantics(self) -> None:
+        # Migration input: the value the entry ACTUALLY behaved with pre-upgrade.
+        data = {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
+        options = {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND}
+        self.assertEqual(
+            cp.legacy_effective_connection_strategy(data, options),
+            C.CONNECTION_STRATEGY_INBOUND,
+        )
+
+    def test_strategy_provenance_names_canonical_vs_legacy_source(self) -> None:
+        canonical = cp.migration_diagnostics(
+            {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND}, {}
+        )
+        self.assertEqual(canonical["connection_strategy_source"], "explicit_data")
+
+        legacy = cp.migration_diagnostics(
+            {}, {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND}
+        )
+        self.assertEqual(
+            legacy["connection_strategy_source"], "legacy_options_pre_migration"
+        )
+        # A pre-migration entry is not reported as fully explicit.
+        self.assertNotEqual(legacy["migration_axes_source"], "explicit")
+
+    def test_runtime_diagnostics_never_override_canonical_strategy(self) -> None:
+        # Legacy migration once corrected this cloud-primary shape, but after v4
+        # an explicit data value is authoritative even when compatibility fields
+        # still describe the old mode.
+        data = {
+            C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_COLLECTOR_PN: "PNCANONICAL0001",
+        }
+
+        diagnostics = cp.entry_axis_diagnostics(data, {})
+
+        self.assertEqual(
+            diagnostics[C.CONF_CONNECTION_STRATEGY],
+            C.CONNECTION_STRATEGY_INBOUND,
+        )
+        self.assertEqual(diagnostics["migration_status"], "ok")
+
+
+class CanonicalStrategyMigrationTests(unittest.TestCase):
+    """v3 -> v4 freezes the real pre-upgrade behavior into data."""
+
+    def _run_migrate(self, entry) -> bool:
+        from custom_components.eybond_local import async_migrate_entry
+
+        def _async_update_entry(target, **kwargs):
+            if "version" in kwargs:
+                target.version = kwargs["version"]
+            if "data" in kwargs:
+                target.data = dict(kwargs["data"])
+            if "options" in kwargs:
+                target.options = dict(kwargs["options"])
+
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry)
+        )
+        return asyncio.run(async_migrate_entry(hass, entry))
+
+    def test_conflicting_data_options_keeps_old_effective_behavior(self) -> None:
+        # Pre-v4 this entry BEHAVED as inbound (options shadowed data). The
+        # migration must preserve that, not "heal" it to the data value.
+        entry = types.SimpleNamespace(
+            entry_id="conflict",
+            version=3,
+            data={
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                C.CONF_COLLECTOR_PN: "A1234567890123",
+            },
+            options={C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND},
+        )
+        self.assertTrue(self._run_migrate(entry))
+
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+        # The options copy is gone: it can never shadow data again.
+        self.assertNotIn(C.CONF_CONNECTION_STRATEGY, entry.options)
+        # And the post-migration resolver agrees with the pre-migration behavior.
+        self.assertEqual(
+            cp.resolve_connection_strategy(entry.data, entry.options),
+            C.CONNECTION_STRATEGY_INBOUND,
+        )
+
+    def test_options_only_strategy_moves_into_data(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="opts-only",
+            version=3,
+            data={C.CONF_COLLECTOR_PN: "A1234567890123"},
+            options={C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND},
+        )
+        self.assertTrue(self._run_migrate(entry))
+
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY],
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertNotIn(C.CONF_CONNECTION_STRATEGY, entry.options)
+
+    def test_migration_does_not_reinvent_strategy_from_address_or_cloud(self) -> None:
+        # A cloud-looking endpoint / peer address must not influence the frozen
+        # value: the entry behaved as inbound, so inbound is what is preserved.
+        entry = types.SimpleNamespace(
+            entry_id="opaque",
+            version=3,
+            data={
+                C.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "some.vendor.example,18899,TCP",
+                C.CONF_COLLECTOR_IP: "192.0.2.55",
+                C.CONF_COLLECTOR_PN: "A1234567890123",
+            },
+            options={C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND},
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+
+    def test_migration_is_idempotent_on_already_canonical_entry(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="canonical",
+            version=_ENTRY_SCHEMA_VERSION,
+            data={C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND},
+            options={},
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_INBOUND
+        )
+        self.assertNotIn(C.CONF_CONNECTION_STRATEGY, entry.options)
 
 
 class MigrationMatrixTests(unittest.TestCase):
@@ -636,7 +802,7 @@ class MigrationMatrixTests(unittest.TestCase):
             options={},
         )
         self.assertTrue(self._run_migrate(entry))
-        self.assertEqual(entry.version, 3)
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
         self.assertEqual(
             entry.data[C.CONF_CONNECTION_STRATEGY],
             C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
@@ -697,22 +863,23 @@ class MigrationMatrixTests(unittest.TestCase):
         self.assertEqual(diag["connection_strategy_source"], "derived_operation_mode_cloud")
         self.assertEqual(diag["migration_axes_source"], "derived")
 
-    def test_entry_axis_diagnostics_reports_corrected_strategy(self) -> None:
+    def test_entry_axis_diagnostics_reports_canonical_strategy(self) -> None:
         diag = cp.entry_axis_diagnostics(
             {
                 C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
                 C.CONF_ENDPOINT_CONTROL_POLICY: C.ENDPOINT_CONTROL_EXTERNAL,
                 C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_COLLECTOR_PN: "PNCANONICAL0002",
             },
             {},
         )
 
         self.assertEqual(
             diag["connection_strategy"],
-            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            C.CONNECTION_STRATEGY_INBOUND,
         )
-        self.assertTrue(diag["may_send_callback_trigger"])
-        self.assertEqual(diag["migration_status"], "corrected")
+        self.assertFalse(diag["may_send_callback_trigger"])
+        self.assertEqual(diag["migration_status"], "ok")
 
 
 class OfflinePnLessCallbackMigrationTests(unittest.TestCase):

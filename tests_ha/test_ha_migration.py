@@ -71,6 +71,53 @@ async def test_legacy_entry_migrates_through_real_lifecycle(
     await hass.async_block_till_done()
 
 
+async def test_v3_conflicting_strategy_is_canonicalized_with_real_ha(
+    hass: HomeAssistant, fake_runtime
+) -> None:
+    """HA preserves the old effective value, then removes the options shadow."""
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Conflicting legacy strategy",
+        unique_id=f"collector:{SYNTHETIC_COLLECTOR_PN}",
+        version=3,
+        data={
+            "connection_type": "eybond",
+            "connection_mode": "known_ip",
+            "server_ip": SYNTHETIC_SERVER_IP,
+            "collector_ip": SYNTHETIC_COLLECTOR_IP,
+            "collector_pn": SYNTHETIC_COLLECTOR_PN,
+            "collector_operation_mode": "home_assistant_only",
+            "connection_strategy": "callback_on_demand",
+            "endpoint_control_policy": "external",
+            "proxy_enabled": False,
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "driver_hint": "auto",
+            "control_mode": "read_only",
+        },
+        # Before schema v4 options won. Preserve that effective behavior once,
+        # then remove this duplicate source of truth.
+        options={
+            "connection_strategy": "inbound",
+            "poll_interval": 30,
+            "poll_mode": "auto",
+        },
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.version == _ENTRY_SCHEMA_VERSION
+    assert entry.data["connection_strategy"] == "inbound"
+    assert "connection_strategy" not in entry.options
+    assert entry.state is ConfigEntryState.LOADED
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
 async def test_migration_does_not_derive_ownership_from_address(
     hass: HomeAssistant, fake_runtime
 ) -> None:

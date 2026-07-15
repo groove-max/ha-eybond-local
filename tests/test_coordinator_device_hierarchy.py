@@ -115,6 +115,8 @@ def _install_coordinator_stubs() -> None:
     const.COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE = "live_session"
     const.CONF_CONNECTION_TYPE = "connection_type"
     const.CONF_CONNECTION_MODE = "connection_mode"
+    const.CONF_ENTRY_ROLE = "entry_role"
+    const.ENTRY_ROLE_LISTENER = "listener"
     const.CONF_CONTROL_MODE = "control_mode"
     const.CONF_DETECTED_MODEL = "detected_model"
     const.CONF_DETECTED_SERIAL = "detected_serial"
@@ -810,6 +812,54 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(updates, [{"options": {}}])
         self.assertEqual(entry.options, {})
         self.assertEqual(coordinator._suppress_entry_reload_count, 0)
+        self.assertFalse(coordinator.consume_entry_reload_suppression())
+
+    def test_pre_listener_persistence_does_not_leave_reload_suppression(self) -> None:
+        """A startup write before listener registration cannot consume a token."""
+
+        entry = types.SimpleNamespace(data={}, options={}, update_listeners=[])
+
+        def _async_update_entry(config_entry, **kwargs) -> bool:
+            if "data" in kwargs:
+                config_entry.data = dict(kwargs["data"])
+            return True
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = entry
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry)
+        )
+        coordinator._suppress_entry_reload_count = 0
+
+        coordinator._async_update_entry_without_reload(data={"detected": True})
+
+        self.assertEqual(entry.data, {"detected": True})
+        self.assertEqual(coordinator._suppress_entry_reload_count, 0)
+        self.assertFalse(coordinator.consume_entry_reload_suppression())
+
+    def test_runtime_persistence_with_listener_arms_one_reload_suppression(self) -> None:
+        """Once setup registered a listener, one changed write arms one token."""
+
+        entry = types.SimpleNamespace(
+            data={}, options={}, update_listeners=[object()]
+        )
+
+        def _async_update_entry(config_entry, **kwargs) -> bool:
+            if "data" in kwargs:
+                config_entry.data = dict(kwargs["data"])
+            return True
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = entry
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry)
+        )
+        coordinator._suppress_entry_reload_count = 0
+
+        coordinator._async_update_entry_without_reload(data={"detected": True})
+
+        self.assertEqual(coordinator._suppress_entry_reload_count, 1)
+        self.assertTrue(coordinator.consume_entry_reload_suppression())
         self.assertFalse(coordinator.consume_entry_reload_suppression())
 
     def test_legacy_metadata_channel_migrates_out_of_driver_option(self) -> None:

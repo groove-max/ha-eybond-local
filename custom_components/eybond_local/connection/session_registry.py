@@ -453,6 +453,18 @@ class CallbackSessionRegistry:
         session is observed. Returns the matched observed session, or ``None`` if
         nothing matches yet (the claim is still recorded so a later-arriving
         session binds to it).
+
+        For an owner that ALREADY holds a claim this is fail-closed: it may only
+        ENRICH that claim (same identity, or filling a previously-empty field),
+        never re-point it. Re-binding an owner to another collector or another
+        physical socket is not this method's job and each legal transition has its
+        own explicit API -- :meth:`promote_claim_to_full_pn` / :meth:`reconcile_identity`
+        for identity enrichment, :meth:`retarget_claim_to_reconnected_session` for
+        the same collector on a new socket, :meth:`prepare_handoff` /
+        :meth:`complete_handoff` for ownership transfer, and :meth:`release` +
+        a fresh claim for a new attempt or a different identity. Re-claiming
+        wholesale used to REPLACE the record, which silently switched identity,
+        dropped the session/protocol and reset ``handoff_pending``.
         """
 
         entry_id = str(entry_id or "").strip()
@@ -466,6 +478,19 @@ class CallbackSessionRegistry:
             if other and other != entry_id:
                 raise ValueError(f"session_already_claimed:{pn}:{other}")
 
+        # Refuse EXPLICIT caller intent that would re-bind rather than enrich,
+        # before deriving anything and before touching any state. Silently
+        # ignoring it would be just as wrong as applying it: the caller believes
+        # the claim now points where it asked.
+        existing = self._claims.get(entry_id)
+        if existing is not None:
+            if pn and existing.collector_pn and not pn_is_same_identity(
+                existing.collector_pn, pn
+            ):
+                raise ValueError(f"claim_identity_mismatch:{existing.collector_pn}:{pn}")
+            if sid and existing.session_id and sid != existing.session_id:
+                raise ValueError(f"claim_session_mismatch:{existing.session_id}:{sid}")
+
         # Enrich the durable PN from the strongest matching observed session.
         matched: CallbackSession | None = None
         for session in self.observed_sessions():
@@ -477,19 +502,63 @@ class CallbackSessionRegistry:
                     session.has_strong_identity and not matched.has_strong_identity
                 ):
                     matched = session
+        # TRUST BOUNDARY: what the CALLER declares and what the matched SOCKET
+        # reports are two independent pieces of evidence, and a session_id lookup
+        # can land on a socket belonging to a different collector entirely. If
+        # they disagree the claim would assert a contradiction -- identity A bound
+        # to collector B's physical session -- and this method would hand back B's
+        # session as though it were A's. prefer_full_pn cannot arbitrate that: its
+        # contract is "the more complete spelling of ONE identity", so given two
+        # different identities it merely returns the longer string and silently
+        # picks a winner. Fail closed BEFORE any of it, for a new owner and an
+        # existing one alike. Both known identities are checked against the socket
+        # because prefix-identity is not transitive: A_short may match both
+        # A_full and a divergent A_other.
+        if matched is not None and matched.collector_pn:
+            for known in (pn, existing.collector_pn if existing is not None else ""):
+                if known and not pn_is_same_identity(known, matched.collector_pn):
+                    raise ValueError(
+                        f"claim_session_identity_mismatch:{known}:{matched.collector_pn}"
+                    )
         if matched is not None:
             if matched.collector_pn:
+                # Same identity is PROVEN immediately above, so this is a pure
+                # short->full enrichment of ONE collector -- prefer_full_pn's
+                # actual contract -- never a choice between two candidates.
                 pn = prefer_full_pn(pn, matched.collector_pn)
             if not sid:
                 sid = matched.session_id
-
-        self._claims[entry_id] = _Claim(
-            entry_id=entry_id,
-            collector_pn=pn,
-            session_id=sid,
-            session_protocol=str(session_protocol or "").strip()
-            or (matched.session_protocol if matched else ""),
+        protocol = str(session_protocol or "").strip() or (
+            matched.session_protocol if matched else ""
         )
+
+        if existing is None:
+            self._claims[entry_id] = _Claim(
+                entry_id=entry_id,
+                collector_pn=pn,
+                session_id=sid,
+                session_protocol=protocol,
+            )
+        else:
+            # Defense in depth. The explicit guard above proved the caller's PN is
+            # this claim's identity, and the trust-boundary guard proved any
+            # socket-DERIVED enrichment is too, so this cannot fire today -- it
+            # stays as a last gate on the write itself.
+            if pn and existing.collector_pn and not pn_is_same_identity(
+                existing.collector_pn, pn
+            ):
+                raise ValueError(f"claim_identity_mismatch:{existing.collector_pn}:{pn}")
+            # Enrichment only: never downgrade the identity, never overwrite a
+            # session/protocol already bound (a reconnect is retarget's job), and
+            # never touch handoff_pending -- re-claiming must not un-prepare a
+            # handoff that setup is about to complete. Same identity is proven by
+            # both guards above, so prefer_full_pn only ever picks the more
+            # complete spelling of the one collector.
+            existing.collector_pn = prefer_full_pn(existing.collector_pn, pn)
+            if not existing.session_id:
+                existing.session_id = sid
+            if not existing.session_protocol:
+                existing.session_protocol = protocol
         if matched is None:
             return None
         return self._attach_owner(matched)
@@ -511,6 +580,17 @@ class CallbackSessionRegistry:
         Raises ``ValueError`` when the session (or the durable identity it is
         currently reporting) is already owned by another entry: single-owner is
         preserved even for transient claims.
+
+        Fail-closed for an owner that already holds a claim: re-claiming the SAME
+        session id is idempotent, and any OTHER session id raises
+        ``claim_session_mismatch`` without mutating anything. A live claim is
+        never silently moved to another socket -- the same collector reappearing
+        on a new socket is :meth:`retarget_claim_to_reconnected_session` (which
+        proves the old socket is closed and the identity matches), and a new
+        attempt must :meth:`release` first. Re-claiming used to REPLACE the
+        record, so it also demoted a durable-PN claim back to a PN-less transient
+        one and reset ``handoff_pending``; the claim is now updated in place and
+        keeps its identity and handoff state.
         """
 
         entry_id = str(entry_id or "").strip()
@@ -526,26 +606,74 @@ class CallbackSessionRegistry:
         # The session's currently-reported durable identity may already be
         # owned (e.g. by a configured entry); a transient claim must not carve
         # that socket out from under its owner.
+        observed_pn = ""
         for session in self._normalized_sessions():
             if session.session_id != sid:
                 continue
-            if session.collector_pn:
-                owner = self.owner_for_pn(session.collector_pn)
+            observed_pn = session.collector_pn
+            if observed_pn:
+                owner = self.owner_for_pn(observed_pn)
                 if owner and owner != entry_id:
-                    raise ValueError(
-                        f"session_already_claimed:{session.collector_pn}:{owner}"
-                    )
+                    raise ValueError(f"session_already_claimed:{observed_pn}:{owner}")
             break
 
+        existing = self._claims.get(entry_id)
+        if existing is not None:
+            if existing.session_id and existing.session_id != sid:
+                raise ValueError(f"claim_session_mismatch:{existing.session_id}:{sid}")
+            if (
+                existing.collector_pn
+                and observed_pn
+                and not pn_is_same_identity(existing.collector_pn, observed_pn)
+            ):
+                # Same session id, but it is no longer the same collector: the
+                # socket this owner proved for A now reports B. Re-claiming it is
+                # NOT idempotent -- it would silently re-attest an identity the
+                # evidence now contradicts, on a claim that may already be a
+                # prepared handoff. Fail closed; a genuinely new attempt releases
+                # first, and a same-collector reconnect is retarget's job.
+                raise ValueError(
+                    f"claim_session_identity_mismatch:{existing.collector_pn}:{observed_pn}"
+                )
+            # In place: a durable PN already proven for this owner survives, and so
+            # does a prepared handoff. Only the (empty) socket binding is filled.
+            existing.session_id = sid
+            return
         self._claims[entry_id] = _Claim(entry_id=entry_id, session_id=sid)
 
     def promote_claim_to_full_pn(self, entry_id: str, full_pn: object) -> bool:
-        """Promote a transient session claim to an exact full durable PN.
+        """Promote a claim to the confirmed full durable PN of the SAME collector.
 
-        Called once the claimed session reports strong identity. Enforces the
-        single-owner invariant against durable PN claims; raises ``ValueError``
-        when another entry already owns the identity. Returns whether the claim
-        was updated.
+        "Promote" is strictly an ENRICHMENT of one identity, never a switch to
+        another. A claim is derived from a real session, so the collector it
+        stands for is a fact; the only thing an observation may add is a more
+        complete spelling of that same PN. Two guards, in this order:
+
+        * single owner -- another owner already holds this identity ->
+          ``session_already_claimed`` (unchanged, and checked first so the error
+          still names the real conflict);
+        * identity -- this claim already stands for a DIFFERENT collector ->
+          ``promote_identity_mismatch``. Without this, promoting A's claim to an
+          as-yet-unowned B silently re-pointed it, and the identity check in
+          :meth:`prepare_handoff` was then satisfied by the very value that had
+          just been smuggled in. That check stays as defense in depth; THIS is
+          where the invariant is actually enforced.
+
+        Both refusals raise BEFORE any mutation: claim PN, session and
+        ``handoff_pending`` are left byte-for-byte as they were.
+
+        Returns whether the claim now stands on the given identity (see below);
+        an identity is never DOWNGRADED, so promoting a claim that already holds
+        the full PN to a short prefix of it keeps the full one.
+
+        Return value
+        ------------
+        ``True``  -- the claim durably stands on this identity. Idempotent: a
+                     re-promotion to the same (or a weaker spelling of the same)
+                     identity is a safe no-op and still ``True``, because the
+                     postcondition the caller asked for holds.
+        ``False`` -- there was nothing to promote: no claim under this owner, or
+                     no usable PN. Never means "refused" -- a refusal raises.
         """
 
         entry_id = str(entry_id or "").strip()
@@ -558,7 +686,11 @@ class CallbackSessionRegistry:
         other = self.owner_for_pn(pn)
         if other and other != entry_id:
             raise ValueError(f"session_already_claimed:{pn}:{other}")
-        claim.collector_pn = pn
+        current = claim.collector_pn
+        if current and not pn_is_same_identity(current, pn):
+            raise ValueError(f"promote_identity_mismatch:{current}:{pn}")
+        # Empty -> adopt; short -> full enriches; full -> short keeps the full PN.
+        claim.collector_pn = prefer_full_pn(current, pn)
         return True
 
     def claimed_session_id(self, entry_id: str) -> str:
@@ -644,9 +776,53 @@ class CallbackSessionRegistry:
         other = self.owner_for_pn(pn)
         if other and other != owner:
             raise ValueError(f"session_already_claimed:{pn}:{other}")
+        if claim.collector_pn and not pn_is_same_identity(claim.collector_pn, pn):
+            # The claim already stands for a DIFFERENT collector. Preparing it for
+            # another identity would silently re-point a live claim (A -> B) and
+            # hand the wrong collector to the entry. prefer_full_pn must never be
+            # applied across identities -- it only ever enriches short -> full of
+            # the SAME one. Refuse without mutating the claim.
+            raise ValueError(f"handoff_identity_mismatch:{claim.collector_pn}:{pn}")
         claim.collector_pn = prefer_full_pn(claim.collector_pn, pn)
         claim.handoff_pending = True
         return True
+
+    def prepared_handoff_identity(self, attempt_owner: str, candidate_pn: object) -> str:
+        """Return the CERTIFIED canonical PN for a prepared handoff, else ``""``.
+
+        This is the registry's single public proof for a promotion trust
+        boundary. A caller may not promote an entry on a PN it merely believes
+        in: it must present an owner, and the registry answers with the identity
+        it can actually vouch for. Non-empty only when ALL hold:
+
+        * the owner still has a live claim here;
+        * that claim is a committed handoff (``prepare_handoff`` ran);
+        * the claim was taken on a CONCRETE observed session -- a PN-only claim
+          (``claim(owner, collector_pn=...)``) never proves that this collector
+          was seen on the wire for this attempt, so it can never promote;
+        * the claim's durable PN is the SAME identity as ``candidate_pn``, judged
+          by the registry's own short/full reconciliation -- never a string
+          compare.
+
+        The value returned is the CLAIM's PN, not the caller's: the claim holds
+        the session-derived identity, so a caller passing a short prefix gets the
+        full PN back and the entry is stamped with the fuller value. Callers must
+        not reach into the claim map to answer this themselves.
+        """
+
+        owner = str(attempt_owner or "").strip()
+        pn = normalize_pn(candidate_pn)
+        if not owner or not pn:
+            return ""
+        claim = self._claims.get(owner)
+        if claim is None or not claim.handoff_pending:
+            return ""
+        if not claim.session_id:
+            # Never certified: nothing was observed on the wire under this owner.
+            return ""
+        if not claim.collector_pn or not pn_is_same_identity(claim.collector_pn, pn):
+            return ""
+        return prefer_full_pn(claim.collector_pn, pn)
 
     def complete_handoff(self, full_pn: object, entry_id: str) -> bool:
         """Transfer a COMMITTED handoff for one PN to its permanent entry.

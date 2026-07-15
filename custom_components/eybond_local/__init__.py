@@ -59,6 +59,10 @@ from .const import (
     DOMAIN,
     DRIVER_HINT_AUTO,
     ENTRY_ROLE_LISTENER,
+    ENTRY_ROLE_PENDING_COLLECTOR,
+    CONF_PENDING_LAST_ATTEMPT_RESULT,
+    PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
+    CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     PLATFORMS,
 )
 from .platform_context import entity_setup_context
@@ -1380,7 +1384,7 @@ def _cleanup_obsolete_entities_allowed(coordinator) -> tuple[bool, str]:
     return True, "snapshot_metadata_consistent"
 
 
-_ENTRY_SCHEMA_VERSION = 3
+_ENTRY_SCHEMA_VERSION = 4
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -1401,13 +1405,26 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     inbound value is never overwritten just because the legacy connection_mode
     looks user-triggered. No endpoint is ever written during migration.
 
+    Version 4 makes ``entry.data`` the SINGLE canonical owner of
+    ``connection_strategy``. Before v4 the options form wrote the strategy into
+    ``entry.options`` while the explicit endpoint actions (HA-only / Cloud+HA
+    switch, bind, rollback) wrote it into ``entry.data``, and the resolver read
+    options first -- so a stale options copy silently shadowed the result of a
+    successful action. v4 freezes the strategy the entry ACTUALLY behaved with
+    (computed with the OLD options-first semantics, so a conflicting data/options
+    pair keeps its real pre-upgrade behavior rather than being "healed" by a
+    guess) into ``entry.data`` and DELETES the options copy. The value is never
+    re-derived from hostname, endpoint, cloud provider, collector kind or peer IP.
+
     Only missing axis fields are filled and only the provably mis-migrated
-    strategy is corrected; all legacy fields are left untouched for backward
-    compatibility.
+    strategy is corrected; all other legacy fields are left untouched for
+    backward compatibility.
     """
 
     from .connection.connection_policy import (
         correct_migrated_connection_strategy,
+        legacy_effective_connection_strategy,
+        legacy_options_strategy_keys,
         migrate_entry_axes,
     )
     from .const import CONF_CONNECTION_STRATEGY
@@ -1422,6 +1439,21 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = dict(entry.data)
     options = dict(entry.options)
     changed = False
+    options_changed = False
+
+    # v3 -> v4 (FIRST): freeze the entry's real pre-upgrade effective strategy --
+    # computed with the OLD options-first rule -- into data, before any later step
+    # reads it back. A conflicting data/options pair is preserved exactly as it
+    # behaved; no heuristic "healing".
+    pre_upgrade_strategy = legacy_effective_connection_strategy(data, options)
+    if data.get(CONF_CONNECTION_STRATEGY) != pre_upgrade_strategy:
+        data[CONF_CONNECTION_STRATEGY] = pre_upgrade_strategy
+        changed = True
+    # ... and drop the options copy so it can never shadow data again.
+    for key in legacy_options_strategy_keys():
+        if key in options:
+            del options[key]
+            options_changed = True
 
     # v1 -> v2: fill any missing axes (idempotent; explicit axes are preserved).
     for key, value in migrate_entry_axes(data, options).items():
@@ -1444,12 +1476,19 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     update_kwargs: dict[str, Any] = {"version": _ENTRY_SCHEMA_VERSION}
     if changed:
         update_kwargs["data"] = data
+    if options_changed:
+        update_kwargs["options"] = options
     try:
         hass.config_entries.async_update_entry(entry, **update_kwargs)
     except TypeError:
         # Older cores do not accept ``version=`` on async_update_entry.
+        legacy_kwargs: dict[str, Any] = {}
         if changed:
-            hass.config_entries.async_update_entry(entry, data=data)
+            legacy_kwargs["data"] = data
+        if options_changed:
+            legacy_kwargs["options"] = options
+        if legacy_kwargs:
+            hass.config_entries.async_update_entry(entry, **legacy_kwargs)
         try:
             entry.version = _ENTRY_SCHEMA_VERSION  # type: ignore[misc]
         except Exception:
@@ -1465,6 +1504,92 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def _async_setup_pending_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Run one pending-entry lifecycle step. Return True iff it promoted itself.
+
+    Dispatch is on the CANONICAL connection_strategy only (entry.data) -- never on
+    hostname, endpoint, collector/bridge kind or peer IP.
+
+    ``inbound``
+        Passive: send nothing, schedule nothing, claim nothing. The shared
+        listener keeps accepting sessions; an unclaimed strong-PN session is
+        offered to the user as a candidate in the pending options flow, and only
+        an explicit confirmation binds it. Returns False (stays pending).
+
+    ``callback_on_demand``
+        Exactly ONE bounded attempt: baseline -> one UDP trigger -> bounded wait
+        on the existing centralized attempt timeout. Promotes on a verified
+        durable full PN (returns True); otherwise raises ConfigEntryNotReady so
+        Home Assistant -- not this integration -- owns retry and backoff.
+    """
+
+    from .connection.connection_policy import resolve_connection_strategy
+    from .pending_collector import (
+        PendingPromotionError,
+        release_pending_attempt_claim,
+    )
+
+    strategy = resolve_connection_strategy(dict(entry.data), dict(entry.options))
+
+    if strategy != CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+        # inbound (and any non-callback value): fully passive. ZERO UDP.
+        logger.debug(
+            "EyeBond pending entry %s is inbound: waiting passively for the "
+            "collector to dial in (no trigger, no scheduler)",
+            entry.entry_id,
+        )
+        return False
+
+    from .onboarding.pending_attempt import async_run_pending_callback_attempt
+
+    outcome = await async_run_pending_callback_attempt(hass, entry)
+    if not outcome.collector_pn:
+        release_pending_attempt_claim(hass, outcome.handoff_owner)
+        await _async_record_pending_attempt_result(hass, entry, outcome.result)
+        # Home Assistant owns the retry cadence from here (its own backoff).
+        raise ConfigEntryNotReady(
+            f"EyeBond collector has not answered the callback yet ({outcome.result})"
+        )
+
+    from .pending_collector import async_promote_pending_entry
+
+    try:
+        async_promote_pending_entry(
+            hass,
+            entry,
+            collector_pn=outcome.collector_pn,
+            evidence=outcome.evidence,
+            handoff_owner=outcome.handoff_owner,
+            detected=outcome.detected,
+        )
+    except PendingPromotionError as exc:
+        # Late collision / failure: roll the handoff back and stay pending,
+        # unmutated. Never a partial promotion.
+        release_pending_attempt_claim(hass, outcome.handoff_owner)
+        await _async_record_pending_attempt_result(hass, entry, exc.reason)
+        raise ConfigEntryNotReady(
+            f"EyeBond pending collector could not be promoted ({exc.reason})"
+        ) from exc
+    return True
+
+
+async def _async_record_pending_attempt_result(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    result: str,
+) -> None:
+    """Persist the TYPED outcome of the last pending attempt (never raw text)."""
+
+    from .const import PENDING_ATTEMPT_RESULTS
+
+    typed = result if result in PENDING_ATTEMPT_RESULTS else PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED
+    if str(entry.data.get(CONF_PENDING_LAST_ATTEMPT_RESULT) or "") == typed:
+        return
+    data = dict(entry.data)
+    data[CONF_PENDING_LAST_ATTEMPT_RESULT] = typed
+    hass.config_entries.async_update_entry(entry, data=data)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EyeBond Local from a config entry."""
 
@@ -1473,6 +1598,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # keeps the integration loaded when there are no collector entries.
         entry.runtime_data = None
         return True
+
+    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_PENDING_COLLECTOR:
+        # A collector saved before its durable full PN is known. This is NOT a
+        # collector runtime: no coordinator, no platforms, no devices, no session
+        # claim, no endpoint write. It either stays passive (inbound) or performs
+        # exactly ONE bounded callback attempt (callback_on_demand) and, on a
+        # verified full PN, promotes itself in place and falls through to the
+        # normal runtime below.
+        promoted = await _async_setup_pending_entry(hass, entry)
+        if not promoted:
+            entry.runtime_data = None
+            return True
+        # Promoted in place: `entry` now carries the durable PN and the normal
+        # role, so continue into the normal setup path in this same call.
 
     from .runtime.coordinator import EybondLocalCoordinator
     from .services import async_setup_services
@@ -1567,6 +1706,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
         return True
 
+    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_PENDING_COLLECTOR:
+        # A pending entry started no coordinator and forwarded no platforms, so
+        # there is nothing to unload. Its only transient resource is the attempt
+        # claim, which the attempt itself already released on every non-promoting
+        # path. Never touch another entry's session, and never write an endpoint.
+        return True
+
     from .runtime.coordinator import EybondLocalCoordinator
 
     coordinator: EybondLocalCoordinator = entry.runtime_data
@@ -1582,6 +1728,13 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
         # Removing this explicit service entry is how the user disables the
         # integration completely. Never recreate it from its own removal.
+        return
+
+    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_PENDING_COLLECTOR:
+        # A pending entry never reached a durable identity, so it owns no cloud
+        # evidence and no permanent registry claim. Removing it must leave NO
+        # discovery suppression behind: the same collector must be addable again
+        # immediately.
         return
 
     from .support.cloud_evidence import remove_cloud_evidence_for_entry

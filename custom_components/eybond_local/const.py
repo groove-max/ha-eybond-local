@@ -64,6 +64,57 @@ CONF_ENTRY_ROLE = "entry_role"
 # coordinator, endpoint, or collector session.
 ENTRY_ROLE_LISTENER = "listener"
 
+# A collector the user saved BEFORE its durable full PN was known. It is not a
+# normal collector entry: it starts no coordinator/runtime, creates no devices or
+# entities, never writes an endpoint, and never claims a session by address. It
+# only carries the user's canonical connection_strategy choice plus (for
+# callback_on_demand) the target address to trigger. It is promoted to a normal
+# collector entry -- in place, same entry -- once a durable full PN is proven.
+ENTRY_ROLE_PENDING_COLLECTOR = "pending_collector"
+
+# Pending-only entry.data fields. All of these are deleted at promotion; none of
+# them is ever an identity.
+#
+# The synthetic pending identity (`pending:<ULID>`) mirrored from unique_id, so a
+# pending entry has a stable id that is NOT derived from an address. Two pending
+# entries behind one NAT/peer IP are therefore distinct.
+CONF_PENDING_ID = "pending_id"
+# The address a callback_on_demand pending entry triggers. For an inbound pending
+# entry this is a user-entered HINT only (diagnostics/UI), never identity and
+# never a reason to bind a session.
+CONF_PENDING_ADDRESS_HINT = "pending_address_hint"
+# Typed outcome of the last pending attempt, surfaced in the options flow. Never
+# raw exception text.
+CONF_PENDING_LAST_ATTEMPT_RESULT = "pending_last_attempt_result"
+
+PENDING_UNIQUE_ID_PREFIX = "pending:"
+
+# Typed pending attempt outcomes (translation keys; never raw exception text).
+PENDING_ATTEMPT_WAITING_INBOUND = "waiting_inbound"
+PENDING_ATTEMPT_WAITING_CALLBACK = "waiting_callback"
+PENDING_ATTEMPT_CALLBACK_TIMEOUT = "callback_timeout"
+PENDING_ATTEMPT_TARGET_UNAVAILABLE = "callback_target_unavailable"
+PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED = "identity_not_confirmed"
+# More than one DISTINCT strong identity appeared after this attempt's trigger.
+# The attempt cannot prove which collector answered IT, so nothing is bound.
+PENDING_ATTEMPT_IDENTITY_AMBIGUOUS = "callback_identity_ambiguous"
+# Another callback trigger was recorded (any entry/flow) while this attempt was
+# in flight, so a new session is not attributable to THIS trigger.
+PENDING_ATTEMPT_TRIGGER_INTERFERENCE = "callback_trigger_interference"
+PENDING_ATTEMPT_CANDIDATE_READY = "candidate_ready"
+PENDING_ATTEMPT_PROMOTED = "promoted"
+PENDING_ATTEMPT_RESULTS = {
+    PENDING_ATTEMPT_WAITING_INBOUND,
+    PENDING_ATTEMPT_WAITING_CALLBACK,
+    PENDING_ATTEMPT_CALLBACK_TIMEOUT,
+    PENDING_ATTEMPT_TARGET_UNAVAILABLE,
+    PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
+    PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
+    PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
+    PENDING_ATTEMPT_CANDIDATE_READY,
+    PENDING_ATTEMPT_PROMOTED,
+}
+
 DEFAULT_TCP_PORT = 8899
 DEFAULT_UDP_PORT = 58899
 DEFAULT_COLLECTOR_IP = ""
@@ -121,8 +172,18 @@ DEFAULT_CONNECTION_STRATEGY = CONNECTION_STRATEGY_INBOUND
 # so the connection policy and the onboarding verification agree on the values
 # without importing each other. Never consulted for transport decisions.
 CONF_CONNECTION_STRATEGY_EVIDENCE = "connection_strategy_evidence"
+# The collector was restarted and dialed back in on its own, with NO callback
+# trigger sent. This is the only genuine behavioral proof of `inbound`, and it
+# may ONLY be recorded by the restart/reconnect verification that actually
+# performed it. Never reuse it for a value the user merely asserted or picked.
 CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT = "reboot_reconnect"
+# The collector answered a one-shot UDP callback trigger on a NEW session.
 CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER = "callback_trigger"
+# The user explicitly picked an observed, unclaimed strong-PN session and bound
+# it to a waiting entry. That is honest provenance for `inbound` (the collector
+# demonstrably dials in) but it is NOT a restart/reconnect proof -- nothing was
+# restarted and nothing was triggered.
+CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION = "user_confirmed_session"
 
 # 2) endpoint_control_policy: whether the integration may manage the endpoint.
 CONF_ENDPOINT_CONTROL_POLICY = "endpoint_control_policy"
@@ -139,7 +200,8 @@ ENDPOINT_CONTROL_POLICIES = {
 # Safe default: never touch an endpoint the integration did not write.
 DEFAULT_ENDPOINT_CONTROL_POLICY = ENDPOINT_CONTROL_EXTERNAL
 
-# 3) proxy_enabled: whether an accepted inbound session should be proxied.
+# Retired compatibility field. Continuous cloud proxying was never implemented;
+# new options writes keep this false. Do not use it as runtime authority.
 CONF_PROXY_ENABLED = "proxy_enabled"
 DEFAULT_PROXY_ENABLED = False
 

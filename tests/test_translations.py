@@ -29,15 +29,16 @@ class TranslationShapeTests(unittest.TestCase):
                 ]
                 self.assertEqual(invalid_steps, [])
 
-    def test_phase4_connection_strategy_strings_exist(self) -> None:
-        # The new connection-strategy runtime field labels exist in every
-        # HA-native bundle (strings.json + translations/*.json).
+    def test_connection_strategy_strings_exist_without_retired_proxy_toggle(self) -> None:
+        # The active connection-strategy labels remain in every HA-native
+        # bundle, while the unimplemented steady-proxy control is absent.
         for path in TRANSLATION_FILES:
             with self.subTest(path=path.name):
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 runtime = payload["options"]["step"]["runtime"]
                 self.assertIn("connection_strategy", runtime["data"])
-                self.assertIn("proxy_enabled", runtime["data"])
+                self.assertNotIn("proxy_enabled", runtime["data"])
+                self.assertNotIn("proxy_enabled", runtime["data_description"])
                 self.assertIn("connection_strategy", runtime["data_description"])
 
     def test_phase4_connection_strategy_flow_labels_exist(self) -> None:

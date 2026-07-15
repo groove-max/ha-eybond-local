@@ -140,3 +140,52 @@ async def test_options_flow_entry_is_not_loaded_requirement(
     assert collector_entry.state is ConfigEntryState.NOT_LOADED
     result = await hass.config_entries.options.async_init(collector_entry.entry_id)
     assert result["type"] in (FlowResultType.FORM, FlowResultType.MENU)
+
+
+async def test_runtime_options_commit_strategy_to_data_with_one_reload(
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime
+) -> None:
+    """The real options manager keeps strategy canonical and reloads once."""
+
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert len(fake_runtime) == 1
+    assert collector_entry.runtime_data._suppress_entry_reload_count == 0
+
+    result = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "runtime"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "runtime"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "poll_mode": "auto",
+            "control_mode": "read_only",
+            "connection_strategy": "inbound",
+            "connection": {
+                "server_ip": SYNTHETIC_SERVER_IP,
+                "collector_ip": SYNTHETIC_COLLECTOR_IP,
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.0.2.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+                "driver_hint": "auto",
+            },
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert collector_entry.data["connection_strategy"] == "inbound"
+    assert "connection_strategy" not in collector_entry.options
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert len(fake_runtime) == 2, "runtime options must schedule exactly one reload"
+
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+    await hass.async_block_till_done()

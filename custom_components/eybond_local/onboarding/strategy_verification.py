@@ -44,6 +44,7 @@ from ..connection.session_registry import pn_is_same_identity
 from ..const import (
     CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
     CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
+    CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ STRATEGY_UNKNOWN = "unknown"
 # has to compare an onboarding literal.
 EVIDENCE_REBOOT_RECONNECT = CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT
 EVIDENCE_CALLBACK_TRIGGER = CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER
+# The user explicitly bound an observed, unclaimed strong-PN session. Honest
+# provenance for inbound, but NOT a restart/reconnect proof -- this verifier is
+# the only thing allowed to record EVIDENCE_REBOOT_RECONNECT.
+EVIDENCE_USER_CONFIRMED_SESSION = CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION
 
 # --- typed failure reasons ------------------------------------------------------
 FAILURE_STRONG_IDENTITY_TIMEOUT = "strong_identity_timeout"

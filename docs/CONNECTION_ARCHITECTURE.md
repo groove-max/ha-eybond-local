@@ -21,7 +21,7 @@ derives it from legacy fields exactly as `migrate_entry_axes` does).
 |---|---|---|
 | `connection_strategy` | `inbound` \| `callback_on_demand` | Who dials whom. |
 | `endpoint_control_policy` | `external` \| `integration_managed` | May the integration write/restore the collector's server endpoint. |
-| `proxy_enabled` | bool | Independent, capability-gated proxy-capture flag. |
+| `proxy_enabled` | bool | Retired compatibility field; new options writes keep it disabled. |
 
 ### `connection_strategy`
 
@@ -31,6 +31,35 @@ derives it from legacy fields exactly as `migrate_entry_axes` does).
   inbound session.
 - **`callback_on_demand`** — Home Assistant asks the collector to dial back.
   Runtime sends **exactly one** UDP trigger per connect attempt (see below).
+
+#### `entry.data` is the single canonical owner (schema v4)
+
+`connection_strategy` has **exactly one** owner: **`entry.data`**. Every authority
+that can change it writes there:
+
+| Authority | Writes |
+|---|---|
+| Config flow onboarding (verified) | `data` |
+| Options form ("how the collector connects") | `data`, via one atomic `async_update_entry(data=…, options=…)` |
+| HA-only / Cloud+HA operation-mode action | `data` (`_persist_connection_axes`) |
+| Bind to HA / rollback endpoint | `data` |
+
+`entry.options` **must never hold an active copy.** Before v4 it did: the options
+form wrote the strategy into options while the endpoint actions wrote it into
+data, and the resolver read options first — so a stale options value silently
+shadowed a successful Cloud+HA / HA-only switch and the user had to re-pick the
+strategy by hand. `resolve_connection_strategy` now reads **data first** and falls
+back to options **only** as a pre-migration legacy source;
+`_connection_strategy_source` reports `explicit_data` vs
+`legacy_options_pre_migration` so a support bundle shows which one was used.
+
+The options form commits data+options in a **single** `async_update_entry`, so the
+entry reloads exactly once and only after the state is consistent (the terminal
+`async_create_entry(data=options)` then writes an unchanged value, which HA
+ignores without firing a second listener).
+
+`endpoint_control_policy` and the endpoint write-provenance
+(`endpoint_written_value`/`at`) live in `entry.data` for the same reason.
 
 The runtime gates on the axis, never on the operation mode / hostname /
 collector type: `EybondLocalCoordinator._configure_reverse_discovery_mode` uses
@@ -56,9 +85,13 @@ gated by `may_auto_manage_endpoint(endpoint_control_policy)`.
 
 ### `proxy_enabled`
 
-Independent of the other two, and only offered when
-`collector_capabilities.proxy_capture` is true (community/ESP bridges cannot host
-proxy capture, so the toggle is hidden for them — gated in the options flow).
+This field is retained only so older entries migrate without losing schema
+compatibility. The former options toggle promised continuous HA + cloud
+forwarding, but no runtime consumer implemented that behavior, so the toggle is
+no longer exposed and new options writes normalize the field to `false`.
+
+Temporary **Collector traffic capture** is a separate, explicit diagnostics
+action with its own route lease and timer; it is not controlled by this field.
 
 ## Session registry owns identity
 
@@ -142,6 +175,21 @@ and it never writes or restores.
 
 ## Migration
 
-Config entry `VERSION` 1 → 2 (`async_migrate_entry` in `__init__.py`) derives the
-three axes from legacy fields via `migrate_entry_axes` (hostname-free). New
-entries are stamped at creation in the config flow.
+`async_migrate_entry` in `__init__.py`; new entries are stamped at creation by the
+config flow (`EybondLocalConfigFlow.VERSION`).
+
+| Step | What it does |
+|---|---|
+| 1 → 2 | Derives the axes from legacy fields via `migrate_entry_axes` (hostname-free). |
+| 2 → 3 | Corrective re-migration of the provably-unreachable inbound **cloud-primary** shape only (never manual/known-IP). |
+| 3 → 4 | Makes `entry.data` the canonical owner of `connection_strategy`: freezes the entry's real **pre-upgrade effective** value into data and **deletes the options copy**. |
+
+The v4 step uses `legacy_effective_connection_strategy()`, which reproduces the
+OLD **options-first** resolution exactly. That is deliberate: when data and options
+disagree, the entry really *behaved* as the options value said, so migration
+preserves that actual behavior instead of "healing" the conflict toward data. The
+frozen value is never re-derived from hostname, endpoint, cloud provider,
+collector kind or peer IP.
+
+After v4, `entry.options` is consulted for the strategy **only** as a legacy
+fallback for an entry that has not migrated yet.

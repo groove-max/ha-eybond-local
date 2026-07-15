@@ -1,15 +1,16 @@
-"""Single source of truth for the three collector-connection architecture axes.
+"""Single source of truth for collector connection architecture state.
 
 The integration used to infer transport ownership and endpoint control from the
 operation mode, the endpoint hostname, the peer IP, or the collector type. That
 coupling is what this module replaces. Each collector-backed config entry now
-carries three explicit, independent axes:
+carries two active axes and one retired compatibility field:
 
 - ``connection_strategy`` -- how Home Assistant obtains the TCP session
   (``inbound`` vs ``callback_on_demand``);
 - ``endpoint_control_policy`` -- whether the integration may manage the endpoint
   (``external`` vs ``integration_managed``);
-- ``proxy_enabled`` -- whether an accepted inbound session should be proxied.
+- ``proxy_enabled`` -- retired, fail-closed compatibility state. Continuous
+  cloud proxying was never wired into runtime and is not user-configurable.
 
 Every runtime/discovery decision that used to branch on operation mode or on an
 endpoint hostname should branch on these resolvers and predicates instead. The
@@ -33,9 +34,11 @@ from ..const import (
     CONF_COLLECTOR_PN,
     CONF_ENTRY_ROLE,
     ENTRY_ROLE_LISTENER,
+    ENTRY_ROLE_PENDING_COLLECTOR,
     CONF_CONNECTION_STRATEGY_EVIDENCE,
     CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
     CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
+    CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_CONNECTION_MODE,
@@ -121,7 +124,12 @@ def _derive_connection_strategy(
     ).strip()
     if evidence == CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER:
         return CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-    if evidence == CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT:
+    if evidence in (
+        CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
+        # The user bound an OBSERVED inbound session: the collector demonstrably
+        # dials in. Honest inbound proof, though not a restart/reconnect one.
+        CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
+    ):
         return CONNECTION_STRATEGY_INBOUND
 
     operation_mode = str(
@@ -163,7 +171,42 @@ def resolve_connection_strategy(
     data: Mapping[str, Any],
     options: Mapping[str, Any] | None = None,
 ) -> str:
-    """Return the effective connection strategy for one entry."""
+    """Return the effective connection strategy for one entry.
+
+    ``entry.data`` is the SINGLE canonical owner of the active strategy. It is
+    written by every authority that can change it: the config flow's verified
+    onboarding, the runtime's explicit endpoint actions (HA-only / Cloud+HA mode
+    switch, bind, rollback) and the options form. ``entry.options`` is consulted
+    ONLY as a pre-migration legacy fallback: schema v4 moves the value into data
+    and deletes the options copy, so after migration options can never shadow a
+    fresh data write. That shadowing was the old two-writers bug -- an options
+    copy left over from an earlier save silently overrode the result of a
+    successful Cloud+HA / HA-only action.
+    """
+
+    options = options or {}
+    canonical = str(data.get(CONF_CONNECTION_STRATEGY) or "").strip()
+    if canonical in CONNECTION_STRATEGIES:
+        return canonical
+    legacy = str(options.get(CONF_CONNECTION_STRATEGY) or "").strip()
+    if legacy in CONNECTION_STRATEGIES:
+        return legacy
+    return _derive_connection_strategy(data, options)
+
+
+def legacy_effective_connection_strategy(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any] | None = None,
+) -> str:
+    """Return the strategy a PRE-v4 entry effectively behaved with.
+
+    This reproduces the old options-first resolution EXACTLY (including the case
+    where a stale options copy shadowed data). Migration uses it to freeze the
+    entry's actual pre-upgrade behavior into ``entry.data`` instead of guessing a
+    "better" answer: a conflicting data/options pair is preserved as it really
+    behaved, never re-derived from hostname/endpoint/cloud/collector kind/peer IP.
+    Do not call this from runtime -- use :func:`resolve_connection_strategy`.
+    """
 
     options = options or {}
     explicit = str(_first_present(CONF_CONNECTION_STRATEGY, data, options) or "").strip()
@@ -267,7 +310,7 @@ def resolve_proxy_enabled(
     data: Mapping[str, Any],
     options: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Return whether proxy mode is enabled for one entry."""
+    """Return the retired persisted proxy flag for migration/diagnostics."""
 
     options = options or {}
     for source in (options, data):
@@ -294,11 +337,26 @@ def migrate_entry_axes(
 
     options = options or {}
     axes: dict[str, Any] = {
-        CONF_CONNECTION_STRATEGY: resolve_connection_strategy(data, options),
+        # Freeze the strategy the entry ACTUALLY behaved with before the upgrade
+        # (old options-first semantics), not a re-derived "better" answer. For a
+        # freshly created entry both resolvers agree, because a new entry has no
+        # options copy of the strategy at all.
+        CONF_CONNECTION_STRATEGY: legacy_effective_connection_strategy(data, options),
         CONF_ENDPOINT_CONTROL_POLICY: resolve_endpoint_control_policy(data, options),
         CONF_PROXY_ENABLED: resolve_proxy_enabled(data, options),
     }
     return axes
+
+
+def legacy_options_strategy_keys() -> tuple[str, ...]:
+    """Return the option keys the v4 migration must delete from ``entry.options``.
+
+    After v4, ``entry.data`` is the single canonical owner of the connection
+    strategy; leaving a copy in options would let a stale value shadow a fresh
+    write from an explicit endpoint action again.
+    """
+
+    return (CONF_CONNECTION_STRATEGY,)
 
 
 def correct_migrated_connection_strategy(
@@ -339,7 +397,12 @@ def correct_migrated_connection_strategy(
     evidence = str(
         _first_present(CONF_CONNECTION_STRATEGY_EVIDENCE, data, options) or ""
     ).strip()
-    if evidence == CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT:
+    if evidence in (
+        CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
+        CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
+    ):
+        # Behaviorally-proven inbound (restarted, or a user-bound observed
+        # session) is never "corrected" away by the legacy cloud-primary rule.
         return None
     if is_integration_managed_endpoint(resolve_endpoint_control_policy(data, options)):
         return None
@@ -362,19 +425,39 @@ def is_collector_backed_callback_entry(
 ) -> bool:
     """Return whether an entry owns its session through the callback registry.
 
-    True for every collector-backed entry -- both ``inbound`` and
+    True for every NORMAL collector entry -- both ``inbound`` and
     ``callback_on_demand`` claim/own via the :class:`CallbackSessionRegistry` by
-    durable PN. False ONLY for the integration listener/bootstrap entry, which is
-    the single explicit non-collector role (identified by ``entry_role`` -- an
-    architectural role, never a hostname/IP). Direct transports, if any ever
-    exist, must be excluded here by their own explicit role, never by address.
+    durable PN. False only for the explicit non-collector roles (identified by
+    ``entry_role`` -- an architectural role, never a hostname/IP):
+
+    * ``listener`` -- the integration bootstrap entry; owns no collector at all.
+    * ``pending_collector`` -- a collector saved before its durable full PN is
+      known. It is NOT yet a collector-backed entry: it must never claim a
+      session (it has no durable identity to claim by), must never be reported as
+      ``identity_binding_required`` (it is not broken -- it is waiting), and must
+      never be routed into the reconfigure repair flow. It gains this role only
+      at promotion, once a durable full PN is proven.
+
+    Direct transports, if any ever exist, must be excluded here by their own
+    explicit role, never by address.
     """
 
     options = options or {}
     role = str(_first_present(CONF_ENTRY_ROLE, data, options) or "").strip()
-    if role == ENTRY_ROLE_LISTENER:
+    if role in (ENTRY_ROLE_LISTENER, ENTRY_ROLE_PENDING_COLLECTOR):
         return False
     return True
+
+
+def is_pending_collector_entry(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether an entry is a not-yet-promoted pending collector."""
+
+    options = options or {}
+    role = str(_first_present(CONF_ENTRY_ROLE, data, options) or "").strip()
+    return role == ENTRY_ROLE_PENDING_COLLECTOR
 
 
 def collector_identity_binding_required(
@@ -403,10 +486,18 @@ def _connection_strategy_source(
     data: Mapping[str, Any],
     options: Mapping[str, Any],
 ) -> str:
-    """Return why the effective connection strategy has its value (provenance)."""
+    """Return why the effective connection strategy has its value (provenance).
 
-    if str(_first_present(CONF_CONNECTION_STRATEGY, data, options) or "").strip() in CONNECTION_STRATEGIES:
-        return "explicit"
+    Distinguishes the CANONICAL owner (entry.data) from the pre-migration LEGACY
+    fallback (entry.options), so a support bundle shows honestly which source the
+    running value came from and whether the entry still needs the v4 migration.
+    """
+
+    if str(data.get(CONF_CONNECTION_STRATEGY) or "").strip() in CONNECTION_STRATEGIES:
+        return "explicit_data"
+    if str(options.get(CONF_CONNECTION_STRATEGY) or "").strip() in CONNECTION_STRATEGIES:
+        # Pre-migration entry: data has no value yet, options still carries one.
+        return "legacy_options_pre_migration"
     operation_mode = str(
         _first_present(CONF_COLLECTOR_OPERATION_MODE, data, options) or ""
     ).strip()
@@ -452,7 +543,16 @@ def migration_diagnostics(
     options = options or {}
     strategy_source = _connection_strategy_source(data, options)
     policy_source = _endpoint_control_policy_source(data, options)
-    correction = correct_migrated_connection_strategy(data, options)
+    # Once entry.data explicitly owns the strategy, diagnostics must report that
+    # canonical value verbatim. The narrow v2->v3 corrective heuristic belongs
+    # to async_migrate_entry (and the explicit migration simulator), not to the
+    # running entry's support view; applying it here would create a second,
+    # contradictory strategy authority after schema v4.
+    correction = (
+        None
+        if strategy_source == "explicit_data"
+        else correct_migrated_connection_strategy(data, options)
+    )
 
     warnings: list[str] = []
     status = "ok"
@@ -476,7 +576,10 @@ def migration_diagnostics(
             "callback re-verification (reconfigure) to bind the collector identity."
         )
 
-    strategy_explicit = strategy_source == "explicit"
+    # "explicit_data" is the canonical source; the pre-migration options fallback
+    # is deliberately NOT counted as explicit, so migration_axes_source still
+    # reports such an entry as needing the v4 move into data.
+    strategy_explicit = strategy_source == "explicit_data"
     policy_explicit = policy_source == "explicit"
     if strategy_explicit and policy_explicit:
         axes_source = "explicit"
@@ -527,8 +630,7 @@ def entry_axis_diagnostics(
     """Return a compact, opaque view of the three axes for support bundles."""
 
     options = options or {}
-    correction = correct_migrated_connection_strategy(data, options)
-    strategy = correction if correction is not None else resolve_connection_strategy(data, options)
+    strategy = resolve_connection_strategy(data, options)
     policy = resolve_endpoint_control_policy(data, options)
     diagnostics: dict[str, Any] = {
         "connection_strategy": strategy,

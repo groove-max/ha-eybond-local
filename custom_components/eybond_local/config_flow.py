@@ -62,11 +62,17 @@ from .connection.entry import (
 from .connection.connection_policy import (
     collector_identity_binding_required,
     resolve_connection_strategy,
-    resolve_proxy_enabled,
 )
 from .connection.models import build_connection_spec, build_connection_spec_from_values
 from .connection.ui import ConnectionFormField
 from .const import (
+    CONF_PENDING_ADDRESS_HINT,
+    CONF_PENDING_ID,
+    CONF_PENDING_LAST_ATTEMPT_RESULT,
+    ENTRY_ROLE_PENDING_COLLECTOR,
+    PENDING_ATTEMPT_WAITING_CALLBACK,
+    PENDING_ATTEMPT_WAITING_INBOUND,
+    PENDING_UNIQUE_ID_PREFIX,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
@@ -202,9 +208,11 @@ from .connection.session_registry import (
     identity_source_is_strong,
     pn_is_same_identity,
 )
+from .onboarding.callback_matching import match_callback_answer
 from .onboarding.strategy_verification import (
     EVIDENCE_CALLBACK_TRIGGER,
     EVIDENCE_REBOOT_RECONNECT,
+    EVIDENCE_USER_CONFIRMED_SESSION,
     FAILURE_SESSION_CLAIMED,
     InboundStrategyVerifier,
     ObservedSessionRestartChannel,
@@ -1443,8 +1451,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     # Version 2 introduces the explicit connection architecture axes
     # (connection_strategy / endpoint_control_policy / proxy_enabled). See
     # ``connection/connection_policy.py`` and ``async_migrate_entry``. v3 adds a
-    # corrective re-migration for unreachable inbound cloud-primary entries.
-    VERSION = 3
+    # corrective re-migration for unreachable inbound cloud-primary entries. v4
+    # makes entry.data the single canonical owner of connection_strategy (the
+    # options copy is deleted), so a stale options value can no longer shadow an
+    # explicit endpoint action.
+    VERSION = 4
 
     def __init__(self) -> None:
         self._translation_bundle: dict[str, Any] = {}
@@ -1500,6 +1511,21 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # Reconfigure of an existing PN-less entry has no prior identity to match:
         # bind the FIRST freshly-triggered NEW strong session's full PN instead.
         self._verification_bind_any = False
+        # The strategy the user picked on the manual form. It is the source of
+        # truth BEFORE any active operation runs (inbound must never probe) and
+        # it is what gets persisted as the canonical entry.data strategy.
+        self._manual_chosen_strategy = ""
+        # Callback-trigger ledger generation sampled immediately BEFORE this
+        # flow's own active callback attempt, so the shared matcher can prove the
+        # attempt's trigger provenance (exactly one trigger: ours).
+        self._manual_trigger_generation_before: int | None = None
+        # How many callback triggers THIS flow's own attempt is EXPECTED to send.
+        # Declared up front by the code that is about to send them -- never
+        # inferred from the process-global ledger delta, which also counts other
+        # flows' triggers and would therefore hide interference. The shared
+        # matcher compares (global delta == expected): fewer means our trigger
+        # never went out, more means someone else triggered concurrently.
+        self._manual_expected_own_triggers = 0
         # NOTE: do NOT name this `_reconfigure_entry_id` -- Home Assistant's own
         # ConfigFlow base class defines that as a read-only property (it returns
         # context["entry_id"] for SOURCE_RECONFIGURE), so assigning to it raises
@@ -1518,6 +1544,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # the exact expected full PN proves the callback.
         self._manual_callback_baseline: frozenset[str] = frozenset()
         self._manual_verified_full_pn = ""
+        # The expectation DECLARED before this flow's first callback attempt
+        # (passive discovery, or the PN an entry already stores), as opposed to
+        # one a previous attempt adopted from its own probe result. ``None`` =
+        # not captured yet. Restored at the start of every attempt so retries are
+        # gated by durable evidence only. See _async_run_manual_callback_attempt.
+        self._manual_declared_expected_pn: str | None = None
         # A one-shot error surfaced on the next manual form render when a callback
         # verification reached entry creation without a durable strong PN.
         self._manual_pending_verification_error = ""
@@ -1569,8 +1601,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        if str(config_entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
+        role = str(config_entry.data.get(CONF_ENTRY_ROLE) or "")
+        if role == ENTRY_ROLE_LISTENER:
             return ListenerOptionsFlow(config_entry)
+        if role == ENTRY_ROLE_PENDING_COLLECTOR:
+            # A pending entry has no collector runtime, so the normal options flow
+            # (which assumes a live coordinator/capabilities) must never serve it.
+            # After promotion the role is cleared and the normal flow takes over.
+            return PendingCollectorOptionsFlow(config_entry)
         return EybondLocalOptionsFlow(config_entry)
 
     # ---- step: user (welcome) ----
@@ -2090,90 +2128,61 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
 
     def _manual_callback_verification_error(self) -> str:
-        """Return a flow error key when the manual probe fails callback verification.
+        """Return a flow error key when this attempt's callback is not confirmed.
 
-        Active while a passive-discovery verification context exists (match the
-        SAME full collector PN on a NEW session) or while reconfigure runs in
-        bind-any mode (adopt the FIRST freshly-triggered NEW strong session's full
-        PN, because a PN-less entry has no prior identity to match). In either
-        case a different PN (even behind the same peer IP), the old session id, or
-        no strong confirmed identity keeps the entry uncreated/unrepaired.
+        This method owns only the CLAIM side-effects and the flow's error keys.
+        The verdict -- did a collector answer THIS attempt? -- comes exclusively
+        from :func:`onboarding.callback_matching.match_callback_answer`, the one
+        matcher shared with the pending entry's runtime attempt. Nothing here
+        re-implements baseline / strength / identity / ambiguity / provenance.
+
+        Two contexts, one rule set:
+
+        * passive-discovery verification -- an ``expected`` identity is known and
+          the answer must be it;
+        * PN-less reconfigure repair (``bind_any``) -- no prior identity, so the
+          probe's own result PN is the identity evidence.
         """
 
         expected = self._verification_expected_pn
         bind_any = self._verification_bind_any
-        if not expected and not bind_any:
+        # An ACTIVE callback attempt must always be verified, even when no prior
+        # identity is known (a generic manual callback_on_demand flow). Otherwise
+        # the flow would accept whatever the probe happened to surface -- including
+        # a pre-existing session belonging to a different collector -- without any
+        # post-baseline / identity / provenance proof.
+        active_attempt = self._manual_expected_own_triggers > 0
+        if not expected and not bind_any and not active_attempt:
             return ""
         self._manual_verified_full_pn = ""
         # A claim from any prior verification attempt is stale until THIS attempt
         # re-confirms the identity on the wire, so drop it first: a mismatch or
-        # timeout below must leave nothing owned (item 2 cleanup on failure).
+        # timeout below must leave nothing owned.
         self._release_verification_claim()
+
         result = self._manual_result
         collector = getattr(result, "collector", None)
         result_pn = str(
             getattr(getattr(collector, "collector", None), "collector_pn", "") or ""
         ).strip()
-        # Identity gate on the probe result: exact match, or a strict weak->strong
-        # enrichment when the discovery-time expected PN was still short. A
-        # shorter/different PN is a different collector. Bind-any skips this
-        # (there is no expected PN); the session gate below still requires strong
-        # identity.
-        if not bind_any:
-            if not result_pn:
-                return "callback_timeout"
-            if result_pn != expected and not (
-                len(result_pn) > len(expected)
-                and pn_is_same_identity(expected, result_pn)
-            ):
-                return "callback_identity_mismatch"
-        # Behavioral gate: collect every session id ABSENT from the pre-trigger
-        # baseline that has registry-certified strong identity and a full PN. The
-        # old session, parallel pre-trigger sessions, and weak observations never
-        # confirm. Peer IP is never consulted.
-        candidates: list[tuple[str, str]] = []
-        for session in self._verification_sessions_source():
-            session_id = str(session.get("session_id") or "").strip()
-            if not session_id or session_id in self._manual_callback_baseline:
-                continue
-            if session_id == self._verification_old_session_id:
-                continue
-            state = str(session.get("state") or "").strip().lower()
-            if state.startswith("closed") or state == "route_identity_mismatch":
-                continue
-            if not session.get("has_strong_identity"):
-                continue
-            session_pn = str(session.get("collector_pn") or "").strip()
-            if not session_pn:
-                continue
-            if bind_any:
-                # Repair binds by identity, never by inventory order: if the probe
-                # returned a strong PN, only that same identity may bind; otherwise
-                # every new strong identity is a candidate and >1 is ambiguous.
-                if result_pn and not pn_is_same_identity(result_pn, session_pn):
-                    continue
-            elif session_pn != expected and not (
-                len(session_pn) > len(expected)
-                and pn_is_same_identity(expected, session_pn)
-            ):
-                continue
-            candidates.append((session_id, session_pn))
 
-        if not candidates:
-            return "callback_timeout"
-        if bind_any:
-            distinct: list[str] = []
-            for _sid, pn in candidates:
-                if not any(pn_is_same_identity(known, pn) for known in distinct):
-                    distinct.append(pn)
-            if len(distinct) > 1:
-                # Two+ different collectors answered: never guess -- ask the user.
-                return "callback_identity_ambiguous"
-        # All surviving candidates share one durable identity; own exactly one.
-        session_id, session_pn = candidates[0]
-        if not self._claim_manual_callback_session(session_id, session_pn):
+        match = match_callback_answer(
+            self._verification_sessions_source(),
+            baseline_session_ids=self._manual_callback_baseline,
+            result_pn=result_pn,
+            expected_pn=expected,
+            old_session_id=self._verification_old_session_id,
+            trigger_generation_before=self._manual_trigger_generation_before,
+            trigger_generation_after=get_callback_trigger_ledger().snapshot_generation(),
+            expected_own_triggers=self._manual_expected_own_triggers,
+        )
+        if not match.confirmed:
+            return match.result or "callback_timeout"
+
+        # Verdict accepted: take ownership of exactly the session that answered.
+        if not self._claim_manual_callback_session(match.session_id, match.collector_pn):
             return "callback_identity_conflict"
-        self._manual_verified_full_pn = session_pn
+        self._manual_verified_full_pn = match.collector_pn
         return ""
 
     def _claim_manual_callback_session(
@@ -3311,44 +3320,131 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             if not errors:
                 self._manual_config = dict(flat_input)
-                if self._verification_expected_pn:
-                    # Baseline BEFORE the one-shot trigger: any session id that
-                    # already existed (the observed session, parallel sessions,
-                    # sessions of other collectors) can never count as the
-                    # answer. This also covers discovery payloads without a
-                    # session id.
-                    self._manual_callback_baseline = frozenset(
-                        str(session.get("session_id") or "").strip()
-                        for session in self._verification_sessions_source()
-                        if str(session.get("session_id") or "").strip()
-                    )
-                self._manual_result = await self._async_probe_manual_target(flat_input)
-                verification_error = self._manual_callback_verification_error()
+                # The user's CHOSEN strategy is the source of truth BEFORE any
+                # active operation. It decides whether this attempt may reach out
+                # at all -- never the connection_mode/hostname/IP derivation.
+                chosen_strategy = str(
+                    flat_input.get(CONF_CONNECTION_STRATEGY) or ""
+                ).strip()
+                if chosen_strategy not in CONNECTION_STRATEGIES:
+                    chosen_strategy = CONNECTION_STRATEGY_INBOUND
+                self._manual_chosen_strategy = chosen_strategy
+
+                if chosen_strategy == CONNECTION_STRATEGY_INBOUND:
+                    # INBOUND: the collector dials Home Assistant on its own.
+                    # Home Assistant must send NOTHING -- no UDP callback trigger
+                    # and no active auto-detect probe. Only passively observe what
+                    # the shared listener already has.
+                    return await self._async_manual_inbound_observe(flat_input)
+
+                # CALLBACK_ON_DEMAND: one bounded attempt, and it needs a target.
+                if not str(flat_input.get(CONF_COLLECTOR_IP) or "").strip():
+                    errors[CONF_COLLECTOR_IP] = "callback_target_required"
+                    return self._async_show_manual_form(user_input, errors)
+
+                # ONE attempt, whole lifecycle owned by the shared helper:
+                # fresh baseline + fresh ledger generation + probe + matcher +
+                # claim. Nothing from a previous attempt survives.
+                verification_error = await self._async_run_manual_callback_attempt(
+                    flat_input
+                )
                 if verification_error:
-                    # Verification context (from passive discovery): the one-shot
-                    # callback attempt did not reach the expected collector on a
-                    # new session. Keep the form editable so the user can fix
-                    # the address and retry -- no entry is created.
+                    # The one-shot callback attempt did not reach a collector on
+                    # a new session. Keep the form editable so the user can fix
+                    # the address and retry -- no entry is created and this flow
+                    # now holds no verified PN and no claim.
                     errors["base"] = verification_error
                 else:
-                    if self._verification_expected_pn:
-                        # Behavioral proof: the collector answered this flow's
-                        # one-shot callback trigger with a NEW strong session of
-                        # the exact full PN.
-                        abort = await self._async_adopt_enriched_collector_pn(
-                            self._manual_verified_full_pn
-                        )
-                        if abort is not None:
-                            return abort
-                        self._verified_connection_strategy = (
-                            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-                        )
-                        self._verified_strategy_evidence = EVIDENCE_CALLBACK_TRIGGER
-                    if self._manual_result.match is not None and self._manual_result.confidence == "high":
-                        self._detection_summary_context = "manual"
-                        return await self.async_step_detection_summary()
-                    return await self.async_step_manual_confirm()
+                    return await self._async_route_after_manual_callback_success()
 
+        return self._async_show_manual_form(user_input, errors)
+
+    async def _async_run_manual_callback_attempt(self, settings: dict[str, Any]) -> str:
+        """Run ONE complete manual callback attempt. Returns a typed error, or "".
+
+        This owns the WHOLE attempt lifecycle so no caller can assemble half of
+        it. Every active manual callback path goes through here -- the first
+        submit, "probe again", and reconfigure repair -- which is what keeps a
+        retry from mixing a new result with the previous attempt's proof:
+
+        1. drop the previous attempt's verdict (``_manual_verified_full_pn``);
+        2. release ONLY this flow's own previous verification claim (another
+           flow's/entry's claim is never touched);
+        3. snapshot a FRESH baseline of session ids;
+        4. snapshot a FRESH ledger generation, immediately before the trigger;
+        5. run the one-shot active probe;
+        6. get the verdict from the single shared matcher;
+        7. on success, claim/promote exactly the session that answered THIS
+           attempt and record the verified PN.
+
+        On any failure the flow is left holding nothing: no verified PN and no
+        claim, so a stale identity can never leak into an entry.
+        """
+
+        # 1 + 2: nothing from the previous attempt survives into this one.
+        #
+        # Including the EXPECTATION. Two very different things live in
+        # _verification_expected_pn: a DECLARED identity (passive discovery, or
+        # the PN an entry already stores on reconfigure repair) which is durable
+        # evidence and must gate every attempt; and an identity a previous
+        # attempt of THIS flow adopted from its own probe result
+        # (_async_adopt_enriched_collector_pn). The latter is not evidence about
+        # what the collector at this address is -- it is just what answered last
+        # time -- so letting it gate the retry would make attempt 1's incidental
+        # finding permanently veto attempt 2. Capture what was declared before
+        # this flow ever probed, and restore it, so a retry is judged exactly as
+        # a first attempt would be.
+        if self._manual_declared_expected_pn is None:
+            self._manual_declared_expected_pn = self._verification_expected_pn
+        else:
+            self._verification_expected_pn = self._manual_declared_expected_pn
+        self._manual_verified_full_pn = ""
+        self._release_verification_claim()
+
+        # 3: a FRESH baseline. Sessions that already exist -- including ones the
+        # previous attempt created -- can never answer the trigger below.
+        self._manual_callback_baseline = frozenset(
+            str(session.get("session_id") or "").strip()
+            for session in self._verification_sessions_source()
+            if str(session.get("session_id") or "").strip()
+        )
+        # 4: a FRESH ledger generation, sampled immediately before our trigger.
+        self._manual_trigger_generation_before = (
+            get_callback_trigger_ledger().snapshot_generation()
+        )
+        # 5 + 6 + 7 (the matcher's verdict, then claim/promote, live in
+        # _manual_callback_verification_error).
+        self._manual_result = await self._async_probe_manual_target(settings)
+        return self._manual_callback_verification_error()
+
+    async def _async_route_after_manual_callback_success(self) -> ConfigFlowResult:
+        """Adopt the verified identity and route on, after a confirmed attempt."""
+
+        if self._manual_verified_full_pn:
+            # Behavioral proof: the collector answered THIS attempt's one-shot
+            # trigger with a NEW strong session of that exact full PN, and the
+            # matcher confirmed it. The claim for that session is already held.
+            abort = await self._async_adopt_enriched_collector_pn(
+                self._manual_verified_full_pn
+            )
+            if abort is not None:
+                return abort
+            self._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+            self._verified_strategy_evidence = EVIDENCE_CALLBACK_TRIGGER
+        if (
+            self._manual_result is not None
+            and self._manual_result.match is not None
+            and self._manual_result.confidence == "high"
+        ):
+            self._detection_summary_context = "manual"
+            return await self.async_step_detection_summary()
+        return await self.async_step_manual_confirm()
+
+    def _async_show_manual_form(
+        self,
+        user_input: dict[str, Any] | None,
+        errors: dict[str, str],
+    ) -> ConfigFlowResult:
         defaults = self._build_manual_defaults(user_input, self._selected_result)
         data_schema = vol.Schema(
             {
@@ -3356,6 +3452,24 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     self._current_connection_type(),
                     fields=self._connection_branch().form_layout.manual_fields,
                     values=defaults,
+                ),
+                # The user states HOW the collector connects. This is the CANONICAL
+                # connection_strategy and is saved straight into entry.data.
+                vol.Required(
+                    CONF_CONNECTION_STRATEGY,
+                    default=str(
+                        defaults.get(CONF_CONNECTION_STRATEGY)
+                        or CONNECTION_STRATEGY_INBOUND
+                    ),
+                ): _connection_strategy_selector(
+                    self._tr(
+                        "common.dynamic.connection_strategy_inbound",
+                        "Collector connects to Home Assistant on its own",
+                    ),
+                    self._tr(
+                        "common.dynamic.connection_strategy_callback_on_demand",
+                        "Ask the collector to connect when needed",
+                    ),
                 ),
                 vol.Required("advanced_connection"): section(
                     vol.Schema(
@@ -3378,6 +3492,91 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "verification_note": self._manual_verification_note(),
             },
         )
+
+    async def _async_manual_inbound_observe(
+        self,
+        flat_input: dict[str, Any],
+    ) -> ConfigFlowResult:
+        """Inbound onboarding: observe only. Send ZERO UDP, run NO active probe.
+
+        The user stated the collector dials Home Assistant on its own, so Home
+        Assistant must not trigger it and must not run an active auto-detect. It
+        only looks at what the shared listener already observed:
+
+        * a strong, unclaimed session whose durable full PN is already known ->
+          create the NORMAL collector entry through the existing path;
+        * otherwise -> save a PENDING entry that waits for the collector.
+
+        The collector address is optional here and is kept only as a hint.
+        """
+
+        from .pending_collector import list_inbound_candidates
+
+        candidates = list_inbound_candidates(self.hass)
+        expected = str(self._verification_expected_pn or "").strip()
+        chosen_pn = ""
+        chosen_session_id = ""
+        if expected:
+            # ONLY a passive-discovery context knows WHICH collector this flow is
+            # for. Bind that identity and nothing else.
+            #
+            # A generic manual inbound flow deliberately has NO such link: a live
+            # unclaimed collector -- even the only one on the network right now --
+            # may belong to another pending flow or to a user who has not chosen
+            # it. "It is currently the only one" is not consent, so this flow
+            # never adopts it. It saves a pending entry, and the user binds a
+            # candidate explicitly in the pending options flow -- which is the
+            # only thing allowed to record user_confirmed_session.
+            for candidate in candidates:
+                if pn_is_same_identity(expected, candidate["collector_pn"]):
+                    chosen_pn = candidate["collector_pn"]
+                    chosen_session_id = candidate["session_id"]
+                    break
+
+        if not chosen_pn:
+            # Nothing (or nothing unambiguous) is observable yet. Save a pending
+            # entry; the user confirms a candidate later in its options flow.
+            self._manual_result = OnboardingResult(
+                connection_type=self._current_connection_type(),
+                connection_mode="manual",
+                next_action="create_pending_entry",
+                last_error="inbound_awaiting_session",
+            )
+            return await self._async_create_pending_collector_entry()
+
+        # A durable identity this flow is explicitly FOR is already observable.
+        # Own that exact session first: claim_session -> promote to the full PN
+        # (prepare_handoff then happens at entry creation).
+        if not self._claim_manual_callback_session(chosen_session_id, chosen_pn):
+            # Owned by another entry/flow: fail closed and save a pending entry.
+            self._manual_result = OnboardingResult(
+                connection_type=self._current_connection_type(),
+                connection_mode="manual",
+                next_action="create_pending_entry",
+                last_error="inbound_awaiting_session",
+            )
+            return await self._async_create_pending_collector_entry()
+        abort = await self._async_adopt_enriched_collector_pn(chosen_pn)
+        if abort is not None:
+            return abort
+        self._manual_verified_full_pn = chosen_pn
+        # The user's choice is the canonical strategy; the evidence is honest --
+        # the collector demonstrably dialed in, but nothing was restarted here.
+        self._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
+        self._verified_strategy_evidence = EVIDENCE_USER_CONFIRMED_SESSION
+        self._manual_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip=str(flat_input.get(CONF_COLLECTOR_IP, "") or ""),
+                source="inbound_observed",
+                ip=str(flat_input.get(CONF_COLLECTOR_IP, "") or ""),
+                connected=True,
+                collector=CollectorInfo(collector_pn=chosen_pn),
+            ),
+            connection_type=self._current_connection_type(),
+            connection_mode="manual",
+            next_action="create_pending_entry",
+        )
+        return await self.async_step_manual_confirm()
 
     def _manual_verification_note(self) -> str:
         """Honest labeling for the prefilled address in the verification context.
@@ -3444,11 +3643,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not self._manual_config:
             return await self.async_step_manual()
 
-        self._manual_result = await self._async_probe_manual_target(self._manual_config)
-        if self._manual_result.match is not None and self._manual_result.confidence == "high":
-            self._detection_summary_context = "manual"
-            return await self.async_step_detection_summary()
-        return await self.async_step_manual_confirm()
+        # A retry is a FULL new attempt, not a bare re-probe. It must never reuse
+        # the previous attempt's baseline, ledger generation, verified PN or
+        # claim -- otherwise a second probe that reaches collector B could be
+        # combined with the first attempt's proof/claim for collector A.
+        verification_error = await self._async_run_manual_callback_attempt(
+            self._manual_config
+        )
+        if verification_error:
+            # Failure leaves nothing behind: no verified PN, no claim. Send the
+            # user back to the editable form so a stale identity can never be
+            # turned into an entry.
+            self._manual_pending_verification_error = verification_error
+            return await self.async_step_manual()
+        return await self._async_route_after_manual_callback_success()
 
     async def async_step_manual_edit_settings(
         self,
@@ -3466,10 +3674,97 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
+        """Save the collector for later: a normal entry if the PN is already known.
+
+        If verification already proved a durable full PN, this is an ordinary
+        collector entry and takes the existing path. Otherwise the user gets an
+        explicit PENDING entry (its own role) that waits for the collector -- it
+        is never a normal PN-less collector entry.
+        """
+
         del user_input
         if not self._manual_config:
             return await self.async_step_manual()
-        return await self._async_create_manual_entry(self._manual_config, self._manual_result)
+        result = await self._async_create_manual_entry(
+            self._manual_config, self._manual_result
+        )
+        if result.get("type") == "form" and result.get("step_id") == "manual":
+            # The strict collector-PN invariant refused a normal entry (no durable
+            # identity yet). That is exactly the pending case: save it explicitly.
+            return await self._async_create_pending_collector_entry()
+        return result
+
+    async def _async_create_pending_collector_entry(self) -> ConfigFlowResult:
+        """Create an explicit pending-collector entry (no durable PN yet).
+
+        Identity is a synthetic ``pending:<ULID>`` -- never an address, so several
+        pending entries can share one NAT/peer IP. The user's canonical strategy
+        choice goes straight into ``entry.data``; nothing is ever written to
+        options. No endpoint is written and no session is claimed.
+        """
+
+        from homeassistant.util.ulid import ulid_now
+
+        config = dict(self._manual_config)
+        strategy = str(
+            config.get(CONF_CONNECTION_STRATEGY)
+            or self._verified_connection_strategy
+            or CONNECTION_STRATEGY_INBOUND
+        ).strip()
+        if strategy not in CONNECTION_STRATEGIES:
+            strategy = CONNECTION_STRATEGY_INBOUND
+
+        address_hint = _sanitize_pending_collector_ip(
+            str(config.get(CONF_COLLECTOR_IP, "") or ""),
+            server_ip=str(config.get(CONF_SERVER_IP, "")),
+            discovery_target=str(config.get(CONF_DISCOVERY_TARGET, "")),
+        )
+        if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and not address_hint:
+            # callback_on_demand has nowhere to send its single trigger.
+            self._manual_pending_verification_error = "callback_target_required"
+            return await self.async_step_manual()
+
+        pending_id = ulid_now()
+        await self.async_set_unique_id(f"{PENDING_UNIQUE_ID_PREFIX}{pending_id}")
+        abort = self._abort_if_unique_id_configured()
+        if abort is not None:
+            return abort
+
+        connection_type = self._current_connection_type()
+        data = with_driver_hint(
+            build_manual_entry_settings(connection_type, config),
+            driver_hint=config.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+        )
+        data.setdefault(CONF_CONNECTION_TYPE, connection_type)
+        data[CONF_ENTRY_ROLE] = ENTRY_ROLE_PENDING_COLLECTOR
+        data[CONF_PENDING_ID] = pending_id
+        # CANONICAL owner: entry.data. Never entry.options.
+        data[CONF_CONNECTION_STRATEGY] = strategy
+        # For inbound this is only a diagnostic hint; it is NEVER an identity and
+        # never binds a session. For callback_on_demand it is the trigger target.
+        data[CONF_PENDING_ADDRESS_HINT] = address_hint
+        data[CONF_COLLECTOR_IP] = address_hint
+        data[CONF_COLLECTOR_PN] = ""
+        data[CONF_PENDING_LAST_ATTEMPT_RESULT] = (
+            PENDING_ATTEMPT_WAITING_INBOUND
+            if strategy == CONNECTION_STRATEGY_INBOUND
+            else PENDING_ATTEMPT_WAITING_CALLBACK
+        )
+        # The endpoint is NEVER touched when saving a pending entry.
+        return self.async_create_entry(
+            title=self._pending_entry_title(strategy, address_hint),
+            data=data,
+            options={},
+        )
+
+    def _pending_entry_title(self, strategy: str, address_hint: str) -> str:
+        base = self._tr(
+            "common.dynamic.pending_entry_title",
+            "EyeBond collector (waiting)",
+        )
+        if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and address_hint:
+            return f"{base} {address_hint}"
+        return base
 
     # ---- step: reconfigure (repair an existing PN-less collector entry) ----
 
@@ -3532,15 +3827,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             if not errors:
                 self._manual_config = dict(flat_input)
-                # Baseline BEFORE the one-shot trigger: pre-existing sessions can
-                # never count as the callback answer.
-                self._manual_callback_baseline = frozenset(
-                    str(session.get("session_id") or "").strip()
-                    for session in self._verification_sessions_source()
-                    if str(session.get("session_id") or "").strip()
+                # Repair is an active callback attempt too: same shared lifecycle
+                # (fresh baseline + ledger generation + probe + matcher + claim),
+                # so a repeated repair can never reuse a previous attempt's proof.
+                verification_error = await self._async_run_manual_callback_attempt(
+                    flat_input
                 )
-                self._manual_result = await self._async_probe_manual_target(flat_input)
-                verification_error = self._manual_callback_verification_error()
                 if verification_error:
                     errors["base"] = verification_error
                 else:
@@ -3849,10 +4141,24 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # is doomed to collector_offline. Only a REGISTRY-CERTIFIED strong full PN
         # (fc2_parameter_2 / at_dtupn, held under the pending-handoff owner) is
         # durable evidence -- never the discovery-time short/expected PN alone,
-        # which is transient and unproven. The strong probe result already sets
-        # ``collector_pn`` above; this only fills in the verified-callback case.
+        # which is transient and unproven.
         verified_full_pn = str(self._manual_verified_full_pn or "").strip()
-        if not collector_pn and verified_full_pn:
+        if self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+            # On the callback path the VERIFIED identity is the ONLY identity the
+            # entry may carry -- it fully REPLACES the probe's own result PN.
+            # That result is not evidence of identity: it says what answered the
+            # address, not that the collector answered THIS attempt's trigger on
+            # a new strong session, and the registry claim is held for the
+            # verified PN alone. Trusting the raw result would let an attempt
+            # that FAILED verification (timeout, mismatch, interference) still
+            # name the entry -- binding an identity this flow owns no claim for,
+            # and in a retry it would resurrect the previous attempt's collector.
+            # Unverified -> no PN -> the strict invariant below refuses a normal
+            # entry and the caller saves an explicit pending one instead.
+            collector_pn = verified_full_pn
+        elif not collector_pn and verified_full_pn:
+            # Inbound: the strong probe result already set ``collector_pn``; this
+            # only fills in the observed/claimed-session case.
             collector_pn = verified_full_pn
 
         assist_state = self._smartess_cloud_assist_state_for_result(result)
@@ -3864,12 +4170,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             server_ip=str(user_input.get(CONF_SERVER_IP, "")),
             discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
         )
-        if not (collector_pn or detected_serial) and collector_ip:
-            existing_pending_entry = self._existing_pending_entry_for_collector_ip(
-                collector_ip
-            )
-            if existing_pending_entry is not None:
-                return self.async_abort(reason="already_configured")
+        # NOTE: there is deliberately NO address-based uniqueness gate here.
+        # A collector's identity is its durable full PN, never its address: two
+        # collectors can legitimately sit behind one NAT/peer IP, so blocking a
+        # second identity-less entry because it shares an address would make that
+        # site unconfigurable. Uniqueness is enforced where identity actually
+        # exists -- on collector:{pn} at promotion (by PN reconciliation), and by
+        # the synthetic pending:<ULID> for entries that have no identity yet.
 
         unique_id = (
             f"collector:{collector_pn}"
@@ -3936,6 +4243,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
         }
         _apply_collector_profile_metadata(options, result)
+        # The user explicitly stated how this collector connects, so that value is
+        # the canonical strategy for EVERY terminal path -- an immediately
+        # recognised NORMAL entry just as much as a pending one. It goes to
+        # entry.data (never options) and wins over any legacy
+        # connection_mode / operation-mode derivation.
+        if self._manual_chosen_strategy in CONNECTION_STRATEGIES:
+            data[CONF_CONNECTION_STRATEGY] = self._manual_chosen_strategy
+        # A behaviorally-verified strategy then refines this with its evidence;
+        # the two always agree (the choice is what decided which verification ran).
         self._apply_verified_connection_strategy(data)
 
         # Item 1 -- strict collector-PN invariant: a normal collector entry is
@@ -3968,9 +4284,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """Flip the attempt's verification claim to a committed handoff for setup.
 
         Returns ``None`` on success (the caller proceeds to create/update the
-        entry). Returns an ``already_configured`` abort when the registry reports
-        the PN is owned by a different owner (a late collision): the attempt's own
-        claim is released and no entry is created/changed.
+        entry). Returns an ``already_configured`` abort when the registry REFUSES
+        the handoff -- either the PN is owned by a different owner (a late
+        collision) or this owner's claim stands for a different identity: the
+        attempt's own claim is released and no entry is created/changed.
+
+        ``_callback_ownership_handed_off`` is set ONLY after the registry really
+        prepared the handoff. The flag is load-bearing in the other direction:
+        ``_release_verification_claim`` deliberately stops releasing once it is
+        set (so the claim survives between ``async_create_entry`` and setup), so
+        setting it for a handoff that never happened would suppress this flow's
+        own cleanup and strand an owner in the registry.
         """
 
         registry = self._verification_registry
@@ -3978,13 +4302,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if registry is None or not owner:
             return None
         try:
-            registry.prepare_handoff(owner, collector_pn)
+            prepared = bool(registry.prepare_handoff(owner, collector_pn))
         except ValueError as exc:
-            logger.info(
-                "Callback handoff collision for %s: %s", collector_pn, exc
-            )
+            logger.info("Callback handoff refused for %s: %s", collector_pn, exc)
             self._release_verification_claim()
             return self.async_abort(reason="already_configured")
+        if not prepared:
+            # The registry holds no claim under this owner any more (the session
+            # went away, or the claim was released). Nothing was prepared, so the
+            # flag must stay False and the stale owner is dropped honestly. Entry
+            # setup re-claims from scratch and fails closed there on conflict.
+            logger.debug(
+                "No verification claim to hand off for %s (owner %s)",
+                collector_pn,
+                owner,
+            )
+            self._release_verification_claim()
+            return None
         self._callback_ownership_handed_off = True
         return None
 
@@ -4132,10 +4466,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any],
     ) -> OnboardingResult:
-        """Run one-shot detection using the manual settings before creating an entry."""
+        """Run ONE active callback attempt for the manual settings.
 
-        # One callback trigger per manual attempt (attempts=1 below); the
-        # detector records it in the integration-wide callback-trigger ledger.
+        This is only ever reached for a user-chosen ``callback_on_demand`` flow
+        (inbound never probes), so it ALWAYS performs exactly one active attempt.
+
+        There is deliberately NO passive-inventory shortcut here. The listener's
+        session inventory is not bound to ``collector_ip`` -- the probe target is
+        only carried as a source/label -- so "there is exactly one passive
+        candidate" says nothing about whether it is the collector the user typed
+        an address for. Accepting it would silently adopt a stranger. The answer
+        must be a session that appears AFTER our own trigger and matches the
+        identity this attempt actually reached; the shared matcher decides that.
+        """
+
+        # Nothing has been sent yet for THIS attempt.
+        self._manual_expected_own_triggers = 0
         detector = create_onboarding_manager(
             build_connection_spec_from_values(
                 self._current_connection_type(),
@@ -4145,28 +4491,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         collector_ip = user_input.get(CONF_COLLECTOR_IP, "")
         discovery_target = "" if collector_ip else user_input.get(CONF_DISCOVERY_TARGET, "")
-        passive_detect = getattr(detector, "async_passive_detect", None)
-        if callable(passive_detect):
-            try:
-                passive_results = await passive_detect(
-                    collector_ip=collector_ip,
-                    discovery_target=discovery_target,
-                    settle_timeout=0.05,
-                )
-            except Exception as exc:
-                logger.debug("Manual passive callback detection failed: %s", exc)
-                passive_results = ()
-            passive_candidates = [
-                result
-                for result in self._collapse_scan_results(passive_results)
-                if self._is_addable_scan_result(result)
-                if self._existing_entry_for_result(result) is None
-            ]
-            if len(passive_candidates) == 1:
-                return passive_candidates[0]
 
         try:
             async with _async_timeout(_MANUAL_PROBE_TIMEOUT):
+                # DECLARE the expectation BEFORE awaiting: this attempt sends
+                # exactly one trigger (attempts=1). It must never be inferred
+                # from the global ledger delta afterwards -- that delta also
+                # contains any concurrent trigger, which is precisely the
+                # interference the matcher has to catch.
+                self._manual_expected_own_triggers = 1
                 results = await detector.async_auto_detect(
                     collector_ip=collector_ip,
                     discovery_target=discovery_target,
@@ -6933,28 +7266,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 return entry
         return None
 
-    def _existing_pending_entry_for_collector_ip(self, collector_ip: str):
-        """Return a same-IP pending entry only when it has no durable identity.
-
-        Once an existing entry has PN or inverter serial, the shared NAT IP is
-        no longer sufficient to claim a newly added pending collector.
-        """
-
-        collector_ip = str(collector_ip or "").strip()
-        if not collector_ip:
-            return None
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if entry.entry_id == self.context.get("entry_id"):
-                continue
-            entry_collector_ip = str(entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
-            if entry_collector_ip != collector_ip:
-                continue
-            entry_collector_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
-            entry_serial = str(entry.data.get(CONF_DETECTED_SERIAL, "") or "").strip()
-            if not (entry_collector_pn or entry_serial):
-                return entry
-        return None
-
     def _already_added_ble_candidate_addresses(
         self,
         candidates: tuple[SmartEssBleCandidate, ...],
@@ -7395,6 +7706,240 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 # Options flow
 # ---------------------------------------------------------------------------
 
+class PendingCollectorOptionsFlow(_TranslationBundleMixin, OptionsFlow):
+    """Options for a pending collector -- an entry with no runtime yet.
+
+    The normal collector options flow assumes a live coordinator and collector
+    capabilities, so a pending entry must never be routed into it. This flow
+    exposes only what a waiting collector actually has:
+
+    * the canonical connection strategy (and switching it);
+    * the callback target (callback_on_demand only);
+    * "Retry now" -- a single ``async_reload``, i.e. exactly one more setup
+      attempt. Never a retry loop: Home Assistant owns the cadence;
+    * for inbound, the list of unclaimed strong-PN candidates plus an EXPLICIT
+      confirmation. Nothing is ever auto-bound.
+
+    Every settings change is written atomically to ``entry.data`` (the canonical
+    owner) followed by exactly one reload. Nothing is written to options.
+    """
+
+    def __init__(self, config_entry) -> None:
+        self._config_entry = config_entry
+        self._translation_bundle: dict[str, Any] = {}
+        self._translation_bundle_language = ""
+
+    def _strategy(self) -> str:
+        return resolve_connection_strategy(
+            dict(self._config_entry.data), dict(self._config_entry.options)
+        )
+
+    @_with_translation_bundle
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        return await self.async_step_pending(user_input)
+
+    @_with_translation_bundle
+    async def async_step_pending(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        from .pending_collector import pending_attempt_status
+
+        menu_options = ["pending_settings", "pending_retry"]
+        if self._strategy() == CONNECTION_STRATEGY_INBOUND:
+            menu_options.insert(0, "pending_confirm_candidate")
+        status = pending_attempt_status(self._config_entry)
+        return self.async_show_menu(
+            step_id="pending",
+            menu_options=menu_options,
+            description_placeholders={
+                "status": self._tr(
+                    f"common.dynamic.pending_status_{status}",
+                    status.replace("_", " "),
+                ),
+                "strategy": self._tr(
+                    f"common.dynamic.connection_strategy_{self._strategy()}",
+                    self._strategy(),
+                ),
+            },
+        )
+
+    @_with_translation_bundle
+    async def async_step_pending_settings(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Change the canonical strategy / callback target, then reload once."""
+
+        errors: dict[str, str] = {}
+        current_strategy = self._strategy()
+        current_target = str(
+            self._config_entry.data.get(CONF_PENDING_ADDRESS_HINT) or ""
+        )
+        if user_input is not None:
+            flat = _flatten_sections(user_input)
+            strategy = str(flat.get(CONF_CONNECTION_STRATEGY) or "").strip()
+            target = str(flat.get(CONF_COLLECTOR_IP) or "").strip()
+            if strategy not in CONNECTION_STRATEGIES:
+                errors[CONF_CONNECTION_STRATEGY] = "invalid_selection"
+            elif strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and not target:
+                # One trigger needs somewhere to go.
+                errors[CONF_COLLECTOR_IP] = "callback_target_required"
+            if not errors:
+                data = dict(self._config_entry.data)
+                # CANONICAL owner: entry.data. Never options.
+                data[CONF_CONNECTION_STRATEGY] = strategy
+                data[CONF_PENDING_ADDRESS_HINT] = target
+                data[CONF_COLLECTOR_IP] = target
+                data[CONF_PENDING_LAST_ATTEMPT_RESULT] = (
+                    PENDING_ATTEMPT_WAITING_INBOUND
+                    if strategy == CONNECTION_STRATEGY_INBOUND
+                    else PENDING_ATTEMPT_WAITING_CALLBACK
+                )
+                # One atomic data write, then exactly one reload.
+                self.hass.config_entries.async_update_entry(
+                    self._config_entry, data=data
+                )
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_reload(self._config_entry.entry_id)
+                )
+                return self.async_create_entry(data=dict(self._config_entry.options))
+
+        return self.async_show_form(
+            step_id="pending_settings",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONNECTION_STRATEGY, default=current_strategy
+                    ): _connection_strategy_selector(
+                        self._tr(
+                            "common.dynamic.connection_strategy_inbound",
+                            "Collector connects to Home Assistant on its own",
+                        ),
+                        self._tr(
+                            "common.dynamic.connection_strategy_callback_on_demand",
+                            "Ask the collector to connect when needed",
+                        ),
+                    ),
+                    vol.Optional(CONF_COLLECTOR_IP, default=current_target): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_pending_retry(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Retry now = ONE more setup attempt, via Home Assistant's own reload.
+
+        This deliberately does not implement a retry loop or a timer: for a
+        callback pending entry each setup performs exactly one bounded attempt,
+        and Home Assistant's ConfigEntryNotReady backoff owns the cadence.
+        """
+
+        del user_input
+        self.hass.async_create_task(
+            self.hass.config_entries.async_reload(self._config_entry.entry_id)
+        )
+        return self.async_create_entry(data=dict(self._config_entry.options))
+
+    @_with_translation_bundle
+    async def async_step_pending_confirm_candidate(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Bind an unclaimed strong-PN candidate to THIS pending entry.
+
+        Candidates are listed from the public session registry and are only ever
+        offered, never auto-selected: with several pending entries an unknown
+        session cannot be attributed to one of them. Peer IP is shown purely as a
+        hint and is never matched.
+        """
+
+        from .pending_collector import (
+            PendingPromotionError,
+            async_promote_pending_entry,
+            list_inbound_candidates,
+            release_pending_attempt_claim,
+        )
+
+        candidates = list_inbound_candidates(self.hass)
+        if not candidates:
+            return self.async_abort(reason="no_pending_candidates")
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            chosen_pn = str(user_input.get("candidate") or "").strip()
+            match = next(
+                (c for c in candidates if c["collector_pn"] == chosen_pn), None
+            )
+            if match is None:
+                errors["candidate"] = "invalid_selection"
+            else:
+                handoff_owner = f"pending_confirm:{uuid.uuid4().hex}"
+                registry = self._callback_session_registry()
+                try:
+                    if registry is not None:
+                        registry.claim_session(
+                            handoff_owner, session_id=match["session_id"]
+                        )
+                        registry.promote_claim_to_full_pn(handoff_owner, chosen_pn)
+                        registry.prepare_handoff(handoff_owner, chosen_pn)
+                    async_promote_pending_entry(
+                        self.hass,
+                        self._config_entry,
+                        collector_pn=chosen_pn,
+                        # Honest provenance: the user bound an OBSERVED session.
+                        # Nothing was restarted, so this is NOT reboot_reconnect.
+                        evidence=EVIDENCE_USER_CONFIRMED_SESSION,
+                        handoff_owner=handoff_owner,
+                    )
+                except (PendingPromotionError, ValueError) as exc:
+                    # Fail closed: roll the handoff back, stay pending, unmutated.
+                    release_pending_attempt_claim(self.hass, handoff_owner)
+                    reason = getattr(exc, "reason", "identity_not_confirmed")
+                    if reason == "already_configured":
+                        return self.async_abort(reason="already_configured")
+                    errors["candidate"] = "identity_not_confirmed"
+                else:
+                    self.hass.async_create_task(
+                        self.hass.config_entries.async_reload(
+                            self._config_entry.entry_id
+                        )
+                    )
+                    return self.async_create_entry(
+                        data=dict(self._config_entry.options)
+                    )
+
+        options = {
+            candidate["collector_pn"]: (
+                f"{candidate['collector_pn']}"
+                + (f"  ({candidate['peer_ip']})" if candidate["peer_ip"] else "")
+            )
+            for candidate in candidates
+        }
+        return self.async_show_form(
+            step_id="pending_confirm_candidate",
+            data_schema=vol.Schema(
+                {vol.Required("candidate"): _result_selector(options)}
+            ),
+            errors=errors,
+        )
+
+    def _callback_session_registry(self):
+        from .passive_discovery import get_callback_session_registry
+
+        try:
+            return get_callback_session_registry(self.hass)
+        except Exception:
+            return None
+
+
 class ListenerOptionsFlow(OptionsFlow):
     """Service tools for the passive-discovery entry."""
 
@@ -7819,9 +8364,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ):
                     self._runtime_poll_interval_pending_input = dict(flat_input)
                     return await self.async_step_runtime_poll_interval()
-                return self.async_create_entry(
-                    data=self._build_runtime_options_from_flat_input(flat_input)
-                )
+                return self._async_commit_runtime_options(flat_input)
 
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
         branch = get_connection_branch(connection_type)
@@ -7845,11 +8388,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
         if connection_strategy not in CONNECTION_STRATEGIES:
             connection_strategy = DEFAULT_CONNECTION_STRATEGY
-        proxy_enabled = resolve_proxy_enabled(
-            self._config_entry.data,
-            self._config_entry.options,
-        )
-
         schema_fields: dict[Any, Any] = {
             vol.Required(CONF_POLL_MODE, default=poll_mode): _poll_mode_selector(
                 self._translation_bundle,
@@ -7880,11 +8418,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     "Ask the collector to connect when needed",
                 ),
             )
-        # Proxy is an independent capability, gated by the collector supporting it.
-        if capabilities.proxy_capture:
-            schema_fields[
-                vol.Required(CONF_PROXY_ENABLED, default=bool(proxy_enabled))
-            ] = bool
         schema_fields[vol.Required("connection")] = section(
             vol.Schema(
                 self._build_connection_fields_schema(
@@ -7938,6 +8471,41 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders=placeholders,
         )
 
+    def _async_commit_runtime_options(self, flat_input: dict[str, Any]) -> ConfigFlowResult:
+        """Persist the runtime form: canonical strategy to data, rest to options.
+
+        The submitted "how the collector connects" selector is the CANONICAL
+        connection_strategy and belongs in ``entry.data`` (schema v4); poll /
+        control / other runtime settings stay in ``entry.options``.
+
+        Both are written in ONE ``async_update_entry`` call, so the entry reloads
+        exactly once and only after the whole state is consistent. The terminal
+        ``async_create_entry(data=options)`` below then writes the SAME options
+        Home Assistant already holds, so HA detects no change, fires no second
+        update-listener, and schedules no second reload.
+        """
+
+        options = self._build_runtime_options_from_flat_input(flat_input)
+        strategy = str(
+            flat_input.get(
+                CONF_CONNECTION_STRATEGY,
+                resolve_connection_strategy(
+                    self._config_entry.data,
+                    self._config_entry.options,
+                ),
+            )
+            or ""
+        ).strip()
+        data = dict(self._config_entry.data)
+        if strategy in CONNECTION_STRATEGIES:
+            data[CONF_CONNECTION_STRATEGY] = strategy
+        self.hass.config_entries.async_update_entry(
+            self._config_entry,
+            data=data,
+            options=options,
+        )
+        return self.async_create_entry(data=options)
+
     def _build_runtime_options_from_flat_input(self, flat_input: dict[str, Any]) -> dict[str, Any]:
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
         persisted_options = build_runtime_option_settings(connection_type, flat_input)
@@ -7950,33 +8518,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
         )
         persisted_options[CONF_CONTROL_MODE] = flat_input[CONF_CONTROL_MODE]
-        # Connection strategy is the primary, authoritative axis (inbound vs
-        # callback_on_demand). It is decoupled from endpoint control -- the
-        # explicit write/restore endpoint actions own endpoint_control_policy.
-        persisted_options[CONF_CONNECTION_STRATEGY] = flat_input.get(
-            CONF_CONNECTION_STRATEGY,
-            resolve_connection_strategy(
-                self._config_entry.data,
-                self._config_entry.options,
-            ),
-        )
-        # Proxy is an independent, capability-gated toggle. If the current
-        # collector/profile does not allow proxying, persist a fail-closed value
-        # instead of carrying a stale True from an older capability snapshot.
-        capabilities = self._collector_capabilities()
-        persisted_options[CONF_PROXY_ENABLED] = (
-            bool(
-                flat_input.get(
-                    CONF_PROXY_ENABLED,
-                    resolve_proxy_enabled(
-                        self._config_entry.data,
-                        self._config_entry.options,
-                    ),
-                )
-            )
-            if capabilities.proxy_capture
-            else False
-        )
+        # NOTE: connection_strategy is deliberately NOT persisted into options.
+        # entry.data is its single canonical owner (schema v4) -- the explicit
+        # endpoint actions (HA-only / Cloud+HA switch, bind, rollback) write it
+        # there, and an options copy would shadow them. The submitted value is
+        # committed to data by _async_commit_runtime_options().
+        # The former steady cloud-proxy toggle never had a runtime consumer.
+        # Keep the persisted compatibility axis fail-closed, but do not expose a
+        # control that promises simultaneous HA + cloud forwarding. Temporary
+        # traffic capture remains a separate, explicit diagnostics action.
+        persisted_options[CONF_PROXY_ENABLED] = False
         # Preserve the legacy operation mode as a compatibility layer (it still
         # drives the endpoint-reconcile target). Never require it from the form.
         legacy_operation_mode = self._config_entry.options.get(
@@ -8013,9 +8564,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 CONF_POLL_INTERVAL,
                 self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
             )
-            return self.async_create_entry(
-                data=self._build_runtime_options_from_flat_input(pending)
-            )
+            return self._async_commit_runtime_options(pending)
         return self.async_show_form(
             step_id="runtime_poll_interval",
             data_schema=vol.Schema(

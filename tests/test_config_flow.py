@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import subprocess
+import itertools
 import sys
 import tempfile
 import types
@@ -28,6 +29,18 @@ def _install_homeassistant_stubs() -> None:
     helpers = types.ModuleType("homeassistant.helpers")
     entity_registry = types.ModuleType("homeassistant.helpers.entity_registry")
     selector = types.ModuleType("homeassistant.helpers.selector")
+    util = types.ModuleType("homeassistant.util")
+    util_ulid = types.ModuleType("homeassistant.util.ulid")
+
+    _ulid_counter = itertools.count(1)
+
+    def ulid_now() -> str:
+        """Deterministic ULID-shaped id for tests (26 chars, Crockford base32)."""
+
+        return f"01TEST{next(_ulid_counter):020d}"[:26].upper()
+
+    util_ulid.ulid_now = ulid_now
+    util.ulid = util_ulid
 
     class ConfigFlow:
         def __init_subclass__(cls, **kwargs):
@@ -228,6 +241,8 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.helpers"] = helpers
     sys.modules["homeassistant.helpers.entity_registry"] = entity_registry
     sys.modules["homeassistant.helpers.selector"] = selector
+    sys.modules["homeassistant.util"] = util
+    sys.modules["homeassistant.util.ulid"] = util_ulid
 
 
 _install_homeassistant_stubs()
@@ -366,6 +381,28 @@ class _FakeConfigEntries:
         self._entries = list(entries or [])
         self.unloaded: list[str] = []
         self.reloaded: list[str] = []
+        # Every async_update_entry(**kwargs) recorded, so tests can assert that
+        # data+options are committed in ONE atomic update (one reload).
+        self.updates: list[dict] = []
+
+    def async_update_entry(self, entry, **kwargs):
+        """Mirror HA: apply the update and report whether anything changed."""
+
+        self.updates.append(dict(kwargs))
+        changed = False
+        for key in ("data", "options"):
+            if key in kwargs and kwargs[key] is not None:
+                new = dict(kwargs[key])
+                if dict(getattr(entry, key, {}) or {}) != new:
+                    changed = True
+                setattr(entry, key, new)
+        for key, value in kwargs.items():
+            if key in ("data", "options"):
+                continue
+            if getattr(entry, key, None) != value:
+                changed = True
+            setattr(entry, key, value)
+        return changed
 
     def async_entries(self, _domain):
         return list(self._entries)
@@ -4583,7 +4620,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured_kwargs["collector_ip"], "192.168.1.14")
         self.assertEqual(captured_kwargs["discovery_target"], "")
 
-    async def test_probe_manual_target_uses_single_passive_callback_candidate_before_active_probe(self) -> None:
+    async def test_probe_manual_target_never_accepts_a_passive_candidate(self) -> None:
         flow = self._make_flow()
         user_input = {
             "server_ip": "192.168.1.50",
@@ -4625,8 +4662,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow._async_probe_manual_target(user_input)
 
-        self.assertIs(result, passive_result)
-        self.assertFalse(detector.auto_called)
+        # BLOCKER 1 regression: the listener's session inventory is NOT bound to
+        # collector_ip (the probe target is only carried as a source/label), so a
+        # lone passive candidate says nothing about the collector the user typed
+        # an address for. A callback attempt must ALWAYS ask actively and prove
+        # the answer, never short-circuit on a stranger's session.
+        self.assertIsNot(result, passive_result)
+        self.assertTrue(detector.auto_called)
+        # And the attempt declares its own trigger expectation up front.
+        self.assertEqual(flow._manual_expected_own_triggers, 1)
 
     async def test_probe_manual_target_ignores_ambiguous_passive_callback_candidates(self) -> None:
         flow = self._make_flow()
@@ -4884,6 +4928,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     "discovery_interval": 3,
                     "heartbeat_interval": 60,
                     "driver_hint": "auto",
+                    # This test asserts the ACTIVE probe runs, which only
+                    # callback_on_demand is allowed to do.
+                    "connection_strategy": "callback_on_demand",
                 }
             )
 
@@ -4932,12 +4979,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         result = await flow.async_step_manual_create_pending()
 
-        # Item 4 (Option A): a no-identity "Setup Pending" attempt (no collector
-        # PN, no detected serial/model/bridge) is NOT created as a normal runtime
-        # entry -- the flow re-prompts so the user can reach the collector.
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "collector_identity_required")
+        # Part 2: no NORMAL collector entry is created without a durable PN --
+        # the user gets an explicit PENDING entry instead, identified by a
+        # synthetic pending:<ULID> (never by an address).
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertEqual(result["data"]["collector_pn"], "")
+        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
     async def test_manual_callback_verified_pn_is_persisted_into_entry(self) -> None:
         # Scenario 1: a manual/known-IP callback verification observed the strong
@@ -5019,15 +5067,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         result = await flow.async_step_manual_create_pending()
 
-        # No entry of any kind was created.
-        self.assertNotEqual(result["type"], "create_entry")
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "callback_identity_unverified")
-        # No collector unique id was claimed for a doomed PN-less entry.
+        # No NORMAL collector entry is created: it is saved as an explicit
+        # PENDING entry instead, so nothing runs a doomed PN-less runtime.
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertEqual(result["data"]["collector_pn"], "")
+        # The unverified/expected PN never became a durable collector identity.
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", None), "collector:V001020SYN62344022"
         )
+        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
     async def test_manual_create_pending_resolves_bridge_profile_before_entry_creation(self) -> None:
         flow = self._make_flow()
@@ -5066,11 +5115,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual_create_pending()
 
-        # Item 1: virtual-bridge metadata is NOT a session identity -- without a
-        # durable collector PN no normal entry is created; the flow re-prompts.
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "collector_identity_required")
+        # Item 1 + Part 2: virtual-bridge metadata is NOT a session identity, so
+        # no NORMAL entry is created; it is saved as an explicit PENDING entry.
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertEqual(result["data"]["collector_pn"], "")
 
     async def test_detected_inverter_without_collector_pn_is_not_created(self) -> None:
         # Item 1: a detected model + serial does NOT substitute for the collector
@@ -5112,9 +5161,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual_create_pending()
 
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "collector_identity_required")
+        # A detected model/serial is NOT a session identity: no NORMAL entry.
+        # It is saved as an explicit PENDING entry instead.
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertEqual(result["data"]["collector_pn"], "")
+        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
     async def test_full_pn_with_model_serial_is_created(self) -> None:
         # Item 1: a full PN alongside model/serial DOES create a normal entry.
@@ -5204,14 +5256,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual_create_pending()
 
-        # Item 4 (Option A): a no-identity pending attempt is no longer created as
-        # a normal runtime entry, even when a same-NAT-IP entry has a PN -- the
-        # flow re-prompts instead of persisting a doomed PN-less entry.
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "collector_identity_required")
+        # Part 2: saved as an explicit PENDING entry. Its identity is a synthetic
+        # pending:<ULID>, so it never aliases with the same-NAT-IP collector entry.
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
-    async def test_manual_create_pending_blocks_same_nat_ip_when_existing_entry_is_still_pending(self) -> None:
+    async def test_manual_create_pending_allows_same_nat_ip_as_another_pending(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
         existing.data.update(
             {
@@ -5245,7 +5296,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual_create_pending()
 
-        self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
+        # An address is NOT an identity: a second collector behind the same NAT
+        # must still be addable. It gets its own synthetic pending:<ULID>.
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
     async def test_manual_create_pending_drops_default_broadcast_collector_ip(self) -> None:
         flow = self._make_flow()
@@ -5263,12 +5318,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         result = await flow.async_step_manual_create_pending()
 
-        # Item 4 (Option A): a no-identity broadcast pending attempt is not created
-        # as a normal runtime entry.
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "collector_identity_required")
-        self.assertEqual(flow._test_unique_id, "listener:192.168.1.50:8899")
+        # Part 2: saved as an explicit PENDING entry (inbound by default, so the
+        # broadcast address is only a hint and is sanitized away).
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertEqual(result["data"]["collector_ip"], "")
+        # Pending identity is synthetic, never derived from an address.
+        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
     async def test_manual_high_confidence_entry_defaults_to_auto_control_mode(self) -> None:
         flow = self._make_flow()
@@ -6417,26 +6473,26 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
+        # Canonical (v4): the strategy is committed to entry.DATA, never options.
         self.assertEqual(
-            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
+            options._config_entry.data[CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_INBOUND,
         )
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data"])
         # Capability-gated proxy must fail closed instead of carrying a stale
         # True from older options/capability snapshots.
         self.assertFalse(result["data"][CONF_PROXY_ENABLED])
 
-    async def test_options_runtime_step_hides_proxy_toggle_when_capability_disallows(self) -> None:
-        # Phase 7 (scenario 5): a community/ESP bridge cannot host proxy capture,
-        # so the runtime options FORM must not even show the proxy control for
-        # it, while a proxy-capable (factory) collector still shows it. This is
-        # form-level capability gating, complementing the fail-closed submit path
-        # asserted in test_options_runtime_step_forces_inbound_for_bridge_on_submit.
+    async def test_options_runtime_step_hides_retired_proxy_toggle(self) -> None:
+        # The steady cloud-proxy flag never had a runtime consumer. Do not expose
+        # it for either factory collectors or community bridges.
         proxy_capable = self._make_options_flow()
         proxy_capable._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(collector=None, values={}),
         )
         proxy_result = await proxy_capable.async_step_runtime()
         self.assertEqual(proxy_result["type"], "form")
-        self.assertIn(CONF_PROXY_ENABLED, proxy_result["data_schema"].schema)
+        self.assertNotIn(CONF_PROXY_ENABLED, proxy_result["data_schema"].schema)
 
         bridge = self._make_options_flow()
         bridge._config_entry.runtime_data = types.SimpleNamespace(
@@ -6449,9 +6505,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge_result["type"], "form")
         self.assertNotIn(CONF_PROXY_ENABLED, bridge_result["data_schema"].schema)
 
-    async def test_options_runtime_step_persists_connection_strategy_and_proxy(self) -> None:
-        # Phase 4: the runtime step persists the connection_strategy + proxy axes.
+    async def test_options_runtime_step_persists_connection_strategy_and_disables_proxy(self) -> None:
+        # The compatibility proxy axis remains explicit and fail-closed.
         options = self._make_options_flow()
+        options._config_entry.options = {CONF_PROXY_ENABLED: True}
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=False),
@@ -6478,13 +6535,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
+        # Canonical (v4): the submitted strategy lands in entry.DATA ...
         self.assertEqual(
-            result["data"][CONF_CONNECTION_STRATEGY],
+            options._config_entry.data[CONF_CONNECTION_STRATEGY],
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
-        # Proxy axis persisted (default off); legacy operation mode preserved.
-        self.assertIn(CONF_PROXY_ENABLED, result["data"])
+        # ... and is NEVER written to options, where it could shadow a later
+        # HA-only / Cloud+HA / bind / rollback action.
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data"])
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, options._config_entry.options)
+        self.assertFalse(result["data"][CONF_PROXY_ENABLED])
         self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        # data+options are committed in ONE atomic update -> exactly one reload.
+        updates = options.hass.config_entries.updates
+        self.assertEqual(len(updates), 1)
+        self.assertIn("data", updates[0])
+        self.assertIn("options", updates[0])
 
     async def test_proxy_capture_step_shows_planner_status(self) -> None:
         options = self._make_options_flow()
@@ -8795,7 +8861,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 return default() if callable(default) else default
         return None
 
-    def _manual_input(self, collector_ip: str) -> dict[str, object]:
+    def _manual_input(
+        self, collector_ip: str, *, connection_strategy: str = "callback_on_demand"
+    ) -> dict[str, object]:
+        # The manual form now REQUIRES an explicit strategy: it decides whether
+        # Home Assistant may reach out at all. These verification tests exercise
+        # the callback path, so they state callback_on_demand.
         return {
             "server_ip": "192.168.1.50",
             "tcp_port": 18899,
@@ -8805,6 +8876,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             "discovery_interval": 3,
             "heartbeat_interval": 60,
             "driver_hint": "auto",
+            "connection_strategy": connection_strategy,
         }
 
     def _manual_result_with_pn(self, pn: str) -> OnboardingResult:
@@ -9571,6 +9643,301 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner_a)
         self.assertEqual(flow_b._verification_claim_owner, "")
 
+    async def test_manual_callback_strategy_is_canonical_in_data_without_expected_pn(
+        self,
+    ) -> None:
+        # Item 2 regression: a generic manual callback_on_demand flow (NO
+        # passive-discovery expected PN) whose attempt resolves a full PN must
+        # persist the CHOSEN strategy in entry.data -- not fall back to legacy
+        # connection_mode derivation -- and never write it to options.
+        #
+        # The attempt is driven through the REAL lifecycle (own trigger recorded,
+        # collector answers on a new strong session) rather than by stubbing the
+        # probe out. A callback entry now takes its identity from the VERIFIED
+        # PN only, so a stubbed probe -- which declares no trigger and leaves no
+        # session behind -- is a state production cannot reach and would (fail
+        # closed) yield a pending entry instead of the normal entry under test.
+        from custom_components.eybond_local.const import (
+            CONF_CONNECTION_STRATEGY,
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+        flow = self._make_flow()
+        inventory: list[dict[str, object]] = []
+        self._install_registry(flow, inventory)
+        assert not flow._verification_expected_pn
+
+        def _answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(self.FULL_PN),), on_detect=_answers
+        )
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        routed = await self._drive_generic_callback(flow, detector)
+        self.assertEqual(routed["step_id"], "manual_confirm")
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+
+        # A NORMAL entry (the PN was found immediately), carrying the chosen
+        # strategy canonically in data.
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
+        self.assertEqual(created["data"].get("entry_role", ""), "")
+        self.assertEqual(
+            created["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, created.get("options") or {})
+
+    async def test_generic_manual_inbound_never_adopts_a_foreign_candidate(self) -> None:
+        # Item 3 regression: ONE unclaimed strong collector exists globally, but
+        # this generic manual inbound flow has no link to it (no expected PN). It
+        # may belong to another pending flow, so it must NOT become this entry.
+        from custom_components.eybond_local.const import CONF_CONNECTION_STRATEGY
+
+        flow = self._make_flow()
+        registry = self._install_registry(
+            flow, [self._inventory_session(self.NEW_SESSION, self.FULL_PN)]
+        )
+        assert not flow._verification_expected_pn
+
+        with patch.object(
+            flow,
+            "_async_probe_manual_target",
+            side_effect=AssertionError("inbound must not probe"),
+        ):
+            created = await flow.async_step_manual(
+                self._manual_input("", connection_strategy="inbound")
+            )
+
+        # A PENDING entry, never a normal entry wearing the stranger's PN.
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["entry_role"], "pending_collector")
+        self.assertEqual(created["data"]["collector_pn"], "")
+        self.assertNotEqual(
+            getattr(flow, "_test_unique_id", ""), f"collector:{self.FULL_PN}"
+        )
+        # The stranger's session was never claimed by this flow.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        # And no user_confirmed_session evidence was invented.
+        self.assertNotIn("connection_strategy_evidence", created["data"])
+        self.assertEqual(created["data"][CONF_CONNECTION_STRATEGY], "inbound")
+
+    # ---- generic manual callback_on_demand: active attempt + shared matcher ----
+
+    def _recording_detector(self, *, results=(), own_triggers=1, extra_triggers=0, on_detect=None):
+        """A detector that records its trigger(s) in the shared ledger, like the real one.
+
+        ``extra_triggers`` simulates a CONCURRENT trigger from another flow/entry.
+        Passive inventory must never be consulted on a callback attempt.
+        """
+
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        class _Detector:
+            async def async_passive_detect(self, **_kwargs):
+                raise AssertionError(
+                    "a callback attempt must never short-circuit on passive inventory"
+                )
+
+            async def async_auto_detect(self, **_kwargs):
+                ledger = get_callback_trigger_ledger()
+                for _ in range(own_triggers):
+                    ledger.record(target="ours", source="test_attempt")
+                for _ in range(extra_triggers):
+                    ledger.record(target="other", source="concurrent_flow")
+                if on_detect is not None:
+                    on_detect()
+                return results
+
+        return _Detector()
+
+    async def _drive_generic_callback(self, flow, detector, collector_ip="192.168.1.60"):
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=detector,
+        ):
+            return await flow.async_step_manual(
+                self._manual_input(collector_ip, connection_strategy="callback_on_demand")
+            )
+
+    async def test_generic_callback_rejects_pre_existing_foreign_session(self) -> None:
+        # BLOCKER 1: a foreign strong session already exists; the user types a
+        # DIFFERENT collector address and chooses callback_on_demand. The active
+        # attempt reaches the target and a NEW matching session appears. The old
+        # foreign session must never be adopted and must stay unclaimed.
+        flow = self._make_flow()
+        inventory = [self._inventory_session("foreign-1", self.OTHER_FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+
+        def _target_answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(self.FULL_PN),),
+            on_detect=_target_answers,
+        )
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        routed = await self._drive_generic_callback(flow, detector)
+        self.assertEqual(routed["step_id"], "manual_confirm")
+        # Only the target identity was claimed ...
+        self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("callback_verification:"))
+        self.assertEqual(registry.claimed_session_id(owner), self.NEW_SESSION)
+        # ... and the pre-existing stranger is untouched.
+        self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
+
+    async def test_generic_callback_without_detector_pn_creates_no_normal_entry(self) -> None:
+        # BLOCKER 1: one pre-existing foreign session; the active attempt does NOT
+        # confirm a PN. No normal entry, and the foreign PN is never assigned.
+        flow = self._make_flow()
+        registry = self._install_registry(
+            flow, [self._inventory_session("foreign-1", self.OTHER_FULL_PN)]
+        )
+        detector = self._recording_detector(results=())
+
+        routed = await self._drive_generic_callback(flow, detector)
+
+        self.assertEqual(routed["type"], "form")
+        self.assertEqual(routed["step_id"], "manual")
+        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
+        self.assertNotEqual(
+            getattr(flow, "_test_unique_id", ""), f"collector:{self.OTHER_FULL_PN}"
+        )
+
+    async def test_concurrent_trigger_during_active_attempt_is_interference(self) -> None:
+        # BLOCKER 2 (A): our trigger fires AND a concurrent one does. Even though
+        # the detector returns the right PN and a matching session appeared, the
+        # answer is not attributable to us -> interference, and nothing is claimed.
+        flow = self._make_flow()
+        inventory: list[dict] = []
+        registry = self._install_registry(flow, inventory)
+
+        def _answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(self.FULL_PN),),
+            own_triggers=1,
+            extra_triggers=1,  # someone else triggered concurrently
+            on_detect=_answers,
+        )
+
+        routed = await self._drive_generic_callback(flow, detector)
+
+        self.assertEqual(routed["type"], "form")
+        self.assertEqual(routed["errors"]["base"], "callback_trigger_interference")
+        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(flow._verification_claim_owner, "")
+
+    async def test_timeout_after_our_trigger_is_timeout_not_interference(self) -> None:
+        # BLOCKER 2 (B): our one trigger DID go out, then nothing answered. The
+        # provenance is correct, so this is a plain timeout -- not interference.
+        flow = self._make_flow()
+        registry = self._install_registry(flow, [])
+        detector = self._recording_detector(results=(), own_triggers=1)
+
+        routed = await self._drive_generic_callback(flow, detector)
+
+        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self.assertNotEqual(
+            routed["errors"]["base"], "callback_trigger_interference"
+        )
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_generic_callback_success_claims_and_stamps_canonical_strategy(self) -> None:
+        # BLOCKER 2 (C): exactly one trigger; detector PN == the new strong
+        # session; claim + handoff exist; the entry carries callback_on_demand.
+        from custom_components.eybond_local.const import (
+            CONF_CONNECTION_STRATEGY,
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+        flow = self._make_flow()
+        inventory: list[dict] = []
+        registry = self._install_registry(flow, inventory)
+
+        def _answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(self.FULL_PN),),
+            own_triggers=1,
+            on_detect=_answers,
+        )
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        routed = await self._drive_generic_callback(flow, detector)
+        self.assertEqual(routed["step_id"], "manual_confirm")
+
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("callback_verification:"))
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(
+            created["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, created.get("options") or {})
+        # The handoff was prepared for the certified identity.
+        self.assertTrue(flow._callback_ownership_handed_off)
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
+        )
+
+    async def test_pre_existing_session_never_substitutes_for_the_answer(self) -> None:
+        # BLOCKER 2 (D): the ONLY strong session existed BEFORE our trigger and
+        # matches the detector's PN. Baseline still rules it out: it cannot be an
+        # answer to a trigger sent after it.
+        flow = self._make_flow()
+        registry = self._install_registry(
+            flow, [self._inventory_session("pre-existing", self.FULL_PN)]
+        )
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(self.FULL_PN),), own_triggers=1
+        )
+
+        routed = await self._drive_generic_callback(flow, detector)
+
+        self.assertEqual(routed["type"], "form")
+        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
     async def test_manual_callback_timeout_leaves_no_registry_claim(self) -> None:
         # Item 2/5 cleanup: a timeout (no confirming strong session) must leave
         # nothing owned.
@@ -9610,7 +9977,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual_create_pending()
 
-        self.assertNotEqual(result["type"], "create_entry")
+        # Saved as a PENDING entry; the expected/short PN never became durable.
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["entry_role"], "pending_collector")
+        self.assertEqual(result["data"]["collector_pn"], "")
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", None), f"collector:{self.FULL_PN}"
         )
@@ -9908,6 +10278,265 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(flow._callback_ownership_handed_off)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(entry.data.get("collector_pn", ""), "")  # entry untouched
+
+
+    # --- retry must be a WHOLE new attempt, never a bare re-probe -------------
+    #
+    # async_step_manual_probe_again used to call the probe directly and route on,
+    # keeping the previous attempt's baseline, ledger generation, verified PN and
+    # registry claim. That let a second probe reaching collector B be combined
+    # with the first attempt's proof/claim for collector A. Every active manual
+    # callback path now runs the one shared lifecycle helper.
+
+    async def _first_attempt_claiming(self, flow, inventory, pn, session_id):
+        """Drive a successful first manual attempt; return its claim owner."""
+
+        def _answers():
+            inventory.append(self._inventory_session(session_id, pn))
+
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(pn),), on_detect=_answers
+        )
+        routed = await self._drive_generic_callback(flow, detector)
+        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(flow._manual_verified_full_pn, pn)
+        return flow._verification_claim_owner
+
+    async def _probe_again(self, flow, detector):
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=detector,
+        ):
+            return await flow.async_step_manual_probe_again()
+
+    async def test_probe_again_to_other_collector_rebinds_wholly(self) -> None:
+        # A. First attempt claims A; "probe again" reaches B on a new strong
+        # session. The old claim on A must be gone, the new claim must belong to
+        # B, and the entry may only ever be created as B.
+        flow = self._make_flow()
+        inventory: list[dict[str, object]] = []
+        registry = self._install_registry(flow, inventory)
+
+        owner_a = await self._first_attempt_claiming(
+            flow, inventory, self.FULL_PN, self.OLD_SESSION
+        )
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner_a)
+
+        def _b_answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.OTHER_FULL_PN))
+
+        routed = await self._probe_again(
+            flow,
+            self._recording_detector(
+                results=(self._manual_result_with_pn(self.OTHER_FULL_PN),),
+                on_detect=_b_answers,
+            ),
+        )
+        self.assertEqual(routed["step_id"], "manual_confirm")
+
+        # The first attempt's claim on A is released, not merely overwritten.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(registry.claimed_identity(owner_a), "")
+        # The new claim is a NEW owner, bound to B's new session.
+        owner_b = registry.owner_for_pn(self.OTHER_FULL_PN)
+        self.assertTrue(owner_b.startswith("callback_verification:"))
+        self.assertNotEqual(owner_b, owner_a)
+        self.assertEqual(registry.claimed_session_id(owner_b), self.NEW_SESSION)
+        self.assertEqual(flow._manual_verified_full_pn, self.OTHER_FULL_PN)
+        self.assertEqual(flow._verification_claim_owner, owner_b)
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+
+        # The entry is B, and ONLY B ...
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["collector_pn"], self.OTHER_FULL_PN)
+        self.assertEqual(getattr(flow, "_test_unique_id", ""), f"collector:{self.OTHER_FULL_PN}")
+        # ... the handoff certifies B ...
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner_b, self.OTHER_FULL_PN),
+            self.OTHER_FULL_PN,
+        )
+        # ... and no owner is left holding A anywhere in the registry.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_probe_again_timeout_drops_first_attempt_proof(self) -> None:
+        # B. First attempt claims A; the retry times out. The claim on A must be
+        # released, the verified PN cleared, and no normal entry for A may be
+        # creatable from what the flow still holds.
+        flow = self._make_flow()
+        inventory: list[dict[str, object]] = []
+        registry = self._install_registry(flow, inventory)
+
+        owner_a = await self._first_attempt_claiming(
+            flow, inventory, self.FULL_PN, self.OLD_SESSION
+        )
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner_a)
+
+        # Our trigger fires; nothing new answers it.
+        routed = await self._probe_again(flow, self._recording_detector(results=()))
+
+        self.assertEqual(routed["type"], "form")
+        self.assertEqual(routed["step_id"], "manual")
+        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertFalse(flow._callback_ownership_handed_off)
+
+        # The stale identity cannot be turned into a normal entry for A.
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+        self.assertNotEqual(created.get("data", {}).get("collector_pn", ""), self.FULL_PN)
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_probe_again_interference_drops_first_attempt_proof(self) -> None:
+        # C. First attempt claims A; during the retry a CONCURRENT trigger fires,
+        # so even a matching session is not attributable to us. Old claim gone,
+        # no new claim, no stale entry.
+        flow = self._make_flow()
+        inventory: list[dict[str, object]] = []
+        registry = self._install_registry(flow, inventory)
+
+        owner_a = await self._first_attempt_claiming(
+            flow, inventory, self.FULL_PN, self.OLD_SESSION
+        )
+
+        def _answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+
+        routed = await self._probe_again(
+            flow,
+            self._recording_detector(
+                results=(self._manual_result_with_pn(self.FULL_PN),),
+                own_triggers=1,
+                extra_triggers=1,
+                on_detect=_answers,
+            ),
+        )
+
+        self.assertEqual(routed["type"], "form")
+        self.assertEqual(routed["errors"]["base"], "callback_trigger_interference")
+        self.assertEqual(flow._manual_verified_full_pn, "")
+        # The old claim is released and NO new claim was taken.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(registry.claimed_identity(owner_a), "")
+        self.assertEqual(flow._verification_claim_owner, "")
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+        self.assertNotEqual(created.get("data", {}).get("collector_pn", ""), self.FULL_PN)
+
+    async def test_probe_again_uses_fresh_baseline_and_generation(self) -> None:
+        # F. The retry must snapshot its OWN baseline and ledger generation, not
+        # reuse the first attempt's. The proof: at retry time the first attempt's
+        # session is already IN the baseline (so it can never be re-counted as the
+        # answer), and the generation has advanced past the first trigger.
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        flow = self._make_flow()
+        inventory: list[dict[str, object]] = []
+        self._install_registry(flow, inventory)
+        seen: list[tuple[frozenset, int]] = []
+
+        def _record_and_answer(session_id, pn):
+            def _inner():
+                seen.append(
+                    (flow._manual_callback_baseline, flow._manual_trigger_generation_before)
+                )
+                inventory.append(self._inventory_session(session_id, pn))
+
+            return _inner
+
+        await self._drive_generic_callback(
+            flow,
+            self._recording_detector(
+                results=(self._manual_result_with_pn(self.FULL_PN),),
+                on_detect=_record_and_answer(self.OLD_SESSION, self.FULL_PN),
+            ),
+        )
+        await self._probe_again(
+            flow,
+            self._recording_detector(
+                results=(self._manual_result_with_pn(self.OTHER_FULL_PN),),
+                on_detect=_record_and_answer(self.NEW_SESSION, self.OTHER_FULL_PN),
+            ),
+        )
+
+        self.assertEqual(len(seen), 2)
+        (baseline_1, gen_1), (baseline_2, gen_2) = seen
+        # A fresh baseline: empty at first, and containing the first attempt's
+        # own session at retry time -- not the stale first snapshot.
+        self.assertEqual(baseline_1, frozenset())
+        self.assertIn(self.OLD_SESSION, baseline_2)
+        self.assertNotEqual(baseline_1, baseline_2)
+        # A fresh generation, sampled after the first attempt's trigger.
+        self.assertGreater(gen_2, gen_1)
+        self.assertEqual(gen_2, gen_1 + 1)
+        self.assertLessEqual(
+            gen_2, get_callback_trigger_ledger().snapshot_generation()
+        )
+
+
+    async def test_handoff_flag_stays_false_when_nothing_was_prepared(self) -> None:
+        # Item 5: the registry reports "no claim under this owner" (False). The
+        # flow must NOT record a handoff it never made: _release_verification_claim
+        # deliberately stops releasing once _callback_ownership_handed_off is set,
+        # so a lying flag would suppress this flow's own cleanup and strand the
+        # owner. No abort either -- entry setup re-claims and fails closed there.
+        flow = self._make_flow()
+        registry = self._install_registry(flow, [])
+        flow._verification_registry = registry
+        flow._verification_claim_owner = "callback_verification:vanished"
+
+        self.assertIsNone(flow._prepare_ownership_handoff(self.FULL_PN))
+
+        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_handoff_refusal_aborts_and_releases_own_claim(self) -> None:
+        # Item 5 (other half): a REFUSED handoff (ValueError) must abort without
+        # creating an entry and must release this flow's own claim.
+        flow = self._make_flow()
+        sessions = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, sessions)
+        registry.claim_session("callback_verification:mine", session_id=self.OLD_SESSION)
+        registry.promote_claim_to_full_pn("callback_verification:mine", self.FULL_PN)
+        flow._verification_registry = registry
+        flow._verification_claim_owner = "callback_verification:mine"
+
+        # The claim stands for A; handing off B is refused by the registry.
+        aborted = flow._prepare_ownership_handoff(self.OTHER_FULL_PN)
+
+        self.assertEqual(aborted["type"], "abort")
+        self.assertEqual(aborted["reason"], "already_configured")
+        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
 
 
 if __name__ == "__main__":

@@ -176,12 +176,14 @@
         "data": {
           "server_ip": "Local listener IP",
           "collector_ip": "Collector IP",
-          "driver_hint": "Driver"
+          "driver_hint": "Driver",
+          "connection_strategy": "How the collector connects"
         },
         "data_description": {
           "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener. For normal LAN setups, choose the interface on the same subnet as the collector.",
           "collector_ip": "Collector IPv4 address to probe directly. Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
-          "driver_hint": "Auto-detect works for most inverters. Override only if instructed."
+          "driver_hint": "Auto-detect works for most inverters. Override only if instructed.",
+          "connection_strategy": "Choose “Collector connects to Home Assistant on its own” if the collector already points at Home Assistant. Choose “Ask the collector to connect when needed” to have Home Assistant send a single request to the address above each time it needs data."
         },
         "sections": {
           "advanced_connection": {
@@ -303,9 +305,11 @@
       "callback_identity_mismatch": "A different collector answered at this address. Check that the address reaches the collector you are adding, then try again.",
       "callback_timeout": "The collector did not call back. Check the address and that the collector can reach Home Assistant, then try again.",
       "callback_identity_unverified": "The collector identity could not be confirmed. Enter an address Home Assistant can reach the collector on, then try again.",
-      "callback_identity_ambiguous": "More than one collector answered the callback. Narrow the address so only the collector you are repairing can reach Home Assistant, then try again.",
+      "callback_identity_ambiguous": "More than one collector answered. Make sure only the collector you are adding can reach Home Assistant, then try again.",
       "callback_identity_conflict": "This collector is already being set up in another flow. Finish or cancel that one, then try again.",
-      "collector_identity_required": "This collector could not be identified. Enter an address Home Assistant can reach the collector on so its identity is confirmed, then try again."
+      "collector_identity_required": "This collector could not be identified. Enter an address Home Assistant can reach the collector on so its identity is confirmed, then try again.",
+      "callback_target_required": "An address is required to ask the collector to connect.",
+      "callback_trigger_interference": "Another connection request ran at the same time, so the answer could not be attributed. Try again."
     },
     "abort": {
       "already_configured": "This collector or inverter is already configured.",
@@ -335,7 +339,11 @@
       "diagnostic_commands_failed": "The diagnostic scenario failed unexpectedly. Check the Home Assistant log.",
       "shadow_learning_failed": "Control discovery action failed. Check details and confirmations, then try again.",
       "passive_discovery_unavailable": "Background discovery is not running. Reload the integration and try again.",
-      "invalid_selection": "The selected option is no longer available."
+      "invalid_selection": "The selected option is no longer available.",
+      "callback_target_required": "An address is required to ask the collector to connect.",
+      "identity_not_confirmed": "That collector's identity could not be confirmed. Try again.",
+      "callback_identity_ambiguous": "More than one collector answered. Make sure only the collector you are adding can reach Home Assistant, then try again.",
+      "callback_trigger_interference": "Another connection request ran at the same time, so the answer could not be attributed. Try again."
     },
     "step": {
       "listener": {
@@ -404,7 +412,6 @@
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
           "connection_strategy": "How the collector connects",
-          "proxy_enabled": "Proxy the collector's cloud traffic",
           "collector_operation_mode": "Collector operation mode",
           "control_mode": "Control mode"
         },
@@ -412,7 +419,6 @@
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
           "connection_strategy": "\"Collector connects to Home Assistant on its own\" if the collector already points at Home Assistant — no callback is sent. \"Ask the collector to connect when needed\" sends the collector one connection request per attempt; use this for a collector that normally talks to its cloud.",
-          "proxy_enabled": "Forward the collector's connection to its upstream cloud in addition to Home Assistant. Only available on collectors that support it.",
           "collector_operation_mode": "Legacy compatibility setting kept for migration. The connection strategy above is the primary choice.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
         },
@@ -558,10 +564,44 @@
       "diagnostics_result": {
         "title": "Diagnostics Result",
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
+      },
+      "pending": {
+        "title": "Waiting collector",
+        "description": "Status: {status}\nConnection: {strategy}\n\nThis collector has not been identified yet, so it is not running.",
+        "menu_options": {
+          "pending_confirm_candidate": "Link a detected collector",
+          "pending_settings": "Edit settings",
+          "pending_retry": "Retry now"
+        }
+      },
+      "pending_settings": {
+        "title": "Edit waiting collector",
+        "description": "Change how this collector connects, or the address Home Assistant should ask.",
+        "data": {
+          "connection_strategy": "How the collector connects",
+          "collector_ip": "Collector address"
+        },
+        "data_description": {
+          "connection_strategy": "Choose “Collector connects to Home Assistant on its own” if the collector already points at Home Assistant. Choose “Ask the collector to connect when needed” to have Home Assistant send a single request to the address above each time it needs data."
+        }
+      },
+      "pending_confirm_candidate": {
+        "title": "Link a detected collector",
+        "description": "These collectors connected to Home Assistant but are not linked to any entry yet. Pick the one this entry should become. The address is shown only as a hint.",
+        "data": {
+          "candidate": "Collector"
+        }
+      },
+      "pending_retry": {
+        "title": "Retry connection"
       }
     },
     "progress": {
       "shadow_learning": "{control_discovery_hint}"
+    },
+    "abort": {
+      "no_pending_candidates": "No unlinked collector has connected to Home Assistant yet.",
+      "already_configured": "That collector is already set up in another entry."
     }
   },
   "entity": {

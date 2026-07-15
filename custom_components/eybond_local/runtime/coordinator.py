@@ -2297,7 +2297,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _async_update_entry_without_reload(self, **update_kwargs: Any) -> None:
         """Persist runtime metadata without reloading the entry we are actively running."""
 
-        self._suppress_entry_reload_count = getattr(self, "_suppress_entry_reload_count", 0) + 1
+        # During initial setup the coordinator may persist discovered metadata
+        # before async_setup_entry registers its update listener. Such an update
+        # cannot schedule a reload, so it must not leave a suppression token
+        # behind: that stale token would swallow the user's next genuine options
+        # change. Only arm suppression when a listener actually exists and can
+        # consume it.
+        update_listeners = getattr(self.config_entry, "update_listeners", ())
+        suppression_armed = bool(update_listeners)
+        if suppression_armed:
+            self._suppress_entry_reload_count = (
+                getattr(self, "_suppress_entry_reload_count", 0) + 1
+            )
         changed = False
         try:
             changed = bool(
@@ -2307,7 +2318,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 )
             )
         finally:
-            if not changed:
+            if suppression_armed and not changed:
                 # A no-op update fires no update listener, so nothing would
                 # ever consume the suppression - and the NEXT genuine options
                 # change would have its reload silently swallowed.
