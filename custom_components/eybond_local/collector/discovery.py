@@ -192,15 +192,17 @@ async def async_send_callback_trigger(
 
     from ..connection.callback_ledger import get_callback_trigger_ledger
 
-    get_callback_trigger_ledger().record(target=target_ip, source=source)
-    return await async_probe_target(
-        bind_ip=bind_ip,
-        advertised_server_ip=advertised_server_ip,
-        advertised_server_port=advertised_server_port,
-        target_ip=target_ip,
-        udp_port=udp_port,
-        timeout=timeout,
-    )
+    ledger = get_callback_trigger_ledger()
+    with ledger.callback_send_scope():
+        ledger.record(target=target_ip, source=source)
+        return await async_probe_target(
+            bind_ip=bind_ip,
+            advertised_server_ip=advertised_server_ip,
+            advertised_server_port=advertised_server_port,
+            target_ip=target_ip,
+            udp_port=udp_port,
+            timeout=timeout,
+        )
 
 
 async def async_send_callback_trigger_replies(
@@ -217,15 +219,17 @@ async def async_send_callback_trigger_replies(
 
     from ..connection.callback_ledger import get_callback_trigger_ledger
 
-    get_callback_trigger_ledger().record(target=target_ip, source=source)
-    return await async_probe_target_replies(
-        bind_ip=bind_ip,
-        advertised_server_ip=advertised_server_ip,
-        advertised_server_port=advertised_server_port,
-        target_ip=target_ip,
-        udp_port=udp_port,
-        timeout=timeout,
-    )
+    ledger = get_callback_trigger_ledger()
+    with ledger.callback_send_scope():
+        ledger.record(target=target_ip, source=source)
+        return await async_probe_target_replies(
+            bind_ip=bind_ip,
+            advertised_server_ip=advertised_server_ip,
+            advertised_server_port=advertised_server_port,
+            target_ip=target_ip,
+            udp_port=udp_port,
+            timeout=timeout,
+        )
 
 
 class DiscoveryAnnouncer:
@@ -277,6 +281,11 @@ class DiscoveryAnnouncer:
         self._task = None
 
     async def _run(self) -> None:
+        from ..connection.callback_ledger import (
+            CallbackTriggerInhibitedError,
+            get_callback_trigger_ledger,
+        )
+
         message = build_discovery_messages(
             self._advertised_server_ip,
             self._advertised_server_port,
@@ -299,36 +308,38 @@ class DiscoveryAnnouncer:
                         # the single send site (the announcer does not go
                         # through the probe facade), so one datagram increments
                         # the generation exactly once.
-                        from ..connection.callback_ledger import (
-                            get_callback_trigger_ledger,
-                        )
-
-                        get_callback_trigger_ledger().record(
-                            target=self._target_ip,
-                            source="discovery_announcer",
-                        )
-                        sock.sendto(message, (self._target_ip, self._udp_port))
-                        logger.debug(
-                            "Discovery TX target=%s:%d payload=%s",
-                            self._target_ip,
-                            self._udp_port,
-                            message.decode("ascii"),
-                        )
-                        try:
-                            data, addr = sock.recvfrom(2048)
-                            self.last_reply = data.decode("ascii", errors="replace").strip()
-                            self.last_reply_from = f"{addr[0]}:{addr[1]}"
-                            logger.debug(
-                                "Discovery RX from=%s reply=%s",
-                                self.last_reply_from,
-                                self.last_reply,
+                        ledger = get_callback_trigger_ledger()
+                        with ledger.callback_send_scope():
+                            ledger.record(
+                                target=self._target_ip,
+                                source="discovery_announcer",
                             )
-                        except OSError:
-                            pass
+                            sock.sendto(message, (self._target_ip, self._udp_port))
+                            logger.debug(
+                                "Discovery TX target=%s:%d payload=%s",
+                                self._target_ip,
+                                self._udp_port,
+                                message.decode("ascii"),
+                            )
+                            try:
+                                data, addr = sock.recvfrom(2048)
+                                self.last_reply = data.decode(
+                                    "ascii", errors="replace"
+                                ).strip()
+                                self.last_reply_from = f"{addr[0]}:{addr[1]}"
+                                logger.debug(
+                                    "Discovery RX from=%s reply=%s",
+                                    self.last_reply_from,
+                                    self.last_reply,
+                                )
+                            except OSError:
+                                pass
                     finally:
                         sock.close()
                 except OSError as exc:
                     logger.debug("Discovery TX failed: %s", exc)
+                except CallbackTriggerInhibitedError as exc:
+                    logger.debug("Discovery TX deferred: %s", exc)
                 await asyncio.sleep(self._interval)
         except asyncio.CancelledError:
             raise

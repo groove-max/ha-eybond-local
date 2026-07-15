@@ -9186,6 +9186,66 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.inbound_verified)
         self.assertEqual(result.evidence, sv.EVIDENCE_REBOOT_RECONNECT)
 
+    async def test_inbound_verification_blocks_concurrent_callback_trigger(self) -> None:
+        """A pending/runtime callback cannot contaminate the reboot proof."""
+
+        from custom_components.eybond_local.collector.discovery import (
+            async_send_callback_trigger,
+        )
+        from custom_components.eybond_local.connection.callback_ledger import (
+            CallbackTriggerInhibitedError,
+            get_callback_trigger_ledger,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+        new_session = self._inventory_session(self.NEW_SESSION, self.FULL_PN)
+        blocked: list[str] = []
+        generation_before = get_callback_trigger_ledger().snapshot_generation()
+
+        class _FakeChannel:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+            async def async_send_restart(self) -> None:
+                try:
+                    await async_send_callback_trigger(
+                        bind_ip="127.0.0.1",
+                        advertised_server_ip="127.0.0.1",
+                        advertised_server_port=8899,
+                        target_ip="192.0.2.55",
+                        udp_port=58899,
+                        timeout=0.01,
+                        source="concurrent_pending_entry",
+                    )
+                except CallbackTriggerInhibitedError as exc:
+                    blocked.append(str(exc))
+                inventory[:] = [new_session]
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                return None
+
+        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+            await flow.async_step_verify_connection({})
+            await flow._verification_task
+
+        self.assertEqual(
+            blocked,
+            ["callback_trigger_inhibited_by_inbound_verification"],
+        )
+        self.assertEqual(
+            get_callback_trigger_ledger().snapshot_generation(),
+            generation_before,
+        )
+        result = flow._verification_result
+        assert result is not None
+        self.assertTrue(result.inbound_verified)
+
     # A session/identity already claimed by another owner is a typed failure --
     # never hijacked -- and the flow continues on the manual callback step.
     async def test_already_claimed_session_is_not_hijacked(self) -> None:

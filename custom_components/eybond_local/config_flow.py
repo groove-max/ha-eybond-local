@@ -2071,7 +2071,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
         )
         try:
-            self._verification_result = await verifier.async_verify()
+            # A reboot/reconnect proves permanent inbound behavior only when no
+            # callback trigger can influence that window.  The ledger barrier
+            # coordinates every production trigger sender without guessing by
+            # peer IP, endpoint, collector kind, or cloud family.
+            async with get_callback_trigger_ledger().inhibit_callback_triggers():
+                self._verification_result = await verifier.async_verify()
         except asyncio.CancelledError:
             raise
         except Exception:

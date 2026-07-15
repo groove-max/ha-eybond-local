@@ -123,6 +123,48 @@ def _verifier(channel, sessions, **kwargs) -> InboundStrategyVerifier:
 
 
 class InboundStrategyVerifierTests(unittest.TestCase):
+    def test_trigger_barrier_drains_started_send_and_refuses_new_send(self) -> None:
+        from custom_components.eybond_local.connection.callback_ledger import (
+            CallbackTriggerInhibitedError,
+            CallbackTriggerLedger,
+        )
+
+        ledger = CallbackTriggerLedger()
+
+        async def _run() -> None:
+            send_started = asyncio.Event()
+            release_send = asyncio.Event()
+            verification_entered = asyncio.Event()
+
+            async def _existing_send() -> None:
+                with ledger.callback_send_scope():
+                    send_started.set()
+                    await release_send.wait()
+
+            async def _verification() -> None:
+                async with ledger.inhibit_callback_triggers():
+                    verification_entered.set()
+                    with self.assertRaises(CallbackTriggerInhibitedError):
+                        with ledger.callback_send_scope():
+                            pass
+
+            send_task = asyncio.create_task(_existing_send())
+            await send_started.wait()
+            verification_task = asyncio.create_task(_verification())
+            await asyncio.sleep(0)
+            self.assertFalse(verification_entered.is_set())
+            release_send.set()
+            await send_task
+            await verification_task
+            self.assertTrue(verification_entered.is_set())
+
+            # Leaving the verification window restores normal trigger sends.
+            with ledger.callback_send_scope():
+                ledger.record(target="synthetic-target", source="test")
+            self.assertEqual(ledger.snapshot_generation(), 1)
+
+        asyncio.run(_run())
+
     def test_reconnected_weak_session_is_probed_before_inbound_confirmation(self) -> None:
         inventory = [_strong_old()]
 
