@@ -1,0 +1,23 @@
+# Lightweight unit-suite dependencies -- the `quality-gate` CI job (Python 3.12).
+#
+# This is the STUB-BASED suite (`tools/quality_gate.py` -> `unittest discover -s
+# tests`). It deliberately does NOT install Home Assistant: ~12 modules under
+# tests/ inject fake `homeassistant.*` packages into sys.modules, so the suite
+# must run against those fakes, not a real install. The real Home Assistant
+# lifecycle is covered by a separate failure boundary, the `ha-runtime-tests`
+# matrix (requirements-test-ha-2026.2.txt / requirements-test-ha-2026.7.txt).
+#
+# Why exactly these two are enough: the fakes cover `homeassistant.*`, but they
+# do NOT cover the two genuine third-party libraries the production modules
+# import at module scope:
+#   * aiohttp    -- imported by support/download.py (the HTTP view) and reached
+#                   through the config-flow/support import chain.
+#   * voluptuous -- imported by config_flow.py for its schemas.
+# Verified empirically: on a bare Python 3.12 with NOTHING installed the gate
+# fails (2348 ran / 2 failures / 30 errors); with only these two -- and still no
+# homeassistant importable -- it passes 5/5.
+#
+# Pinned (not floating) so the gate is reproducible; both are pure-version pins
+# with no Home Assistant coupling, so they can be bumped independently.
+aiohttp==3.13.3
+voluptuous==0.15.2

@@ -1500,7 +1500,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # Reconfigure of an existing PN-less entry has no prior identity to match:
         # bind the FIRST freshly-triggered NEW strong session's full PN instead.
         self._verification_bind_any = False
-        self._reconfigure_entry_id = ""
+        # NOTE: do NOT name this `_reconfigure_entry_id` -- Home Assistant's own
+        # ConfigFlow base class defines that as a read-only property (it returns
+        # context["entry_id"] for SOURCE_RECONFIGURE), so assigning to it raises
+        # AttributeError and breaks every flow instantiation.
+        self._repair_entry_id = ""
         self._verified_connection_strategy = ""
         self._verified_strategy_evidence = ""
         # Temporary registry claim held for the duration of the verification.
@@ -3471,7 +3475,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
     def _reconfigure_target_entry(self) -> ConfigEntry | None:
         entry_id = str(
-            self.context.get("entry_id") or self._reconfigure_entry_id or ""
+            self.context.get("entry_id") or self._repair_entry_id or ""
         ).strip()
         if not entry_id:
             return None
@@ -3506,7 +3510,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not collector_identity_binding_required(entry.data, entry.options):
             return self.async_abort(reason="reconfigure_not_required")
 
-        self._reconfigure_entry_id = entry.entry_id
+        self._repair_entry_id = entry.entry_id
         await self._async_ensure_network_defaults()
 
         # A PN-less entry has no prior identity to match -> bind ANY freshly

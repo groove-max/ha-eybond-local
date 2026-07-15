@@ -1,0 +1,29 @@
+# Real Home Assistant integration-test stack -- LANE "2026.2" (Python 3.13).
+#
+# Used by the `ha-runtime-tests` CI matrix. Kept separate from both the
+# lightweight unit suite (requirements-test.txt, no Home Assistant at all) and
+# from production requirements (custom_components/eybond_local/manifest.json).
+#
+# ONE pin on purpose:
+#   pytest-homeassistant-custom-component==0.13.316
+#     * It hard-pins its own matched stack, so this single line fixes the whole
+#       environment reproducibly and self-consistently:
+#           homeassistant==2026.2.3   (requires_python >=3.13.2)
+#           pytest==9.0.0
+#           pytest-asyncio==1.3.0
+#           pytest-socket==0.7.0
+#           syrupy==5.0.0
+#       Home Assistant is therefore NEVER installed separately here -- pinning it
+#       independently could contradict that hard pin.
+#     * 0.13.316 is the LAST release supporting Python 3.13 (requires_python
+#       >=3.13). The next one (0.13.317) moves to homeassistant==2026.3.1 and
+#       requires_python >=3.14, because Home Assistant dropped 3.13 in the 2026.3
+#       cycle. The 3.14 lane lives in requirements-test-ha-2026.7.txt.
+#
+# NOTE: `bleak` (the integration's only manifest requirement) is intentionally
+# NOT listed. The Home Assistant stack already pulls it transitively through its
+# own bluetooth chain (habluetooth -> bleak, bluetooth-adapters -> bleak>=3.0.2),
+# at a version the stack itself constrains and which satisfies the manifest's
+# `bleak>=0.22.3`. Re-declaring it here would add an unpinned dependency and
+# could fight the stack's own resolution.
+pytest-homeassistant-custom-component==0.13.316
