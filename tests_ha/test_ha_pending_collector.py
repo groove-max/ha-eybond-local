@@ -24,10 +24,12 @@ from custom_components.eybond_local.const import (
     CONF_ENTRY_ROLE,
     CONF_PENDING_ADDRESS_HINT,
     CONF_PENDING_ID,
+    CONF_PENDING_LAST_ATTEMPT_RESULT,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
     DOMAIN,
     ENTRY_ROLE_PENDING_COLLECTOR,
+    PENDING_ATTEMPT_CALLBACK_TIMEOUT,
     PENDING_UNIQUE_ID_PREFIX,
 )
 from synthetic import (
@@ -555,6 +557,57 @@ async def test_manual_callback_requires_a_target(hass: HomeAssistant, fake_runti
 
     assert submitted["type"] is FlowResultType.FORM
     assert submitted["errors"][CONF_COLLECTOR_IP] == "callback_target_required"
+
+
+async def test_manual_callback_timeout_can_be_saved_as_pending(
+    hass: HomeAssistant, fake_runtime
+) -> None:
+    """A failed callback is a result, not a form error that blocks pending."""
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    flow = hass.config_entries.flow._progress[result["flow_id"]]
+
+    with patch.object(
+        flow,
+        "_async_run_manual_callback_attempt",
+        return_value="callback_timeout",
+    ):
+        submitted = await flow.async_step_manual(
+            {
+                "server_ip": SYNTHETIC_SERVER_IP,
+                "collector_ip": SYNTHETIC_COLLECTOR_IP,
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": SYNTHETIC_BROADCAST,
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+                "driver_hint": "auto",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            }
+        )
+
+    assert submitted["type"] is FlowResultType.MENU
+    assert submitted["step_id"] == "manual_confirm"
+    assert "manual_create_pending" in submitted["menu_options"]
+
+    async def _passthrough_enrich(_user_input, pending_result):
+        return pending_result
+
+    with patch.object(
+        flow,
+        "_async_enrich_manual_pending_collector_profile",
+        side_effect=_passthrough_enrich,
+    ):
+        created = await flow.async_step_manual_create_pending()
+    assert created["type"] is FlowResultType.CREATE_ENTRY
+    assert created["data"][CONF_ENTRY_ROLE] == ENTRY_ROLE_PENDING_COLLECTOR
+    assert created["data"][CONF_CONNECTION_STRATEGY] == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+    assert created["data"][CONF_COLLECTOR_IP] == SYNTHETIC_COLLECTOR_IP
+    assert created["data"][CONF_COLLECTOR_PN] == ""
+    assert (
+        created["data"][CONF_PENDING_LAST_ATTEMPT_RESULT]
+        == PENDING_ATTEMPT_CALLBACK_TIMEOUT
+    )
 
 
 # --- BLOCKER 3: two pending entries behind one NAT, via the REAL flow ----------

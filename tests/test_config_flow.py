@@ -8817,6 +8817,22 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         ]
         return flow
 
+    def _assert_callback_failure_menu(
+        self,
+        flow: EybondLocalConfigFlow,
+        result: dict[str, object],
+        reason: str,
+    ) -> None:
+        """A failed manual callback remains actionable, never form-blocking."""
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertIn("manual_probe_again", result["menu_options"])
+        self.assertIn("manual_edit_settings", result["menu_options"])
+        self.assertIn("manual_create_pending", result["menu_options"])
+        self.assertIsNotNone(flow._manual_result)
+        self.assertEqual(flow._manual_result.last_error, reason)
+
     def _discovery_info(self, **overrides) -> dict[str, object]:
         info = {
             "tcp_port": 18899,
@@ -9272,18 +9288,31 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
 
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "callback_identity_mismatch")
+        self._assert_callback_failure_menu(
+            flow, result, "callback_identity_mismatch"
+        )
+        self.assertIsNone(flow._manual_result.collector)
+        self.assertIsNone(flow._manual_result.match)
         self.assertEqual(flow._verified_connection_strategy, "")
-        # Editable and re-submittable: the entered address is only flow state.
-        self.assertEqual(flow._manual_defaults.get("collector_ip"), "192.168.1.60")
+        # The entered address stays in flow state and the explicit Edit action
+        # returns it to the editable form.
+        self.assertEqual(flow._manual_config.get("collector_ip"), "192.168.1.60")
+        self.assertIn("manual_edit_settings", result["menu_options"])
 
-    async def test_manual_callback_timeout_shows_error(self) -> None:
+    async def test_manual_callback_timeout_offers_pending_entry(self) -> None:
+        from custom_components.eybond_local.const import (
+            CONF_CONNECTION_STRATEGY,
+            CONF_ENTRY_ROLE,
+            CONF_PENDING_LAST_ATTEMPT_RESULT,
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            ENTRY_ROLE_PENDING_COLLECTOR,
+            PENDING_ATTEMPT_CALLBACK_TIMEOUT,
+        )
+
         flow = self._make_flow()
         flow._verification_expected_pn = self.FULL_PN
         flow._verification_old_session_id = self.OLD_SESSION
-        self._install_registry(flow, [])
+        registry = self._install_registry(flow, [])
 
         with patch.object(
             flow,
@@ -9292,10 +9321,32 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
 
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "manual")
-        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(flow._verified_connection_strategy, "")
+
+        async def _passthrough_enrich(_user_input, pending_result):
+            return pending_result
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"][CONF_ENTRY_ROLE], ENTRY_ROLE_PENDING_COLLECTOR)
+        self.assertEqual(
+            created["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertEqual(created["data"]["collector_ip"], "192.168.1.60")
+        self.assertEqual(created["data"]["collector_pn"], "")
+        self.assertEqual(
+            created["data"][CONF_PENDING_LAST_ATTEMPT_RESULT],
+            PENDING_ATTEMPT_CALLBACK_TIMEOUT,
+        )
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     # 10. Two collectors behind one peer IP cannot confirm each other: a fresh
     # session of a DIFFERENT full PN does not satisfy the new-session check.
@@ -9316,7 +9367,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await flow.async_step_manual(self._manual_input(self.PEER_IP))
 
-        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(flow._verified_connection_strategy, "")
 
     # Weak new session never proves the callback: strong identity is required.
@@ -9340,7 +9391,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(flow, "_async_probe_manual_target", side_effect=_probe):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
 
-        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(flow._verified_connection_strategy, "")
 
     # No-session-id discovery: a session that ALREADY existed before the trigger
@@ -9363,7 +9414,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_manual(self._manual_input(self.PEER_IP))
 
         # The pre-existing session is in the baseline: no proof, no entry.
-        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(flow._verified_connection_strategy, "")
 
     # Entry created after short->full enrichment carries ONE consistent full PN
@@ -9634,11 +9685,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return_value=self._manual_result_with_pn(self.FULL_PN),
         ):
             result_b = await flow_b.async_step_manual(self._manual_input("192.168.1.60"))
-        self.assertEqual(result_b["type"], "form")
+        self.assertEqual(result_b["type"], "menu")
+        self.assertEqual(result_b["step_id"], "manual_confirm")
         self.assertIn(
-            result_b["errors"]["base"],
+            flow_b._manual_result.last_error,
             ("callback_identity_conflict", "callback_timeout"),
         )
+        self.assertIn("manual_create_pending", result_b["menu_options"])
         # Flow A still owns it; flow B never became an owner.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner_a)
         self.assertEqual(flow_b._verification_claim_owner, "")
@@ -9821,9 +9874,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         routed = await self._drive_generic_callback(flow, detector)
 
-        self.assertEqual(routed["type"], "form")
-        self.assertEqual(routed["step_id"], "manual")
-        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, routed, "callback_timeout")
         self.assertEqual(flow._manual_verified_full_pn, "")
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
         self.assertNotEqual(
@@ -9850,8 +9901,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         routed = await self._drive_generic_callback(flow, detector)
 
-        self.assertEqual(routed["type"], "form")
-        self.assertEqual(routed["errors"]["base"], "callback_trigger_interference")
+        self._assert_callback_failure_menu(
+            flow, routed, "callback_trigger_interference"
+        )
         self.assertEqual(flow._manual_verified_full_pn, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(flow._verification_claim_owner, "")
@@ -9865,9 +9917,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         routed = await self._drive_generic_callback(flow, detector)
 
-        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, routed, "callback_timeout")
         self.assertNotEqual(
-            routed["errors"]["base"], "callback_trigger_interference"
+            flow._manual_result.last_error, "callback_trigger_interference"
         )
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
@@ -9934,8 +9986,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         routed = await self._drive_generic_callback(flow, detector)
 
-        self.assertEqual(routed["type"], "form")
-        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, routed, "callback_timeout")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     async def test_manual_callback_timeout_leaves_no_registry_claim(self) -> None:
@@ -9951,7 +10002,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return_value=OnboardingResult(connection_mode="manual"),
         ):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
-        self.assertEqual(result["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(flow._verification_claim_owner, "")
 
@@ -10383,9 +10434,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Our trigger fires; nothing new answers it.
         routed = await self._probe_again(flow, self._recording_detector(results=()))
 
-        self.assertEqual(routed["type"], "form")
-        self.assertEqual(routed["step_id"], "manual")
-        self.assertEqual(routed["errors"]["base"], "callback_timeout")
+        self._assert_callback_failure_menu(flow, routed, "callback_timeout")
         self.assertEqual(flow._manual_verified_full_pn, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(flow._verification_claim_owner, "")
@@ -10429,8 +10478,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertEqual(routed["type"], "form")
-        self.assertEqual(routed["errors"]["base"], "callback_trigger_interference")
+        self._assert_callback_failure_menu(
+            flow, routed, "callback_trigger_interference"
+        )
         self.assertEqual(flow._manual_verified_full_pn, "")
         # The old claim is released and NO new claim was taken.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")

@@ -70,6 +70,10 @@ from .const import (
     CONF_PENDING_ID,
     CONF_PENDING_LAST_ATTEMPT_RESULT,
     ENTRY_ROLE_PENDING_COLLECTOR,
+    PENDING_ATTEMPT_CALLBACK_TIMEOUT,
+    PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
+    PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
+    PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
     PENDING_ATTEMPT_WAITING_CALLBACK,
     PENDING_ATTEMPT_WAITING_INBOUND,
     PENDING_UNIQUE_ID_PREFIX,
@@ -3349,11 +3353,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     flat_input
                 )
                 if verification_error:
-                    # The one-shot callback attempt did not reach a collector on
-                    # a new session. Keep the form editable so the user can fix
-                    # the address and retry -- no entry is created and this flow
-                    # now holds no verified PN and no claim.
-                    errors["base"] = verification_error
+                    # A callback attempt is an observation, not form validation.
+                    # Failure must not make a deliberately PENDING collector
+                    # impossible to create: route to the existing result menu so
+                    # the user can retry, edit the address, or explicitly save a
+                    # pending entry. No PN/session/claim is carried into it.
+                    return await self._async_route_after_manual_callback_failure(
+                        verification_error
+                    )
                 else:
                     return await self._async_route_after_manual_callback_success()
 
@@ -3438,6 +3445,46 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         ):
             self._detection_summary_context = "manual"
             return await self.async_step_detection_summary()
+        return await self.async_step_manual_confirm()
+
+    async def _async_route_after_manual_callback_failure(
+        self,
+        verification_error: str,
+    ) -> ConfigFlowResult:
+        """Show callback failure as a result with an explicit pending action.
+
+        A failed one-shot proves only that the collector was not confirmed during
+        THIS attempt. It is not a schema error and must not block the user's
+        original intent to save an expected device. The result is deliberately
+        identity-free: the callback matcher already released this attempt's claim
+        and cleared ``_manual_verified_full_pn``; stale successful-attempt strategy
+        evidence is cleared here as an additional terminal-path guard.
+
+        Reconfigure does not call this helper: an existing normal entry cannot be
+        converted into a pending entry and therefore remains fail-closed on its
+        own form.
+        """
+
+        reason = str(verification_error or "callback_timeout").strip()
+        result = self._manual_result or OnboardingResult(
+            connection_type=self._current_connection_type(),
+            connection_mode="manual",
+        )
+        self._manual_result = replace(
+            result,
+            # The raw detector result is not attributable to THIS callback once
+            # verification failed. Do not display or later enrich from its PN,
+            # model, or serial as though they were confirmed; the entered target
+            # address remains available from ``_manual_config``.
+            collector=None,
+            match=None,
+            alternative_matches=(),
+            next_action="create_pending_entry",
+            last_error=reason,
+        )
+        self._manual_verified_full_pn = ""
+        self._verified_connection_strategy = ""
+        self._verified_strategy_evidence = ""
         return await self.async_step_manual_confirm()
 
     def _async_show_manual_form(
@@ -3651,11 +3698,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._manual_config
         )
         if verification_error:
-            # Failure leaves nothing behind: no verified PN, no claim. Send the
-            # user back to the editable form so a stale identity can never be
-            # turned into an entry.
-            self._manual_pending_verification_error = verification_error
-            return await self.async_step_manual()
+            # Failure leaves nothing behind: no verified PN and no claim. Keep it
+            # as an honest result and preserve all three explicit next actions,
+            # including saving a pending collector.
+            return await self._async_route_after_manual_callback_failure(
+                verification_error
+            )
         return await self._async_route_after_manual_callback_success()
 
     async def async_step_manual_edit_settings(
@@ -3745,11 +3793,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         data[CONF_PENDING_ADDRESS_HINT] = address_hint
         data[CONF_COLLECTOR_IP] = address_hint
         data[CONF_COLLECTOR_PN] = ""
-        data[CONF_PENDING_LAST_ATTEMPT_RESULT] = (
-            PENDING_ATTEMPT_WAITING_INBOUND
-            if strategy == CONNECTION_STRATEGY_INBOUND
-            else PENDING_ATTEMPT_WAITING_CALLBACK
-        )
+        if strategy == CONNECTION_STRATEGY_INBOUND:
+            pending_status = PENDING_ATTEMPT_WAITING_INBOUND
+        else:
+            callback_error = str(
+                getattr(self._manual_result, "last_error", "") or ""
+            ).strip()
+            pending_status = {
+                "callback_timeout": PENDING_ATTEMPT_CALLBACK_TIMEOUT,
+                "callback_identity_mismatch": PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
+                "callback_identity_conflict": PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
+                "callback_identity_ambiguous": PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
+                "callback_trigger_interference": PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
+            }.get(callback_error, PENDING_ATTEMPT_WAITING_CALLBACK)
+        data[CONF_PENDING_LAST_ATTEMPT_RESULT] = pending_status
         # The endpoint is NEVER touched when saving a pending entry.
         return self.async_create_entry(
             title=self._pending_entry_title(strategy, address_hint),
@@ -6811,7 +6868,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             model_name = result.match.model_name
             serial_number = result.match.serial_number or serial_number
 
-        if result is not None and result.match is not None:
+        callback_failure = str(
+            getattr(result, "last_error", "") if result is not None else ""
+        ).strip()
+        callback_failure_summaries = {
+            "callback_timeout": (
+                "common.dynamic.manual_probe_callback_timeout",
+                "The collector did not call back during this attempt.",
+            ),
+            "callback_identity_mismatch": (
+                "common.dynamic.manual_probe_callback_identity_mismatch",
+                "A callback connection appeared, but its collector identity did not match this attempt.",
+            ),
+            "callback_identity_conflict": (
+                "common.dynamic.manual_probe_callback_identity_conflict",
+                "The collector identity is already owned by another entry or setup flow.",
+            ),
+            "callback_identity_ambiguous": (
+                "common.dynamic.manual_probe_callback_identity_ambiguous",
+                "More than one collector answered during this attempt, so none was selected.",
+            ),
+            "callback_trigger_interference": (
+                "common.dynamic.manual_probe_callback_trigger_interference",
+                "Another callback request overlapped this attempt, so its answer could not be attributed safely.",
+            ),
+        }
+
+        if callback_failure in callback_failure_summaries:
+            key, fallback = callback_failure_summaries[callback_failure]
+            probe_summary = self._tr(key, fallback)
+        elif result is not None and result.match is not None:
             probe_summary = self._tr(
                 "common.dynamic.manual_probe_confirmed",
                 "{peer_label_capitalized} and inverter were confirmed with the manual settings.",
