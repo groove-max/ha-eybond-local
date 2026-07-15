@@ -125,6 +125,7 @@ from ..const import (
 )
 from ..connection.models import build_connection_spec
 from ..connection.connection_policy import (
+    collector_identity_binding_required,
     may_auto_manage_endpoint,
     may_run_steady_reverse_discovery,
     resolve_connection_strategy,
@@ -1100,6 +1101,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 if inverter is not None
                 else _RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
             ),
+            "collector_identity_binding_required": self._identity_binding_required_flag(),
             "runtime_detection_status": (
                 persisted_detection_status or "detecting_inverter"
             ),
@@ -3421,6 +3423,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     ).max_auto_interval
                 ),
                 "runtime_driver_state": runtime_driver_state,
+                "collector_identity_binding_required": self._identity_binding_required_flag(),
                 "collector_poll_context": poll_context,
                 "collector_poll_current_interval_seconds": interval,
                 "collector_poll_next_interval_seconds": next_interval,
@@ -3868,6 +3871,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if removed_commands or removed_version or removed_meta or removed_meta_version:
             self._async_update_entry_without_reload(options=options)
         await self.async_request_refresh()
+
+    def _identity_binding_required_flag(self) -> bool:
+        """Whether this entry has no durable collector PN to own a session.
+
+        Surfaced as a live snapshot value so the runtime state agrees with the
+        support bundle's ``entry_axis_diagnostics.collector_identity_binding_required``.
+        This is a pure DIAGNOSTIC flag: it does NOT feed the poll scheduler or the
+        runtime_driver_state that drives polling, so no poll behavior changes.
+        """
+
+        try:
+            return collector_identity_binding_required(
+                self.config_entry.data, self.config_entry.options
+            )
+        except Exception:  # pragma: no cover - diagnostics must never break polling
+            return False
 
     def _on_collector_connection_established(self, remote_ip: str) -> None:
         """Refresh immediately when the collector dials back in.

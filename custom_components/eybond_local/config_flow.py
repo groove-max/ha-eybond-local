@@ -60,6 +60,7 @@ from .connection.entry import (
     with_driver_hint,
 )
 from .connection.connection_policy import (
+    collector_identity_binding_required,
     resolve_connection_strategy,
     resolve_proxy_enabled,
 )
@@ -197,7 +198,10 @@ from .onboarding.presentation import (
 )
 from .drivers.registry import poll_policy_for_driver_key
 from .connection.callback_ledger import get_callback_trigger_ledger
-from .connection.session_registry import identity_source_is_strong, pn_is_same_identity
+from .connection.session_registry import (
+    identity_source_is_strong,
+    pn_is_same_identity,
+)
 from .onboarding.strategy_verification import (
     EVIDENCE_CALLBACK_TRIGGER,
     EVIDENCE_REBOOT_RECONNECT,
@@ -1493,6 +1497,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._verification_result: StrategyVerificationResult | None = None
         self._verification_expected_pn = ""
         self._verification_old_session_id = ""
+        # Reconfigure of an existing PN-less entry has no prior identity to match:
+        # bind the FIRST freshly-triggered NEW strong session's full PN instead.
+        self._verification_bind_any = False
+        self._reconfigure_entry_id = ""
         self._verified_connection_strategy = ""
         self._verified_strategy_evidence = ""
         # Temporary registry claim held for the duration of the verification.
@@ -1506,10 +1514,26 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # the exact expected full PN proves the callback.
         self._manual_callback_baseline: frozenset[str] = frozenset()
         self._manual_verified_full_pn = ""
+        # A one-shot error surfaced on the next manual form render when a callback
+        # verification reached entry creation without a durable strong PN.
+        self._manual_pending_verification_error = ""
+        # Once the verified identity claim has been handed to the deterministic
+        # pending-handoff owner (right before ``async_create_entry``), flow
+        # cleanup must NOT release it: entry setup will transfer it to the entry.
+        self._callback_ownership_handed_off = False
 
     def _release_verification_claim(self) -> None:
-        """Release the temporary verification claim (idempotent)."""
+        """Release the temporary verification claim (idempotent).
 
+        A no-op once the claim has been handed off to the deterministic pending
+        handoff owner for entry setup -- releasing it then would drop the durable
+        identity between ``async_create_entry`` and setup.
+        """
+
+        if self._callback_ownership_handed_off:
+            self._verification_registry = None
+            self._verification_claim_owner = ""
+            return
         registry, owner = self._verification_registry, self._verification_claim_owner
         self._verification_registry = None
         self._verification_claim_owner = ""
@@ -2007,11 +2031,21 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
         finally:
             # Ordering matters: fully close the restart channel (and the socket
-            # it claimed) BEFORE releasing the registry claim, so no other owner
-            # can grab the identity while our socket is still open.
+            # it claimed) BEFORE deciding on the claim, so no other owner can grab
+            # the identity while our socket is still open.
             with suppress(Exception):
                 await channel.async_close()
-            self._release_verification_claim()
+            result = self._verification_result
+            if result is not None and getattr(result, "inbound_verified", False):
+                # SUCCESS: keep the strong full-PN claim held by this flow (the
+                # socket is now closed but the durable identity stays owned). It
+                # is committed at entry creation via prepare_handoff and completed
+                # by setup, so the runtime owns the session before it starts. It
+                # is released only if the flow is cancelled/aborted before create.
+                pass
+            else:
+                # Timeout / mismatch / cancel / error: free the claim as before.
+                self._release_verification_claim()
 
     def _callback_session_registry(self):
         from .passive_discovery import get_callback_session_registry
@@ -2054,34 +2088,46 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     def _manual_callback_verification_error(self) -> str:
         """Return a flow error key when the manual probe fails callback verification.
 
-        Active only while a passive-discovery verification context exists: the
-        one-shot manual callback attempt must reach the SAME full collector PN on
-        a NEW session. A different PN (even behind the same peer IP), the old
-        session id, or no confirmed identity keeps the entry uncreated.
+        Active while a passive-discovery verification context exists (match the
+        SAME full collector PN on a NEW session) or while reconfigure runs in
+        bind-any mode (adopt the FIRST freshly-triggered NEW strong session's full
+        PN, because a PN-less entry has no prior identity to match). In either
+        case a different PN (even behind the same peer IP), the old session id, or
+        no strong confirmed identity keeps the entry uncreated/unrepaired.
         """
 
-        if not self._verification_expected_pn:
-            return ""
         expected = self._verification_expected_pn
+        bind_any = self._verification_bind_any
+        if not expected and not bind_any:
+            return ""
         self._manual_verified_full_pn = ""
+        # A claim from any prior verification attempt is stale until THIS attempt
+        # re-confirms the identity on the wire, so drop it first: a mismatch or
+        # timeout below must leave nothing owned (item 2 cleanup on failure).
+        self._release_verification_claim()
         result = self._manual_result
         collector = getattr(result, "collector", None)
         result_pn = str(
             getattr(getattr(collector, "collector", None), "collector_pn", "") or ""
         ).strip()
-        if not result_pn:
-            return "callback_timeout"
         # Identity gate on the probe result: exact match, or a strict weak->strong
         # enrichment when the discovery-time expected PN was still short. A
-        # shorter/different PN is a different collector.
-        if result_pn != expected and not (
-            len(result_pn) > len(expected) and pn_is_same_identity(expected, result_pn)
-        ):
-            return "callback_identity_mismatch"
-        # Behavioral gate: only a session id ABSENT from the pre-trigger
-        # baseline, with registry-certified strong identity and the exact full
-        # PN, proves the callback answer. The old session, parallel pre-trigger
-        # sessions, and weak observations never confirm.
+        # shorter/different PN is a different collector. Bind-any skips this
+        # (there is no expected PN); the session gate below still requires strong
+        # identity.
+        if not bind_any:
+            if not result_pn:
+                return "callback_timeout"
+            if result_pn != expected and not (
+                len(result_pn) > len(expected)
+                and pn_is_same_identity(expected, result_pn)
+            ):
+                return "callback_identity_mismatch"
+        # Behavioral gate: collect every session id ABSENT from the pre-trigger
+        # baseline that has registry-certified strong identity and a full PN. The
+        # old session, parallel pre-trigger sessions, and weak observations never
+        # confirm. Peer IP is never consulted.
+        candidates: list[tuple[str, str]] = []
         for session in self._verification_sessions_source():
             session_id = str(session.get("session_id") or "").strip()
             if not session_id or session_id in self._manual_callback_baseline:
@@ -2094,14 +2140,74 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             if not session.get("has_strong_identity"):
                 continue
             session_pn = str(session.get("collector_pn") or "").strip()
-            if session_pn != expected and not (
+            if not session_pn:
+                continue
+            if bind_any:
+                # Repair binds by identity, never by inventory order: if the probe
+                # returned a strong PN, only that same identity may bind; otherwise
+                # every new strong identity is a candidate and >1 is ambiguous.
+                if result_pn and not pn_is_same_identity(result_pn, session_pn):
+                    continue
+            elif session_pn != expected and not (
                 len(session_pn) > len(expected)
                 and pn_is_same_identity(expected, session_pn)
             ):
                 continue
-            self._manual_verified_full_pn = session_pn
-            return ""
-        return "callback_timeout"
+            candidates.append((session_id, session_pn))
+
+        if not candidates:
+            return "callback_timeout"
+        if bind_any:
+            distinct: list[str] = []
+            for _sid, pn in candidates:
+                if not any(pn_is_same_identity(known, pn) for known in distinct):
+                    distinct.append(pn)
+            if len(distinct) > 1:
+                # Two+ different collectors answered: never guess -- ask the user.
+                return "callback_identity_ambiguous"
+        # All surviving candidates share one durable identity; own exactly one.
+        session_id, session_pn = candidates[0]
+        if not self._claim_manual_callback_session(session_id, session_pn):
+            return "callback_identity_conflict"
+        self._manual_verified_full_pn = session_pn
+        return ""
+
+    def _claim_manual_callback_session(
+        self,
+        session_id: str,
+        session_pn: str,
+    ) -> bool:
+        """Own the verified callback socket under a UNIQUE per-attempt owner.
+
+        Claims exactly the new ``session_id`` (transient), then promotes it to the
+        strong full ``session_pn`` under an attempt-scoped
+        ``callback_verification:<uuid>`` owner -- NOT a PN-derived id, so two flows
+        for the same collector are distinct owners and the second hits a
+        single-owner conflict here. Entry setup later completes this claim by PN
+        via :meth:`CallbackSessionRegistry.prepare_handoff` /
+        :meth:`complete_handoff`. Peer IP is never consulted. Returns ``False``
+        (fail closed) when the identity is already owned by another flow/entry.
+        """
+
+        registry = self._callback_session_registry()
+        if registry is None or not session_id or not session_pn:
+            return False
+        owner = f"callback_verification:{uuid.uuid4().hex}"
+        try:
+            registry.claim_session(owner, session_id=session_id)
+            registry.promote_claim_to_full_pn(owner, session_pn)
+        except ValueError as exc:
+            logger.info(
+                "Manual callback verification: session for %s already claimed: %s",
+                session_pn,
+                exc,
+            )
+            with suppress(Exception):
+                registry.release(owner)
+            return False
+        self._verification_registry = registry
+        self._verification_claim_owner = owner
+        return True
 
     # ---- step: collector_network ----
 
@@ -3185,6 +3291,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         await self._async_ensure_network_defaults()
         errors: dict[str, str] = {}
+        if self._manual_pending_verification_error:
+            # Fail-closed retry from _async_create_manual_entry: the callback
+            # verification produced no durable strong PN, so no entry was created.
+            errors["base"] = self._manual_pending_verification_error
+            self._manual_pending_verification_error = ""
 
         if user_input is not None:
             flat_input = _flatten_sections(user_input)
@@ -3356,6 +3467,169 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return await self.async_step_manual()
         return await self._async_create_manual_entry(self._manual_config, self._manual_result)
 
+    # ---- step: reconfigure (repair an existing PN-less collector entry) ----
+
+    def _reconfigure_target_entry(self) -> ConfigEntry | None:
+        entry_id = str(
+            self.context.get("entry_id") or self._reconfigure_entry_id or ""
+        ).strip()
+        if not entry_id:
+            return None
+        return self.hass.config_entries.async_get_entry(entry_id)
+
+    @_with_translation_bundle
+    async def async_step_reconfigure(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Repair a collector entry that has no durable identity binding.
+
+        Runs the SAME manual callback verification as onboarding: the user enters
+        the reachable collector address, we trigger a one-shot callback and take
+        the strong full PN off the NEW session it answers on. The existing entry
+        is then updated in place (``async_update_reload_and_abort``) -- keeping the
+        verified callback strategy/evidence and completing the ownership handoff --
+        never deleted and re-added. Until repair succeeds the entry keeps its
+        identity_binding_required state and does not masquerade as a normal
+        waiting_for_collector entry.
+        """
+
+        entry = self._reconfigure_target_entry()
+        if entry is None:
+            return self.async_abort(reason="reconfigure_entry_missing")
+
+        # Identity repair runs ONLY for an entry that actually lacks its durable
+        # binding. A listener entry, or a healthy PN-bound inbound/callback entry,
+        # must NOT be pushed through callback verification -- that would flip a
+        # genuine inbound entry to callback_on_demand and emit a UDP trigger it
+        # never needed. Finish honestly without changing strategy or triggering.
+        if not collector_identity_binding_required(entry.data, entry.options):
+            return self.async_abort(reason="reconfigure_not_required")
+
+        self._reconfigure_entry_id = entry.entry_id
+        await self._async_ensure_network_defaults()
+
+        # A PN-less entry has no prior identity to match -> bind ANY freshly
+        # triggered strong session. An entry that still carries a (short) PN must
+        # re-confirm exactly it.
+        existing_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
+        self._verification_expected_pn = existing_pn
+        self._verification_bind_any = not existing_pn
+        self._verification_old_session_id = ""
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            flat_input = _flatten_sections(user_input)
+            self._normalize_current_server_ip(flat_input)
+            errors = self._validate_connection_inputs(
+                flat_input,
+                fields=self._connection_branch().form_layout.manual_fields
+                + self._connection_branch().form_layout.manual_advanced_fields,
+            )
+            if not errors:
+                self._manual_config = dict(flat_input)
+                # Baseline BEFORE the one-shot trigger: pre-existing sessions can
+                # never count as the callback answer.
+                self._manual_callback_baseline = frozenset(
+                    str(session.get("session_id") or "").strip()
+                    for session in self._verification_sessions_source()
+                    if str(session.get("session_id") or "").strip()
+                )
+                self._manual_result = await self._async_probe_manual_target(flat_input)
+                verification_error = self._manual_callback_verification_error()
+                if verification_error:
+                    errors["base"] = verification_error
+                else:
+                    applied = self._async_apply_reconfigure(entry)
+                    if applied is not None:
+                        return applied
+                    # No durable strong PN was bound: refuse to "repair" into
+                    # another doomed PN-less entry; re-prompt.
+                    errors["base"] = "callback_identity_unverified"
+
+        return self._async_show_reconfigure_form(user_input, errors)
+
+    def _async_show_reconfigure_form(
+        self,
+        user_input: dict[str, Any] | None,
+        errors: dict[str, str],
+    ) -> ConfigFlowResult:
+        defaults = self._build_manual_defaults(user_input, None)
+        data_schema = vol.Schema(
+            {
+                **self._build_connection_fields_schema(
+                    self._current_connection_type(),
+                    fields=self._connection_branch().form_layout.manual_fields,
+                    values=defaults,
+                ),
+                vol.Required("advanced_connection"): section(
+                    vol.Schema(
+                        self._build_connection_fields_schema(
+                            self._current_connection_type(),
+                            fields=self._connection_branch().form_layout.manual_advanced_fields,
+                            values=defaults,
+                        )
+                    ),
+                    {"collapsed": True},
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=data_schema,
+            errors=errors,
+            description_placeholders={
+                "verification_note": self._manual_verification_note(),
+            },
+        )
+
+    def _async_apply_reconfigure(self, entry: ConfigEntry) -> ConfigFlowResult | None:
+        """Update the existing entry in place with the verified durable identity.
+
+        Returns the terminal abort result on success, or ``None`` when no
+        registry-certified strong PN was bound (the caller re-prompts). Never
+        deletes/re-adds the entry.
+        """
+
+        verified_full_pn = str(self._manual_verified_full_pn or "").strip()
+        if not verified_full_pn:
+            self._release_verification_claim()
+            return None
+
+        collector_ip = _sanitize_pending_collector_ip(
+            str(self._manual_config.get(CONF_COLLECTOR_IP, "")),
+            server_ip=str(self._manual_config.get(CONF_SERVER_IP, "")),
+            discovery_target=str(self._manual_config.get(CONF_DISCOVERY_TARGET, "")),
+        )
+        # Collision guard (item 7): a DIFFERENT config entry may already own
+        # collector:{pn}. Refuse to repair into a duplicate; leave this entry
+        # PN-less and release the attempt's claim.
+        for other in self.hass.config_entries.async_entries(DOMAIN):
+            if getattr(other, "entry_id", None) == entry.entry_id:
+                continue
+            if str(getattr(other, "unique_id", "") or "") == f"collector:{verified_full_pn}":
+                self._release_verification_claim()
+                return self.async_abort(reason="already_configured")
+
+        new_data = dict(entry.data)
+        new_data[CONF_COLLECTOR_PN] = verified_full_pn
+        new_data[CONF_COLLECTOR_IP] = collector_ip
+        # Keep the behaviorally-verified callback strategy/evidence.
+        self._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        self._verified_strategy_evidence = EVIDENCE_CALLBACK_TRIGGER
+        self._apply_verified_connection_strategy(new_data)
+        # Commit the ownership handoff (setup completes it after reload) and update
+        # the entry in place, rolling the handoff back if the terminal helper
+        # throws (item 4).
+        return self._create_entry_with_handoff(
+            verified_full_pn,
+            lambda: self.async_update_reload_and_abort(
+                entry,
+                unique_id=f"collector:{verified_full_pn}",
+                data=new_data,
+            ),
+        )
+
     # ---- entry creation ----
 
     async def _async_create_entry_from_result(
@@ -3498,10 +3772,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._apply_verified_connection_strategy(data)
         data.update(migrate_entry_axes(data, options))
-        return self.async_create_entry(
-            title=title,
-            data=data,
-            options=options,
+        # Item 1 -- strict collector-PN invariant on the auto/passive path too: no
+        # normal collector entry without a durable PN (peer IP is never identity).
+        if collector_identity_binding_required(data, options):
+            self._release_verification_claim()
+            return self.async_abort(reason="collector_identity_required")
+        # Item 2 (symmetry with the manual path): commit the handoff of the claim
+        # held since the successful inbound restart/reconnect proof, then create;
+        # roll back if the terminal helper throws (item 4).
+        return self._create_entry_with_handoff(
+            collector_pn,
+            lambda: self.async_create_entry(title=title, data=data, options=options),
         )
 
     def _apply_verified_connection_strategy(self, data: dict[str, Any]) -> None:
@@ -3557,6 +3838,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 detected_model = result.match.model_name
                 detected_serial = result.match.serial_number
                 driver_hint = result.match.driver_key or driver_hint
+
+        # Durable-identity invariant: a manual/known-IP callback verification that
+        # observed the collector's strong full PN must persist it. Without it the
+        # created callback entry can never own the inbound session it triggers and
+        # is doomed to collector_offline. Only a REGISTRY-CERTIFIED strong full PN
+        # (fc2_parameter_2 / at_dtupn, held under the pending-handoff owner) is
+        # durable evidence -- never the discovery-time short/expected PN alone,
+        # which is transient and unproven. The strong probe result already sets
+        # ``collector_pn`` above; this only fills in the verified-callback case.
+        verified_full_pn = str(self._manual_verified_full_pn or "").strip()
+        if not collector_pn and verified_full_pn:
+            collector_pn = verified_full_pn
 
         assist_state = self._smartess_cloud_assist_state_for_result(result)
         if result is not None and result.match is None and driver_hint == DRIVER_HINT_AUTO and assist_state is not None and assist_state.inferred_driver_key:
@@ -3640,7 +3933,91 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         }
         _apply_collector_profile_metadata(options, result)
         self._apply_verified_connection_strategy(data)
-        return self.async_create_entry(title=title, data=data, options=options)
+
+        # Item 1 -- strict collector-PN invariant: a normal collector entry is
+        # created ONLY with a durable collector PN. A detected inverter
+        # model/serial or a virtual-bridge tag is NOT a session identity (the
+        # registry owns sessions by PN only), so it can never substitute. The
+        # detection stays in the flow and is shown to the user, but no normal
+        # runtime entry is created until identity verification yields the PN;
+        # legacy PN-less entries are fixed via reconfigure. No IP/session
+        # fallback. (Only the integration listener entry is exempt, and it is
+        # created on its own path, not here.)
+        if collector_identity_binding_required(data, options):
+            self._release_verification_claim()
+            self._manual_pending_verification_error = (
+                "callback_identity_unverified"
+                if self._verification_expected_pn
+                else "collector_identity_required"
+            )
+            return await self.async_step_manual()
+
+        # Commit the ownership handoff (the unique-id collision check above already
+        # guaranteed collector:{pn} is free) and create the entry, rolling the
+        # handoff back if the terminal helper throws (item 4).
+        return self._create_entry_with_handoff(
+            collector_pn,
+            lambda: self.async_create_entry(title=title, data=data, options=options),
+        )
+
+    def _prepare_ownership_handoff(self, collector_pn: str) -> ConfigFlowResult | None:
+        """Flip the attempt's verification claim to a committed handoff for setup.
+
+        Returns ``None`` on success (the caller proceeds to create/update the
+        entry). Returns an ``already_configured`` abort when the registry reports
+        the PN is owned by a different owner (a late collision): the attempt's own
+        claim is released and no entry is created/changed.
+        """
+
+        registry = self._verification_registry
+        owner = self._verification_claim_owner
+        if registry is None or not owner:
+            return None
+        try:
+            registry.prepare_handoff(owner, collector_pn)
+        except ValueError as exc:
+            logger.info(
+                "Callback handoff collision for %s: %s", collector_pn, exc
+            )
+            self._release_verification_claim()
+            return self.async_abort(reason="already_configured")
+        self._callback_ownership_handed_off = True
+        return None
+
+    def _rollback_committed_handoff(self) -> None:
+        """Undo THIS attempt's committed handoff after a terminal helper threw.
+
+        ``async_create_entry`` / ``async_update_reload_and_abort`` can raise AFTER
+        ``prepare_handoff`` committed the claim. Without rollback the handoff would
+        be stuck committed forever (blocking any retry of the same PN). Reset the
+        committed flag and release ONLY this attempt's own verification owner;
+        another flow's / entry's claim is never touched. The original exception is
+        re-raised by the caller.
+        """
+
+        if not self._callback_ownership_handed_off:
+            return
+        self._callback_ownership_handed_off = False
+        self._release_verification_claim()
+
+    def _create_entry_with_handoff(self, collector_pn: str, terminal):
+        """prepare the ownership handoff, then run the terminal create/update.
+
+        ``terminal`` is a zero-arg callable returning the ConfigFlowResult (an
+        ``async_create_entry`` / ``async_update_reload_and_abort`` call). On a late
+        unique-id collision the handoff is refused and an ``already_configured``
+        abort is returned without running the terminal. If the terminal raises,
+        the committed handoff is rolled back before the exception propagates.
+        """
+
+        handoff = self._prepare_ownership_handoff(collector_pn)
+        if handoff is not None:
+            return handoff
+        try:
+            return terminal()
+        except Exception:
+            self._rollback_committed_handoff()
+            raise
 
     async def _async_enrich_manual_pending_collector_profile(
         self,

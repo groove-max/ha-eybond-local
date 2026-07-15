@@ -214,12 +214,27 @@ class CallbackSession:
 
 @dataclass(slots=True)
 class _Claim:
-    """One entry's ownership claim over a durable collector identity."""
+    """One owner's claim over a session and/or durable collector identity.
+
+    Ownership moves through three lifecycle stages, all keyed on the SAME owner
+    id (a per-attempt ``callback_verification:<uuid>`` for a flow, or the
+    ``entry_id`` for a permanent entry) -- never on a PN-derived owner id:
+
+    * active verification claim: ``handoff_pending=False`` (a flow is still
+      proving the identity; setup must never transfer this);
+    * prepared handoff: ``handoff_pending=True`` on a verification owner (the flow
+      is about to create/update the entry; setup completes exactly this one,
+      found by PN);
+    * permanent entry claim: ``handoff_pending=False`` on the ``entry_id`` owner
+      (a settled claim -- setup's completion clears the flag, so it can never be
+      re-completed out from under the entry).
+    """
 
     entry_id: str
     collector_pn: str = ""
     session_id: str = ""
     session_protocol: str = ""
+    handoff_pending: bool = False
 
 
 @dataclass(slots=True)
@@ -606,8 +621,90 @@ class CallbackSessionRegistry:
                     return True
         return False
 
+    def prepare_handoff(self, attempt_owner: str, full_pn: object) -> bool:
+        """Mark a verification attempt's claim as a committed handoff (atomic).
+
+        Called by the config flow the moment it is about to create/update the
+        entry: it pins the attempt's claim to the strong full ``full_pn`` and
+        flips it ``committed=True`` so entry setup may later complete exactly this
+        handoff (looked up by PN). It does NOT change the owner id -- the attempt
+        owner stays a unique ``callback_verification:<uuid>``; the PN is only an
+        INDEX, never encoded into the owner. Single ownership is enforced: a PN
+        already owned by another owner raises ``ValueError``. Only the attempt's
+        own claim is touched; another flow's claim is never affected.
+        """
+
+        owner = str(attempt_owner or "").strip()
+        claim = self._claims.get(owner)
+        if claim is None:
+            return False
+        pn = normalize_pn(full_pn)
+        if not pn:
+            raise ValueError("full_pn_required")
+        other = self.owner_for_pn(pn)
+        if other and other != owner:
+            raise ValueError(f"session_already_claimed:{pn}:{other}")
+        claim.collector_pn = prefer_full_pn(claim.collector_pn, pn)
+        claim.handoff_pending = True
+        return True
+
+    def complete_handoff(self, full_pn: object, entry_id: str) -> bool:
+        """Transfer a COMMITTED handoff for one PN to its permanent entry.
+
+        Called by entry setup. It moves ONLY a committed handoff (never an active,
+        uncommitted verification claim -- setup cannot steal a claim a flow is
+        still proving). The move is atomic: the identity is never momentarily
+        unowned. Returns ``False`` when no committed handoff exists for this PN
+        (setup then claims the durable PN directly). Single ownership is enforced
+        against a different permanent identity on the destination.
+
+        Peer IP is never consulted here.
+        """
+
+        pn = normalize_pn(full_pn)
+        to_id = str(entry_id or "").strip()
+        if not pn or not to_id:
+            raise ValueError("handoff_args_required")
+        source_owner = ""
+        for owner, claim in self._claims.items():
+            if (
+                claim.handoff_pending
+                and owner != to_id
+                and claim.collector_pn
+                and pn_is_same_identity(claim.collector_pn, pn)
+            ):
+                source_owner = owner
+                break
+        if not source_owner:
+            return False
+        source = self._claims[source_owner]
+        existing = self._claims.get(to_id)
+        if (
+            existing is not None
+            and existing.collector_pn
+            and not pn_is_same_identity(existing.collector_pn, source.collector_pn)
+        ):
+            raise ValueError(f"session_already_claimed:{source.collector_pn}:{to_id}")
+        # The destination is a SETTLED permanent claim (handoff_pending=False), so
+        # it can never be re-completed out from under the entry.
+        self._claims[to_id] = _Claim(
+            entry_id=to_id,
+            collector_pn=prefer_full_pn(
+                source.collector_pn, existing.collector_pn if existing else ""
+            ),
+            session_id=source.session_id,
+            session_protocol=source.session_protocol,
+            handoff_pending=False,
+        )
+        del self._claims[source_owner]
+        return True
+
     def release(self, entry_id: str) -> bool:
-        """Release any claim held by one entry. Returns whether one existed."""
+        """Release the claim held by exactly one owner. Returns whether one existed.
+
+        Only the named owner's claim is removed -- a concurrent flow/entry owning
+        a different (even same-PN) claim is never touched.
+        """
 
         return self._claims.pop(str(entry_id or "").strip(), None) is not None
 

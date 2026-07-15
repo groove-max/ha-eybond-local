@@ -1747,6 +1747,198 @@ class InitModuleTests(unittest.TestCase):
         asyncio.run(_run())
 
 
+class SetupOwnershipOrderingTests(unittest.TestCase):
+    """Permanent registry ownership must be established before the runtime starts."""
+
+    FULL_PN = "V001020SYN62344022"
+
+    def _run_setup_with_registry(self, entry_data, registry, coordinator_probe):
+        async def _run() -> None:
+            async def async_add_executor_job(func, *args):
+                return func(*args)
+
+            def async_create_task(coro):
+                return asyncio.create_task(coro)
+
+            class _Bus:
+                def async_listen_once(self, event_type, callback):
+                    return lambda: None
+
+            class _ConfigEntries:
+                async def async_forward_entry_setups(self, entry, platforms) -> None:
+                    return None
+
+            hass = types.SimpleNamespace(
+                async_add_executor_job=async_add_executor_job,
+                async_create_task=async_create_task,
+                bus=_Bus(),
+                config_entries=_ConfigEntries(),
+                data={"eybond_local": {"callback_session_registry": registry}},
+            )
+
+            class _Entry:
+                def __init__(self) -> None:
+                    self.entry_id = "entry-owned"
+                    self.data = dict(entry_data)
+                    self.options = {}
+                    self.title = "Collector"
+                    self.runtime_data = None
+
+                def async_on_unload(self, callback) -> None:
+                    return None
+
+                def add_update_listener(self, listener):
+                    return listener
+
+            entry = _Entry()
+
+            test = self
+
+            class _FakeCoordinator:
+                def __init__(self, _hass, _entry) -> None:
+                    self.data = types.SimpleNamespace(inverter=None)
+                    self.current_driver = None
+                    self.platforms_initialized = False
+
+                async def async_setup(self) -> None:
+                    # Ownership MUST already be established here.
+                    coordinator_probe["owner_at_setup"] = registry.owner_for_pn(
+                        test.FULL_PN
+                    )
+
+                async def async_refresh(self) -> None:
+                    return None
+
+                async def async_shutdown(self) -> None:
+                    return None
+
+                def async_sync_device_registry(self) -> None:
+                    return None
+
+                @property
+                def has_inverter_identity(self) -> bool:
+                    return False
+
+                def mark_entity_platforms_initialized(self, **_kwargs) -> None:
+                    self.platforms_initialized = True
+
+            runtime_coordinator_module = types.ModuleType(
+                "custom_components.eybond_local.runtime.coordinator"
+            )
+            runtime_coordinator_module.EybondLocalCoordinator = _FakeCoordinator
+
+            with (
+                patch("custom_components.eybond_local._configure_local_metadata_roots"),
+                patch("custom_components.eybond_local._prime_metadata_caches"),
+                patch("custom_components.eybond_local.services.async_setup_services", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_server_ip", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_collector_operation_mode", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_collector_cloud_family", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_valuecloud_driver_hint", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_entry_title", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_initial_refresh_for_setup", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_self_heal_enabled_defaults", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_cleanup_obsolete_entities", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_finalize_expert_entity_migration", new=AsyncMock()),
+                patch("custom_components.eybond_local._async_ensure_listener_entry", new=AsyncMock()),
+                patch("custom_components.eybond_local.support.download.async_register_support_package_download_view"),
+                patch("custom_components.eybond_local.entity_setup_context", return_value=(None, None, False)),
+                patch.dict(
+                    sys.modules,
+                    {"custom_components.eybond_local.runtime.coordinator": runtime_coordinator_module},
+                ),
+            ):
+                result = await async_setup_entry(hass, entry)
+
+            self.assertTrue(result)
+
+        asyncio.run(_run())
+
+    def test_handoff_completed_before_coordinator_setup(self) -> None:
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        sessions = [
+            {
+                "session_id": "s1",
+                "peer_ip": "203.0.113.9",
+                "listener_port": 18899,
+                "collector_pn": self.FULL_PN,
+                "state": "routed_framed",
+                "collector_identity_source": "at_dtupn",
+            }
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        # A config flow prepared a committed handoff for this PN.
+        registry.claim_session("callback_verification:zzz", session_id="s1")
+        registry.promote_claim_to_full_pn("callback_verification:zzz", self.FULL_PN)
+        registry.prepare_handoff("callback_verification:zzz", self.FULL_PN)
+
+        probe: dict[str, str] = {}
+        self._run_setup_with_registry(
+            {"driver_hint": "pi30", "collector_pn": self.FULL_PN}, registry, probe
+        )
+        # Ownership was already the entry's when the coordinator started.
+        self.assertEqual(probe["owner_at_setup"], "entry-owned")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "entry-owned")
+
+    def test_restart_without_handoff_claims_by_pn_before_setup(self) -> None:
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        sessions = [
+            {
+                "session_id": "s1",
+                "peer_ip": "203.0.113.9",
+                "listener_port": 18899,
+                "collector_pn": self.FULL_PN,
+                "state": "routed_framed",
+                "collector_identity_source": "at_dtupn",
+            }
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        # No committed handoff (HA restart): setup claims the durable PN directly.
+        probe: dict[str, str] = {}
+        self._run_setup_with_registry(
+            {"driver_hint": "pi30", "collector_pn": self.FULL_PN}, registry, probe
+        )
+        self.assertEqual(probe["owner_at_setup"], "entry-owned")
+
+    def test_competing_verification_blocks_setup_before_coordinator(self) -> None:
+        # Item 3: an in-flight verification of the same PN makes setup fail closed
+        # with a retryable ConfigEntryNotReady, and the coordinator never starts.
+        from custom_components.eybond_local import ConfigEntryNotReady
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        sessions = [
+            {
+                "session_id": "s1",
+                "peer_ip": "203.0.113.9",
+                "listener_port": 18899,
+                "collector_pn": self.FULL_PN,
+                "state": "routed_framed",
+                "collector_identity_source": "at_dtupn",
+            }
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+        registry.claim_session("callback_verification:live", session_id="s1")
+        registry.promote_claim_to_full_pn("callback_verification:live", self.FULL_PN)
+
+        probe: dict[str, str] = {}
+        with self.assertRaises(ConfigEntryNotReady):
+            self._run_setup_with_registry(
+                {"driver_hint": "pi30", "collector_pn": self.FULL_PN}, registry, probe
+            )
+        # coordinator.async_setup was never reached.
+        self.assertNotIn("owner_at_setup", probe)
+        # The verification claim is untouched; a retry after it releases succeeds.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "callback_verification:live")
+
+
 class StopShutdownHookTests(unittest.TestCase):
     """The HA-stop hook must never keep shutdown hostage to a hung teardown."""
 

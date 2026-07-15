@@ -22,9 +22,12 @@ except ModuleNotFoundError:  # Local tooling imports the package without Home As
     EVENT_HOMEASSISTANT_STOP = "homeassistant_stop"
 
 try:
-    from homeassistant.exceptions import ConfigEntryNotReady
+    from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 except ModuleNotFoundError:  # Local tooling imports the package without Home Assistant installed.
     class ConfigEntryNotReady(Exception):
+        """Fallback used by local tooling when Home Assistant is unavailable."""
+
+    class ConfigEntryError(Exception):
         """Fallback used by local tooling when Home Assistant is unavailable."""
 
 from .naming import installation_title, legacy_installation_titles
@@ -143,45 +146,26 @@ def _register_entry_stop_shutdown(hass: HomeAssistant, entry: ConfigEntry, coord
 
 
 def _register_entry_callback_session_claim(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Claim this entry's collector identity in the callback session registry.
+    """Establish this entry's PERMANENT ownership before the runtime starts.
 
-    Ownership is durable-PN based (peer IP is never used). The claim makes the
-    registry the single authority for "which entry owns which inbound session",
-    so passive discovery does not re-publish a collector an entry already owns.
-    Claiming is best-effort: a conflicting stale claim must never break setup.
+    Ownership is durable-PN based (peer IP is never used). It makes the registry
+    the single authority for "which entry owns which inbound session", so passive
+    discovery does not re-publish a collector an entry already owns. Contract:
+    this either returns having recorded ownership (or having nothing to own -- no
+    registry, or a PN-less legacy entry), or it RAISES a typed setup error so the
+    coordinator/runtime never starts without ownership:
+
+    * a conflict with an in-flight config-flow verification of the same PN raises
+      ``ConfigEntryNotReady`` (retryable -- setup succeeds once the flow completes
+      its handoff or releases its claim);
+    * a conflict with a DIFFERENT permanent entry raises ``ConfigEntryError``
+      (fail-closed -- a genuine duplicate is not resolved by retrying).
     """
 
     from .passive_discovery import (
         get_callback_session_registry,
         get_passive_callback_discovery,
     )
-
-    registry = get_callback_session_registry(hass)
-    if registry is None:
-        return
-    collector_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
-    if not collector_pn:
-        return
-    session_protocol = str(
-        entry.options.get(
-            "collector_session_protocol",
-            entry.data.get("collector_session_protocol", ""),
-        )
-        or ""
-    ).strip()
-    try:
-        registry.claim(
-            entry.entry_id,
-            collector_pn=collector_pn,
-            session_protocol=session_protocol,
-        )
-    except ValueError as exc:
-        logger.debug(
-            "Could not claim callback session for entry %s (%s): %s",
-            entry.entry_id,
-            collector_pn,
-            exc,
-        )
 
     def _release_callback_session() -> None:
         discovery = get_passive_callback_discovery(hass)
@@ -191,7 +175,57 @@ def _register_entry_callback_session_claim(hass: HomeAssistant, entry: ConfigEnt
         if released_registry is not None:
             released_registry.release(entry.entry_id)
 
+    # Register the release hook unconditionally so a failed setup (or unload)
+    # always frees whatever this entry claimed below.
     entry.async_on_unload(_release_callback_session)
+
+    registry = get_callback_session_registry(hass)
+    if registry is None:
+        return
+    collector_pn = str(entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
+    if not collector_pn:
+        # A PN-less legacy entry has no durable identity to own; it stays
+        # identity_binding_required (surfaced in diagnostics) and is repaired via
+        # the reconfigure flow. This is a distinct, explicit state -- not a
+        # silent "run without ownership".
+        return
+    session_protocol = str(
+        entry.options.get(
+            "collector_session_protocol",
+            entry.data.get("collector_session_protocol", ""),
+        )
+        or ""
+    ).strip()
+    try:
+        # First try to complete a committed config-flow handoff for this PN (the
+        # verification flow prepared it under its own unique attempt owner); that
+        # transfers the already-owned session with no unowned window. If there is
+        # no committed handoff (an already-configured entry after an HA restart
+        # lost the in-memory claim), claim the durable identity directly by PN so
+        # the next same-PN inbound session binds to it. Never by peer IP.
+        if not registry.complete_handoff(collector_pn, entry.entry_id):
+            registry.claim(
+                entry.entry_id,
+                collector_pn=collector_pn,
+                session_protocol=session_protocol,
+            )
+    except ValueError as exc:
+        # Fail closed: the runtime must NOT start without ownership. Ask the
+        # registry who actually holds the identity (avoids parsing the message).
+        conflicting_owner = registry.owner_for_pn(collector_pn)
+        if conflicting_owner.startswith(
+            ("callback_verification:", "strategy_verification:")
+        ):
+            # An in-flight config-flow verification holds the identity; retry.
+            raise ConfigEntryNotReady(
+                f"EyeBond collector {collector_pn} is being verified in a config "
+                "flow; ownership not yet available"
+            ) from exc
+        # A different permanent entry already owns this identity (a duplicate).
+        raise ConfigEntryError(
+            f"EyeBond collector {collector_pn} is already owned by another entry "
+            f"({conflicting_owner or 'unknown'})"
+        ) from exc
 
 
 def _register_entry_network_reconcile(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
@@ -1362,11 +1396,14 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     a stale ``callback_listener`` connection_mode used to take precedence over the
     operation mode. Such an entry can never connect as inbound (the collector
     points at the vendor cloud and never dials Home Assistant), so it is corrected
-    to ``callback_on_demand`` -- a superset that still accepts a spontaneous
-    inbound session. No endpoint is ever written during migration.
+    to ``callback_on_demand``. The correction is narrow: only the cloud-primary
+    SmartESS+HA shape is touched (never manual/known-IP), so a genuinely-explicit
+    inbound value is never overwritten just because the legacy connection_mode
+    looks user-triggered. No endpoint is ever written during migration.
 
-    Only missing axis fields are filled and only the provably-broken strategy is
-    corrected; all legacy fields are left untouched for backward compatibility.
+    Only missing axis fields are filled and only the provably mis-migrated
+    strategy is corrected; all legacy fields are left untouched for backward
+    compatibility.
     """
 
     from .connection.connection_policy import (
@@ -1451,12 +1488,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_self_heal_collector_cloud_family(hass, entry)
         await _async_self_heal_valuecloud_driver_hint(hass, entry)
         await _async_self_heal_entry_title(hass, entry)
+        # Establish permanent registry ownership (complete the config-flow handoff
+        # or claim the durable PN) BEFORE the coordinator starts, so the runtime
+        # sees a registry where this entry already owns its PN/session. Also
+        # registers the unload hook that frees the claim if setup fails below.
+        _register_entry_callback_session_claim(hass, entry)
         coordinator = EybondLocalCoordinator(hass, entry)
         await coordinator.async_setup()
         entry.runtime_data = coordinator
         _register_entry_stop_shutdown(hass, entry, coordinator)
         _register_entry_network_reconcile(hass, entry, coordinator)
-        _register_entry_callback_session_claim(hass, entry)
         await _async_initial_refresh_for_setup(hass, entry, coordinator)
         await _async_self_heal_enabled_defaults(hass, entry, coordinator)
         await _async_cleanup_obsolete_entities(hass, entry, coordinator)
@@ -1500,6 +1541,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 f"EyeBond listener is not ready on {exc.host}:{exc.port}: {exc.error}"
             ) from exc
         logger.exception("Failed to set up EyeBond Local entry %s", entry.entry_id)
+        raise
+    except (ConfigEntryNotReady, ConfigEntryError):
+        # Ownership could not be established (a competing verification/duplicate).
+        # The claim ran before the coordinator was constructed, so nothing runs;
+        # propagate the typed, (non-)retryable result unchanged and quietly.
         raise
     except Exception:
         if coordinator is not None and getattr(entry, "runtime_data", None) is None:

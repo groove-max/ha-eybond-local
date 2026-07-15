@@ -10,6 +10,7 @@ PN identity and short/full PN reconciliation. Peer IP is never durable identity.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import types
 import unittest
 
@@ -712,6 +713,172 @@ class MigrationMatrixTests(unittest.TestCase):
         )
         self.assertTrue(diag["may_send_callback_trigger"])
         self.assertEqual(diag["migration_status"], "corrected")
+
+
+class OfflinePnLessCallbackMigrationTests(unittest.TestCase):
+    """The manual/known-IP offline PN-less callback entry migration + repair state."""
+
+    def test_legacy_known_ip_ha_only_maps_to_callback_on_demand(self) -> None:
+        # A user-triggered known-IP callback collector is NOT inbound even when a
+        # legacy HA-only operation mode was recorded: it needs a UDP trigger.
+        data = {
+            C.CONF_CONNECTION_MODE: "known_ip",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+        }
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    def test_legacy_manual_ha_only_maps_to_callback_on_demand(self) -> None:
+        data = {
+            C.CONF_CONNECTION_MODE: "manual",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+        }
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    def test_ha_only_alone_still_inbound(self) -> None:
+        # Regression: a plain HA-only entry (no user-triggered connection_mode)
+        # stays inbound -- the endpoint points at HA and it dials in.
+        data = {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY}
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}), C.CONNECTION_STRATEGY_INBOUND
+        )
+
+    def test_explicit_inbound_is_not_changed(self) -> None:
+        data = {
+            C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+            C.CONF_CONNECTION_MODE: "known_ip",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+        }
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}), C.CONNECTION_STRATEGY_INBOUND
+        )
+
+    def test_verified_reboot_reconnect_evidence_stays_inbound(self) -> None:
+        # A behaviorally verified inbound entry is authoritative over legacy fields.
+        data = {
+            C.CONF_CONNECTION_STRATEGY_EVIDENCE: C.CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
+            C.CONF_CONNECTION_MODE: "known_ip",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+        }
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}), C.CONNECTION_STRATEGY_INBOUND
+        )
+
+    def test_verified_callback_trigger_evidence_is_callback_on_demand(self) -> None:
+        data = {
+            C.CONF_CONNECTION_STRATEGY_EVIDENCE: C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+        }
+        self.assertEqual(
+            cp.resolve_connection_strategy(data, {}),
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    def test_explicit_inbound_known_ip_is_not_corrected_by_migration(self) -> None:
+        # Item 6: a genuinely-explicit inbound value on a manual/known-IP entry is
+        # NOT flipped to callback_on_demand by the corrective re-migration just
+        # because the legacy connection_mode looks user-triggered. The correction
+        # is reserved for the cloud-primary SmartESS+HA mis-migration shape.
+        data = {
+            C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+            C.CONF_CONNECTION_MODE: "known_ip",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+        }
+        self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
+        # The explicit strategy is preserved end-to-end.
+        self.assertEqual(
+            cp.simulate_migration(data, {})[C.CONF_CONNECTION_STRATEGY],
+            C.CONNECTION_STRATEGY_INBOUND,
+        )
+
+    def test_pn_less_manual_entry_reports_identity_binding_required(self) -> None:
+        # The exact offline support-package shape: manual + HA_ONLY + no PN.
+        data = {
+            C.CONF_CONNECTION_MODE: "manual",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+            C.CONF_COLLECTOR_PN: "",
+        }
+        self.assertTrue(cp.collector_identity_binding_required(data, {}))
+        diag = cp.migration_diagnostics(data, {})
+        self.assertEqual(diag["migration_status"], "identity_binding_required")
+        axes = cp.entry_axis_diagnostics(data, {})
+        self.assertFalse(axes["collector_pn_bound"])
+        self.assertTrue(axes["collector_identity_binding_required"])
+
+    def test_callback_entry_with_pn_is_not_binding_required(self) -> None:
+        data = {
+            C.CONF_CONNECTION_MODE: "known_ip",
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+            C.CONF_COLLECTOR_PN: "V001020SYN62344022",
+        }
+        self.assertFalse(cp.collector_identity_binding_required(data, {}))
+        self.assertEqual(cp.migration_diagnostics(data, {})["migration_status"], "ok")
+
+    def test_pn_less_inbound_entry_also_requires_identity_binding(self) -> None:
+        # Item 7: the unified invariant covers inbound too. An inbound collector
+        # entry claims its dial-in session by durable PN through the callback
+        # registry (peer IP is never ownership), so a PN-less inbound entry can
+        # never own a session and must fail closed as identity_binding_required.
+        data = {
+            C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
+            C.CONF_COLLECTOR_PN: "",
+        }
+        self.assertTrue(cp.collector_identity_binding_required(data, {}))
+        # The integration listener/bootstrap entry is the sole exception.
+        listener = {C.CONF_ENTRY_ROLE: C.ENTRY_ROLE_LISTENER}
+        self.assertFalse(cp.collector_identity_binding_required(listener, {}))
+
+
+class OperationModeIsNotStrategyAuthorityGuardTests(unittest.TestCase):
+    def test_operation_mode_does_not_override_user_triggered_connection_mode(self) -> None:
+        # Guard: whatever the legacy operation mode, a manual/known-IP entry is
+        # callback_on_demand. Operation mode is not the strategy authority.
+        for op_mode in (
+            C.COLLECTOR_OPERATION_HA_ONLY,
+            C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            "",
+        ):
+            for conn_mode in ("manual", "known_ip"):
+                data = {
+                    C.CONF_CONNECTION_MODE: conn_mode,
+                    C.CONF_COLLECTOR_OPERATION_MODE: op_mode,
+                }
+                self.assertEqual(
+                    cp.resolve_connection_strategy(data, {}),
+                    C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                    msg=f"{conn_mode}+{op_mode!r}",
+                )
+
+    def test_connection_policy_never_reads_hostname_endpoint_or_peer_ip(self) -> None:
+        # Guard: the module contains NO code that parses peer IP / hostnames for
+        # the strategy decision. (The endpoint-provenance axis is allowed; parsing
+        # an address or a hostname is not.) Checks code tokens, not prose.
+        import ast
+
+        tree = ast.parse(Path(cp.__file__).read_text(encoding="utf-8"))
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    names.add((alias.asname or alias.name).split(".")[0])
+        for token in (
+            "peer_ip",
+            "gethostbyname",
+            "ip_address",
+            "socket",
+            "CONF_COLLECTOR_IP",
+        ):
+            self.assertNotIn(token, names, msg=token)
 
 
 if __name__ == "__main__":

@@ -239,6 +239,44 @@
           "verify_connection_retry": "Repeat automatic check",
           "manual": "Enter collector address manually"
         }
+      },
+      "reconfigure": {
+        "title": "Re-verify collector identity",
+        "description": "This collector entry has no confirmed identity yet, so it cannot claim its callback session and stays offline. Enter the address Home Assistant can reach the collector on; a one-shot callback is triggered to bind the collector's durable identity.",
+        "data": {
+          "server_ip": "Local listener IP",
+          "collector_ip": "Collector IP",
+          "driver_hint": "Driver"
+        },
+        "data_description": {
+          "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener. For normal LAN setups, choose the interface on the same subnet as the collector.",
+          "collector_ip": "Collector IPv4 address to probe directly. Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
+          "driver_hint": "Auto-detect works for most inverters. Override only if instructed."
+        },
+        "sections": {
+          "advanced_connection": {
+            "name": "Advanced connection settings",
+            "description": "Only needed for remote, VPN, or NAT setups. For a normal home network the defaults are correct — you can leave everything here untouched.",
+            "data": {
+              "tcp_port": "Local TCP port",
+              "advertised_server_ip": "Advertised callback IP",
+              "advertised_tcp_port": "Advertised callback TCP port",
+              "udp_port": "UDP discovery port",
+              "discovery_target": "Discovery target IP",
+              "discovery_interval": "Discovery interval",
+              "heartbeat_interval": "Heartbeat interval"
+            },
+            "data_description": {
+              "tcp_port": "Local TCP listener port on Home Assistant. Default: 8899.",
+              "advertised_server_ip": "Public or forwarded IP the collector should call back to. Leave empty for normal home networks (the local address above is used).",
+              "advertised_tcp_port": "Forwarded external port for the callback. Leave empty unless your router forwards a different external port.",
+              "udp_port": "Port used to discover the collector on the network. Default: 58899 — change only if instructed.",
+              "discovery_target": "IPv4 address that receives discovery packets. Use subnet broadcast for local LAN, or a specific remote/NAT IPv4 for unicast discovery.",
+              "discovery_interval": "How often to send discovery redirects while waiting for the collector.",
+              "heartbeat_interval": "How often Home Assistant pings the collector to keep the connection alive."
+            }
+          }
+        }
       }
     },
     "progress": {
@@ -263,10 +301,16 @@
       "smartess_cloud_assist_failed": "SmartESS cloud assist did not complete. See the explanation above and try again.",
       "inverter_link_down": "The collector responded, but the inverter link is down (identity registers read as zeros). Check the inverter power and the collector cable, then rescan.",
       "callback_identity_mismatch": "A different collector answered at this address. Check that the address reaches the collector you are adding, then try again.",
-      "callback_timeout": "The collector did not call back. Check the address and that the collector can reach Home Assistant, then try again."
+      "callback_timeout": "The collector did not call back. Check the address and that the collector can reach Home Assistant, then try again.",
+      "callback_identity_unverified": "The collector identity could not be confirmed. Enter an address Home Assistant can reach the collector on, then try again.",
+      "callback_identity_ambiguous": "More than one collector answered the callback. Narrow the address so only the collector you are repairing can reach Home Assistant, then try again.",
+      "callback_identity_conflict": "This collector is already being set up in another flow. Finish or cancel that one, then try again.",
+      "collector_identity_required": "This collector could not be identified. Enter an address Home Assistant can reach the collector on so its identity is confirmed, then try again."
     },
     "abort": {
-      "already_configured": "This collector or inverter is already configured."
+      "already_configured": "This collector or inverter is already configured.",
+      "reconfigure_entry_missing": "The entry to reconfigure no longer exists.",
+      "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair."
     }
   },
   "options": {
