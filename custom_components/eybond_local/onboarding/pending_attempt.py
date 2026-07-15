@@ -156,6 +156,27 @@ async def async_run_pending_callback_attempt(
         # callback_on_demand needs somewhere to send its single trigger.
         return PendingAttemptOutcome(result=PENDING_ATTEMPT_TARGET_UNAVAILABLE)
 
+    from ..passive_discovery import active_callback_probe_scope
+
+    scope_id = f"pending_callback:{entry.entry_id}:{uuid.uuid4().hex}"
+    with active_callback_probe_scope(hass, scope_id) as retained_sessions:
+        return await _async_run_pending_callback_attempt_scoped(
+            hass,
+            entry,
+            target,
+            retained_sessions=retained_sessions,
+        )
+
+
+async def _async_run_pending_callback_attempt_scoped(
+    hass: Any,
+    entry: Any,
+    target: str,
+    *,
+    retained_sessions: set[str],
+) -> PendingAttemptOutcome:
+    """Run one pending callback attempt inside its discovery attribution scope."""
+
     baseline = _baseline_session_ids(hass)
 
     settings = dict(entry.data)
@@ -239,6 +260,8 @@ async def async_run_pending_callback_attempt(
         except Exception:  # pragma: no cover
             pass
         return PendingAttemptOutcome(result=PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED)
+
+    retained_sessions.add(match.session_id)
 
     return PendingAttemptOutcome(
         result=PENDING_ATTEMPT_PROMOTED,

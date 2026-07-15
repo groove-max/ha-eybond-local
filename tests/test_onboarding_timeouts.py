@@ -19,6 +19,7 @@ from custom_components.eybond_local.onboarding.timeouts import (  # noqa: E402
     default_deep_driver_sweep_seconds,
     estimate_deep_scan_seconds,
     manual_probe_timeout_seconds,
+    manual_probe_watchdog_timeout_seconds,
 )
 
 
@@ -28,6 +29,10 @@ class OnboardingTimeoutPolicyTests(unittest.TestCase):
 
         self.assertEqual(auto_scan_timeout_seconds(), policy.auto_total_timeout)
         self.assertEqual(manual_probe_timeout_seconds(), policy.manual_total_timeout)
+        self.assertEqual(
+            manual_probe_watchdog_timeout_seconds(),
+            policy.manual_total_timeout + policy.result_finalization_grace,
+        )
         self.assertFalse(hasattr(policy, "driver_detection_timeout"))
         self.assertGreaterEqual(policy.driver_detection_attempts, 1)
         self.assertGreaterEqual(policy.driver_retry_delay, 0)

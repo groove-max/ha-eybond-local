@@ -6,7 +6,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from custom_components.eybond_local.const import DOMAIN
-from custom_components.eybond_local.passive_discovery import PassiveCallbackDiscovery
+from custom_components.eybond_local.passive_discovery import (
+    PassiveCallbackDiscovery,
+    active_callback_probe_scope,
+)
 
 
 class _FakeFlowManager:
@@ -82,6 +85,54 @@ class _FakeListener:
 
 
 class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_active_callback_probe_scope_always_closes_service_scope(self) -> None:
+        hass = _FakeHass()
+        hass.data = {}
+        discovery = PassiveCallbackDiscovery(hass)
+        hass.data[DOMAIN] = {"passive_callback_discovery": discovery}
+
+        with self.assertRaisesRegex(RuntimeError, "probe failed"):
+            with active_callback_probe_scope(hass, "manual-1"):
+                self.assertIn("manual-1", discovery._active_probe_scopes)
+                raise RuntimeError("probe failed")
+
+        self.assertNotIn("manual-1", discovery._active_probe_scopes)
+
+    async def test_callback_scope_retains_only_matcher_selected_session(self) -> None:
+        hass = _FakeHass()
+        hass.data = {}
+        discovery = PassiveCallbackDiscovery(hass)
+        listener = _FakeListener(())
+        discovery._listeners[18899] = listener
+        hass.data[DOMAIN] = {"passive_callback_discovery": discovery}
+
+        with active_callback_probe_scope(hass, "manual-1") as retained:
+            listener._sessions = (
+                {
+                    "session_id": "matched-session",
+                    "peer_ip": "192.168.1.55",
+                    "collector_pn": "E500SYN253884199645",
+                    "state": "routed_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                },
+                {
+                    "session_id": "unrelated-session",
+                    "peer_ip": "192.168.1.56",
+                    "collector_pn": "I300SYN25063387",
+                    "state": "routed_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                },
+            )
+            await discovery._async_poll_once()
+            self.assertEqual(hass.config_entries.flow.flows, [])
+            retained.add("matched-session")
+
+        await discovery._async_poll_once()
+
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+        _domain, _context, data = hass.config_entries.flow.flows[0]
+        self.assertEqual(data["collector_pn"], "I300SYN25063387")
+
     async def test_start_listens_on_legacy_binary_smartess_and_runtime_ports(self) -> None:
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)

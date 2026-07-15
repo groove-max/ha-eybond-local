@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import inspect
 import logging
@@ -134,16 +134,49 @@ class PassiveCallbackDiscovery:
             return
         self._active_probe_scopes[token] = self._observed_session_keys()
 
-    def end_active_probe_scope(self, scope_id: str) -> None:
-        """Finish one scan while retaining suppression for its live sockets."""
+    def end_active_probe_scope(
+        self,
+        scope_id: str,
+        *,
+        retain_session_ids: set[str] | None = None,
+    ) -> None:
+        """Finish one probe scope and retain only its attributable sockets.
+
+        ``None`` preserves the broad scan behavior: every socket accepted during
+        the scope remains suppressed.  A concrete set is used by one-target
+        callback attempts: unrelated sessions are suppressed only while the
+        matcher is deciding, then become discoverable again.
+        """
 
         token = str(scope_id or "").strip()
         baseline = self._active_probe_scopes.pop(token, None)
         if baseline is None:
             return
-        self._probe_suppressed_sessions.update(
-            self._observed_session_keys() - baseline
+        current = self._observed_session_keys()
+        new_keys = current - baseline
+        if retain_session_ids is None:
+            self._probe_suppressed_sessions.update(new_keys)
+            return
+
+        retained_ids = {
+            str(session_id or "").strip()
+            for session_id in retain_session_ids
+            if str(session_id or "").strip()
+        }
+        retained_keys = {
+            _session_inventory_key(session)
+            for session in self.iter_observed_sessions()
+            if _session_id(session) in retained_ids
+        }
+        # Do not release a socket while another overlapping probe scope is still
+        # evaluating it.  That scope will make its own retain/release decision.
+        other_scope_keys: set[str] = set()
+        for other_baseline in self._active_probe_scopes.values():
+            other_scope_keys.update(current - other_baseline)
+        self._probe_suppressed_sessions.difference_update(
+            new_keys - retained_keys - other_scope_keys
         )
+        self._probe_suppressed_sessions.update(retained_keys)
 
     def retire_entry_sessions(self, entry_id: str) -> None:
         """Prevent an unloaded entry's current sockets becoming new discovery edges.
@@ -973,6 +1006,31 @@ def get_passive_callback_discovery(
         return None
     service = domain_data.get(_DATA_KEY)
     return service if isinstance(service, PassiveCallbackDiscovery) else None
+
+
+@contextmanager
+def active_callback_probe_scope(hass: HomeAssistant, scope_id: str):
+    """Attribute sockets created by one active probe to that probe only.
+
+    Active onboarding and passive discovery intentionally share listeners.  A
+    callback session caused by a manual or pending one-shot trigger belongs to
+    that attempt and must not also create an unrelated discovery card.  The
+    service records exact transient session ids; PN and peer IP are never used
+    as causal evidence.
+    """
+
+    retained_session_ids: set[str] = set()
+    service = get_passive_callback_discovery(hass)
+    if service is not None:
+        service.begin_active_probe_scope(scope_id)
+    try:
+        yield retained_session_ids
+    finally:
+        if service is not None:
+            service.end_active_probe_scope(
+                scope_id,
+                retain_session_ids=retained_session_ids,
+            )
 
 
 async def async_start_passive_callback_discovery(hass: HomeAssistant) -> None:

@@ -10,7 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from unittest.mock import AsyncMock, Mock, patch, sentinel
 import zipfile
 
@@ -4744,7 +4744,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
         with patch(
-            "custom_components.eybond_local.config_flow._MANUAL_PROBE_TIMEOUT",
+            "custom_components.eybond_local.config_flow._MANUAL_PROBE_WATCHDOG_TIMEOUT",
             0.001,
         ), patch(
             "custom_components.eybond_local.config_flow.create_onboarding_manager",
@@ -4755,6 +4755,54 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.connection_mode, "manual")
         self.assertEqual(result.next_action, "create_pending_entry")
         self.assertEqual(result.last_error, "manual_probe_timeout")
+
+    async def test_manual_probe_preserves_partial_result_after_work_deadline(self) -> None:
+        flow = self._make_flow()
+        user_input = {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "collector_ip": "192.168.1.55",
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+        }
+        partial = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="manual",
+                ip="192.168.1.55",
+                connected=True,
+                collector=CollectorInfo(collector_pn="I300002SYN3387"),
+            ),
+            connection_mode="manual",
+            next_action="manual_driver_selection",
+            last_error="target_detection_timeout",
+        )
+
+        class _FinalizingDetector:
+            async def async_auto_detect(self, **kwargs):
+                self.total_timeout = kwargs["total_timeout"]
+                await asyncio.sleep(0.01)
+                return (partial,)
+
+        detector = _FinalizingDetector()
+        with patch(
+            "custom_components.eybond_local.config_flow._MANUAL_PROBE_TIMEOUT",
+            0.001,
+        ), patch(
+            "custom_components.eybond_local.config_flow._MANUAL_PROBE_WATCHDOG_TIMEOUT",
+            0.1,
+        ), patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=detector,
+        ):
+            result = await flow._async_probe_manual_target(user_input)
+
+        self.assertIs(result, partial)
+        self.assertEqual(detector.total_timeout, 0.001)
+        self.assertEqual(result.collector.collector.collector_pn, "I300002SYN3387")
 
     async def test_manual_confirm_step_exposes_retry_edit_and_create_actions(self) -> None:
         flow = self._make_flow()
@@ -9823,6 +9871,84 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return await flow.async_step_manual(
                 self._manual_input(collector_ip, connection_strategy="callback_on_demand")
             )
+
+    async def test_manual_callback_attempt_owns_one_passive_discovery_scope(self) -> None:
+        flow = self._make_flow()
+        inventory: list[dict] = []
+        self._install_registry(flow, inventory)
+        events: list[tuple[str, str]] = []
+
+        @contextmanager
+        def _scope(_hass, scope_id):
+            events.append(("begin", scope_id))
+            retained: set[str] = set()
+            try:
+                yield retained
+            finally:
+                events.append(("end", scope_id))
+
+        def _answers():
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+
+        detector = self._recording_detector(
+            results=(self._manual_result_with_pn(self.FULL_PN),),
+            on_detect=_answers,
+        )
+        with patch(
+            "custom_components.eybond_local.passive_discovery."
+            "active_callback_probe_scope",
+            new=_scope,
+        ):
+            routed = await self._drive_generic_callback(flow, detector)
+
+        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual([event for event, _scope_id in events], ["begin", "end"])
+        self.assertEqual(events[0][1], events[1][1])
+        self.assertTrue(events[0][1].startswith("manual_callback:"))
+
+    async def test_slow_detection_keeps_proven_callback_identity(self) -> None:
+        """Driver timeout may not erase the collector session/PN already proved."""
+
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        flow = self._make_flow()
+        inventory: list[dict] = []
+        registry = self._install_registry(flow, inventory)
+
+        class _Detector:
+            async def async_auto_detect(_self, **kwargs):
+                get_callback_trigger_ledger().record(
+                    target="ours", source="slow_detection_test"
+                )
+                inventory.append(
+                    self._inventory_session(self.NEW_SESSION, self.FULL_PN)
+                )
+                # Simulate detector finalization just after its work deadline.
+                await asyncio.sleep(0.01)
+                result = replace(
+                    self._manual_result_with_pn(self.FULL_PN),
+                    last_error="target_detection_timeout",
+                    next_action="manual_driver_selection",
+                )
+                return (result,)
+
+        with patch(
+            "custom_components.eybond_local.config_flow._MANUAL_PROBE_TIMEOUT",
+            0.001,
+        ), patch(
+            "custom_components.eybond_local.config_flow._MANUAL_PROBE_WATCHDOG_TIMEOUT",
+            0.1,
+        ):
+            routed = await self._drive_generic_callback(flow, _Detector())
+
+        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(flow._manual_result.last_error, "target_detection_timeout")
+        self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("callback_verification:"))
+        self.assertEqual(registry.claimed_session_id(owner), self.NEW_SESSION)
 
     async def test_generic_callback_rejects_pre_existing_foreign_session(self) -> None:
         # BLOCKER 1: a foreign strong session already exists; the user types a

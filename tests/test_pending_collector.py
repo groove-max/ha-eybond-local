@@ -16,6 +16,8 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from contextlib import contextmanager
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -612,6 +614,54 @@ class CallbackAttemptMatchingTests(unittest.TestCase):
 
         self.assertTrue(pending_attempt_matches_identity("E50000999900", FULL_PN))
         self.assertFalse(pending_attempt_matches_identity(FULL_PN, OTHER_FULL_PN))
+
+
+class PendingActiveProbeScopeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_callback_attempt_owns_one_passive_discovery_scope(self) -> None:
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+        from custom_components.eybond_local.onboarding.pending_attempt import (
+            async_run_pending_callback_attempt,
+        )
+
+        entry = _pending_entry(
+            strategy=C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            address=NAT_IP,
+        )
+        hass = _fake_hass(registry=CallbackSessionRegistry(sessions_source=lambda: ()))
+        events: list[tuple[str, str]] = []
+
+        @contextmanager
+        def _scope(_hass, scope_id):
+            events.append(("begin", scope_id))
+            retained: set[str] = set()
+            try:
+                yield retained
+            finally:
+                events.append(("end", scope_id))
+
+        class _Detector:
+            async def async_auto_detect(self, **_kwargs):
+                get_callback_trigger_ledger().record(
+                    target=NAT_IP, source="pending_scope_test"
+                )
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.passive_discovery."
+            "active_callback_probe_scope",
+            new=_scope,
+        ), patch(
+            "custom_components.eybond_local.onboarding.pending_attempt."
+            "create_onboarding_manager",
+            return_value=_Detector(),
+        ):
+            await async_run_pending_callback_attempt(hass, entry)
+
+        self.assertEqual([event for event, _scope_id in events], ["begin", "end"])
+        self.assertEqual(events[0][1], events[1][1])
+        self.assertTrue(events[0][1].startswith("pending_callback:"))
 
 
 if __name__ == "__main__":

@@ -34,6 +34,11 @@ class OnboardingTimeoutPolicy:
     collector_query_timeout: float = 1.0
     driver_onboarding_read_timeout: float = 2.0
     manual_total_timeout: float = 45.0
+    # The detector owns the manual onboarding work budget above.  A wrapper may
+    # wait this little bit longer only so the detector can materialize and
+    # return its partial result after its own deadline expires.  This is not
+    # additional probe/driver-detection time.
+    result_finalization_grace: float = 2.0
     auto_total_timeout: float = 45.0
     auto_scan_estimated_seconds: float = 12.5
     deep_scan_followup_estimated_seconds: float = 75.0
@@ -138,6 +143,22 @@ def manual_probe_timeout_seconds(
     """Return the default end-to-end timeout budget for manual onboarding."""
 
     return float(policy.manual_total_timeout)
+
+
+def manual_probe_watchdog_timeout_seconds(
+    policy: OnboardingTimeoutPolicy = DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+) -> float:
+    """Return the outer runaway guard for one manual onboarding call.
+
+    The detector's own deadline remains authoritative for all actual work.  The
+    extra finalization grace prevents an outer wrapper from cancelling the
+    detector while it is converting deadline expiry into an honest partial
+    collector result.
+    """
+
+    return manual_probe_timeout_seconds(policy) + max(
+        0.0, float(policy.result_finalization_grace)
+    )
 
 
 def estimate_deep_scan_seconds(

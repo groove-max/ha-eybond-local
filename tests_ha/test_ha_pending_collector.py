@@ -369,6 +369,59 @@ async def test_pending_options_flow_is_served_by_real_flow_manager(
     assert result["step_id"] == "pending"
 
 
+async def test_callback_pending_can_explicitly_bind_observed_candidate(
+    hass: HomeAssistant, fake_runtime
+) -> None:
+    """Identity confirmation is independent of callback/inbound strategy."""
+
+    from custom_components.eybond_local.onboarding.pending_attempt import (
+        PendingAttemptOutcome,
+    )
+
+    entry = _pending_entry(
+        hass,
+        strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        address=SYNTHETIC_COLLECTOR_IP,
+    )
+
+    async def _timeout(_hass, _entry):
+        return PendingAttemptOutcome(result="callback_timeout")
+
+    with patch(
+        "custom_components.eybond_local.onboarding.pending_attempt."
+        "async_run_pending_callback_attempt",
+        side_effect=_timeout,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    sessions = [_observed_session("candidate-session", SYNTHETIC_COLLECTOR_PN)]
+    _install_registry(hass, sessions)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["step_id"] == "pending"
+    assert "pending_confirm_candidate" in result["menu_options"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"next_step_id": "pending_confirm_candidate"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "pending_confirm_candidate"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"candidate": SYNTHETIC_COLLECTOR_PN},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_COLLECTOR_PN] == SYNTHETIC_COLLECTOR_PN
+    assert entry.data[CONF_ENTRY_ROLE] == ""
+    # Binding an observed identity does not rewrite how the collector connects.
+    assert (
+        entry.data[CONF_CONNECTION_STRATEGY]
+        == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+    )
+
+
 async def test_pending_options_settings_step_writes_canonical_data(
     hass: HomeAssistant, fake_runtime
 ) -> None:

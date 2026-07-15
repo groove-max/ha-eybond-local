@@ -227,6 +227,7 @@ from .onboarding.timeouts import (
     auto_scan_timeout_seconds as _onboarding_auto_scan_timeout_seconds,
     deep_scan_timeout_seconds as _onboarding_deep_scan_timeout_seconds,
     manual_probe_timeout_seconds as _onboarding_manual_probe_timeout_seconds,
+    manual_probe_watchdog_timeout_seconds as _onboarding_manual_probe_watchdog_timeout_seconds,
 )
 from .support.cloud_evidence_providers import (
     CloudEvidenceContext,
@@ -349,6 +350,9 @@ _BLE_WIFI_SCAN_ATTEMPTS = 3
 _BLE_WIFI_SCAN_RETRY_DELAY = 1.0
 _BLE_PROVISION_TIMEOUT = 45.0
 _MANUAL_PROBE_TIMEOUT = _onboarding_manual_probe_timeout_seconds(_ONBOARDING_TIMEOUT_POLICY)
+_MANUAL_PROBE_WATCHDOG_TIMEOUT = _onboarding_manual_probe_watchdog_timeout_seconds(
+    _ONBOARDING_TIMEOUT_POLICY
+)
 # The passive callback listeners bind the wildcard host; the verification's
 # restart channel attaches to that same shared listener (host, port) key.
 _PASSIVE_LISTENER_HOST = "0.0.0.0"
@@ -1548,6 +1552,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # the exact expected full PN proves the callback.
         self._manual_callback_baseline: frozenset[str] = frozenset()
         self._manual_verified_full_pn = ""
+        self._manual_verified_session_id = ""
         # The expectation DECLARED before this flow's first callback attempt
         # (passive discovery, or the PN an entry already stores), as opposed to
         # one a previous attempt adopted from its own probe result. ``None`` =
@@ -2159,6 +2164,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not expected and not bind_any and not active_attempt:
             return ""
         self._manual_verified_full_pn = ""
+        self._manual_verified_session_id = ""
         # A claim from any prior verification attempt is stale until THIS attempt
         # re-confirms the identity on the wire, so drop it first: a mismatch or
         # timeout below must leave nothing owned.
@@ -2187,6 +2193,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not self._claim_manual_callback_session(match.session_id, match.collector_pn):
             return "callback_identity_conflict"
         self._manual_verified_full_pn = match.collector_pn
+        self._manual_verified_session_id = match.session_id
         return ""
 
     def _claim_manual_callback_session(
@@ -3388,6 +3395,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         claim, so a stale identity can never leak into an entry.
         """
 
+        from .passive_discovery import active_callback_probe_scope
+
+        probe_scope_id = f"manual_callback:{id(self)}:{uuid.uuid4().hex}"
+        with active_callback_probe_scope(self.hass, probe_scope_id) as retained_sessions:
+            error = await self._async_run_manual_callback_attempt_scoped(settings)
+            if not error and self._manual_verified_session_id:
+                retained_sessions.add(self._manual_verified_session_id)
+            return error
+
+    async def _async_run_manual_callback_attempt_scoped(
+        self, settings: dict[str, Any]
+    ) -> str:
+        """Run one manual callback attempt inside its discovery attribution scope."""
+
         # 1 + 2: nothing from the previous attempt survives into this one.
         #
         # Including the EXPECTATION. Two very different things live in
@@ -3406,6 +3427,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         else:
             self._verification_expected_pn = self._manual_declared_expected_pn
         self._manual_verified_full_pn = ""
+        self._manual_verified_session_id = ""
         self._release_verification_claim()
 
         # 3: a FRESH baseline. Sessions that already exist -- including ones the
@@ -3483,6 +3505,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             last_error=reason,
         )
         self._manual_verified_full_pn = ""
+        self._manual_verified_session_id = ""
         self._verified_connection_strategy = ""
         self._verified_strategy_evidence = ""
         return await self.async_step_manual_confirm()
@@ -4550,7 +4573,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         discovery_target = "" if collector_ip else user_input.get(CONF_DISCOVERY_TARGET, "")
 
         try:
-            async with _async_timeout(_MANUAL_PROBE_TIMEOUT):
+            async with _async_timeout(_MANUAL_PROBE_WATCHDOG_TIMEOUT):
                 # DECLARE the expectation BEFORE awaiting: this attempt sends
                 # exactly one trigger (attempts=1). It must never be inferred
                 # from the global ledger delta afterwards -- that delta also
@@ -4568,7 +4591,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         except TimeoutError:
             logger.warning(
                 "Manual onboarding probe timed out after %.1fs server_ip=%s collector_ip=%s discovery_target=%s driver_hint=%s",
-                _MANUAL_PROBE_TIMEOUT,
+                _MANUAL_PROBE_WATCHDOG_TIMEOUT,
                 user_input.get(CONF_SERVER_IP, ""),
                 collector_ip or "-",
                 discovery_target or "-",
@@ -7803,8 +7826,9 @@ class PendingCollectorOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     * the callback target (callback_on_demand only);
     * "Retry now" -- a single ``async_reload``, i.e. exactly one more setup
       attempt. Never a retry loop: Home Assistant owns the cadence;
-    * for inbound, the list of unclaimed strong-PN candidates plus an EXPLICIT
-      confirmation. Nothing is ever auto-bound.
+    * the list of unclaimed strong-PN candidates plus an EXPLICIT confirmation.
+      Identity confirmation is independent of the chosen connection strategy;
+      nothing is ever auto-bound.
 
     Every settings change is written atomically to ``entry.data`` (the canonical
     owner) followed by exactly one reload. Nothing is written to options.
@@ -7833,10 +7857,10 @@ class PendingCollectorOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         del user_input
-        from .pending_collector import pending_attempt_status
+        from .pending_collector import list_inbound_candidates, pending_attempt_status
 
         menu_options = ["pending_settings", "pending_retry"]
-        if self._strategy() == CONNECTION_STRATEGY_INBOUND:
+        if list_inbound_candidates(self.hass):
             menu_options.insert(0, "pending_confirm_candidate")
         status = pending_attempt_status(self._config_entry)
         return self.async_show_menu(
