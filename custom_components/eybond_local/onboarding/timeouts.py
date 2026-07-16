@@ -34,6 +34,15 @@ class OnboardingTimeoutPolicy:
     collector_query_timeout: float = 1.0
     driver_onboarding_read_timeout: float = 2.0
     manual_total_timeout: float = 45.0
+    # LINK budget for one callback identity transaction: how long we wait for the
+    # collector to actually open a socket after our single trigger sequence. It
+    # is not a detection budget -- no driver work happens inside it -- which is
+    # why it is a fraction of manual_total_timeout above.
+    callback_identity_session_wait: float = 20.0
+    # How long one attempt may wait for the exclusive causality lease before
+    # giving up. The wire carries no correlation token, so attempts are
+    # serialized; this bounds the queue rather than letting a caller hang.
+    callback_causality_lease_wait: float = 30.0
     # The detector owns the manual onboarding work budget above.  A wrapper may
     # wait this little bit longer only so the detector can materialize and
     # return its partial result after its own deadline expires.  This is not

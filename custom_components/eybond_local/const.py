@@ -101,6 +101,14 @@ PENDING_ATTEMPT_IDENTITY_AMBIGUOUS = "callback_identity_ambiguous"
 # Another callback trigger was recorded (any entry/flow) while this attempt was
 # in flight, so a new session is not attributable to THIS trigger.
 PENDING_ATTEMPT_TRIGGER_INTERFERENCE = "callback_trigger_interference"
+# OUR OWN failure to get the trigger sequence out (an inhibited window, a socket
+# error, a competing attempt holding the causality lease). Deliberately NOT
+# folded into interference: that told the user to hunt a phantom competing flow.
+PENDING_ATTEMPT_TRIGGER_NOT_SENT = "callback_trigger_not_sent"
+# The session opened but its identity could not be read authoritatively.
+PENDING_ATTEMPT_IDENTITY_UNVERIFIED = "callback_identity_unverified"
+# The identity is owned by another entry/flow.
+PENDING_ATTEMPT_IDENTITY_CLAIMED_BY_OTHER = "callback_identity_conflict"
 PENDING_ATTEMPT_CANDIDATE_READY = "candidate_ready"
 PENDING_ATTEMPT_PROMOTED = "promoted"
 PENDING_ATTEMPT_RESULTS = {
@@ -111,6 +119,9 @@ PENDING_ATTEMPT_RESULTS = {
     PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
     PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
     PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
+    PENDING_ATTEMPT_TRIGGER_NOT_SENT,
+    PENDING_ATTEMPT_IDENTITY_UNVERIFIED,
+    PENDING_ATTEMPT_IDENTITY_CLAIMED_BY_OTHER,
     PENDING_ATTEMPT_CANDIDATE_READY,
     PENDING_ATTEMPT_PROMOTED,
 }

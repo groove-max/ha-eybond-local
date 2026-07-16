@@ -616,6 +616,26 @@ class CallbackAttemptMatchingTests(unittest.TestCase):
         self.assertFalse(pending_attempt_matches_identity(FULL_PN, OTHER_FULL_PN))
 
 
+def _fast_policy():
+    """The central policy with the wait budgets shrunk for tests.
+
+    Budgets live in OnboardingTimeoutPolicy, so a test tunes the policy rather
+    than a module constant -- which is the point of having one home for them.
+    """
+
+    from dataclasses import replace
+
+    from custom_components.eybond_local.onboarding.timeouts import (
+        DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+    )
+
+    return replace(
+        DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+        callback_identity_session_wait=0.01,
+        callback_causality_lease_wait=5.0,
+    )
+
+
 class PendingActiveProbeScopeTests(unittest.IsolatedAsyncioTestCase):
     async def test_pending_callback_attempt_owns_one_passive_discovery_scope(self) -> None:
         from custom_components.eybond_local.connection.callback_ledger import (
@@ -641,27 +661,31 @@ class PendingActiveProbeScopeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 events.append(("end", scope_id))
 
-        class _Detector:
-            async def async_auto_detect(self, **_kwargs):
-                get_callback_trigger_ledger().record(
-                    target=NAT_IP, source="pending_scope_test"
-                )
-                return ()
+        async def _fake_trigger(**kwargs):
+            # Stand in for the production facade: record like it does, send nothing.
+            get_callback_trigger_ledger().record(
+                target=kwargs.get("target_ip", ""), source=kwargs.get("source", "")
+            )
+            return None
 
         with patch(
             "custom_components.eybond_local.passive_discovery."
             "active_callback_probe_scope",
             new=_scope,
         ), patch(
-            "custom_components.eybond_local.onboarding.pending_attempt."
-            "create_onboarding_manager",
-            return_value=_Detector(),
+            "custom_components.eybond_local.collector.discovery."
+            "async_send_callback_trigger",
+            new=_fake_trigger,
+        ), patch(
+            "custom_components.eybond_local.onboarding.callback_identity."
+            "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
+            _fast_policy(),
         ):
             await async_run_pending_callback_attempt(hass, entry)
 
         self.assertEqual([event for event, _scope_id in events], ["begin", "end"])
         self.assertEqual(events[0][1], events[1][1])
-        self.assertTrue(events[0][1].startswith("pending_callback:"))
+        self.assertTrue(events[0][1].startswith("pending_attempt:"))
 
 
 if __name__ == "__main__":

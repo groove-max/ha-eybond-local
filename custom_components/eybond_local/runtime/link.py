@@ -52,6 +52,11 @@ from ..support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandle
 
 logger = logging.getLogger(__name__)
 
+# How long a runtime callback attempt waits for the shared causality lease before
+# giving up quietly. Home Assistant already owns retry/backoff for the runtime, so
+# queueing briefly is right and blocking is not.
+_RUNTIME_CAUSALITY_LEASE_WAIT = 5.0
+
 _DEFAULT_LISTENER_BIND_HOST = "0.0.0.0"
 
 # Stable entry key for this link's own claim in its runtime-scoped session
@@ -1932,7 +1937,67 @@ class EybondRuntimeLinkManager:
             if not self._callback_listener_ready():
                 self._note_callback_failure()
                 return False
-            await self._send_callback_trigger()
+            # THE causal window of a callback_on_demand connect is trigger ->
+            # session, not the datagram alone: the collector dials back seconds
+            # later. Take the shared lease before the trigger and hold it across
+            # the wait below, so no other attempt can snapshot a baseline while
+            # OUR late session is still in flight and adopt it as its own answer.
+            # Refusing the send while somebody else owns causality is not enough:
+            # a datagram sent just before their lease still produces a session
+            # inside their window.
+            return await self._async_callback_connect_within_causality(
+                timeout=timeout, require_heartbeat=require_heartbeat
+            )
+
+        return await self._async_await_callback_session(
+            timeout=timeout, require_heartbeat=require_heartbeat
+        )
+
+    def _callback_attempt_seq(self) -> str:
+        """A unique id for ONE runtime callback attempt.
+
+        Deliberately opaque: never a peer IP, hostname, endpoint or PN. It only
+        has to be unique per attempt so the coordinator can tell attempts apart.
+        """
+
+        self._callback_attempt_counter = getattr(self, "_callback_attempt_counter", 0) + 1
+        return f"{id(self):x}:{self._callback_attempt_counter}"
+
+    async def _async_callback_connect_within_causality(
+        self, *, timeout: float, require_heartbeat: bool
+    ) -> bool:
+        """Own causality for ONE runtime callback_on_demand connect attempt.
+
+        The lease is released only once this attempt reaches its terminal point
+        (connected, or the bounded wait gave up), so a late session is always
+        attributable to it and never to whoever ran next.
+        """
+
+        from ..connection.callback_ledger import (
+            CallbackCausalityBusyError,
+            get_callback_trigger_ledger,
+        )
+
+        attempt_id = f"runtime_callback:{self._callback_attempt_seq()}"
+        try:
+            async with get_callback_trigger_ledger().causality_lease(
+                attempt_id, timeout=_RUNTIME_CAUSALITY_LEASE_WAIT
+            ):
+                await self._send_callback_trigger()
+                return await self._async_await_callback_session(
+                    timeout=timeout, require_heartbeat=require_heartbeat
+                )
+        except CallbackCausalityBusyError:
+            # Someone else owns causality (an onboarding attempt, an inbound
+            # verification). We did NOT trigger, so this is not a collector
+            # failure: stay silent and let Home Assistant retry.
+            logger.debug("Runtime callback deferred: causality is owned elsewhere")
+            return False
+
+    async def _async_await_callback_session(
+        self, *, timeout: float, require_heartbeat: bool
+    ) -> bool:
+        """Bounded wait for the session, then adopt it. No trigger is sent here."""
 
         if self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH:
             if self.active_collector_at_transport is None:
@@ -2734,22 +2799,6 @@ class EybondRuntimeLinkManager:
             await transport.disconnect()
         for transport in reversed(self._payload_transports()):
             await transport.disconnect()
-
-    async def _ensure_discovery(self, *, reason: str) -> None:
-        """Start the continuous discovery announcer (legacy/manual path only).
-
-        Phase 3 removed this from the callback_on_demand connect path, which now
-        sends a single one-shot UDP trigger per attempt. This is retained only
-        for an explicit legacy/manual continuous-discovery caller and is not part
-        of the runtime connect flow.
-        """
-
-        was_running = bool(getattr(self._announcer, "running", False))
-        await self._announcer.start()
-        is_running = bool(getattr(self._announcer, "running", True))
-        if not was_running and is_running:
-            self._discovery_restart_count += 1
-            self._last_discovery_reason = reason
 
     def _rebuild_link(self, server_ip: str) -> None:
         """Create the transport/discovery pair for one collector-facing IP."""

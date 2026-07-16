@@ -136,7 +136,9 @@
       "manual_probe_callback_timeout": "The collector did not call back during this attempt.",
       "manual_probe_callback_identity_mismatch": "A callback connection appeared, but its collector identity did not match this attempt.",
       "manual_probe_callback_identity_conflict": "The collector identity is already owned by another entry or setup flow.",
+      "manual_probe_callback_identity_unverified": "The collector connected but did not report its part number, so it was not identified.",
       "manual_probe_callback_identity_ambiguous": "More than one collector answered during this attempt, so none was selected.",
+      "manual_probe_callback_trigger_not_sent": "The connection request could not be sent, so this attempt never reached the collector.",
       "manual_probe_callback_trigger_interference": "Another callback request overlapped this attempt, so its answer could not be attributed safely.",
       "manual_control_summary": "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until the {peer_label} connects and detection completes.",
       "manual_control_summary_smartess_hint": "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until a local driver match is confirmed. This local probe does not rule out SmartESS app support; the app may still use a separate cloud identity.",
@@ -463,7 +465,10 @@
       "pending_status_identity_not_confirmed": "The collector identity was not confirmed",
       "pending_status_candidate_ready": "A collector is ready to be linked",
       "pending_status_promoted": "The collector was linked",
+      "pending_status_callback_identity_unverified": "The collector connected but could not be identified; nothing was linked",
+      "pending_status_callback_identity_conflict": "That collector is already linked to another entry; nothing was linked",
       "pending_status_callback_identity_ambiguous": "More than one collector answered; none was linked",
+      "pending_status_callback_trigger_not_sent": "The connection request could not be sent; nothing was linked",
       "pending_status_callback_trigger_interference": "Another connection request interfered; nothing was linked"
     }
   }

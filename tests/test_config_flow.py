@@ -503,7 +503,42 @@ def _schema_select_options(data_schema, field_name: str) -> list[str]:
     raise AssertionError(f"field {field_name} not found in schema")
 
 
+def _fast_identity_policy():
+    """The central onboarding policy with the callback wait budgets shrunk.
+
+    Budgets live in OnboardingTimeoutPolicy, so tests tune the policy rather than
+    a module constant. Without this a flow test that never gets a session sits out
+    the real 20s link budget.
+    """
+
+    from dataclasses import replace
+
+    from custom_components.eybond_local.onboarding.timeouts import (
+        DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+    )
+
+    return replace(
+        DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+        callback_identity_session_wait=0.05,
+        callback_causality_lease_wait=2.0,
+    )
+
+
+def _install_fast_identity_policy(testcase):
+    import custom_components.eybond_local.onboarding.callback_identity as ci
+
+    patcher = patch.object(
+        ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()
+    )
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+
+
 class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        _install_fast_identity_policy(self)
+
     def _make_flow(self, *, entries=None) -> EybondLocalConfigFlow:
         flow = EybondLocalConfigFlow()
         flow.hass = _FakeHass(entries)
@@ -8840,6 +8875,10 @@ class PreflightEffectiveMetadataTests(unittest.TestCase):
 
 
 class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        _install_fast_identity_policy(self)
+
     """Behavioral connection-strategy verification wired into passive discovery."""
 
     FULL_PN = "V001020SYN62344022"
@@ -8891,6 +8930,65 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         info.update(overrides)
         return info
 
+    # --- driving the real identity transaction from a flow test ---------------
+    #
+    # The flow tests keep exercising the REAL transaction (real causality lease,
+    # real claim/promote/prepare_handoff) and stub only the two wire edges it
+    # cannot have in a unit test: the UDP trigger sequence and the authoritative
+    # on-session PN read. That keeps these tests about the FLOW's use of the
+    # proof, while the proof's own mechanics are pinned in
+    # tests/test_callback_identity.py.
+
+    @contextmanager
+    def _identity_wire(
+        self,
+        inventory,
+        *,
+        answers=(),
+        read_pn=None,
+        read_error=None,
+        own_sends=1,
+        foreign_sends=0,
+    ):
+        """Stub the collector: its trigger answer and its authoritative PN read.
+
+        ``answers`` appear only AFTER the trigger, like a real collector dialing
+        in; ``foreign_sends`` are recorded with no attempt context, exactly like
+        an uncoordinated runtime sender.
+        """
+
+        import custom_components.eybond_local.onboarding.callback_identity as ci
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        class _Sender:
+            async def async_send(self, request):
+                ledger = get_callback_trigger_ledger()
+                for _ in range(own_sends):
+                    ledger.record(target=request.target_ip, source="test_attempt")
+                for _ in range(foreign_sends):
+                    ledger.record(target="other", source="runtime", attempt_id="")
+                inventory.extend(answers)
+
+        class _Reader:
+            calls: list = []
+
+            async def async_read_full_pn(self, *, session_id, session_protocol, listener_port, expected_pn=""):
+                type(self).calls.append(session_id)
+                if read_error is not None:
+                    raise read_error
+                if read_pn is None:
+                    return ("", "")
+                return (read_pn, "fc2_parameter_2")
+
+        with patch.object(ci, "_ProductionTriggerSender", return_value=_Sender()), patch.object(
+            ci, "_SessionPinnedIdentityReader", return_value=_Reader()
+        ), patch.object(
+            ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()
+        ):
+            yield _Reader
+
     def _install_registry(self, flow, inventory: list[dict[str, object]]):
         from custom_components.eybond_local.connection.session_registry import (
             CallbackSessionRegistry,
@@ -8907,13 +9005,19 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         state: str = "identified",
         *,
         identity_source: str = "at_dtupn",
+        protocol_shape: str = "eybond_framed",
     ) -> dict[str, object]:
+        # protocol_shape is what the socket's first bytes looked like. A real
+        # listener always records it, and the identity transaction needs it: the
+        # wire is negotiated from the observation alone, and a session with no
+        # wire evidence is (correctly) refused rather than guessed at.
         return {
             "session_id": session_id,
             "peer_ip": "203.0.113.10",
             "listener_port": 18899,
             "collector_pn": pn,
             "state": state,
+            "protocol_shape": protocol_shape,
             "collector_identity_source": identity_source,
         }
 
@@ -9897,8 +10001,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     def _recording_detector(self, *, results=(), own_triggers=1, extra_triggers=0, on_detect=None):
         """A detector that records its trigger(s) in the shared ledger, like the real one.
 
-        ``extra_triggers`` simulates a CONCURRENT trigger from another flow/entry.
-        Passive inventory must never be consulted on a callback attempt.
+        It now DECLARES its behaviour (results / trigger counts / the collector's
+        answer) so one seam can drive both halves of the flow: the identity
+        transaction's wire first, then this detector for the detection that runs
+        afterwards. Passive inventory must never be consulted on a callback
+        attempt.
         """
 
         from custom_components.eybond_local.connection.callback_ledger import (
@@ -9912,19 +10019,73 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             async def async_auto_detect(self, **_kwargs):
+                # Detection now runs AFTER identity is certified and outside the
+                # causality lease, so its own probes cannot decide identity.
                 ledger = get_callback_trigger_ledger()
                 for _ in range(own_triggers):
-                    ledger.record(target="ours", source="test_attempt")
-                for _ in range(extra_triggers):
-                    ledger.record(target="other", source="concurrent_flow")
-                if on_detect is not None:
-                    on_detect()
+                    ledger.record(target="ours", source="test_detection")
                 return results
 
-        return _Detector()
+        detector = _Detector()
+        # Declared behaviour for _identity_wire_for(): what the collector does in
+        # response to THIS attempt's single trigger sequence.
+        detector.declared_results = results
+        detector.declared_own_triggers = own_triggers
+        detector.declared_extra_triggers = extra_triggers
+        detector.declared_on_detect = on_detect
+        return detector
+
+    @staticmethod
+    def _detector_pn(detector):
+        for result in getattr(detector, "declared_results", ()) or ():
+            collector = getattr(result, "collector", None)
+            pn = str(
+                getattr(getattr(collector, "collector", None), "collector_pn", "") or ""
+            ).strip()
+            if pn:
+                return pn
+        return ""
+
+    @contextmanager
+    def _identity_wire_for(self, detector):
+        """Drive the REAL identity transaction from a detector's declared behaviour."""
+
+        import custom_components.eybond_local.onboarding.callback_identity as ci
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        pn = self._detector_pn(detector)
+        on_detect = getattr(detector, "declared_on_detect", None)
+        own = getattr(detector, "declared_own_triggers", 1)
+        extra = getattr(detector, "declared_extra_triggers", 0)
+
+        class _Sender:
+            async def async_send(self, request):
+                ledger = get_callback_trigger_ledger()
+                for _ in range(own):
+                    ledger.record(target=request.target_ip, source="test_attempt")
+                for _ in range(extra):
+                    # No attempt context: an uncoordinated sender (the runtime).
+                    ledger.record(target="other", source="runtime", attempt_id="")
+                if on_detect is not None:
+                    on_detect()  # the collector dials in
+
+        class _Reader:
+            async def async_read_full_pn(self, **_kwargs):
+                if not pn:
+                    return ("", "")
+                return (pn, "fc2_parameter_2")
+
+        with patch.object(ci, "_ProductionTriggerSender", return_value=_Sender()), patch.object(
+            ci, "_SessionPinnedIdentityReader", return_value=_Reader()
+        ), patch.object(
+            ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()
+        ):
+            yield
 
     async def _drive_generic_callback(self, flow, detector, collector_ip="192.168.1.60"):
-        with patch(
+        with self._identity_wire_for(detector), patch(
             "custom_components.eybond_local.config_flow.create_onboarding_manager",
             return_value=detector,
         ):
@@ -10540,7 +10701,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         return flow._verification_claim_owner
 
     async def _probe_again(self, flow, detector):
-        with patch(
+        # A retry is a FULL new attempt: a new identity transaction (new lease,
+        # new trigger sequence, new authoritative read) plus the detection that
+        # follows it. Same seam as the first submit.
+        with self._identity_wire_for(detector), patch(
             "custom_components.eybond_local.config_flow.create_onboarding_manager",
             return_value=detector,
         ):
@@ -10773,6 +10937,81 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(flow._callback_ownership_handed_off)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
+
+
+class CollectorOnlyResultTests(unittest.TestCase):
+    """The certified identity becomes a COLLECTOR-only result -- nothing invented.
+
+    The flow no longer runs any pre-entry detection, so this result is everything
+    the entry is built from. It must record the collector we triggered, never
+    Home Assistant's own address.
+    """
+
+    FULL_PN = "V001020SYN62344022"
+    HA_IP = "192.0.2.10"
+    COLLECTOR_IP = "192.0.2.55"
+
+    def _result(self):
+        from custom_components.eybond_local.config_flow import EybondLocalConfigFlow
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+
+        flow = EybondLocalConfigFlow.__new__(EybondLocalConfigFlow)
+        settings = {
+            "server_ip": self.HA_IP,          # HA: where the collector dials IN
+            "collector_ip": self.COLLECTOR_IP,  # the collector: what we trigger
+        }
+        outcome = CallbackIdentityOutcome(
+            result="",
+            collector_pn=self.FULL_PN,
+            session_id="s-new",
+            session_protocol="eybond_framed",
+            identity_source="fc2_parameter_2",
+            handoff_owner="callback_verification:x",
+        )
+        with patch.object(
+            EybondLocalConfigFlow, "_current_connection_type", return_value="eybond"
+        ):
+            return flow._collector_only_result(settings, outcome)
+
+    def test_target_ip_is_the_collector_not_home_assistant(self) -> None:
+        candidate = self._result().collector
+        self.assertEqual(candidate.target_ip, self.COLLECTOR_IP)
+        self.assertEqual(candidate.ip, self.COLLECTOR_IP)
+        # HA's own address must never be recorded as the collector's target.
+        self.assertNotEqual(candidate.target_ip, self.HA_IP)
+        self.assertNotEqual(candidate.ip, self.HA_IP)
+
+    def test_result_carries_only_what_the_transaction_proved(self) -> None:
+        result = self._result()
+        candidate = result.collector
+        self.assertEqual(candidate.collector.collector_pn, self.FULL_PN)
+        self.assertEqual(candidate.session_protocol, "eybond_framed")
+        self.assertTrue(candidate.connected)
+        self.assertEqual(candidate.source, "callback_identity")
+        # No inverter match and no high confidence -> manual_confirm, never a
+        # detection summary claiming knowledge we do not have.
+        self.assertIsNone(result.match)
+        self.assertNotEqual(getattr(result, "confidence", ""), "high")
+
+    def test_entry_persists_the_collector_address_and_pn(self) -> None:
+        # The candidate is what the entry is built from: its ip becomes
+        # CONF_COLLECTOR_IP and its PN becomes CONF_COLLECTOR_PN. Neither may be
+        # HA's address.
+        from custom_components.eybond_local.const import (
+            CONF_COLLECTOR_IP,
+            CONF_COLLECTOR_PN,
+        )
+
+        candidate = self._result().collector
+        data = {
+            CONF_COLLECTOR_IP: candidate.ip,
+            CONF_COLLECTOR_PN: candidate.collector.collector_pn,
+        }
+        self.assertEqual(data[CONF_COLLECTOR_IP], self.COLLECTOR_IP)
+        self.assertEqual(data[CONF_COLLECTOR_PN], self.FULL_PN)
+        self.assertNotIn(self.HA_IP, data.values())
 
 
 if __name__ == "__main__":

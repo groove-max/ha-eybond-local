@@ -304,6 +304,7 @@
       "inverter_link_down": "The collector responded, but the inverter link is down (identity registers read as zeros). Check the inverter power and the collector cable, then rescan.",
       "callback_identity_mismatch": "A different collector answered at this address. Check that the address reaches the collector you are adding, then try again.",
       "callback_timeout": "The collector did not call back. Check the address and that the collector can reach Home Assistant, then try again.",
+      "callback_trigger_not_sent": "Home Assistant could not send the connection request. Another connection attempt may be in progress -- wait a moment and try again.",
       "callback_identity_unverified": "The collector identity could not be confirmed. Enter an address Home Assistant can reach the collector on, then try again.",
       "callback_identity_ambiguous": "More than one collector answered. Make sure only the collector you are adding can reach Home Assistant, then try again.",
       "callback_identity_conflict": "This collector is already being set up in another flow. Finish or cancel that one, then try again.",

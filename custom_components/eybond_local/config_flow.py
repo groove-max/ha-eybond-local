@@ -212,7 +212,11 @@ from .connection.session_registry import (
     identity_source_is_strong,
     pn_is_same_identity,
 )
-from .onboarding.callback_matching import match_callback_answer
+from .onboarding.callback_identity import (
+    CallbackIdentityOutcome,
+    CallbackIdentityRequest,
+    async_run_callback_identity_transaction,
+)
 from .onboarding.strategy_verification import (
     EVIDENCE_CALLBACK_TRIGGER,
     EVIDENCE_REBOOT_RECONNECT,
@@ -1526,14 +1530,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # Callback-trigger ledger generation sampled immediately BEFORE this
         # flow's own active callback attempt, so the shared matcher can prove the
         # attempt's trigger provenance (exactly one trigger: ours).
-        self._manual_trigger_generation_before: int | None = None
-        # How many callback triggers THIS flow's own attempt is EXPECTED to send.
-        # Declared up front by the code that is about to send them -- never
-        # inferred from the process-global ledger delta, which also counts other
-        # flows' triggers and would therefore hide interference. The shared
-        # matcher compares (global delta == expected): fewer means our trigger
-        # never went out, more means someone else triggered concurrently.
-        self._manual_expected_own_triggers = 0
         # NOTE: do NOT name this `_reconfigure_entry_id` -- Home Assistant's own
         # ConfigFlow base class defines that as a read-only property (it returns
         # context["entry_id"] for SOURCE_RECONFIGURE), so assigning to it raises
@@ -1547,10 +1543,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # is ALWAYS released: run-task finally, cancel, abort, async_remove.
         self._verification_claim_owner = ""
         self._verification_registry: Any = None
-        # Baseline of live session ids snapshotted right before the one-shot
-        # manual callback trigger; only a NEW (non-baseline) strong session of
-        # the exact expected full PN proves the callback.
-        self._manual_callback_baseline: frozenset[str] = frozenset()
         self._manual_verified_full_pn = ""
         self._manual_verified_session_id = ""
         # The expectation DECLARED before this flow's first callback attempt
@@ -2072,11 +2064,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         try:
             # A reboot/reconnect proves permanent inbound behavior only when no
-            # callback trigger can influence that window.  The ledger barrier
-            # coordinates every production trigger sender without guessing by
-            # peer IP, endpoint, collector kind, or cloud family.
-            async with get_callback_trigger_ledger().inhibit_callback_triggers():
-                self._verification_result = await verifier.async_verify()
+            # callback trigger can influence that window. TWO things are needed,
+            # and the inhibitor alone was only one of them:
+            #
+            #  * the LEASE, taken first, means no callback attempt is already in
+            #    flight. Refusing new sends does not help against a trigger fired
+            #    a second EARLIER -- its session lands inside our reconnect window
+            #    and would be certified as inbound evidence it is not. Waiting for
+            #    the lease waits for that attempt's whole causal window to close.
+            #  * the INHIBITOR, nested inside it, keeps the window silent for as
+            #    long as we hold it.
+            #
+            # Same coordinator as every callback attempt: this operation cannot
+            # run concurrently with one, in either direction. No peer IP,
+            # endpoint, collector kind or cloud family is consulted.
+            ledger = get_callback_trigger_ledger()
+            async with ledger.causality_lease(
+                f"inbound_verification:{uuid.uuid4().hex}",
+                timeout=_ONBOARDING_TIMEOUT_POLICY.callback_causality_lease_wait,
+            ):
+                async with ledger.inhibit_callback_triggers():
+                    self._verification_result = await verifier.async_verify()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -2140,66 +2148,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             }
             for session in sessions
         )
-
-    def _manual_callback_verification_error(self) -> str:
-        """Return a flow error key when this attempt's callback is not confirmed.
-
-        This method owns only the CLAIM side-effects and the flow's error keys.
-        The verdict -- did a collector answer THIS attempt? -- comes exclusively
-        from :func:`onboarding.callback_matching.match_callback_answer`, the one
-        matcher shared with the pending entry's runtime attempt. Nothing here
-        re-implements baseline / strength / identity / ambiguity / provenance.
-
-        Two contexts, one rule set:
-
-        * passive-discovery verification -- an ``expected`` identity is known and
-          the answer must be it;
-        * PN-less reconfigure repair (``bind_any``) -- no prior identity, so the
-          probe's own result PN is the identity evidence.
-        """
-
-        expected = self._verification_expected_pn
-        bind_any = self._verification_bind_any
-        # An ACTIVE callback attempt must always be verified, even when no prior
-        # identity is known (a generic manual callback_on_demand flow). Otherwise
-        # the flow would accept whatever the probe happened to surface -- including
-        # a pre-existing session belonging to a different collector -- without any
-        # post-baseline / identity / provenance proof.
-        active_attempt = self._manual_expected_own_triggers > 0
-        if not expected and not bind_any and not active_attempt:
-            return ""
-        self._manual_verified_full_pn = ""
-        self._manual_verified_session_id = ""
-        # A claim from any prior verification attempt is stale until THIS attempt
-        # re-confirms the identity on the wire, so drop it first: a mismatch or
-        # timeout below must leave nothing owned.
-        self._release_verification_claim()
-
-        result = self._manual_result
-        collector = getattr(result, "collector", None)
-        result_pn = str(
-            getattr(getattr(collector, "collector", None), "collector_pn", "") or ""
-        ).strip()
-
-        match = match_callback_answer(
-            self._verification_sessions_source(),
-            baseline_session_ids=self._manual_callback_baseline,
-            result_pn=result_pn,
-            expected_pn=expected,
-            old_session_id=self._verification_old_session_id,
-            trigger_generation_before=self._manual_trigger_generation_before,
-            trigger_generation_after=get_callback_trigger_ledger().snapshot_generation(),
-            expected_own_triggers=self._manual_expected_own_triggers,
-        )
-        if not match.confirmed:
-            return match.result or "callback_timeout"
-
-        # Verdict accepted: take ownership of exactly the session that answered.
-        if not self._claim_manual_callback_session(match.session_id, match.collector_pn):
-            return "callback_identity_conflict"
-        self._manual_verified_full_pn = match.collector_pn
-        self._manual_verified_session_id = match.session_id
-        return ""
 
     def _claim_manual_callback_session(
         self,
@@ -3381,52 +3329,30 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     async def _async_run_manual_callback_attempt(self, settings: dict[str, Any]) -> str:
         """Run ONE complete manual callback attempt. Returns a typed error, or "".
 
-        This owns the WHOLE attempt lifecycle so no caller can assemble half of
-        it. Every active manual callback path goes through here -- the first
-        submit, "probe again", and reconfigure repair -- which is what keeps a
-        retry from mixing a new result with the previous attempt's proof:
+        Every active manual callback path goes through here -- the first submit,
+        "probe again", and reconfigure repair -- so no caller assembles half a
+        proof and a retry can never mix a new result with the previous attempt's.
 
-        1. drop the previous attempt's verdict (``_manual_verified_full_pn``);
-        2. release ONLY this flow's own previous verification claim (another
-           flow's/entry's claim is never touched);
-        3. snapshot a FRESH baseline of session ids;
-        4. snapshot a FRESH ledger generation, immediately before the trigger;
-        5. run the one-shot active probe;
-        6. get the verdict from the single shared matcher;
-        7. on success, claim/promote exactly the session that answered THIS
-           attempt and record the verified PN.
+        The PROOF is the shared identity transaction, which is the ONE callback
+        identity path in production: it takes the exclusive causality lease,
+        sends exactly one trigger sequence, waits for the socket, claims it, reads
+        the full PN authoritatively over the negotiated wire, and returns a
+        registry-certified prepared handoff.
+
+        Driver detection is NOT part of it, and does not run in this flow AT ALL.
+        It used to run FIRST, with identity inferred from whatever PN it surfaced
+        -- which is why an attempt outlived the very session it was identifying.
+        It is now deferred entirely to the normal runtime after the entry is set
+        up: nothing before entry creation probes for an inverter, a model or a
+        driver.
 
         On any failure the flow is left holding nothing: no verified PN and no
         claim, so a stale identity can never leak into an entry.
         """
 
-        from .passive_discovery import active_callback_probe_scope
-
-        probe_scope_id = f"manual_callback:{id(self)}:{uuid.uuid4().hex}"
-        with active_callback_probe_scope(self.hass, probe_scope_id) as retained_sessions:
-            error = await self._async_run_manual_callback_attempt_scoped(settings)
-            if not error and self._manual_verified_session_id:
-                retained_sessions.add(self._manual_verified_session_id)
-            return error
-
-    async def _async_run_manual_callback_attempt_scoped(
-        self, settings: dict[str, Any]
-    ) -> str:
-        """Run one manual callback attempt inside its discovery attribution scope."""
-
-        # 1 + 2: nothing from the previous attempt survives into this one.
-        #
-        # Including the EXPECTATION. Two very different things live in
-        # _verification_expected_pn: a DECLARED identity (passive discovery, or
-        # the PN an entry already stores on reconfigure repair) which is durable
-        # evidence and must gate every attempt; and an identity a previous
-        # attempt of THIS flow adopted from its own probe result
-        # (_async_adopt_enriched_collector_pn). The latter is not evidence about
-        # what the collector at this address is -- it is just what answered last
-        # time -- so letting it gate the retry would make attempt 1's incidental
-        # finding permanently veto attempt 2. Capture what was declared before
-        # this flow ever probed, and restore it, so a retry is judged exactly as
-        # a first attempt would be.
+        # The DECLARED expectation (passive discovery / an entry's stored PN) is
+        # durable and gates every attempt; one a previous attempt of this flow
+        # adopted from its own result is not evidence and must not gate the next.
         if self._manual_declared_expected_pn is None:
             self._manual_declared_expected_pn = self._verification_expected_pn
         else:
@@ -3435,21 +3361,75 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._manual_verified_session_id = ""
         self._release_verification_claim()
 
-        # 3: a FRESH baseline. Sessions that already exist -- including ones the
-        # previous attempt created -- can never answer the trigger below.
-        self._manual_callback_baseline = frozenset(
-            str(session.get("session_id") or "").strip()
-            for session in self._verification_sessions_source()
-            if str(session.get("session_id") or "").strip()
+        outcome = await async_run_callback_identity_transaction(
+            self.hass,
+            CallbackIdentityRequest(
+                server_ip=str(settings.get(CONF_SERVER_IP) or ""),
+                tcp_port=int(settings.get(CONF_TCP_PORT) or 0),
+                udp_port=int(settings.get(CONF_UDP_PORT) or 0),
+                target_ip=str(settings.get(CONF_COLLECTOR_IP) or ""),
+                strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                expected_pn=self._verification_expected_pn,
+                old_session_id=self._verification_old_session_id,
+                owner_prefix="callback_verification",
+            ),
         )
-        # 4: a FRESH ledger generation, sampled immediately before our trigger.
-        self._manual_trigger_generation_before = (
-            get_callback_trigger_ledger().snapshot_generation()
+        if not outcome.confirmed:
+            return outcome.result or "callback_timeout"
+
+        # Adopt the certified proof. The transaction's owner already holds a
+        # PREPARED handoff; the flow keeps releasing it on abort until entry
+        # creation commits it (see _release_verification_claim).
+        self._verification_registry = self._callback_session_registry()
+        self._verification_claim_owner = outcome.handoff_owner
+        self._manual_verified_full_pn = outcome.collector_pn
+        self._manual_verified_session_id = outcome.session_id
+
+        # NO detection. Not here, not after: this attempt has proven a collector
+        # and that is the whole job. Running a driver sweep now would send a
+        # SECOND callback trigger at the collector we just claimed, take tens of
+        # seconds on a session we already own, and re-open the causal ambiguity
+        # the lease just closed -- all to learn something the runtime will read
+        # for itself, better, once the entry exists.
+        #
+        # So the flow carries an honest collector-only result: what we actually
+        # know (this exact collector, on this exact wire) and nothing invented.
+        # match/confidence stay empty, which routes to manual_confirm rather than
+        # a detection summary. Inverter model/driver identification belongs to the
+        # normal runtime after setup.
+        self._manual_result = self._collector_only_result(settings, outcome)
+        return ""
+
+    def _collector_only_result(
+        self,
+        settings: dict[str, Any],
+        outcome: CallbackIdentityOutcome,
+    ) -> OnboardingResult:
+        """Build the minimal onboarding result a certified identity proves.
+
+        Everything here is evidence from the transaction: the durable full PN it
+        read, the wire it negotiated, and the fact that the collector connected.
+        No model, no serial, no driver, no confidence -- the flow must not imply
+        knowledge it does not have.
+        """
+
+        return OnboardingResult(
+            connection_type=self._current_connection_type(),
+            connection_mode="manual",
+            collector=CollectorCandidate(
+                # The collector we triggered -- NOT Home Assistant's own address.
+                # CONF_SERVER_IP is where the collector dials IN to; putting it
+                # here would record HA as the collector's target. The address is
+                # a target only: identity is the PN the transaction read, and peer
+                # IP is never identity.
+                target_ip=str(settings.get(CONF_COLLECTOR_IP, "") or ""),
+                source="callback_identity",
+                ip=str(settings.get(CONF_COLLECTOR_IP, "") or ""),
+                session_protocol=outcome.session_protocol,
+                connected=True,
+                collector=CollectorInfo(collector_pn=outcome.collector_pn),
+            ),
         )
-        # 5 + 6 + 7 (the matcher's verdict, then claim/promote, live in
-        # _manual_callback_verification_error).
-        self._manual_result = await self._async_probe_manual_target(settings)
-        return self._manual_callback_verification_error()
 
     async def _async_route_after_manual_callback_success(self) -> ConfigFlowResult:
         """Adopt the verified identity and route on, after a confirmed attempt."""
@@ -4546,79 +4526,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return result
 
     # ---- probe ----
-
-    async def _async_probe_manual_target(
-        self,
-        user_input: dict[str, Any],
-    ) -> OnboardingResult:
-        """Run ONE active callback attempt for the manual settings.
-
-        This is only ever reached for a user-chosen ``callback_on_demand`` flow
-        (inbound never probes), so it ALWAYS performs exactly one active attempt.
-
-        There is deliberately NO passive-inventory shortcut here. The listener's
-        session inventory is not bound to ``collector_ip`` -- the probe target is
-        only carried as a source/label -- so "there is exactly one passive
-        candidate" says nothing about whether it is the collector the user typed
-        an address for. Accepting it would silently adopt a stranger. The answer
-        must be a session that appears AFTER our own trigger and matches the
-        identity this attempt actually reached; the shared matcher decides that.
-        """
-
-        # Nothing has been sent yet for THIS attempt.
-        self._manual_expected_own_triggers = 0
-        detector = create_onboarding_manager(
-            build_connection_spec_from_values(
-                self._current_connection_type(),
-                build_manual_entry_settings(self._current_connection_type(), user_input),
-            ),
-            driver_hint=user_input[CONF_DRIVER_HINT],
-        )
-        collector_ip = user_input.get(CONF_COLLECTOR_IP, "")
-        discovery_target = "" if collector_ip else user_input.get(CONF_DISCOVERY_TARGET, "")
-
-        try:
-            async with _async_timeout(_MANUAL_PROBE_WATCHDOG_TIMEOUT):
-                # DECLARE the expectation BEFORE awaiting: this attempt sends
-                # exactly one trigger (attempts=1). It must never be inferred
-                # from the global ledger delta afterwards -- that delta also
-                # contains any concurrent trigger, which is precisely the
-                # interference the matcher has to catch.
-                self._manual_expected_own_triggers = 1
-                results = await detector.async_auto_detect(
-                    collector_ip=collector_ip,
-                    discovery_target=discovery_target,
-                    attempts=1,
-                    connect_timeout=3.5,
-                    heartbeat_timeout=1.5,
-                    total_timeout=_MANUAL_PROBE_TIMEOUT,
-                )
-        except TimeoutError:
-            logger.warning(
-                "Manual onboarding probe timed out after %.1fs server_ip=%s collector_ip=%s discovery_target=%s driver_hint=%s",
-                _MANUAL_PROBE_WATCHDOG_TIMEOUT,
-                user_input.get(CONF_SERVER_IP, ""),
-                collector_ip or "-",
-                discovery_target or "-",
-                user_input.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            return OnboardingResult(
-                connection_type=self._current_connection_type(),
-                connection_mode="manual",
-                next_action="create_pending_entry",
-                last_error="manual_probe_timeout",
-            )
-        if results:
-            return results[0]
-
-        return OnboardingResult(
-            connection_type=self._current_connection_type(),
-            connection_mode="manual",
-            next_action="create_pending_entry",
-            last_error="manual_target_not_confirmed",
-        )
-
-    # ---- network defaults ----
 
     async def _async_ensure_network_defaults(self) -> None:
         if not self._local_ip or not self._interface_options:

@@ -54,6 +54,49 @@ def _code_identifiers(source: str) -> set[str]:
     return names
 
 
+def _code_string_literals(source: str) -> set[str]:
+    """String literals in real code, excluding docstrings.
+
+    _code_identifiers only sees AST names, so a rule smuggled in as a literal
+    (a state name, a wire name) is invisible to it. Docstrings are excluded so a
+    module may still DESCRIBE the rules it delegates.
+    """
+
+    tree = ast.parse(source)
+    docstrings: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            doc = ast.get_docstring(node, clean=False)
+            if doc:
+                docstrings.add(doc)
+    literals: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in docstrings:
+                continue
+            literals.add(node.value)
+    return literals
+
+
+def _imported_modules(source: str) -> set[str]:
+    """Every module named by an import (dotted parts included).
+
+    _code_identifiers cannot see these: `import x.y` binds no ast.Name.
+    """
+
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.update(alias.name.split("."))
+        elif isinstance(node, ast.ImportFrom):
+            modules.update((node.module or "").split("."))
+            modules.update(alias.name for alias in node.names)
+    return {part for part in modules if part}
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -130,6 +173,87 @@ class AdapterSelectionAuthorityGuardTests(unittest.TestCase):
                     set(),
                     msg=f"{method_name} must not select by {token!r}: {offenders}",
                 )
+
+
+_CALLBACK_IDENTITY = (
+    REPO_ROOT / "custom_components/eybond_local/onboarding/callback_identity.py"
+)
+
+
+class WireNegotiationAuthorityGuardTests(unittest.TestCase):
+    """There is exactly ONE authority that decides a session's live wire.
+
+    negotiate_session_adapters / SessionHandle own every rule: untrusted
+    lifecycle states, state-vs-shape conflicts, sniffed shape never overriding an
+    untrusted state, and "persisted expected protocol is not live evidence". A
+    second resolver in the onboarding layer would be free to drift from those
+    rules -- and drift here means writing the wrong frame to a stranger's socket.
+    """
+
+    def test_callback_identity_does_not_use_the_transport_profile_resolver(self) -> None:
+        source = _read(_CALLBACK_IDENTITY)
+        identifiers = _code_identifiers(source)
+        imports = _imported_modules(source)
+        for banned in (
+            "collector_session_protocol_from_inventory_state",
+            "normalize_collector_session_protocol",
+        ):
+            self.assertNotIn(banned, identifiers)
+            self.assertNotIn(banned, imports)
+        # The resolver's whole MODULE is off limits, not just the one function.
+        self.assertNotIn("transport_profile", imports)
+
+    def test_callback_identity_delegates_to_the_session_handle_authority(self) -> None:
+        identifiers = _code_identifiers(_read(_CALLBACK_IDENTITY))
+        self.assertIn("negotiate_session_adapters", identifiers)
+
+    def test_callback_identity_re_derives_no_wire_rule_of_its_own(self) -> None:
+        literals = _code_string_literals(_read(_CALLBACK_IDENTITY))
+        # The wire vocabulary and the untrusted-state list live in session_handle.
+        # Holding any of them here means a second rule set that can drift.
+        for literal in (
+            "routed_framed",
+            "routed_at_text",
+            "waiting_for_route_identity",
+            "parked_waiting_for_identity",
+            "route_identity_mismatch",
+            "eybond_framed_or_binary",
+            "closed_no_payload",
+            "raw_tcp",
+        ):
+            self.assertNotIn(
+                literal,
+                literals,
+                msg=f"callback_identity must not re-derive wire rule {literal!r}",
+            )
+
+
+class CallbackIdentityIsolationGuardTests(unittest.TestCase):
+    def test_callback_identity_has_no_driver_or_provider_dependency(self) -> None:
+        source = _read(_CALLBACK_IDENTITY)
+        code = _code_identifiers(source) | _imported_modules(source)
+        for banned in (
+            # driver detection must not exist before identity is confirmed
+            "async_auto_detect",
+            "async_deep_detect",
+            "create_onboarding_manager",
+            "driver_detection",
+            "link_sweep",
+            "DRIVER_HINT",
+            # nor provider / cloud / collector-kind concerns
+            "SmartEssLocalSession",
+            "smartess",
+            "cloud_family",
+            "collector_kind",
+            "bridge_kind",
+        ):
+            self.assertNotIn(
+                banned, code, msg=f"callback_identity must not depend on {banned}"
+            )
+
+    def test_callback_identity_uses_the_neutral_management_session(self) -> None:
+        code = _code_identifiers(_read(_CALLBACK_IDENTITY))
+        self.assertIn("CollectorWireManagementSession", code)
 
 
 if __name__ == "__main__":
