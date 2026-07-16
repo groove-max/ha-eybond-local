@@ -256,5 +256,193 @@ class CallbackIdentityIsolationGuardTests(unittest.TestCase):
         self.assertIn("CollectorWireManagementSession", code)
 
 
+class CallbackIdentityIsNotRecoveryProofTests(unittest.TestCase):
+    """IDENTITY proof != RECOVERY proof.
+
+    A certified identity outcome states only that ONE live session belongs to
+    ONE full PN. It says nothing about being able to re-establish contact after
+    that session is gone, so the transaction has no business producing (or even
+    naming) a connection strategy, strategy evidence, endpoint write, or any
+    other recovery-shaped artifact. Recovery is a SEPARATE future proof (the
+    RecoveryContract); these guards keep it from leaking in early.
+    """
+
+    def test_transaction_writes_no_strategy_evidence_or_endpoint(self) -> None:
+        source = _read(_CALLBACK_IDENTITY)
+        code = _code_identifiers(source) | _imported_modules(source)
+        for banned in (
+            # strategy / evidence vocabulary
+            "CONF_CONNECTION_STRATEGY",
+            "CONF_CONNECTION_STRATEGY_EVIDENCE",
+            "CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER",
+            "CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT",
+            "CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION",
+            "EVIDENCE_CALLBACK_TRIGGER",
+            "EVIDENCE_REBOOT_RECONNECT",
+            "EVIDENCE_USER_CONFIRMED_SESSION",
+            "strategy_verification",
+            # endpoint ownership / endpoint writes
+            "CONF_ENDPOINT_CONTROL_POLICY",
+            "CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT",
+            "collector_endpoint",
+            # entry mutation API -- the transaction owns no ConfigEntry
+            "async_update_entry",
+            "async_create_entry",
+        ):
+            self.assertNotIn(
+                banned,
+                code,
+                msg=f"callback_identity must not name {banned}: identity is not recovery",
+            )
+        literals = _code_string_literals(source)
+        for banned_literal in (
+            "connection_strategy",
+            "connection_strategy_evidence",
+            "endpoint_control_policy",
+            "collector_original_server_endpoint",
+        ):
+            self.assertNotIn(
+                banned_literal,
+                literals,
+                msg=f"callback_identity must not smuggle key {banned_literal!r} as a literal",
+            )
+
+    def test_outcome_carries_identity_fields_only(self) -> None:
+        from dataclasses import fields
+
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+
+        # A frozen field list: any new recovery-shaped field must be a
+        # deliberate, reviewed change here first.
+        self.assertEqual(
+            {field.name for field in fields(CallbackIdentityOutcome)},
+            {
+                "result",
+                "collector_pn",
+                "session_id",
+                "session_protocol",
+                "identity_source",
+                "handoff_owner",
+            },
+        )
+        outcome = CallbackIdentityOutcome(result="")
+        for forbidden in (
+            "connection_strategy",
+            "connection_strategy_evidence",
+            "evidence",
+            "endpoint",
+            "recovery_verified",
+            "inbound",
+            # the old ambiguous name: it read as "the callback way of
+            # (re)connecting is confirmed", which identity cannot claim
+            "confirmed",
+        ):
+            self.assertFalse(
+                hasattr(outcome, forbidden),
+                msg=f"CallbackIdentityOutcome must not expose {forbidden!r}",
+            )
+
+    def test_transaction_consults_no_persisted_protocol_or_peer_identity(self) -> None:
+        source = _read(_CALLBACK_IDENTITY)
+        code = _code_identifiers(source) | _imported_modules(source)
+        literals = _code_string_literals(source)
+        # A persisted/expected protocol is not live evidence; peer IP, hostname
+        # and endpoint are route/diagnostics, never identity and never a wire
+        # switch.
+        # NOTE: the bare identifier ``collector_session_protocol`` is allowed --
+        # the AT reader passes the LIVE negotiated wire under that kwarg. What
+        # is banned is reading the PERSISTED entry key (the CONF_ constant / its
+        # literal value) as if it were live evidence.
+        for banned in (
+            "CONF_COLLECTOR_SESSION_PROTOCOL",
+            "hostname",
+            # peer IP is route/diagnostics, never identity: the transaction may
+            # not even read it (neither as an attribute nor as a mapping key).
+            "peer_ip",
+        ):
+            self.assertNotIn(banned, code | literals, msg=f"banned: {banned}")
+
+
+class IdentityConsumersNeverMintRecoveryEvidenceTests(unittest.TestCase):
+    """No CONSUMER of the identity transaction may mint recovery evidence.
+
+    The transaction-module guards above cannot see a mapper one layer up: a
+    flow/pending consumer that takes ``identity_certified`` and stamps
+    ``callback_trigger`` evidence re-creates the false recovery proof outside
+    the guarded module. So the ban follows the IMPORT: every production module
+    that imports ``callback_identity`` is forbidden from even naming the
+    callback-trigger evidence vocabulary. Persisting the user's CHOSEN
+    ``connection_strategy`` remains legal everywhere -- intent is not evidence.
+    Legacy READERS (connection_policy's derivation for old entries) do not
+    import the transaction and are deliberately untouched.
+    """
+
+    def _identity_consumers(self) -> list[tuple[Path, str]]:
+        consumers: list[tuple[Path, str]] = []
+        for path in sorted(_CC.rglob("*.py")):
+            source = _read(path)
+            if path.name == "callback_identity.py":
+                continue  # the transaction itself has its own, stricter guards
+            if "callback_identity" in _imported_modules(source):
+                consumers.append((path, source))
+        return consumers
+
+    def test_the_guard_sees_the_real_consumers(self) -> None:
+        # The guard must never silently go blind: the two known mappers (the
+        # config flow's manual/reconfigure paths and the pending attempt) have
+        # to be in its scope, or the ban below proves nothing.
+        names = {path.name for path, _source in self._identity_consumers()}
+        self.assertIn("config_flow.py", names)
+        self.assertIn("pending_attempt.py", names)
+
+    def test_identity_consumers_never_name_callback_trigger_evidence(self) -> None:
+        for path, source in self._identity_consumers():
+            code = _code_identifiers(source) | _imported_modules(source)
+            literals = _code_string_literals(source)
+            for banned in (
+                "EVIDENCE_CALLBACK_TRIGGER",
+                "CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER",
+            ):
+                self.assertNotIn(
+                    banned,
+                    code,
+                    msg=(
+                        f"{path.name} imports the identity transaction and must "
+                        f"not name {banned}: identity_certified is never a "
+                        "recovery proof"
+                    ),
+                )
+            self.assertNotIn(
+                "callback_trigger",
+                literals,
+                msg=(
+                    f"{path.name} must not smuggle the callback_trigger evidence "
+                    "value as a literal"
+                ),
+            )
+
+    def test_pending_identity_mapper_never_touches_the_evidence_key(self) -> None:
+        # The pending mapper has no legitimate evidence business at all (the
+        # config flow, by contrast, still writes REAL inbound evidence from the
+        # behavioral restart/reconnect verification).
+        source = _read(_CC / "onboarding" / "pending_attempt.py")
+        code = (
+            _code_identifiers(source)
+            | _imported_modules(source)
+            | _code_string_literals(source)
+        )
+        for banned in (
+            "CONF_CONNECTION_STRATEGY_EVIDENCE",
+            "connection_strategy_evidence",
+        ):
+            self.assertNotIn(
+                banned,
+                code,
+                msg=f"pending_attempt must not touch {banned}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -203,13 +203,19 @@ def build_query_collector_response(parameter: int, scenario: CollectorScenario) 
     """Build one FC=2 SmartESS local collector reply payload or drop it."""
 
     parameter_u8 = int(parameter) & 0xFF
-    behavior = scenario.fc2_query_modes.get(parameter_u8, QUERY_MODE_FAIL)
+    # Parameter 2 is the collector's own full PN. Every real collector answers
+    # it (it is how the cloud identifies the device), so the fake defaults to
+    # success unless a scenario explicitly overrides it via fc2_query_modes.
+    default_mode = QUERY_MODE_SUCCESS if parameter_u8 == 2 else QUERY_MODE_FAIL
+    behavior = scenario.fc2_query_modes.get(parameter_u8, default_mode)
     if behavior == QUERY_MODE_TIMEOUT:
         return None
     if behavior == QUERY_MODE_FAIL:
         return bytes((1, parameter_u8))
 
     profile = scenario.profile
+    if parameter_u8 == 2:
+        return bytes((0, parameter_u8)) + profile.pn.encode("ascii")
     if parameter_u8 == 5:
         return bytes((0, parameter_u8)) + profile.firmware_version.encode("ascii")
     if parameter_u8 == 14:

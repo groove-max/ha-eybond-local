@@ -196,6 +196,9 @@ class PromotionTests(unittest.TestCase):
         return registry
 
     def test_promotion_is_atomic_and_clears_pending_fields(self) -> None:
+        # Behavioral test C: promotion keeps the entry's CANONICAL (user-chosen)
+        # strategy and stamps NO callback recovery evidence -- the identity path
+        # passes evidence="" and a certified identity is not a recovery proof.
         from custom_components.eybond_local.pending_collector import (
             async_promote_pending_entry,
         )
@@ -209,7 +212,7 @@ class PromotionTests(unittest.TestCase):
             hass,
             entry,
             collector_pn=FULL_PN,
-            evidence=C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
+            evidence="",
             handoff_owner=owner,
         )
 
@@ -219,18 +222,54 @@ class PromotionTests(unittest.TestCase):
 
         self.assertEqual(entry.data[C.CONF_COLLECTOR_PN], FULL_PN)
         self.assertEqual(entry.data[C.CONF_ENTRY_ROLE], "")
-        # The user's canonical strategy survives promotion.
+        # The user's canonical strategy survives promotion...
         self.assertEqual(
             entry.data[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
         )
-        self.assertEqual(
-            entry.data[C.CONF_CONNECTION_STRATEGY_EVIDENCE],
-            C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
-        )
+        # ...and no recovery evidence is invented for it.
+        self.assertNotIn(C.CONF_CONNECTION_STRATEGY_EVIDENCE, entry.data)
         for key in (C.CONF_PENDING_ID, C.CONF_PENDING_ADDRESS_HINT, C.CONF_PENDING_LAST_ATTEMPT_RESULT):
             self.assertNotIn(key, entry.data)
         self.assertTrue(cp.is_collector_backed_callback_entry(entry.data, entry.options))
         self.assertFalse(cp.collector_identity_binding_required(entry.data, entry.options))
+
+    def test_identity_mapper_never_stamps_callback_evidence(self) -> None:
+        # Behavioral test C (mapper level): a certified identity outcome maps to
+        # PENDING_ATTEMPT_PROMOTED with EMPTY evidence. Converting identity into
+        # CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER is exactly the false
+        # recovery proof this batch removes.
+        import asyncio
+        from unittest.mock import patch
+
+        from custom_components.eybond_local.onboarding import pending_attempt as pa
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+
+        certified = CallbackIdentityOutcome(
+            result="",
+            collector_pn=FULL_PN,
+            session_id="s-new",
+            session_protocol="eybond_framed",
+            identity_source="fc2_parameter_2",
+            handoff_owner="pending_attempt:xyz",
+        )
+
+        async def _fake_transaction(_hass, _entry):
+            return certified
+
+        entry = _pending_entry(strategy=C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND, address=NAT_IP)
+        with patch.object(
+            pa, "async_run_callback_identity_transaction_for_entry", _fake_transaction
+        ):
+            outcome = asyncio.run(
+                pa.async_run_pending_callback_attempt(object(), entry)
+            )
+
+        self.assertEqual(outcome.result, C.PENDING_ATTEMPT_PROMOTED)
+        self.assertEqual(outcome.collector_pn, FULL_PN)
+        self.assertEqual(outcome.evidence, "")
+        self.assertEqual(outcome.handoff_owner, "pending_attempt:xyz")
 
     def test_promotion_without_handoff_owner_is_refused(self) -> None:
         # A caller may not promote on a PN it merely believes in.

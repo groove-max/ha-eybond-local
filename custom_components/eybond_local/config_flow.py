@@ -218,7 +218,6 @@ from .onboarding.callback_identity import (
     async_run_callback_identity_transaction,
 )
 from .onboarding.strategy_verification import (
-    EVIDENCE_CALLBACK_TRIGGER,
     EVIDENCE_REBOOT_RECONNECT,
     EVIDENCE_USER_CONFIRMED_SESSION,
     FAILURE_SESSION_CLAIMED,
@@ -230,8 +229,6 @@ from .onboarding.timeouts import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     auto_scan_timeout_seconds as _onboarding_auto_scan_timeout_seconds,
     deep_scan_timeout_seconds as _onboarding_deep_scan_timeout_seconds,
-    manual_probe_timeout_seconds as _onboarding_manual_probe_timeout_seconds,
-    manual_probe_watchdog_timeout_seconds as _onboarding_manual_probe_watchdog_timeout_seconds,
 )
 from .support.cloud_evidence_providers import (
     CloudEvidenceContext,
@@ -353,10 +350,6 @@ _BLE_WIFI_SCAN_TIMEOUT = 30.0
 _BLE_WIFI_SCAN_ATTEMPTS = 3
 _BLE_WIFI_SCAN_RETRY_DELAY = 1.0
 _BLE_PROVISION_TIMEOUT = 45.0
-_MANUAL_PROBE_TIMEOUT = _onboarding_manual_probe_timeout_seconds(_ONBOARDING_TIMEOUT_POLICY)
-_MANUAL_PROBE_WATCHDOG_TIMEOUT = _onboarding_manual_probe_watchdog_timeout_seconds(
-    _ONBOARDING_TIMEOUT_POLICY
-)
 # The passive callback listeners bind the wildcard host; the verification's
 # restart channel attaches to that same shared listener (host, port) key.
 _PASSIVE_LISTENER_HOST = "0.0.0.0"
@@ -3374,7 +3367,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 owner_prefix="callback_verification",
             ),
         )
-        if not outcome.confirmed:
+        if not outcome.identity_certified:
             return outcome.result or "callback_timeout"
 
         # Adopt the certified proof. The transaction's owner already holds a
@@ -3443,8 +3436,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             if abort is not None:
                 return abort
-            self._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-            self._verified_strategy_evidence = EVIDENCE_CALLBACK_TRIGGER
+            # The strategy is the USER'S CHOICE (the manual form's
+            # connection_strategy selector), persisted canonically as intent --
+            # re-affirmed here only when the user actually chose
+            # callback_on_demand, never inferred from the attempt itself. NO
+            # recovery evidence is recorded from an identity outcome: one
+            # answered one-shot trigger certifies the session<->PN identity of
+            # THIS session, not that the callback route will reach the
+            # collector again after the session is lost. That future-facing
+            # proof is the (future) RecoveryContract's job, so
+            # CONF_CONNECTION_STRATEGY_EVIDENCE stays unset here.
+            self._verified_connection_strategy = (
+                CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                if self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                else ""
+            )
+            self._verified_strategy_evidence = ""
         if (
             self._manual_result is not None
             and self._manual_result.match is not None
@@ -3848,14 +3855,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Repair a collector entry that has no durable identity binding.
 
-        Runs the SAME manual callback verification as onboarding: the user enters
-        the reachable collector address, we trigger a one-shot callback and take
-        the strong full PN off the NEW session it answers on. The existing entry
-        is then updated in place (``async_update_reload_and_abort``) -- keeping the
-        verified callback strategy/evidence and completing the ownership handoff --
-        never deleted and re-added. Until repair succeeds the entry keeps its
-        identity_binding_required state and does not masquerade as a normal
-        waiting_for_collector entry.
+        Runs the SAME callback identity transaction as onboarding: the user
+        enters the reachable collector address, we trigger a one-shot callback
+        and take the strong full PN off the NEW session it answers on. The
+        existing entry is then updated in place (``async_update_reload_and_abort``)
+        -- preserving the entry's canonical connection strategy (the user's
+        choice) and completing the ownership handoff -- never deleted and
+        re-added. Identity repair records NO recovery evidence: it proves which
+        collector this is, not how it can be reached again. Until repair
+        succeeds the entry keeps its identity_binding_required state and does
+        not masquerade as a normal waiting_for_collector entry.
         """
 
         entry = self._reconfigure_target_entry()
@@ -3975,9 +3984,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         new_data = dict(entry.data)
         new_data[CONF_COLLECTOR_PN] = verified_full_pn
         new_data[CONF_COLLECTOR_IP] = collector_ip
-        # Keep the behaviorally-verified callback strategy/evidence.
-        self._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-        self._verified_strategy_evidence = EVIDENCE_CALLBACK_TRIGGER
+        # Identity repair re-binds the durable PN; it does NOT re-decide how the
+        # collector connects. The entry's canonical strategy (the user's choice)
+        # is preserved untouched. Only an entry from before the canonical axis
+        # (no strategy in data) gets one stamped now -- callback_on_demand, the
+        # explicit repair action the user just ran -- still intent, not an
+        # inference. And no recovery evidence either way: the answered one-shot
+        # certifies THIS session's identity, not a future recovery route (the
+        # future RecoveryContract's job).
+        has_canonical_strategy = (
+            str(entry.data.get(CONF_CONNECTION_STRATEGY) or "").strip()
+            in CONNECTION_STRATEGIES
+        )
+        self._verified_connection_strategy = (
+            "" if has_canonical_strategy else CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        )
+        self._verified_strategy_evidence = ""
         self._apply_verified_connection_strategy(new_data)
         # Commit the ownership handoff (setup completes it after reload) and update
         # the entry in place, rolling the handoff back if the terminal helper
@@ -4147,13 +4169,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
 
     def _apply_verified_connection_strategy(self, data: dict[str, Any]) -> None:
-        """Persist a behaviorally-verified strategy (and its evidence) explicitly.
+        """Persist the canonical strategy -- and evidence ONLY when one exists.
 
-        Only ever set from the passive-discovery verification: ``inbound`` after
-        the restart/reconnect proof, ``callback_on_demand`` after the one-shot
-        callback proof. The explicit axis takes precedence over any legacy-field
-        derivation; endpoint ownership is NOT touched (``endpoint_control_policy``
-        still requires real write provenance to become integration_managed).
+        Two very different sources feed this, and they carry different proof:
+
+        * ``inbound`` from the passive-discovery verification -- a BEHAVIORAL
+          recovery proof (a genuine restart/reconnect dial-in, or the user
+          explicitly binding an observed session). These set real evidence
+          (``reboot_reconnect`` / ``user_confirmed_session``).
+        * ``callback_on_demand`` from the manual/reconfigure paths -- the USER'S
+          CHOSEN strategy, re-affirmed after a successful callback identity
+          transaction. That transaction certifies session<->PN identity only;
+          one answered one-shot trigger is NOT a behaviorally verified recovery
+          route, so these paths set NO evidence and this method writes none.
+
+        The explicit axis takes precedence over any legacy-field derivation;
+        endpoint ownership is NOT touched (``endpoint_control_policy`` still
+        requires real write provenance to become integration_managed).
         """
 
         if not self._verified_connection_strategy:
@@ -4315,8 +4347,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # connection_mode / operation-mode derivation.
         if self._manual_chosen_strategy in CONNECTION_STRATEGIES:
             data[CONF_CONNECTION_STRATEGY] = self._manual_chosen_strategy
-        # A behaviorally-verified strategy then refines this with its evidence;
-        # the two always agree (the choice is what decided which verification ran).
+        # Re-affirm the same user choice through the shared helper. On the
+        # callback path this adds NO evidence -- identity success is not a
+        # recovery proof (see _apply_verified_connection_strategy).
         self._apply_verified_connection_strategy(data)
 
         # Item 1 -- strict collector-PN invariant: a normal collector entry is

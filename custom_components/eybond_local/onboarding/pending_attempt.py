@@ -36,7 +36,6 @@ from ..const import (
     CONF_SERVER_IP,
     CONF_TCP_PORT,
     CONF_UDP_PORT,
-    CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
     PENDING_ATTEMPT_CALLBACK_TIMEOUT,
     PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
     PENDING_ATTEMPT_IDENTITY_CLAIMED_BY_OTHER,
@@ -95,7 +94,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class PendingAttemptOutcome:
-    """Typed result of ONE pending callback attempt."""
+    """Typed result of ONE pending callback attempt.
+
+    ``evidence`` stays EMPTY on the identity path -- a certified identity is
+    never converted into recovery/strategy evidence here. The field exists only
+    for the promotion API surface; a future RecoveryContract batch is the one
+    thing that may ever populate it, from its own explicit proof.
+    """
 
     result: str
     collector_pn: str = ""
@@ -148,7 +153,7 @@ async def async_run_pending_callback_attempt(
     """
 
     outcome = await async_run_callback_identity_transaction_for_entry(hass, entry)
-    if not outcome.confirmed:
+    if not outcome.identity_certified:
         return PendingAttemptOutcome(
             result=_ATTEMPT_RESULT_FOR_IDENTITY.get(
                 outcome.result, PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED
@@ -157,7 +162,12 @@ async def async_run_pending_callback_attempt(
     return PendingAttemptOutcome(
         result=PENDING_ATTEMPT_PROMOTED,
         collector_pn=outcome.collector_pn,
-        evidence=CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
+        # NO recovery evidence -- deliberately empty. A certified identity says
+        # which collector answered THIS attempt; it does not prove the callback
+        # route will work again after the session is lost, so nothing here may
+        # be persisted as CONF_CONNECTION_STRATEGY_EVIDENCE. Promotion keeps
+        # the entry's canonical (user-chosen) connection strategy untouched; an
+        # explicit recovery proof is the future RecoveryContract's job.
         handoff_owner=outcome.handoff_owner,
     )
 

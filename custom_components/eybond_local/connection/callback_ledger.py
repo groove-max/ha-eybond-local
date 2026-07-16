@@ -8,6 +8,27 @@ triggered it. Behavioral inbound verification therefore owns a process-wide
 no-trigger window; the monotonic generation remains the fail-closed proof that
 no uncoordinated/legacy sender changed that fact before reconnect.
 
+Scope of the guarantee -- honestly: PROCESS-LEVEL ONLY. Every in-process
+sender funnels through ``callback_send_scope`` (the one choke point the
+causality lease and the inhibitor gate), but a trigger sent from OUTSIDE this
+Home Assistant process -- the ``collector_cloud_proxy`` support CLI, the
+SmartESS app, another HA instance, an operator's script -- is invisible to
+this ledger until its effect (a session) appears. What each layer can and
+cannot exclude:
+
+* the causality lease excludes only IN-PROCESS senders from the window;
+* the session baseline excludes only sessions that ALREADY existed
+  (old session ids can never be the answer to a later trigger);
+* PN matching excludes only a DIFFERENT identity answering.
+
+None of those layers can tell an EXTERNAL trigger aimed at the SAME collector
+apart from ours: a session of the expected PN appearing after our baseline is
+indistinguishable whether our datagram or an outside one caused it. That is
+why a certified callback identity outcome proves the session<->PN binding and
+nothing about trigger->session causality beyond this process -- and why it
+must never be recorded as recovery evidence. No heuristic for detecting
+external triggers belongs here; the honest boundary is the documentation.
+
 This module is pure bookkeeping. It never sends anything, never inspects
 addresses, and must not import transport/onboarding code.
 """
@@ -249,6 +270,12 @@ class CallbackTriggerLedger:
         counts. Serializing removes the ambiguity instead of detecting it: two
         correct attempts now run one after another and BOTH succeed, where before
         both failed with interference.
+
+        The exclusion is IN-PROCESS only (see the module docstring): a trigger
+        from outside this Home Assistant process can still land a same-PN
+        session inside the held window and is indistinguishable from ours.
+        Holding this lease therefore supports an IDENTITY certification, never
+        a recovery-causality claim.
 
         Waiting is done off the event loop so this stays loop-agnostic; the wait
         is bounded so a caller queues rather than hangs.

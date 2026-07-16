@@ -1937,6 +1937,33 @@ class _SharedEybondListener:
         connection.set_write_timeout(write_timeout)
         return connection
 
+    def payload_connection_for_session(
+        self, session_id: str
+    ) -> _CollectorConnection | None:
+        """Return the ACTIVATED framed connection of one exact session id.
+
+        A registry-claimed session id is the strongest route instruction there
+        is: the caller owns exactly that observed socket, so neither peer IP nor
+        a collector-PN index may substitute another one. A parked (not yet
+        activated) socket resolves to ``None`` here -- claiming it is
+        :meth:`pop_pending_socket_for_route`'s job, keyed by the same id.
+        """
+
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        return self._session_payload_connections.get(sid)
+
+    def at_connection_for_session(
+        self, session_id: str
+    ) -> _CollectorAtConnection | None:
+        """Return the ACTIVATED AT connection of one exact session id."""
+
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        return self._session_at_connections.get(sid)
+
     def ensure_at_connection(
         self,
         collector_ip: str,
@@ -3934,12 +3961,15 @@ class SharedEybondTransport:
             if connection is not None and connection.connected:
                 return True
 
-            if self._collector_ip or self._collector_pn:
+            # Re-resolved every iteration: the runtime's registry-mediated
+            # provider may learn (or lose) the claimed session while we wait.
+            claimed_session_id = self._resolve_claimed_session_id()
+            if self._collector_ip or self._collector_pn or claimed_session_id:
                 pending = await listener.pop_pending_socket_for_route(
                     collector_ip=self._collector_ip,
                     collector_pn=self._collector_pn,
                     session_protocol=self._collector_session_protocol,
-                    session_id=self._resolve_claimed_session_id(),
+                    session_id=claimed_session_id,
                 )
                 if pending is not None:
                     connection = await listener.activate_pending_connection(
@@ -3956,7 +3986,9 @@ class SharedEybondTransport:
             if remaining <= 0:
                 return False
 
-            if connection is not None and (self._collector_ip or self._collector_pn):
+            if connection is not None and (
+                self._collector_ip or self._collector_pn or claimed_session_id
+            ):
                 ok = await connection.wait_until_connected(timeout=min(0.1, remaining))
                 if ok:
                     return True
@@ -3977,12 +4009,13 @@ class SharedEybondTransport:
                     return False
                 return await connection.wait_until_heartbeat(timeout=remaining)
 
-            if self._collector_ip or self._collector_pn:
+            claimed_session_id = self._resolve_claimed_session_id()
+            if self._collector_ip or self._collector_pn or claimed_session_id:
                 pending = await self._listener.pop_pending_socket_for_route(
                     collector_ip=self._collector_ip,
                     collector_pn=self._collector_pn,
                     session_protocol=self._collector_session_protocol,
-                    session_id=self._resolve_claimed_session_id(),
+                    session_id=claimed_session_id,
                 )
                 if pending is not None:
                     connection = await self._listener.activate_pending_connection(
@@ -4056,12 +4089,13 @@ class SharedEybondTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip or self._collector_pn:
+        claimed_session_id = self._resolve_claimed_session_id()
+        if self._collector_ip or self._collector_pn or claimed_session_id:
             pending = await self._listener.pop_pending_socket_for_route(
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
-                session_id=self._resolve_claimed_session_id(),
+                session_id=claimed_session_id,
             )
             if pending is not None:
                 return await self._listener.activate_pending_connection(
@@ -4080,6 +4114,21 @@ class SharedEybondTransport:
     def _connection(self, *, create_placeholder: bool) -> _CollectorConnection | None:
         if self._listener is None:
             return None
+        claimed_session_id = self._resolve_claimed_session_id()
+        if claimed_session_id:
+            connection = self._listener.payload_connection_for_session(
+                claimed_session_id
+            )
+            if connection is not None:
+                return connection
+            if not self._collector_ip and not self._collector_pn:
+                # A session-pinned-ONLY transport (the callback identity read):
+                # the claimed socket either resolves or there is nothing this
+                # transport may talk to. The "current connection" fallback below
+                # hands back an arbitrary live socket -- exactly the
+                # substitution a session claim exists to prevent. A claimed but
+                # still-parked socket is activated by the pop path, not here.
+                return None
         if self._collector_pn:
             connection = self._listener.ensure_connection(
                 "",
@@ -4232,12 +4281,13 @@ class SharedCollectorAtTransport:
             if connection is not None and connection.connected:
                 return True
 
-            if self._collector_ip or self._collector_pn:
+            claimed_session_id = self._resolve_claimed_session_id()
+            if self._collector_ip or self._collector_pn or claimed_session_id:
                 pending = await listener.pop_pending_socket_for_route(
                     collector_ip=self._collector_ip,
                     collector_pn=self._collector_pn,
                     session_protocol=self._collector_session_protocol,
-                    session_id=self._resolve_claimed_session_id(),
+                    session_id=claimed_session_id,
                 )
                 if pending is not None:
                     if self._uses_at_text_session():
@@ -4283,12 +4333,13 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip or self._collector_pn:
+        claimed_session_id = self._resolve_claimed_session_id()
+        if self._collector_ip or self._collector_pn or claimed_session_id:
             pending = await self._listener.pop_pending_socket_for_route(
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
-                session_id=self._resolve_claimed_session_id(),
+                session_id=claimed_session_id,
             )
             if pending is not None:
                 if self._uses_at_text_session():
@@ -4360,12 +4411,13 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip or self._collector_pn:
+        claimed_session_id = self._resolve_claimed_session_id()
+        if self._collector_ip or self._collector_pn or claimed_session_id:
             pending = await self._listener.pop_pending_socket_for_route(
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
-                session_id=self._resolve_claimed_session_id(),
+                session_id=claimed_session_id,
             )
             if pending is not None:
                 if self._uses_at_text_session():
@@ -4437,12 +4489,13 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip or self._collector_pn:
+        claimed_session_id = self._resolve_claimed_session_id()
+        if self._collector_ip or self._collector_pn or claimed_session_id:
             pending = await self._listener.pop_pending_socket_for_route(
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
-                session_id=self._resolve_claimed_session_id(),
+                session_id=claimed_session_id,
             )
             if pending is not None:
                 if self._uses_at_text_session():
@@ -4516,12 +4569,13 @@ class SharedCollectorAtTransport:
         if self._listener is None:
             raise ConnectionError("collector_not_connected")
 
-        if self._collector_ip or self._collector_pn:
+        claimed_session_id = self._resolve_claimed_session_id()
+        if self._collector_ip or self._collector_pn or claimed_session_id:
             pending = await self._listener.pop_pending_socket_for_route(
                 collector_ip=self._collector_ip,
                 collector_pn=self._collector_pn,
                 session_protocol=self._collector_session_protocol,
-                session_id=self._resolve_claimed_session_id(),
+                session_id=claimed_session_id,
             )
             if pending is not None:
                 connection = await self._listener.activate_pending_at_connection(
@@ -4638,6 +4692,26 @@ class SharedCollectorAtTransport:
     def _at_connection(self, *, create_placeholder: bool) -> _CollectorAtConnection | None:
         if self._listener is None:
             return None
+        claimed_session_id = self._resolve_claimed_session_id()
+        if claimed_session_id:
+            connection = self._listener.at_connection_for_session(claimed_session_id)
+            if connection is not None:
+                connection.set_raw_passthrough_bootstrap(
+                    self._collector_raw_passthrough_bootstrap
+                )
+                connection.set_raw_passthrough_frame_format(
+                    self._collector_raw_passthrough_frame_format
+                )
+                connection.set_raw_passthrough_min_interval_ms(
+                    self._collector_raw_passthrough_min_interval_ms
+                )
+                return connection
+            if not self._collector_ip and not self._collector_pn:
+                # Session-pinned-ONLY transport (the callback identity read):
+                # never substitute the "current" arbitrary AT socket for the
+                # claimed one. A claimed-but-parked socket is activated by the
+                # pop path, not resolved here.
+                return None
         if self._collector_pn:
             connection = self._listener.ensure_at_connection(
                 "",
@@ -4679,6 +4753,17 @@ class SharedCollectorAtTransport:
     def _framed_connection(self, *, create_placeholder: bool) -> _CollectorConnection | None:
         if self._listener is None:
             return None
+        claimed_session_id = self._resolve_claimed_session_id()
+        if claimed_session_id:
+            connection = self._listener.payload_connection_for_session(
+                claimed_session_id
+            )
+            if connection is not None:
+                return connection
+            if not self._collector_ip and not self._collector_pn:
+                # Session-pinned-ONLY transport: same exclusivity as
+                # _at_connection -- the claimed socket or nothing.
+                return None
         if self._collector_pn:
             connection = self._listener.ensure_connection(
                 "",

@@ -462,6 +462,40 @@ class MigrationInvariantTests(unittest.TestCase):
             entry_id="e3b", version=_ENTRY_SCHEMA_VERSION, data={}, options={}
         )
         self.assertTrue(self._run_migrate(entry))
+
+    def test_legacy_callback_evidence_survives_migration_untouched(self) -> None:
+        # Behavioral test D: entries created before recovery evidence was
+        # separated from identity may carry
+        # connection_strategy_evidence=callback_trigger. NO migration removes or
+        # rewrites it -- dropping the false evidence from NEW writes must never
+        # retroactively mutate existing entries, whose strategy resolution still
+        # legitimately reads that legacy value.
+        legacy_pn = "V001020SYN62344022"
+        entry = types.SimpleNamespace(
+            entry_id="e-legacy-evidence",
+            version=1,
+            data={
+                C.CONF_CONNECTION_MODE: "known_ip",
+                C.CONF_COLLECTOR_PN: legacy_pn,
+                C.CONF_CONNECTION_STRATEGY_EVIDENCE: (
+                    C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER
+                ),
+            },
+            options={},
+        )
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
+        # The legacy evidence is byte-for-byte intact...
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY_EVIDENCE],
+            C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
+        )
+        # ...and keeps doing its legacy job: the frozen canonical strategy came
+        # out of it, so the entry behaves exactly as it did before the upgrade.
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY],
+            C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
         self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
 
     def test_future_version_is_refused(self) -> None:

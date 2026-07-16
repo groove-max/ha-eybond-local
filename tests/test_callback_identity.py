@@ -223,7 +223,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         outcome, registry = await self._run(sessions)
 
         self.assertEqual(outcome.result, IDENTITY_OK)
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
         self.assertEqual(outcome.collector_pn, FULL_PN)
         self.assertEqual(outcome.session_id, "s-new")
         self.assertEqual(outcome.session_protocol, "eybond_framed")
@@ -241,7 +241,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         sessions = [_observed("s-new", SHORT_PN)]
         outcome, registry = await self._run(sessions, reader=_Reader(pn=FULL_PN))
 
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
         self.assertEqual(outcome.collector_pn, FULL_PN)
         self.assertEqual(registry.claimed_identity(outcome.handoff_owner), FULL_PN)
         self.assertEqual(
@@ -254,7 +254,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         sessions = [_observed("s-new", FULL_PN, state="routed_framed", shape="eybond_framed")]
         outcome, _registry = await self._run(sessions, reader=reader)
 
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
         self.assertEqual(len(reader.calls), 1)
         # The wire came from the OBSERVED session, and the read was pinned to
         # exactly the claimed socket (never an IP/PN scan).
@@ -269,7 +269,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         sessions = [_observed("s-new", FULL_PN, state="routed_at_text", shape="at_text")]
         outcome, _registry = await self._run(sessions, reader=reader)
 
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
         self.assertEqual(reader.calls[0]["session_protocol"], "at_text")
         self.assertEqual(outcome.session_protocol, "at_text")
         self.assertEqual(outcome.identity_source, "at_dtupn")
@@ -288,7 +288,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         sessions = [_observed("s-new", FULL_PN)]
         with patch.object(factory, "create_onboarding_manager", side_effect=_boom):
             outcome, _registry = await self._run(sessions)
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
 
     async def test_transaction_module_imports_no_detection_symbol(self) -> None:
         # Static proof, not just runtime: detection must not even be reachable.
@@ -316,7 +316,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         sessions = [_observed("s-new", FULL_PN)]
         outcome, _registry = await self._run(sessions, sender=sender)
 
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
         self.assertEqual(sender.calls, 1)
 
     async def test_more_than_one_own_trigger_is_refused(self) -> None:
@@ -342,7 +342,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         # Home Assistant never dials out on inbound ...
         self.assertEqual(sender.calls, 0)
         # ... and a session that appears on its own still identifies normally.
-        self.assertTrue(outcome.confirmed)
+        self.assertTrue(outcome.identity_certified)
         self.assertEqual(outcome.collector_pn, FULL_PN)
 
     # 8 -----------------------------------------------------------------
@@ -386,8 +386,8 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         # BOTH succeeded -- serialized, not mutually destroyed.
-        self.assertTrue(first.confirmed, first.result)
-        self.assertTrue(second.confirmed, second.result)
+        self.assertTrue(first.identity_certified, first.result)
+        self.assertTrue(second.identity_certified, second.result)
         self.assertEqual({first.collector_pn, second.collector_pn}, {FULL_PN, OTHER_FULL_PN})
         self.assertNotEqual(first.handoff_owner, second.handoff_owner)
         # Each send happened under its own exclusive lease, and the two windows
@@ -470,7 +470,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         a_outcome, b_outcome = await _both(_a(), _b())
 
         # A owns the late session its own trigger caused ...
-        self.assertTrue(a_outcome.confirmed, a_outcome.result)
+        self.assertTrue(a_outcome.identity_certified, a_outcome.result)
         self.assertEqual(a_outcome.collector_pn, FULL_PN)
         self.assertEqual(a_outcome.session_id, "s-a")
         # ... B only opened its window after A's closed ...
@@ -523,7 +523,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
             first = await async_run_callback_identity_transaction(
                 hass, _request(), reader=_Reader(pn=FULL_PN), sender=_Sender()
             )
-        self.assertTrue(first.confirmed)
+        self.assertTrue(first.identity_certified)
         self.assertEqual(first.collector_pn, FULL_PN)
 
         # The second collector dials in from the SAME NAT IP.
@@ -532,7 +532,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
             second = await async_run_callback_identity_transaction(
                 hass, _request(), reader=_Reader(pn=OTHER_FULL_PN), sender=_Sender()
             )
-        self.assertTrue(second.confirmed)
+        self.assertTrue(second.identity_certified)
         self.assertEqual(second.collector_pn, OTHER_FULL_PN)
 
         # Two distinct owners, two distinct identities, one peer IP.
@@ -544,7 +544,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_is_typed_and_claims_nothing(self) -> None:
         outcome, registry = await self._run([])
         self.assertEqual(outcome.result, IDENTITY_TIMEOUT)
-        self.assertFalse(outcome.confirmed)
+        self.assertFalse(outcome.identity_certified)
         self.assertEqual(registry.diagnostics()["claim_count"], 0)
 
     async def test_identity_mismatch_against_expected_pn_is_typed(self) -> None:
@@ -602,6 +602,86 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reader.calls, [])  # nothing was written to that socket
         self.assertEqual(registry.diagnostics()["claim_count"], 0)
 
+    async def test_success_is_identity_proof_only_no_recovery_artifacts(self) -> None:
+        """Identity proof != recovery proof: success writes NOTHING but the claim.
+
+        The fake hass carries ONLY the session registry -- no config_entries, no
+        bus, no states. A transaction that tried to record a connection
+        strategy, strategy evidence, or an endpoint would have to reach for an
+        API that does not exist here, so plain success is structural proof that
+        identity success performs no recovery/strategy/endpoint write.
+        """
+
+        from dataclasses import asdict
+
+        outcome, registry = await self._run([_observed("s-new", FULL_PN)])
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        # The registry handoff is the ONLY artifact of success.
+        self.assertEqual(registry.diagnostics()["claim_count"], 1)
+        # And the outcome itself carries no strategy/evidence/endpoint values.
+        payload = asdict(outcome)
+        for forbidden in ("connection_strategy", "evidence", "endpoint"):
+            self.assertFalse(
+                any(forbidden in key for key in payload),
+                msg=f"outcome leaked a {forbidden!r} field: {sorted(payload)}",
+            )
+
+    async def test_read_identity_owned_by_another_claim_is_conflict_and_never_steals(
+        self,
+    ) -> None:
+        """A foreign owner's PN can never replace or be replaced by our claim.
+
+        An entry already owns the collector; our attempt's NEW socket then
+        authoritatively reads as that same owned PN (the collector opened a
+        second socket). The attempt must end as a typed conflict: the owner's
+        claim stays byte-for-byte, and our transient claim is released.
+        """
+
+        live = _Live([_observed("s-owned", FULL_PN)])
+        registry = CallbackSessionRegistry(sessions_source=live)
+        registry.claim_session("entry-abc", session_id="s-owned")
+        registry.promote_claim_to_full_pn("entry-abc", FULL_PN)
+        # The new socket dials in PN-less; its identity is learned by the read
+        # (which also stamps the inventory, like the production transport does).
+        pending = _observed("s-new", "", state="routed_framed")
+
+        def _stamp(_kwargs):
+            pending["collector_pn"] = FULL_PN
+            pending["collector_identity_source"] = "fc2_parameter_2"
+
+        live.arm(pending)
+        hass = _FakeHass(registry)
+        with _no_probe_scope():
+            outcome = await async_run_callback_identity_transaction(
+                hass,
+                _request(),
+                reader=_Reader(pn=FULL_PN, on_read=_stamp),
+                sender=_Sender(),
+            )
+
+        self.assertEqual(outcome.result, IDENTITY_CONFLICT)
+        self.assertFalse(outcome.identity_certified)
+        # The rightful owner is untouched; the attempt owns nothing.
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "entry-abc")
+        self.assertEqual(registry.claimed_session_id("entry-abc"), "s-owned")
+        self.assertEqual(registry.diagnostics()["claim_count"], 1)
+
+    async def test_read_pn_of_a_different_identity_than_observed_is_mismatch(self) -> None:
+        """Short->full is enrichment of ONE identity, never a cross-identity swap.
+
+        The socket is strongly observed as collector B, but the authoritative
+        read answers with collector A's full PN. There is no identity both
+        proofs agree on, so nothing may be promoted or merged.
+        """
+
+        sessions = [_observed("s-new", OTHER_FULL_PN)]
+        outcome, registry = await self._run(sessions, reader=_Reader(pn=FULL_PN))
+
+        self.assertEqual(outcome.result, IDENTITY_MISMATCH)
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(OTHER_FULL_PN), "")
+        self.assertEqual(registry.diagnostics()["claim_count"], 0)
+
     # 13 ----------------------------------------------------------------
     async def test_claim_is_released_after_every_failure(self) -> None:
         for label, kwargs in (
@@ -612,7 +692,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(failure=label):
                 sessions = kwargs.pop("sessions", [_observed("s-new", FULL_PN)])
                 outcome, registry = await self._run(sessions, **kwargs)
-                self.assertFalse(outcome.confirmed)
+                self.assertFalse(outcome.identity_certified)
                 self.assertEqual(
                     registry.diagnostics()["claim_count"],
                     0,
@@ -693,7 +773,7 @@ class CallbackTriggerSequenceSemanticsTests(unittest.IsolatedAsyncioTestCase):
                 hass, _request(session_wait_timeout=0.5), reader=_Reader(pn=FULL_PN)
             )
 
-        self.assertTrue(outcome.confirmed, outcome.result)
+        self.assertTrue(outcome.identity_certified, outcome.result)
         # ONE logical sequence for the attempt.
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["target_ip"], NAT_IP)
@@ -735,7 +815,7 @@ class CallbackTriggerSequenceSemanticsTests(unittest.IsolatedAsyncioTestCase):
             outcome = await async_run_callback_identity_transaction(
                 hass, _request(session_wait_timeout=0.5), reader=_Reader(), sender=_Sender()
             )
-        self.assertTrue(outcome.confirmed, outcome.result)
+        self.assertTrue(outcome.identity_certified, outcome.result)
 
 
 class CallbackIdentityBudgetPolicyTests(unittest.TestCase):
@@ -1033,7 +1113,7 @@ class CausalLifecycleTests(unittest.IsolatedAsyncioTestCase):
             ["runtime:trigger", "runtime:session", "runtime:terminal", "manual:terminal"],
         )
         # B: the runtime's late session is in the manual baseline -> never its answer.
-        self.assertTrue(outcome.confirmed, outcome.result)
+        self.assertTrue(outcome.identity_certified, outcome.result)
         self.assertEqual(outcome.collector_pn, FULL_PN)
         self.assertEqual(outcome.session_id, "s-manual")
         self.assertEqual(registry.owner_for_pn(OTHER_FULL_PN), "", "adopted the runtime's session")
@@ -1119,7 +1199,7 @@ class CausalLifecycleTests(unittest.IsolatedAsyncioTestCase):
         # It only triggered once the verification's window closed.
         self.assertEqual(order[:2], ["inbound:window", "inbound:terminal"])
         self.assertIn("callback:trigger", order)
-        self.assertTrue(outcome.confirmed, outcome.result)
+        self.assertTrue(outcome.identity_certified, outcome.result)
 
     # F ------------------------------------------------------------------------
     async def test_every_high_level_failure_mode_releases_the_lease(self) -> None:

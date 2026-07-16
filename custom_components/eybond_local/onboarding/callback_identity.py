@@ -122,7 +122,23 @@ class CallbackIdentityRequest:
 
 @dataclass(frozen=True, slots=True)
 class CallbackIdentityOutcome:
-    """Typed result of ONE identity transaction."""
+    """Typed result of ONE identity transaction.
+
+    IDENTITY PROOF ONLY -- never a recovery proof. A certified outcome states
+    exactly: *the live session ``session_id`` on wire ``session_protocol``
+    belongs to the collector with full PN ``collector_pn``, and a registry
+    handoff is prepared under ``handoff_owner``*. It deliberately proves
+    nothing about the future:
+
+    * NOT that the collector can be reached again after this session is lost;
+    * NOT that a callback trigger is a working recovery route;
+    * NOT that the collector is "inbound".
+
+    Accordingly this outcome must never, by itself, be turned into
+    ``connection_strategy`` / ``connection_strategy_evidence`` writes, endpoint
+    writes, or any endpoint-ownership change. Recovery is a SEPARATE proof
+    (the future RecoveryContract); nothing in this module produces one.
+    """
 
     result: str
     collector_pn: str = ""
@@ -134,7 +150,15 @@ class CallbackIdentityOutcome:
     handoff_owner: str = ""
 
     @property
-    def confirmed(self) -> bool:
+    def identity_certified(self) -> bool:
+        """The session<->full-PN binding is certified and a handoff is prepared.
+
+        Named deliberately: this certifies IDENTITY (see the class docstring),
+        never a recovery route. The old name ``confirmed`` read as "the callback
+        way of (re)connecting is confirmed", which is a claim this transaction
+        cannot make.
+        """
+
         return (
             self.result == IDENTITY_OK
             and bool(self.collector_pn)
@@ -182,11 +206,17 @@ class _ProductionTriggerSender:
 class _SessionPinnedIdentityReader:
     """Authoritative full-PN read, pinned to exactly one claimed session id.
 
-    Both wires reuse the transports' existing claimed-session mechanism, so the
-    read lands on the socket the registry says we own -- never one picked by peer
-    IP or PN scan. The two shapes reuse the integration's existing reads:
+    Both wires reuse the transports' claimed-session mechanism EXCLUSIVELY: the
+    transports are constructed with NO collector_ip and NO collector_pn, so the
+    only route they can resolve is the claimed session id -- never a socket
+    picked by peer IP, a PN index, or "the current connection". (Passing the
+    caller's ``expected_pn`` as the transport's ``collector_pn`` would re-open
+    PN routing: a second live socket of the same collector could then serve the
+    read, and the certified session<->PN binding would be about the wrong
+    socket.) The two shapes reuse the integration's existing reads:
 
-    * framed  -> ``SmartEssLocalSession.query_collector_pn`` (FC=2 parameter 2);
+    * framed  -> the neutral ``CollectorWireManagementSession.query_collector_pn``
+      (FC=2 parameter 2);
     * at_text -> the DTUPN query (``AT+DTUPN``).
 
     Both replies are also stamped into the listener inventory by the transport
@@ -223,13 +253,15 @@ class _SessionPinnedIdentityReader:
         from ..collector.collector_wire import CollectorWireManagementSession
         from ..collector.transport import SharedEybondTransport
 
+        # collector_ip/collector_pn stay EMPTY on purpose: the claimed session
+        # id must be the transport's only route (see the class docstring).
         transport = SharedEybondTransport(
             host=self._host,
             port=int(listener_port),
             request_timeout=self._request_timeout,
             heartbeat_interval=60.0,
             collector_ip="",
-            collector_pn=expected_pn,
+            collector_pn="",
         )
         transport.set_claimed_session_provider(lambda: session_id)
         # The NEUTRAL management session: FC=2 parameter 2 and nothing else. The
@@ -250,7 +282,7 @@ class _SessionPinnedIdentityReader:
             port=int(listener_port),
             request_timeout=self._request_timeout,
             collector_ip="",
-            collector_pn=expected_pn,
+            collector_pn="",
             collector_session_protocol=WIRE_AT_TEXT,
         )
         transport.set_claimed_session_provider(lambda: session_id)
@@ -453,7 +485,7 @@ async def async_run_callback_identity_transaction(
             # Honest: we never got a window, so we never sent our sequence.
             logger.info("Callback attempt %s could not acquire causality", owner)
             return CallbackIdentityOutcome(result=IDENTITY_TRIGGER_NOT_SENT)
-        if outcome.confirmed and outcome.session_id:
+        if outcome.identity_certified and outcome.session_id:
             retained_sessions.add(outcome.session_id)
         return outcome
 

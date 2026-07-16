@@ -251,7 +251,9 @@ async def test_callback_pending_promotes_and_starts_normal_runtime(
         return PendingAttemptOutcome(
             result="promoted",
             collector_pn=SYNTHETIC_COLLECTOR_PN,
-            evidence="callback_trigger",
+            # The identity path never mints recovery evidence (see
+            # onboarding/pending_attempt.py) -- promotion runs without it.
+            evidence="",
             handoff_owner=owner,
         )
 
@@ -276,8 +278,10 @@ async def test_callback_pending_promotes_and_starts_normal_runtime(
     assert entry.unique_id == f"collector:{SYNTHETIC_COLLECTOR_PN}"
     assert entry.data[CONF_COLLECTOR_PN] == SYNTHETIC_COLLECTOR_PN
     assert entry.data[CONF_ENTRY_ROLE] == ""
-    # The canonical strategy the user picked survived promotion.
+    # The canonical strategy the user picked survived promotion...
     assert entry.data[CONF_CONNECTION_STRATEGY] == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+    # ...and identity-driven promotion minted NO recovery evidence.
+    assert "connection_strategy_evidence" not in entry.data
     assert CONF_PENDING_ID not in entry.data
     # The normal runtime is now running.
     assert entry.state is ConfigEntryState.LOADED
@@ -330,7 +334,7 @@ async def test_pn_collision_keeps_entry_pending(hass: HomeAssistant, fake_runtim
         return PendingAttemptOutcome(
             result="promoted",
             collector_pn=SYNTHETIC_COLLECTOR_PN,
-            evidence="callback_trigger",
+            evidence="",
             handoff_owner=owner,
         )
 
@@ -553,9 +557,9 @@ async def test_manual_inbound_never_probes_or_triggers(
     flow_id = result["flow_id"]
 
     with patch(
-        "custom_components.eybond_local.config_flow.EybondLocalConfigFlow."
-        "_async_probe_manual_target",
-        side_effect=AssertionError("inbound onboarding must not run an active probe"),
+        "custom_components.eybond_local.config_flow."
+        "async_run_callback_identity_transaction",
+        side_effect=AssertionError("inbound onboarding must not run an active attempt"),
     ):
         # Drive to the manual step and submit an inbound choice.
         flow = hass.config_entries.flow._progress[flow_id]
@@ -590,9 +594,9 @@ async def test_manual_callback_requires_a_target(hass: HomeAssistant, fake_runti
     flow = hass.config_entries.flow._progress[result["flow_id"]]
 
     with patch(
-        "custom_components.eybond_local.config_flow.EybondLocalConfigFlow."
-        "_async_probe_manual_target",
-        side_effect=AssertionError("must not probe without a target"),
+        "custom_components.eybond_local.config_flow."
+        "async_run_callback_identity_transaction",
+        side_effect=AssertionError("must not run an attempt without a target"),
     ):
         submitted = await flow.async_step_manual(
             {
