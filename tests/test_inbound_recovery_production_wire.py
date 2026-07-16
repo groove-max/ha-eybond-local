@@ -278,6 +278,18 @@ class InboundRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
             session_id_provider=lambda: self._registry.claimed_session_id(owner),
             handle_provider=lambda: self._registry.session_handle_for_claimed_session(owner),
         )
+        def _retarget(new_sid: str) -> bool:
+            try:
+                if self._registry.claimed_session_id(owner) == new_sid:
+                    return True
+                return bool(
+                    self._registry.retarget_claim_to_reconnected_session(
+                        owner, new_sid
+                    )
+                )
+            except ValueError:
+                return False
+
         verifier = InboundRecoveryVerifier(
             collector_pn=SHORT_HEARTBEAT_PN,
             session_id=old_session_id,
@@ -287,6 +299,7 @@ class InboundRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
             policy=replace(_FAST_POLICY, inbound_restart_disconnect_timeout=1.0),
             ledger=CallbackTriggerLedger(),
             promote_claim=lambda pn: self._registry.promote_claim_to_full_pn(owner, pn),
+            retarget_claim=_retarget,
             poll_interval=0.05,
         )
 

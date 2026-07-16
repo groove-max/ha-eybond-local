@@ -97,7 +97,10 @@ class CollectorScenario:
     # FC=3 parameter 29 (reboot/apply): "fail" keeps the legacy refusal;
     # "reboot" ACKs the command and the service then really drops the TCP
     # session and dials back in after ``reboot_reconnect_delay`` seconds --
-    # the full reboot -> autonomous reconnect lifecycle.
+    # the full reboot -> autonomous reconnect lifecycle. "reboot_silent" ACKs
+    # and drops the session but does NOT redial: the collector stays silent
+    # until a NEW set>server datagram arrives on its UDP listener (the
+    # callback-recovery lifecycle).
     set_29_mode: str = "fail"
     reboot_reconnect_delay: float = 0.3
 

@@ -157,6 +157,9 @@ def _verifier(channel, sessions, **kwargs) -> InboundRecoveryVerifier:
         # A fresh ledger per verifier: the transaction owns its own causal
         # window without cross-test interference on the process-global one.
         "ledger": CallbackTriggerLedger(),
+        # A retarget capability is MANDATORY for any proof-producing run;
+        # tests exercising its absence pass ``retarget_claim=None`` explicitly.
+        "retarget_claim": lambda _sid: True,
         "poll_interval": 0.01,
     }
     defaults.update(kwargs)
@@ -621,6 +624,31 @@ class InboundRecoveryVerifierTests(unittest.TestCase):
         self.assertIsNone(result.proof)
         self.assertEqual(result.failure_reason, FAILURE_SESSION_CLAIMED)
 
+    def test_missing_retarget_capability_refuses_before_any_reset(self) -> None:
+        # A proof-producing success is structurally impossible without the
+        # ownership retarget hook: the engine refuses upfront -- BEFORE the
+        # lease and BEFORE the collector is rebooted -- instead of producing
+        # a proof whose claim nobody moved.
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            FAILURE_OWNERSHIP_UNAVAILABLE,
+        )
+
+        channel = _FakeChannel()
+        sessions = _ScriptedSessions(
+            (_strong_old(),),
+            (),
+            (_session(NEW_SESSION, FULL_PN),),
+        )
+
+        result = asyncio.run(
+            _verifier(channel, sessions, retarget_claim=None).async_verify()
+        )
+
+        self.assertFalse(result.inbound_verified)
+        self.assertIsNone(result.proof)
+        self.assertEqual(result.failure_reason, FAILURE_OWNERSHIP_UNAVAILABLE)
+        self.assertEqual(channel.restart_calls, 0)
+
     # The verifier must never return a success the contract would refuse: the
     # proof is pre-validated through the strict RecoveryContract builder.
     def test_invalid_clock_yields_typed_failure_and_no_final_retarget(self) -> None:
@@ -760,7 +788,7 @@ class CausalityOwnershipTests(unittest.IsolatedAsyncioTestCase):
         ).async_verify()
 
         self.assertTrue(result.inbound_verified)
-        self.assertTrue(str(seen["owner_during"]).startswith("inbound_verification:"))
+        self.assertTrue(str(seen["owner_during"]).startswith("recovery_verification:"))
         self.assertFalse(seen["send_allowed"])
         # After the transaction: lease released, sends allowed again.
         self.assertEqual(ledger.causality_owner(), "")

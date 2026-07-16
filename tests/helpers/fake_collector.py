@@ -146,6 +146,7 @@ class FakeCollectorService:
         task.add_done_callback(self._background_tasks.discard)
 
     async def handle_discovery(self, data: bytes, addr: tuple[str, int]) -> None:
+        self.discovery_rx_count = getattr(self, "discovery_rx_count", 0) + 1
         try:
             redirect = parse_discovery_redirect(data)
         except ValueError:
@@ -229,6 +230,13 @@ class FakeCollectorService:
                 )
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="fake_collector_heartbeat")
             self._reader_task = asyncio.create_task(self._reader_loop(), name="fake_collector_reader")
+
+    async def _reboot_silent(self) -> None:
+        """Simulated reboot with NO autonomous reconnect (callback recovery)."""
+
+        await self._close_tcp_only()
+        # Forget the endpoint guard so the NEXT set>server really reconnects.
+        self._last_discovery = None
 
     async def _reboot_and_reconnect(self) -> None:
         """Simulated reboot: close the reverse TCP, then autonomously re-dial."""
@@ -380,7 +388,7 @@ class FakeCollectorService:
                     parameter = payload[0] if payload else 0
                     reboots = (
                         parameter == 29
-                        and self._scenario.set_29_mode == "reboot"
+                        and self._scenario.set_29_mode in ("reboot", "reboot_silent")
                     )
                     response_payload = build_set_collector_response(
                         parameter, success=reboots
@@ -398,6 +406,17 @@ class FakeCollectorService:
                         response_payload[0] if response_payload else -1,
                     )
                     if reboots:
+                        if self._scenario.set_29_mode == "reboot_silent":
+                            # Callback-recovery shape: acknowledge and drop the
+                            # TCP session, then stay SILENT -- only a fresh
+                            # set>server datagram on the UDP listener makes
+                            # this collector dial anywhere again.
+                            _LOG.info("Reboot accepted; dropping TCP, staying silent")
+                            self.create_background_task(
+                                self._reboot_silent(),
+                                name="fake_collector_reboot_silent",
+                            )
+                            return
                         # The REAL reboot lifecycle: acknowledge, then drop the
                         # TCP session and dial back in on our own after a boot
                         # delay -- no UDP trigger involved.

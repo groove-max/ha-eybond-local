@@ -12,10 +12,14 @@ The contract holds at most two independent, typed proofs:
 
 * an INBOUND recovery proof -- after a controlled restart/reboot, the collector
   opened a NEW session of the same full PN on its own, while callback triggers
-  were provably inhibited;
-* a CALLBACK recovery proof -- after a clean baseline reset, an addressed
-  ``set>server`` along one concrete route produced a NEW session of the same
-  full PN.
+  were provably inhibited (in-process);
+* a CALLBACK recovery proof -- after a clean baseline reset and a full silent
+  inbound window, an addressed ``set>server`` along one concrete route was
+  followed by a NEW session of the same full PN, with every OTHER in-process
+  trigger excluded for the whole window. The exclusivity is PROCESS-LOCAL: an
+  external sender hitting the same collector inside the window cannot be
+  detected or excluded (see ``CallbackRecoveryProof``), so this records the
+  strongest causal statement one process can make, not metaphysical certainty.
 
 What can NEVER become a proof here (fail-closed by construction):
 
@@ -178,12 +182,22 @@ class InboundRecoveryProof:
 
 @dataclass(frozen=True, slots=True)
 class CallbackRecoveryProof:
-    """One verified 'an addressed set>server regains this collector' proof.
+    """One controlled 'an addressed set>server regains this collector' experiment.
 
     ``trigger_target`` and ``advertised_ha_endpoint`` are opaque snapshots of
     the route the proof actually used; ``listener_port`` is the minimal extra
     parameter a caller needs to check that today's configuration is the proven
     one. All three are REQUIRED: a partial route snapshot is no proof.
+
+    HONEST CAUSALITY BOUNDARY: the experiment ran under PROCESS-LOCAL
+    exclusivity (the callback ledger's documented guarantee). It excluded
+    every other in-process trigger, every pre-existing session, foreign PNs
+    and wrong-route arrivals -- it cannot exclude an EXTERNAL sender (a
+    SmartESS app, a script, another HA instance) unicasting the same
+    collector inside the verification window; such a datagram is physically
+    indistinguishable on the receiving side. The proof therefore certifies
+    the strongest causal statement available to one process, not an absolute
+    'our datagram produced this session'.
     """
 
     method: str

@@ -54,6 +54,10 @@ class OnboardingTimeoutPolicy:
     # their outbound link; bounded but generous, polled from the in-memory
     # session inventory (no UDP loops).
     inbound_reconnect_timeout: float = 180.0
+    # Callback recovery: after the inbound window expired and exactly ONE
+    # unicast set>server sequence went out, how long the collector may take to
+    # dial the advertised endpoint. LINK budget only -- no detection runs here.
+    callback_recovery_session_wait: float = 20.0
     # The detector owns the manual onboarding work budget above.  A wrapper may
     # wait this little bit longer only so the detector can materialize and
     # return its partial result after its own deadline expires.  This is not
