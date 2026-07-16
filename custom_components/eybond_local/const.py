@@ -187,13 +187,26 @@ CONF_CONNECTION_STRATEGY_EVIDENCE = "connection_strategy_evidence"
 # trigger sent. This is the only genuine behavioral proof of `inbound`, and it
 # may ONLY be recorded by the restart/reconnect verification that actually
 # performed it. Never reuse it for a value the user merely asserted or picked.
+# NOTE: this legacy evidence value is NOT a RecoveryContract inbound proof by
+# itself -- <=v4 schemas stored neither a verification timestamp nor a strong
+# identity source, so it cannot be backfilled and the contract model has no
+# legacy method to backfill into (see connection/recovery_contract.py; the
+# v4->v5 migration is a pure version bump, pinned by the migration tests).
 CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT = "reboot_reconnect"
-# The collector answered a one-shot UDP callback trigger on a NEW session.
+# LEGACY COMPATIBILITY VALUE. Historical bookkeeping: "a one-shot UDP callback
+# trigger was answered on a NEW session once, during onboarding". That was an
+# IDENTITY observation, never a recovery proof -- it says nothing about
+# re-establishing contact after the session is lost, and it never becomes a
+# RecoveryContract callback proof (connection/recovery_contract.py rejects it
+# by rule). New production writers MUST NOT create this value; it exists only
+# so the legacy strategy READER (connection_policy) keeps resolving entries
+# that already carry it. Removal is a separate cleanup phase.
 CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER = "callback_trigger"
 # The user explicitly picked an observed, unclaimed strong-PN session and bound
 # it to a waiting entry. That is honest provenance for `inbound` (the collector
 # demonstrably dials in) but it is NOT a restart/reconnect proof -- nothing was
-# restarted and nothing was triggered.
+# restarted and nothing was triggered -- and it never becomes a RecoveryContract
+# inbound proof.
 CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION = "user_confirmed_session"
 
 # 2) endpoint_control_policy: whether the integration may manage the endpoint.

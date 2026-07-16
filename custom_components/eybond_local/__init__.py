@@ -1384,7 +1384,7 @@ def _cleanup_obsolete_entities_allowed(coordinator) -> tuple[bool, str]:
     return True, "snapshot_metadata_consistent"
 
 
-_ENTRY_SCHEMA_VERSION = 4
+_ENTRY_SCHEMA_VERSION = 5
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -1416,6 +1416,25 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     guess) into ``entry.data`` and DELETES the options copy. The value is never
     re-derived from hostname, endpoint, cloud provider, collector kind or peer IP.
 
+    Version 5 introduces the typed RecoveryContract era
+    (:mod:`connection.recovery_contract`) and deliberately writes NOTHING:
+
+    * ``recovery_contract`` (the ONE canonical key, in ``entry.data``) is only
+      ever created by a REAL recovery verifier, none of which exist yet;
+    * the only legacy evidence that could conservatively map to a proof --
+      ``connection_strategy_evidence=reboot_reconnect`` -- has NO persisted
+      verification timestamp and NO strong identity source in any <=v4 schema,
+      and inventing the migration time as ``verified_at`` is forbidden, so no
+      contract is created (the model deliberately has no legacy proof method
+      to backfill into; the rule is pinned by the migration tests);
+    * ``callback_trigger`` evidence is identity bookkeeping, never recovery;
+      ``user_confirmed_session`` is a user binding, never a reboot proof;
+    * legacy evidence fields remain untouched for the compatibility reader;
+      connection_strategy / endpoint_control_policy / endpoints / collector IP
+      are not modified, and no network I/O happens.
+
+    The v4->v5 step is therefore a pure version bump.
+
     Only missing axis fields are filled and only the provably mis-migrated
     strategy is corrected; all other legacy fields are left untouched for
     backward compatibility.
@@ -1441,37 +1460,43 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     changed = False
     options_changed = False
 
-    # v3 -> v4 (FIRST): freeze the entry's real pre-upgrade effective strategy --
-    # computed with the OLD options-first rule -- into data, before any later step
-    # reads it back. A conflicting data/options pair is preserved exactly as it
-    # behaved; no heuristic "healing".
-    pre_upgrade_strategy = legacy_effective_connection_strategy(data, options)
-    if data.get(CONF_CONNECTION_STRATEGY) != pre_upgrade_strategy:
-        data[CONF_CONNECTION_STRATEGY] = pre_upgrade_strategy
-        changed = True
-    # ... and drop the options copy so it can never shadow data again.
-    for key in legacy_options_strategy_keys():
-        if key in options:
-            del options[key]
-            options_changed = True
+    if version < 4:
+        # v3 -> v4 (FIRST): freeze the entry's real pre-upgrade effective
+        # strategy -- computed with the OLD options-first rule -- into data,
+        # before any later step reads it back. A conflicting data/options pair
+        # is preserved exactly as it behaved; no heuristic "healing".
+        pre_upgrade_strategy = legacy_effective_connection_strategy(data, options)
+        if data.get(CONF_CONNECTION_STRATEGY) != pre_upgrade_strategy:
+            data[CONF_CONNECTION_STRATEGY] = pre_upgrade_strategy
+            changed = True
+        # ... and drop the options copy so it can never shadow data again.
+        for key in legacy_options_strategy_keys():
+            if key in options:
+                del options[key]
+                options_changed = True
 
-    # v1 -> v2: fill any missing axes (idempotent; explicit axes are preserved).
-    for key, value in migrate_entry_axes(data, options).items():
-        if data.get(key) != value:
-            data[key] = value
+        # v1 -> v2: fill any missing axes (idempotent; explicit axes are
+        # preserved).
+        for key, value in migrate_entry_axes(data, options).items():
+            if data.get(key) != value:
+                data[key] = value
+                changed = True
+
+        # v2 -> v3: correct a provably-broken cloud-primary inbound entry.
+        # Safe, deterministic, and only in the inbound -> callback_on_demand
+        # direction.
+        corrected_strategy = correct_migrated_connection_strategy(data, options)
+        if corrected_strategy is not None and data.get(CONF_CONNECTION_STRATEGY) != corrected_strategy:
+            logger.warning(
+                "EyeBond entry %s: correcting unreachable inbound cloud-primary entry to %s",
+                entry.entry_id,
+                corrected_strategy,
+            )
+            data[CONF_CONNECTION_STRATEGY] = corrected_strategy
             changed = True
 
-    # v2 -> v3: correct a provably-broken cloud-primary inbound entry. Safe,
-    # deterministic, and only in the inbound -> callback_on_demand direction.
-    corrected_strategy = correct_migrated_connection_strategy(data, options)
-    if corrected_strategy is not None and data.get(CONF_CONNECTION_STRATEGY) != corrected_strategy:
-        logger.warning(
-            "EyeBond entry %s: correcting unreachable inbound cloud-primary entry to %s",
-            entry.entry_id,
-            corrected_strategy,
-        )
-        data[CONF_CONNECTION_STRATEGY] = corrected_strategy
-        changed = True
+    # v4 -> v5: the RecoveryContract era. A pure version bump -- see the
+    # docstring for why NO legacy evidence may be converted into a proof here.
 
     update_kwargs: dict[str, Any] = {"version": _ENTRY_SCHEMA_VERSION}
     if changed:

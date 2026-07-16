@@ -64,6 +64,25 @@ def _present(source: dict[str, Any], *keys: str) -> dict[str, Any]:
     return {key: source[key] for key in keys if source.get(key) is not None}
 
 
+def _redact_recovery_contract(data: dict[str, Any]) -> dict[str, Any]:
+    """Strip the raw recovery record from the bundle's verbatim entry data.
+
+    The RecoveryContract's callback proof carries opaque route/endpoint
+    snapshots (trigger target, advertised HA endpoint). A support bundle shows
+    the proof STRUCTURE -- ``roles.diagnostics.recovery`` (booleans, methods,
+    timestamps) -- but never the network values themselves, so the raw record
+    is replaced with a pointer, not copied.
+    """
+
+    from ..connection.recovery_contract import RECOVERY_CONTRACT_KEY
+
+    if RECOVERY_CONTRACT_KEY not in data:
+        return data
+    redacted = dict(data)
+    redacted[RECOVERY_CONTRACT_KEY] = "**redacted: see roles.diagnostics.recovery**"
+    return redacted
+
+
 def _build_diagnostics_split(
     values: dict[str, Any],
     data: dict[str, Any],
@@ -201,6 +220,26 @@ def _build_diagnostics_split(
             "endpoint_control_policy_source": axes.get(
                 "endpoint_control_policy_source", ""
             ),
+        },
+        # Proof STRUCTURE only: booleans, methods and timestamps. The raw
+        # trigger target / advertised endpoint snapshots never enter a bundle.
+        "recovery": {
+            "recovery_contract_version": axes.get("recovery_contract_version", 0),
+            "recovery_contract_valid": axes.get("recovery_contract_valid", False),
+            "recovery_contract_identity_strong": axes.get(
+                "recovery_contract_identity_strong", False
+            ),
+            "recovery_contract_pn_bound": axes.get("recovery_contract_pn_bound", False),
+            "inbound_recovery_verified": axes.get("inbound_recovery_verified", False),
+            "inbound_recovery_method": axes.get("inbound_recovery_method", ""),
+            "inbound_recovery_verified_at": axes.get("inbound_recovery_verified_at", ""),
+            "callback_recovery_verified": axes.get("callback_recovery_verified", False),
+            "callback_recovery_method": axes.get("callback_recovery_method", ""),
+            "callback_recovery_verified_at": axes.get(
+                "callback_recovery_verified_at", ""
+            ),
+            "callback_route_bound": axes.get("callback_route_bound", False),
+            "advertised_endpoint_bound": axes.get("advertised_endpoint_bound", False),
         },
     }
 
@@ -372,7 +411,7 @@ def build_support_bundle_payload(
         "entry": {
             "entry_id": entry_id,
             "title": entry_title,
-            "data": data,
+            "data": _redact_recovery_contract(data),
             "options": options,
         },
         "source_metadata": source_metadata,

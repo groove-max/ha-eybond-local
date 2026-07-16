@@ -76,7 +76,7 @@ from fake_collector_lib import CollectorProfile, resolve_scenario
 FULL_PN = "V001020SYN62344022"
 SHORT_HEARTBEAT_PN = FULL_PN[:14]
 OTHER_FULL_PN = "V000405SYN94677058"
-AT_FULL_PN = "E470162345671234"
+AT_FULL_PN = "E50000200000000001"  # allowlisted synthetic (see test_no_real_identifiers)
 
 # Real-socket harness bound: generous next to the unit-test 1-2s watchdog rule
 # because two TCP handshakes + one UDP round trip are involved, but still small

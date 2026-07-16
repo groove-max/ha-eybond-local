@@ -1459,8 +1459,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     # corrective re-migration for unreachable inbound cloud-primary entries. v4
     # makes entry.data the single canonical owner of connection_strategy (the
     # options copy is deleted), so a stale options value can no longer shadow an
-    # explicit endpoint action.
-    VERSION = 4
+    # explicit endpoint action. v5 opens the typed RecoveryContract era
+    # (``connection/recovery_contract.py``): entry.data["recovery_contract"] is
+    # the one canonical store for verified recovery proofs, written only by a
+    # real recovery verifier -- the flow itself never creates one.
+    VERSION = 5
 
     def __init__(self) -> None:
         self._translation_bundle: dict[str, Any] = {}

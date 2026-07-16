@@ -463,6 +463,145 @@ class MigrationInvariantTests(unittest.TestCase):
         )
         self.assertTrue(self._run_migrate(entry))
 
+    # --- v4 -> v5: the RecoveryContract era is a PURE version bump -------------
+    #
+    # No legacy evidence may become a recovery proof during migration: the <=v4
+    # schema stored no verification timestamp, and inventing migration time as
+    # verified_at is forbidden. The matrix below pins every evidence shape.
+
+    def _v4_entry(self, entry_id: str, **data_overrides):
+        data = {
+            C.CONF_COLLECTOR_PN: "V001020SYN62344022",
+            C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            C.CONF_ENDPOINT_CONTROL_POLICY: C.ENDPOINT_CONTROL_EXTERNAL,
+            C.CONF_PROXY_ENABLED: False,
+            "collector_ip": "192.0.2.55",
+        }
+        data.update(data_overrides)
+        return types.SimpleNamespace(entry_id=entry_id, version=4, data=data, options={})
+
+    def _assert_v5_bump_only(self, entry, before: dict) -> None:
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
+        # Byte-for-byte: strategy, policy, proxy, endpoints, collector IP and
+        # any legacy evidence are untouched, and NO recovery_contract appeared.
+        self.assertEqual(entry.data, before)
+        self.assertNotIn("recovery_contract", entry.data)
+
+    def test_v4_no_evidence_bumps_version_and_writes_nothing(self) -> None:
+        entry = self._v4_entry("v5-a")
+        before = dict(entry.data)
+        self.assertTrue(self._run_migrate(entry))
+        self._assert_v5_bump_only(entry, before)
+
+    def test_v4_callback_trigger_evidence_never_becomes_a_proof(self) -> None:
+        entry = self._v4_entry(
+            "v5-b",
+            **{
+                C.CONF_CONNECTION_STRATEGY_EVIDENCE: (
+                    C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER
+                )
+            },
+        )
+        before = dict(entry.data)
+        self.assertTrue(self._run_migrate(entry))
+        self._assert_v5_bump_only(entry, before)
+        # The legacy value is still there for the compatibility reader...
+        self.assertEqual(
+            entry.data[C.CONF_CONNECTION_STRATEGY_EVIDENCE],
+            C.CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
+        )
+
+    def test_v4_user_confirmed_session_never_becomes_an_inbound_proof(self) -> None:
+        entry = self._v4_entry(
+            "v5-c",
+            **{
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_CONNECTION_STRATEGY_EVIDENCE: (
+                    C.CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION
+                ),
+            },
+        )
+        before = dict(entry.data)
+        self.assertTrue(self._run_migrate(entry))
+        self._assert_v5_bump_only(entry, before)
+
+    def test_v4_reboot_reconnect_without_timestamp_creates_no_contract(self) -> None:
+        # The preferred fail-closed outcome: v4 never persisted a verification
+        # timestamp, so even the genuine inbound evidence cannot be backfilled.
+        entry = self._v4_entry(
+            "v5-d",
+            **{
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_CONNECTION_STRATEGY_EVIDENCE: (
+                    C.CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT
+                ),
+            },
+        )
+        before = dict(entry.data)
+        self.assertTrue(self._run_migrate(entry))
+        self._assert_v5_bump_only(entry, before)
+
+    def test_v4_stray_timestamps_are_not_mistaken_for_verification_time(self) -> None:
+        # Other subsystems' timestamps (endpoint writes, endpoint observations)
+        # exist in v4 data -- none of them is a verification time and none may
+        # seed a proof.
+        entry = self._v4_entry(
+            "v5-e",
+            **{
+                C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
+                C.CONF_CONNECTION_STRATEGY_EVIDENCE: (
+                    C.CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT
+                ),
+                C.CONF_ENDPOINT_WRITTEN_AT: "2026-07-01T10:00:00+00:00",
+                C.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT: (
+                    "2026-07-01T09:00:00+00:00"
+                ),
+            },
+        )
+        before = dict(entry.data)
+        self.assertTrue(self._run_migrate(entry))
+        self._assert_v5_bump_only(entry, before)
+
+    def test_existing_v5_contract_is_preserved_byte_for_byte(self) -> None:
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RECOVERY_CONTRACT_KEY,
+            RecoveryContract,
+        )
+
+        contract = RecoveryContract.empty_for_pn(
+            "V001020SYN62344022", identity_source="fc2_parameter_2"
+        )
+        record = contract.to_record()
+        entry = types.SimpleNamespace(
+            entry_id="v5-f",
+            version=_ENTRY_SCHEMA_VERSION,
+            data={
+                C.CONF_COLLECTOR_PN: "V001020SYN62344022",
+                RECOVERY_CONTRACT_KEY: dict(record),
+            },
+            options={},
+        )
+        before = {k: (dict(v) if isinstance(v, dict) else v) for k, v in entry.data.items()}
+        self.assertTrue(self._run_migrate(entry))
+        self.assertEqual(entry.version, _ENTRY_SCHEMA_VERSION)
+        self.assertEqual(entry.data, before)
+        self.assertEqual(entry._last_updates, {})  # migration never even ran
+
+    def test_malformed_v5_contract_fails_closed_at_the_parser(self) -> None:
+        # Migration leaves a malformed record alone (it never runs for v5); the
+        # PARSER is the fail-closed boundary that refuses to trust it.
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RECOVERY_CONTRACT_KEY,
+            RecoveryContract,
+            recovery_contract_diagnostics,
+        )
+
+        data = {RECOVERY_CONTRACT_KEY: {"schema_version": "bogus", "collector_pn": 7}}
+        self.assertIsNone(RecoveryContract.from_entry_data(data))
+        self.assertFalse(
+            recovery_contract_diagnostics(data)["recovery_contract_valid"]
+        )
+
     def test_legacy_callback_evidence_survives_migration_untouched(self) -> None:
         # Behavioral test D: entries created before recovery evidence was
         # separated from identity may carry

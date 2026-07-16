@@ -658,4 +658,9 @@ def entry_axis_diagnostics(
         "may_auto_manage_endpoint": may_auto_manage_endpoint(policy),
     }
     diagnostics.update(migration_diagnostics(data, options))
+    # RecoveryContract structure (booleans/methods/timestamps only): the raw
+    # trigger target and advertised endpoint are deliberately NOT surfaced.
+    from .recovery_contract import recovery_contract_diagnostics
+
+    diagnostics.update(recovery_contract_diagnostics(data))
     return diagnostics

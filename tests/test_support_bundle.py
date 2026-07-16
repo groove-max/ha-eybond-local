@@ -70,6 +70,55 @@ def _sample_support_bundle_payload() -> dict[str, object]:
     )
 
 
+def _recovery_contract_data() -> dict[str, object]:
+    """Entry data carrying a FULL recovery contract with network-looking values.
+
+    The snapshots are deliberately address-shaped so the non-disclosure test
+    below can prove the bundle never leaks them.
+    """
+
+    from custom_components.eybond_local.connection.recovery_contract import (
+        CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+        CallbackRecoveryProof,
+        INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+        InboundRecoveryProof,
+        RECOVERY_CONTRACT_KEY,
+        RecoveryContract,
+    )
+
+    pn = "V001020SYN62344022"
+    ts = "2026-07-16T10:00:00+00:00"
+    contract = (
+        RecoveryContract.empty_for_pn(pn, identity_source="fc2_parameter_2")
+        .with_inbound_proof(
+            InboundRecoveryProof(
+                method=INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+                collector_pn=pn,
+                identity_source="fc2_parameter_2",
+                verified_at=ts,
+            ),
+            updated_at=ts,
+        )
+        .with_callback_proof(
+            CallbackRecoveryProof(
+                method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                collector_pn=pn,
+                identity_source="at_dtupn",
+                verified_at=ts,
+                trigger_target="203.0.113.55:58899",
+                advertised_ha_endpoint="192.0.2.10:18899",
+                listener_port=18899,
+            ),
+            updated_at=ts,
+        )
+    )
+    return {
+        "server_ip": "192.168.1.50",
+        "collector_pn": pn,
+        RECOVERY_CONTRACT_KEY: contract.to_record(),
+    }
+
+
 class SupportBundleTests(unittest.TestCase):
     def test_builds_support_bundle_payload(self) -> None:
         raw = _sample_support_bundle_payload()
@@ -325,6 +374,68 @@ class SupportBundleTests(unittest.TestCase):
         )
 
         self.assertIsNone(raw["source_metadata"]["support_marker"])
+
+    def test_bundle_shows_recovery_structure_without_network_values(self) -> None:
+        # The bundle exposes the proof STRUCTURE (booleans/methods/timestamps)
+        # and never the raw trigger target / advertised endpoint snapshots.
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG 6200",
+            connected=True,
+            collector={"collector_pn": "V001020SYN62344022"},
+            inverter=None,
+            values={},
+            data=_recovery_contract_data(),
+            options={},
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+        )
+
+        recovery = raw["roles"]["diagnostics"]["recovery"]
+        self.assertTrue(recovery["recovery_contract_valid"])
+        self.assertTrue(recovery["recovery_contract_identity_strong"])
+        self.assertTrue(recovery["recovery_contract_pn_bound"])
+        self.assertTrue(recovery["inbound_recovery_verified"])
+        self.assertEqual(
+            recovery["inbound_recovery_method"], "reboot_reconnect_no_trigger"
+        )
+        self.assertTrue(recovery["callback_recovery_verified"])
+        self.assertEqual(
+            recovery["callback_recovery_method"], "reset_unicast_reconnect_same_pn"
+        )
+        self.assertTrue(recovery["callback_route_bound"])
+        self.assertTrue(recovery["advertised_endpoint_bound"])
+
+        # Non-disclosure: the whole serialized bundle carries neither the raw
+        # route/endpoint snapshots nor even their address components. (The raw
+        # entry data section is deliberately not part of a support bundle.)
+        serialized = json.dumps(raw)
+        for secret in (
+            "203.0.113.55:58899",
+            "192.0.2.10:18899",
+            "203.0.113.55",
+            "192.0.2.10",
+        ):
+            self.assertNotIn(secret, serialized)
+
+    def test_bundle_recovery_section_reports_absent_contract_honestly(self) -> None:
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG 6200",
+            connected=True,
+            collector=None,
+            inverter=None,
+            values={},
+            data={"server_ip": "192.168.1.50"},
+            options={},
+            profile_name="",
+            register_schema_name="",
+        )
+        recovery = raw["roles"]["diagnostics"]["recovery"]
+        self.assertFalse(recovery["recovery_contract_valid"])
+        self.assertFalse(recovery["inbound_recovery_verified"])
+        self.assertFalse(recovery["callback_recovery_verified"])
+        self.assertFalse(recovery["callback_route_bound"])
 
     def test_export_support_bundle_writes_json_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
