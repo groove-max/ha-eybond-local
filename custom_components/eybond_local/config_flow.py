@@ -217,6 +217,11 @@ from .onboarding.callback_identity import (
     CallbackIdentityRequest,
     async_run_callback_identity_transaction,
 )
+from .onboarding.recovery_terminalization import (
+    RecoveryTerminalInput,
+    merge_recovery_contract,
+    verify_prepared_handoff,
+)
 from .onboarding.strategy_verification import (
     EVIDENCE_USER_CONFIRMED_SESSION,
     FAILURE_SESSION_CLAIMED,
@@ -1513,10 +1518,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._verification_next_step = "detection_summary"
         self._verification_task: asyncio.Task | None = None
         self._verification_result: InboundRecoveryOutcome | None = None
-        # The typed InboundRecoveryProof carried from a successful verification
-        # to the terminal entry-create path (where it becomes the entry's
-        # RecoveryContract). Never persisted anywhere else.
-        self._verification_proof = None
+        # The typed recovery evidence carried from a successful verification to
+        # the terminal entry-create path. ONLY the terminal boundary
+        # (onboarding.recovery_terminalization) turns it into the entry's
+        # RecoveryContract; it is never persisted anywhere else.
+        self._recovery_terminal = RecoveryTerminalInput.none()
         self._verification_expected_pn = ""
         self._verification_old_session_id = ""
         # Reconfigure of an existing PN-less entry has no prior identity to match:
@@ -1870,7 +1876,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             # becomes the entry's RecoveryContract at creation.
             self._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
             self._verified_strategy_evidence = ""
-            self._verification_proof = result.proof
+            # Typed, fail-closed: only a REAL verified InboundRecoveryOutcome
+            # can become terminal recovery evidence (identity outcomes and
+            # ducks are TypeErrors inside the constructor).
+            self._recovery_terminal = RecoveryTerminalInput.from_inbound_outcome(
+                result
+            )
             # The verified inbound entry needs no verification-context checks in
             # the manual path anymore.
             self._strategy_verification_context = None
@@ -1909,7 +1920,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         del user_input
         self._verification_result = None
-        self._verification_proof = None
+        self._recovery_terminal = RecoveryTerminalInput.none()
         self._verification_task = None
         return await self.async_step_verify_connection()
 
@@ -4032,6 +4043,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         self._verified_strategy_evidence = ""
         self._apply_verified_connection_strategy(new_data)
+        # The SAME terminal boundary: reconfigure carries no recovery outcome
+        # today (identity repair is not recovery evidence), so the merge is a
+        # typed no-op that also guarantees an existing valid contract in
+        # entry.data survives the update untouched.
+        refusal = merge_recovery_contract(new_data, self._recovery_terminal)
+        if refusal:
+            logger.info("Recovery terminal refused the contract merge: %s", refusal)
+            self._release_verification_claim()
+            return self.async_abort(reason="recovery_contract_conflict")
         # Commit the ownership handoff (setup completes it after reload) and update
         # the entry in place, rolling the handoff back if the terminal helper
         # throws (item 4).
@@ -4042,6 +4062,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 unique_id=f"collector:{verified_full_pn}",
                 data=new_data,
             ),
+            recovery=self._recovery_terminal,
         )
 
     # ---- entry creation ----
@@ -4186,22 +4207,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._apply_verified_connection_strategy(data)
         data.update(migrate_entry_axes(data, options))
-        # The typed InboundRecoveryProof (if this flow verified one) becomes the
-        # entry's RecoveryContract HERE, in the same terminal create path as the
-        # entry itself -- written only through the model's single-writer API,
-        # never as loose fields and never into options. An entry-create failure
-        # below therefore persists nothing.
-        if self._verification_proof is not None:
-            from .connection.recovery_contract import RecoveryContract
-
-            proof = self._verification_proof
-            RecoveryContract.empty_for_pn(
-                proof.collector_pn,
-                identity_source=proof.identity_source,
-            ).with_inbound_proof(
-                proof,
-                updated_at=proof.verified_at,
-            ).write_to(data)
+        # The typed recovery evidence (if this flow verified any) becomes the
+        # entry's RecoveryContract HERE, through the ONE terminal merge
+        # boundary -- written only via the model's single-writer API, never as
+        # loose fields and never into options. A refusal (foreign identity /
+        # malformed existing record) is typed, leaves the staged data
+        # untouched, and is detected BEFORE any ownership handoff is prepared.
+        # An entry-create failure below therefore persists nothing.
+        refusal = merge_recovery_contract(data, self._recovery_terminal)
+        if refusal:
+            logger.info("Recovery terminal refused the contract merge: %s", refusal)
+            self._release_verification_claim()
+            return self.async_abort(reason="recovery_contract_conflict")
         # Item 1 -- strict collector-PN invariant on the auto/passive path too: no
         # normal collector entry without a durable PN (peer IP is never identity).
         if collector_identity_binding_required(data, options):
@@ -4213,6 +4230,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return self._create_entry_with_handoff(
             collector_pn,
             lambda: self.async_create_entry(title=title, data=data, options=options),
+            recovery=self._recovery_terminal,
         )
 
     def _apply_verified_connection_strategy(self, data: dict[str, Any]) -> None:
@@ -4417,15 +4435,28 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
             return await self.async_step_manual()
 
+        # The SAME terminal boundary as the passive path: today the manual
+        # flow carries no recovery outcome (a certified callback identity is
+        # NOT recovery evidence), so this is a typed no-op -- but every
+        # terminal funnels through the one merge writer.
+        refusal = merge_recovery_contract(data, self._recovery_terminal)
+        if refusal:
+            logger.info("Recovery terminal refused the contract merge: %s", refusal)
+            self._release_verification_claim()
+            return self.async_abort(reason="recovery_contract_conflict")
+
         # Commit the ownership handoff (the unique-id collision check above already
         # guaranteed collector:{pn} is free) and create the entry, rolling the
         # handoff back if the terminal helper throws (item 4).
         return self._create_entry_with_handoff(
             collector_pn,
             lambda: self.async_create_entry(title=title, data=data, options=options),
+            recovery=self._recovery_terminal,
         )
 
-    def _prepare_ownership_handoff(self, collector_pn: str) -> ConfigFlowResult | None:
+    def _prepare_ownership_handoff(
+        self, collector_pn: str, *, claim_required: bool = False
+    ) -> ConfigFlowResult | None:
         """Flip the attempt's verification claim to a committed handoff for setup.
 
         Returns ``None`` on success (the caller proceeds to create/update the
@@ -4433,6 +4464,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         the handoff -- either the PN is owned by a different owner (a late
         collision) or this owner's claim stands for a different identity: the
         attempt's own claim is released and no entry is created/changed.
+
+        ``claim_required=True`` (a proof-bearing terminal): a missing registry,
+        a missing owner or a stale claim is a typed
+        ``recovery_ownership_unavailable`` abort instead of a silent pass-
+        through -- a recovery proof may never terminalize without the flow
+        owning the very session it proved.
 
         ``_callback_ownership_handed_off`` is set ONLY after the registry really
         prepared the handoff. The flag is load-bearing in the other direction:
@@ -4445,6 +4482,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         registry = self._verification_registry
         owner = self._verification_claim_owner
         if registry is None or not owner:
+            if claim_required:
+                # A proof-bearing terminal without this flow's own verified
+                # claim can never become a handoff: refuse before the terminal.
+                logger.info(
+                    "Recovery terminal for %s has no verification claim; refusing",
+                    collector_pn,
+                )
+                return self.async_abort(reason="recovery_ownership_unavailable")
             return None
         try:
             prepared = bool(registry.prepare_handoff(owner, collector_pn))
@@ -4455,17 +4500,76 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not prepared:
             # The registry holds no claim under this owner any more (the session
             # went away, or the claim was released). Nothing was prepared, so the
-            # flag must stay False and the stale owner is dropped honestly. Entry
-            # setup re-claims from scratch and fails closed there on conflict.
+            # flag must stay False and the stale owner is dropped honestly.
             logger.debug(
                 "No verification claim to hand off for %s (owner %s)",
                 collector_pn,
                 owner,
             )
             self._release_verification_claim()
+            if claim_required:
+                # A recovery proof whose claim went stale must NOT silently
+                # create an unowned entry: fail closed instead.
+                return self.async_abort(reason="recovery_ownership_unavailable")
             return None
+        # Acceptance boundary AFTER the one prepare: the registry must be able
+        # to certify this owner's identity for the PN we are about to create.
+        # A committed claim it cannot vouch for (no concrete session / foreign
+        # identity) must not reach the terminal -- release it and fail closed.
+        certified = ""
+        with suppress(Exception):
+            certified = str(
+                registry.prepared_handoff_identity(owner, collector_pn) or ""
+            ).strip()
+        if not certified:
+            logger.info(
+                "Prepared handoff for %s is not certifiable; refusing terminal",
+                collector_pn,
+            )
+            self._release_verification_claim()
+            return self.async_abort(reason="already_configured")
         self._callback_ownership_handed_off = True
         return None
+
+    def _adopt_callback_recovery_outcome(self, outcome) -> bool:
+        """Adopt a successful callback recovery transaction into THIS flow.
+
+        The transaction already retargeted and PREPARED its claim under the
+        exact ``outcome.handoff_owner``; adoption makes that owner flow-owned
+        state so every existing cleanup path governs it:
+
+        * abort/cancel/``async_remove`` BEFORE the terminal -> the exact owner
+          is released by ``_release_verification_claim``;
+        * a terminal exception -> the coordinator releases exactly it;
+        * terminal success -> ``_callback_ownership_handed_off`` keeps the
+          committed handoff alive for entry setup's ``complete_handoff``.
+
+        Fail-closed: only a REAL successful ``RecoveryVerificationOutcome`` is
+        accepted (the typed input constructor raises on anything else), and
+        the exact owner must certify via ``prepared_handoff_identity`` on the
+        domain registry BEFORE anything is adopted -- an invalid/stale
+        capability changes nothing (the flow's previous claim, if any, is kept
+        and no new claim appears). Ownership is never rebuilt by PN.
+        """
+
+        terminal_input = RecoveryTerminalInput.from_callback_transaction(outcome)
+        registry = self._callback_session_registry()
+        certified = verify_prepared_handoff(registry, terminal_input)
+        if not certified:
+            logger.info(
+                "Callback recovery outcome for %s is not certifiable; not adopting",
+                terminal_input.collector_pn,
+            )
+            return False
+        # Replace, never leak: the flow's previous verification claim (an old
+        # identity attempt) is released FIRST -- only this flow's own owner,
+        # never another flow's; the transaction owner itself is untouched.
+        self._release_verification_claim()
+        self._recovery_terminal = terminal_input
+        self._verification_registry = registry
+        self._verification_claim_owner = terminal_input.prepared_handoff_owner
+        self._callback_ownership_handed_off = False
+        return True
 
     def _rollback_committed_handoff(self) -> None:
         """Undo THIS attempt's committed handoff after a terminal helper threw.
@@ -4483,17 +4587,92 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._callback_ownership_handed_off = False
         self._release_verification_claim()
 
-    def _create_entry_with_handoff(self, collector_pn: str, terminal):
-        """prepare the ownership handoff, then run the terminal create/update.
+    def _create_entry_with_handoff(
+        self,
+        collector_pn: str,
+        terminal,
+        *,
+        recovery: RecoveryTerminalInput | None = None,
+    ):
+        """The ONE terminal ownership coordinator for create/update.
 
         ``terminal`` is a zero-arg callable returning the ConfigFlowResult (an
-        ``async_create_entry`` / ``async_update_reload_and_abort`` call). On a late
-        unique-id collision the handoff is refused and an ``already_configured``
-        abort is returned without running the terminal. If the terminal raises,
-        the committed handoff is rolled back before the exception propagates.
+        ``async_create_entry`` / ``async_update_reload_and_abort`` call). Two
+        ownership lifecycles converge here:
+
+        * flow-owned verification claim (inbound / manual / reconfigure):
+          ``_prepare_ownership_handoff`` commits it EXACTLY ONCE and the
+          post-prepare ``prepared_handoff_identity`` acceptance check must
+          certify the identity before the terminal may run; on a late
+          unique-id collision the handoff is refused (``already_configured``)
+          without running the terminal;
+        * an ALREADY-PREPARED capability from the callback recovery
+          transaction (``recovery.prepared_handoff_owner``): it is NEVER
+          prepared a second time and never reconstructed by PN --
+          ``prepared_handoff_identity`` for the exact owner token is the only
+          acceptance boundary, fail-closed on empty/foreign/stale.
+
+        If the terminal raises, the rollback releases ONLY this attempt's own
+        owner -- the newly prepared flow claim or the transaction's prepared
+        owner respectively; no other owner/entry is ever touched.
         """
 
-        handoff = self._prepare_ownership_handoff(collector_pn)
+        recovery = recovery if recovery is not None else RecoveryTerminalInput.none()
+        if type(recovery) is not RecoveryTerminalInput:
+            raise TypeError("recovery_terminal_input_required")
+        if recovery.prepared_handoff_owner:
+            # ALREADY-PREPARED capability (callback recovery transaction). The
+            # flow must have ADOPTED this exact owner first
+            # (``_adopt_callback_recovery_outcome``): the capability is bound
+            # to flow state, never accepted from a bare input and never
+            # reconstructed by PN. A forged/unadopted owner is refused WITHOUT
+            # being released -- it is not ours to touch.
+            registry = self._verification_registry
+            if (
+                registry is None
+                or recovery.prepared_handoff_owner != self._verification_claim_owner
+            ):
+                logger.info(
+                    "Callback-recovery owner for %s was never adopted by this flow; refusing terminal",
+                    collector_pn,
+                )
+                return self.async_abort(reason="recovery_ownership_unavailable")
+            certified = verify_prepared_handoff(registry, recovery)
+            if not certified or not pn_is_same_identity(certified, collector_pn):
+                logger.info(
+                    "Prepared callback-recovery handoff for %s is not certifiable; refusing terminal",
+                    collector_pn,
+                )
+                return self.async_abort(reason="recovery_ownership_unavailable")
+            try:
+                result = terminal()
+            except Exception:
+                # Terminal threw AFTER the capability was verified: the
+                # adopted owner is this flow's to clean -- release exactly it,
+                # clear the flow refs, re-raise. handed_off was never set, so
+                # no committed state survives the exception.
+                self._release_verification_claim()
+                raise
+            # ONLY a returned create/update result commits: the prepared
+            # handoff now survives flow cleanup until entry setup completes it.
+            self._callback_ownership_handed_off = True
+            return result
+        if recovery.has_proof and (
+            self._verification_registry is None
+            or not self._verification_claim_owner
+        ):
+            # A proof-bearing inbound terminal REQUIRES this flow's own
+            # verification claim: a recovery proof without ownership of the
+            # proven session must never create an entry (and the staged
+            # contract dies with the flow -- nothing is persisted).
+            logger.info(
+                "Inbound recovery terminal for %s has no flow-owned claim; refusing",
+                collector_pn,
+            )
+            return self.async_abort(reason="recovery_ownership_unavailable")
+        handoff = self._prepare_ownership_handoff(
+            collector_pn, claim_required=recovery.has_proof
+        )
         if handoff is not None:
             return handoff
         try:

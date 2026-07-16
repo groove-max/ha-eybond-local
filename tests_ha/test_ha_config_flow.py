@@ -189,3 +189,194 @@ async def test_runtime_options_commit_strategy_to_data_with_one_reload(
 
     await hass.config_entries.async_unload(collector_entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_terminal_create_hands_prepared_claim_to_real_entry_setup(
+    hass: HomeAssistant, fake_runtime
+) -> None:
+    """Batch 5 terminal coordinator under REAL HA: flow claim -> prepare once ->
+    CREATE_ENTRY -> the real ``async_setup_entry`` completes exactly this
+    handoff (no unowned window, no PN re-lookup)."""
+
+    from custom_components.eybond_local.passive_discovery import (
+        get_callback_session_registry,
+    )
+
+    # Boot the domain services (the ownership registry) with a first entry.
+    boot = MockConfigEntry(
+        domain=DOMAIN,
+        title="EyeBond boot",
+        unique_id="collector:E5000099990003",
+        data={
+            "connection_type": "eybond",
+            "server_ip": SYNTHETIC_SERVER_IP,
+            "collector_ip": SYNTHETIC_COLLECTOR_IP,
+            "collector_pn": "E5000099990003",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "driver_hint": "auto",
+        },
+        options={},
+    )
+    boot.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(boot.entry_id)
+    await hass.async_block_till_done()
+    registry = get_callback_session_registry(hass)
+    assert registry is not None
+
+    # A live observed session for the collector this flow verified (the REAL
+    # registry instance; only its inventory source is synthetic).
+    session_id = "listener-8899-77"
+    registry.sessions_source = lambda: (
+        {
+            "session_id": session_id,
+            "collector_pn": SYNTHETIC_COLLECTOR_PN,
+            "state": "routed_framed",
+            "collector_identity_source": "fc2_parameter_2",
+            "listener_port": 8899,
+            "raw": {"session_id": session_id, "protocol_shape": "eybond_framed"},
+        },
+    )
+
+    # The REAL flow handler from the REAL manager, holding its verification
+    # claim exactly like a successful inbound verification leaves it.
+    init = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    flow = hass.config_entries.flow._progress[init["flow_id"]]
+    owner = "strategy_verification:ha-lane"
+    registry.claim_session(owner, session_id=session_id)
+    registry.promote_claim_to_full_pn(owner, SYNTHETIC_COLLECTOR_PN)
+    flow._verification_registry = registry
+    flow._verification_claim_owner = owner
+
+    entry_data = {
+        "connection_type": "eybond",
+        "server_ip": SYNTHETIC_SERVER_IP,
+        "collector_ip": "",
+        "collector_pn": SYNTHETIC_COLLECTOR_PN,
+        "tcp_port": 8899,
+        "udp_port": 58899,
+        "driver_hint": "auto",
+        "connection_strategy": "inbound",
+    }
+    result = flow._create_entry_with_handoff(
+        SYNTHETIC_COLLECTOR_PN,
+        lambda: flow.async_create_entry(
+            title="EyeBond collector", data=entry_data, options={}
+        ),
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # The prepared handoff survived the terminal, awaiting entry setup.
+    assert (
+        registry.prepared_handoff_identity(owner, SYNTHETIC_COLLECTOR_PN)
+        == SYNTHETIC_COLLECTOR_PN
+    )
+    hass.config_entries.flow.async_abort(init["flow_id"])
+
+    # Materialize the created entry and run the REAL setup: it must complete
+    # exactly this committed handoff -- the identity is never re-claimed by PN
+    # while the flow's owner still holds it. (The local-IP probe inside the
+    # runtime link is an OS/network boundary -- faked like the interface scan.)
+    from unittest.mock import patch
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="EyeBond collector",
+        unique_id=f"collector:{SYNTHETIC_COLLECTOR_PN}",
+        data=dict(result["data"]),
+        options={},
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.eybond_local.runtime.link._default_local_ip",
+        return_value=SYNTHETIC_SERVER_IP,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert registry.owner_for_pn(SYNTHETIC_COLLECTOR_PN) == entry.entry_id
+    assert registry.claimed_session_id(entry.entry_id) == session_id
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.config_entries.async_unload(boot.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_terminal_exception_rolls_back_only_this_flows_claim(
+    hass: HomeAssistant, fake_runtime
+) -> None:
+    """Batch 5 rollback under REAL HA: the terminal throws AFTER the handoff
+    was committed -> exactly this flow's owner is released; no entry, no
+    stranded prepared handoff, other owners untouched."""
+
+    from custom_components.eybond_local.passive_discovery import (
+        get_callback_session_registry,
+    )
+
+    boot = MockConfigEntry(
+        domain=DOMAIN,
+        title="EyeBond boot",
+        unique_id="collector:E5000099990003",
+        data={
+            "connection_type": "eybond",
+            "server_ip": SYNTHETIC_SERVER_IP,
+            "collector_ip": SYNTHETIC_COLLECTOR_IP,
+            "collector_pn": "E5000099990003",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "driver_hint": "auto",
+        },
+        options={},
+    )
+    boot.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(boot.entry_id)
+    await hass.async_block_till_done()
+    registry = get_callback_session_registry(hass)
+    assert registry is not None
+
+    session_id = "listener-8899-88"
+    registry.sessions_source = lambda: (
+        {
+            "session_id": session_id,
+            "collector_pn": SYNTHETIC_COLLECTOR_PN,
+            "state": "routed_framed",
+            "collector_identity_source": "fc2_parameter_2",
+            "listener_port": 8899,
+            "raw": {"session_id": session_id, "protocol_shape": "eybond_framed"},
+        },
+    )
+
+    init = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    flow = hass.config_entries.flow._progress[init["flow_id"]]
+    owner = "strategy_verification:ha-rollback"
+    registry.claim_session(owner, session_id=session_id)
+    registry.promote_claim_to_full_pn(owner, SYNTHETIC_COLLECTOR_PN)
+    flow._verification_registry = registry
+    flow._verification_claim_owner = owner
+
+    entries_before = len(hass.config_entries.async_entries(DOMAIN))
+
+    def _terminal_boom():
+        raise RuntimeError("late terminal failure")
+
+    try:
+        flow._create_entry_with_handoff(SYNTHETIC_COLLECTOR_PN, _terminal_boom)
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover - the raise is load-bearing
+        raise AssertionError("terminal exception must propagate")
+
+    # Rollback: this flow's owner is fully released -- no claim, no prepared
+    # handoff, no entry; the unrelated boot entry's ownership is untouched.
+    assert registry.owner_for_pn(SYNTHETIC_COLLECTOR_PN) == ""
+    assert registry.prepared_handoff_identity(owner, SYNTHETIC_COLLECTOR_PN) == ""
+    assert flow._callback_ownership_handed_off is False
+    assert len(hass.config_entries.async_entries(DOMAIN)) == entries_before
+    assert registry.claimed_identity(boot.entry_id) == "E5000099990003"
+
+    hass.config_entries.flow.async_abort(init["flow_id"])
+    await hass.config_entries.async_unload(boot.entry_id)
+    await hass.async_block_till_done()

@@ -315,7 +315,9 @@
     "abort": {
       "already_configured": "This collector or inverter is already configured.",
       "reconfigure_entry_missing": "The entry to reconfigure no longer exists.",
-      "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair."
+      "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair.",
+      "recovery_contract_conflict": "The verified recovery proof could not be stored: the entry already carries a recovery record for a different collector or one that cannot be read. Remove or repair that entry, then try again.",
+      "recovery_ownership_unavailable": "The verified recovery session is no longer held for this collector. Run the verification again."
     }
   },
   "options": {

@@ -1686,9 +1686,10 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
 
     def test_no_callback_proof_writer_outside_the_contract_model(self) -> None:
         # The single-store guard lives in test_recovery_contract; here we pin
-        # the batch boundary: NOTHING persists a callback proof yet -- no
-        # production module calls write_to with a callback branch except via
-        # the (inbound-only) config-flow path.
+        # the batch boundary: callback proofs are persisted ONLY by the
+        # Batch-5 terminal boundary (onboarding.recovery_terminalization).
+        # The verifier may name with_callback_proof solely for PRE-VALIDATION
+        # and must never persist anything itself.
         import ast
 
         package_root = REPO_ROOT / "custom_components" / "eybond_local"
@@ -1698,13 +1699,13 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
             source = path.read_text(encoding="utf-8")
             if "with_callback_proof" not in source:
                 continue
-            # Only the verifier's PRE-VALIDATION may name it, and it must not
-            # persist the result.
-            self.assertEqual(
+            self.assertIn(
                 path.name,
-                "strategy_verification.py",
+                ("strategy_verification.py", "recovery_terminalization.py"),
                 msg=f"unexpected callback-proof producer: {path.name}",
             )
+            if path.name != "strategy_verification.py":
+                continue
             tree = ast.parse(source)
             for node in ast.walk(tree):
                 if (
@@ -1713,7 +1714,7 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
                 ):
                     self.fail(
                         "strategy_verification must not persist contracts "
-                        "(that is the next onboarding batch)"
+                        "(the terminal boundary owns persistence)"
                     )
 
 

@@ -9197,10 +9197,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # and no legacy evidence.
         self.assertEqual(flow._verified_connection_strategy, "inbound")
         self.assertEqual(flow._verified_strategy_evidence, "")
-        proof = flow._verification_proof
+        # The proof travels ONLY inside the typed terminal input; the flow
+        # holds no loose proof field the terminal could bypass.
+        terminal_input = flow._recovery_terminal
+        proof = terminal_input.inbound_proof
         self.assertIsNotNone(proof)
         self.assertEqual(proof.collector_pn, self.FULL_PN)
         self.assertEqual(proof.method, "reboot_reconnect_no_trigger")
+        self.assertEqual(terminal_input.prepared_handoff_owner, "")
         # Item 2: the claim existed during the restart AND is HELD after a
         # successful inbound proof -- retargeted onto the NEW socket, handed
         # off at entry creation, so the runtime owns the session it will use.
@@ -11027,6 +11031,354 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(flow._callback_ownership_handed_off)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
+
+    # ---- the terminal coordinator with an ALREADY-PREPARED callback owner ----
+
+    def _prepared_callback_recovery(self, flow, *, owner="callback_recovery:t1"):
+        """Real registry + real transaction-shaped prepared owner + outcome."""
+
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+        )
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            RecoveryVerificationOutcome,
+            STATE_CALLBACK_VERIFIED,
+        )
+
+        inventory = [self._inventory_session(self.NEW_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        registry.claim_session(owner, session_id=self.NEW_SESSION)
+        registry.promote_claim_to_full_pn(owner, self.FULL_PN)
+        self.assertTrue(registry.prepare_handoff(owner, self.FULL_PN))
+        outcome = RecoveryVerificationOutcome(
+            status=STATE_CALLBACK_VERIFIED,
+            collector_pn=self.FULL_PN,
+            new_session_id=self.NEW_SESSION,
+            callback_proof=CallbackRecoveryProof(
+                method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                collector_pn=self.FULL_PN,
+                identity_source="fc2_parameter_2",
+                verified_at="2026-07-16T10:00:00+00:00",
+                trigger_target="192.168.1.60:58899",
+                advertised_ha_endpoint="198.51.100.7:48899",
+                listener_port=18899,
+            ),
+            handoff_owner=owner,
+        )
+        return registry, owner, outcome
+
+    # ---- B. callback prepared-owner lifecycle (adoption-based) ----
+
+    async def test_adoption_stores_the_exact_owner_in_flow_state(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+
+        self.assertIs(flow._verification_registry, registry)
+        self.assertEqual(flow._verification_claim_owner, owner)
+        self.assertEqual(flow._recovery_terminal.prepared_handoff_owner, owner)
+        self.assertIsNotNone(flow._recovery_terminal.callback_proof)
+        self.assertFalse(flow._callback_ownership_handed_off)
+
+    async def test_abort_after_adoption_releases_the_adopted_owner(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+
+        # Any pre-terminal cleanup path (abort/cancel) funnels here.
+        flow._release_verification_claim()
+
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
+        self.assertEqual(flow._verification_claim_owner, "")
+
+    async def test_async_remove_after_adoption_releases_the_adopted_owner(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+
+        flow.async_remove()
+
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
+
+    async def test_adopted_owner_terminal_success_keeps_handoff_for_setup(self) -> None:
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+
+        sentinel = {"type": "create_entry", "reason": ""}
+        with patch.object(
+            CallbackSessionRegistry,
+            "prepare_handoff",
+            autospec=True,
+            side_effect=CallbackSessionRegistry.prepare_handoff,
+        ) as prepare_mock:
+            result = flow._create_entry_with_handoff(
+                self.FULL_PN, lambda: sentinel, recovery=flow._recovery_terminal
+            )
+
+        self.assertIs(result, sentinel)
+        # The transaction prepared the owner already; the coordinator only
+        # verified the capability -- ZERO further prepare_handoff calls.
+        self.assertEqual(prepare_mock.call_count, 0)
+        # Success committed the flow: cleanup between CREATE_ENTRY and setup
+        # must NOT release the prepared owner.
+        self.assertTrue(flow._callback_ownership_handed_off)
+        flow.async_remove()
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
+        )
+        # The committed handoff survived for entry setup to complete.
+        self.assertTrue(registry.complete_handoff(self.FULL_PN, "entry-new"))
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "entry-new")
+
+    async def test_terminal_without_adoption_refuses_and_never_releases(self) -> None:
+        # A direct/forged RecoveryTerminalInput carrying a REAL prepared owner
+        # the flow never adopted: refused, and the foreign owner is untouched.
+        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+            RecoveryTerminalInput,
+        )
+
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        forged = RecoveryTerminalInput.from_callback_transaction(outcome)
+        ran: list[int] = []
+
+        result = flow._create_entry_with_handoff(
+            self.FULL_PN,
+            lambda: ran.append(1) or {"type": "create_entry"},
+            recovery=forged,
+        )
+
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "recovery_ownership_unavailable")
+        self.assertEqual(ran, [])  # the terminal never ran
+        # NOT ours to touch: the real transaction owner stays fully prepared.
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
+        )
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner)
+
+    async def test_adopted_stale_owner_is_refused_before_terminal(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        # The capability went stale AFTER adoption (released elsewhere).
+        registry.release(owner)
+        ran: list[int] = []
+
+        result = flow._create_entry_with_handoff(
+            self.FULL_PN,
+            lambda: ran.append(1) or {"type": "create_entry"},
+            recovery=flow._recovery_terminal,
+        )
+
+        self.assertEqual(result["reason"], "recovery_ownership_unavailable")
+        self.assertEqual(ran, [])
+
+    async def test_stale_outcome_is_not_adopted_and_leaves_no_state(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        # The capability died BEFORE adoption.
+        registry.release(owner)
+
+        self.assertFalse(flow._adopt_callback_recovery_outcome(outcome))
+
+        self.assertIsNone(flow._verification_registry)
+        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertFalse(flow._recovery_terminal.has_proof)
+
+    async def test_terminal_exception_releases_only_the_adopted_owner(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        # Another flow's unrelated claim must survive the rollback untouched.
+        registry.claim(
+            "callback_verification:other", collector_pn=self.OTHER_FULL_PN
+        )
+
+        def _boom():
+            raise RuntimeError("terminal blew up after capability verification")
+
+        with self.assertRaises(RuntimeError):
+            flow._create_entry_with_handoff(
+                self.FULL_PN, _boom, recovery=flow._recovery_terminal
+            )
+
+        # Exactly this flow's adopted owner is gone, refs cleared...
+        self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertFalse(registry.complete_handoff(self.FULL_PN, "entry-x"))
+        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertFalse(flow._callback_ownership_handed_off)
+        # ...while the other owner's claim is untouched.
+        self.assertEqual(
+            registry.owner_for_pn(self.OTHER_FULL_PN), "callback_verification:other"
+        )
+
+    # ---- C. replacement safety ----
+
+    async def test_adoption_releases_only_the_flows_previous_claim(self) -> None:
+        flow = self._make_flow()
+        registry, owner, outcome = self._prepared_callback_recovery(flow)
+        # The flow still owns an OLD identity attempt, and an unrelated flow
+        # owns a third identity.
+        old_owner = "strategy_verification:old"
+        registry.claim(old_owner, collector_pn=self.OTHER_FULL_PN)
+        flow._verification_registry = registry
+        flow._verification_claim_owner = old_owner
+        registry.claim("callback_verification:bystander", collector_pn="V000405SYN94677999")
+
+        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+
+        # Only the flow's own previous claim was released.
+        self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
+        self.assertEqual(flow._verification_claim_owner, owner)
+        self.assertEqual(
+            registry.owner_for_pn("V000405SYN94677999"),
+            "callback_verification:bystander",
+        )
+        # The adopted capability itself is intact.
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
+        )
+
+    # ---- A. inbound flow-owned lifecycle ----
+
+    async def test_inbound_flow_owner_prepares_exactly_once(self) -> None:
+        flow = self._make_flow()
+        sessions = [self._inventory_session(self.NEW_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, sessions)
+        owner = "strategy_verification:once"
+        registry.claim_session(owner, session_id=self.NEW_SESSION)
+        registry.promote_claim_to_full_pn(owner, self.FULL_PN)
+        flow._verification_registry = registry
+        flow._verification_claim_owner = owner
+
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        sentinel = {"type": "create_entry"}
+        with patch.object(
+            CallbackSessionRegistry,
+            "prepare_handoff",
+            autospec=True,
+            side_effect=CallbackSessionRegistry.prepare_handoff,
+        ) as prepare_mock:
+            result = flow._create_entry_with_handoff(
+                self.FULL_PN, lambda: sentinel, recovery=self._inbound_terminal_input()
+            )
+
+        self.assertIs(result, sentinel)
+        self.assertEqual(prepare_mock.call_count, 1)  # exactly once
+        self.assertEqual(prepare_mock.call_args[0][1], owner)
+        # The acceptance boundary certified the identity before the terminal.
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
+        )
+        self.assertTrue(registry.complete_handoff(self.FULL_PN, "entry-inbound"))
+
+    def _inbound_terminal_input(self):
+        from custom_components.eybond_local.connection.recovery_contract import (
+            INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+            InboundRecoveryProof,
+        )
+        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+            RecoveryTerminalInput,
+        )
+
+        return RecoveryTerminalInput(
+            collector_pn=self.FULL_PN,
+            inbound_proof=InboundRecoveryProof(
+                method=INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+                collector_pn=self.FULL_PN,
+                identity_source="fc2_parameter_2",
+                verified_at="2026-07-16T10:00:00+00:00",
+                session_protocol="eybond_framed",
+            ),
+        )
+
+    async def test_inbound_proof_without_claim_refuses_terminal(self) -> None:
+        flow = self._make_flow()
+        self._install_registry(flow, [])
+        ran: list[int] = []
+        cases = (
+            ("no_registry_no_owner", None, ""),
+            ("registry_without_owner", flow._callback_session_registry(), ""),
+            ("owner_without_registry", None, "strategy_verification:ghost"),
+        )
+        for label, registry, owner in cases:
+            with self.subTest(case=label):
+                flow._verification_registry = registry
+                flow._verification_claim_owner = owner
+                result = flow._create_entry_with_handoff(
+                    self.FULL_PN,
+                    lambda: ran.append(1) or {"type": "create_entry"},
+                    recovery=self._inbound_terminal_input(),
+                )
+                self.assertEqual(result["type"], "abort")
+                self.assertEqual(result["reason"], "recovery_ownership_unavailable")
+        self.assertEqual(ran, [])  # the terminal never ran in any case
+
+    async def test_inbound_proof_with_stale_claim_refuses_terminal(self) -> None:
+        # Registry + owner refs exist, but the registry no longer holds a
+        # claim under that owner (prepare returns False): a proof-bearing
+        # terminal must refuse instead of creating an unowned entry.
+        flow = self._make_flow()
+        registry = self._install_registry(flow, [])
+        flow._verification_registry = registry
+        flow._verification_claim_owner = "strategy_verification:vanished"
+        ran: list[int] = []
+
+        result = flow._create_entry_with_handoff(
+            self.FULL_PN,
+            lambda: ran.append(1) or {"type": "create_entry"},
+            recovery=self._inbound_terminal_input(),
+        )
+
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "recovery_ownership_unavailable")
+        self.assertEqual(ran, [])
+        self.assertFalse(flow._callback_ownership_handed_off)
+
+    async def test_uncertifiable_prepared_inbound_claim_refuses_terminal(self) -> None:
+        # prepare_handoff succeeds (a PN-only claim exists) but the registry
+        # cannot certify it (no concrete session): the terminal must not run.
+        flow = self._make_flow()
+        registry = self._install_registry(flow, [])
+        owner = "strategy_verification:pn-only"
+        registry.claim(owner, collector_pn=self.FULL_PN)
+        flow._verification_registry = registry
+        flow._verification_claim_owner = owner
+        ran: list[int] = []
+
+        result = flow._create_entry_with_handoff(
+            self.FULL_PN,
+            lambda: ran.append(1) or {"type": "create_entry"},
+            recovery=self._inbound_terminal_input(),
+        )
+
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(ran, [])
+        self.assertFalse(flow._callback_ownership_handed_off)
+
+    async def test_no_proof_terminal_still_works_without_claim(self) -> None:
+        # RecoveryTerminalInput.none(): an ordinary/manual entry without any
+        # recovery proof keeps the old behavior -- no claim required.
+        flow = self._make_flow()
+        sentinel = {"type": "create_entry"}
+
+        result = flow._create_entry_with_handoff(self.FULL_PN, lambda: sentinel)
+
+        self.assertIs(result, sentinel)
 
 
 class CollectorOnlyResultTests(unittest.TestCase):
