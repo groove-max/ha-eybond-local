@@ -218,12 +218,11 @@ from .onboarding.callback_identity import (
     async_run_callback_identity_transaction,
 )
 from .onboarding.strategy_verification import (
-    EVIDENCE_REBOOT_RECONNECT,
     EVIDENCE_USER_CONFIRMED_SESSION,
     FAILURE_SESSION_CLAIMED,
-    InboundStrategyVerifier,
+    InboundRecoveryOutcome,
+    InboundRecoveryVerifier,
     ObservedSessionRestartChannel,
-    StrategyVerificationResult,
 )
 from .onboarding.timeouts import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -1513,7 +1512,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._strategy_verification_context: dict[str, Any] | None = None
         self._verification_next_step = "detection_summary"
         self._verification_task: asyncio.Task | None = None
-        self._verification_result: StrategyVerificationResult | None = None
+        self._verification_result: InboundRecoveryOutcome | None = None
+        # The typed InboundRecoveryProof carried from a successful verification
+        # to the terminal entry-create path (where it becomes the entry's
+        # RecoveryContract). Never persisted anywhere else.
+        self._verification_proof = None
         self._verification_expected_pn = ""
         self._verification_old_session_id = ""
         # Reconfigure of an existing PN-less entry has no prior identity to match:
@@ -1861,8 +1864,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if abort is not None:
             return abort
         if result is not None and result.inbound_verified:
+            # The strategy is the INTENT of this passive-discovery inbound flow;
+            # the verifier proved RECOVERY, not strategy. No legacy
+            # reboot_reconnect evidence is written anymore -- the typed proof
+            # becomes the entry's RecoveryContract at creation.
             self._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
-            self._verified_strategy_evidence = result.evidence
+            self._verified_strategy_evidence = ""
+            self._verification_proof = result.proof
             # The verified inbound entry needs no verification-context checks in
             # the manual path anymore.
             self._strategy_verification_context = None
@@ -1901,6 +1909,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         del user_input
         self._verification_result = None
+        self._verification_proof = None
         self._verification_task = None
         return await self.async_step_verify_connection()
 
@@ -2001,7 +2010,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 collector_pn,
                 exc,
             )
-            self._verification_result = StrategyVerificationResult(
+            self._verification_result = InboundRecoveryOutcome(
                 failure_reason=FAILURE_SESSION_CLAIMED,
                 collector_pn=collector_pn,
             )
@@ -2023,69 +2032,81 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             if registry is not None:
                 registry.promote_claim_to_full_pn(owner, full_pn)
 
+        def _retarget_claim(new_session_id: str) -> bool:
+            # Idempotent move of the registry claim onto the NEW socket. Success
+            # of the verification requires the claim to end up here, so the
+            # ownership handoff prepared at entry creation carries the session
+            # the collector actually opened after its reboot.
+            if registry is None:
+                return True
+            try:
+                if registry.claimed_session_id(owner) == new_session_id:
+                    return True
+                return bool(
+                    registry.retarget_claim_to_reconnected_session(
+                        owner, new_session_id
+                    )
+                )
+            except ValueError:
+                return False
+
+        def _session_handle_for_claim():
+            # SESSION-ID-pinned: the transient claim may not be promoted to a
+            # durable PN yet, and the management operations must land on the
+            # exact socket the claim holds -- never a same-PN sibling.
+            if registry is None:
+                return None
+            return registry.session_handle_for_claimed_session(owner)
+
         channel = ObservedSessionRestartChannel(
             host=_PASSIVE_LISTENER_HOST,
             port=port,
             collector_pn=collector_pn,
             session_id=session_id,
             session_id_provider=_claimed_session_id if registry is not None else None,
+            handle_provider=_session_handle_for_claim if registry is not None else None,
         )
 
         async def _probe_reconnected_identity(new_session_id: str) -> str:
-            if registry is None:
-                return ""
-            if not registry.retarget_claim_to_reconnected_session(
-                owner,
-                new_session_id,
-            ):
-                return ""
-            # The restart channel was closed after the old socket became
-            # terminal. Its dynamic registry provider now resolves exactly the
-            # new socket; the FC2 query strengthens that session's identity
-            # without PN/IP ownership guessing.
+            # The verifier already retargeted the claim onto this candidate
+            # (exactly once per socket). The restart channel was closed after
+            # the old socket became terminal; its dynamic registry provider now
+            # resolves exactly the new socket, and the negotiated-wire identity
+            # read strengthens that session's identity without PN/IP guessing.
+            del new_session_id
             return await channel.async_probe_identity()
 
-        verifier = InboundStrategyVerifier(
+        def _aware_clock() -> str:
+            from datetime import datetime, timezone
+
+            return datetime.now(timezone.utc).isoformat()
+
+        # The verifier OWNS its causal window: it takes the exclusive callback
+        # causality lease before the baseline and holds the trigger inhibitor
+        # for the whole verification -- this flow cannot forget to wrap it.
+        verifier = InboundRecoveryVerifier(
             collector_pn=collector_pn,
             session_id=session_id,
             restart_channel=channel,
             sessions_source=self._verification_sessions_source,
+            clock=_aware_clock,
+            policy=_ONBOARDING_TIMEOUT_POLICY,
             callback_trigger_generation=(
                 get_callback_trigger_ledger().snapshot_generation
             ),
             promote_claim=_promote_claim if registry is not None else None,
+            retarget_claim=_retarget_claim if registry is not None else None,
             probe_reconnected_identity=(
                 _probe_reconnected_identity if registry is not None else None
             ),
         )
         try:
-            # A reboot/reconnect proves permanent inbound behavior only when no
-            # callback trigger can influence that window. TWO things are needed,
-            # and the inhibitor alone was only one of them:
-            #
-            #  * the LEASE, taken first, means no callback attempt is already in
-            #    flight. Refusing new sends does not help against a trigger fired
-            #    a second EARLIER -- its session lands inside our reconnect window
-            #    and would be certified as inbound evidence it is not. Waiting for
-            #    the lease waits for that attempt's whole causal window to close.
-            #  * the INHIBITOR, nested inside it, keeps the window silent for as
-            #    long as we hold it.
-            #
-            # Same coordinator as every callback attempt: this operation cannot
-            # run concurrently with one, in either direction. No peer IP,
-            # endpoint, collector kind or cloud family is consulted.
-            ledger = get_callback_trigger_ledger()
-            async with ledger.causality_lease(
-                f"inbound_verification:{uuid.uuid4().hex}",
-                timeout=_ONBOARDING_TIMEOUT_POLICY.callback_causality_lease_wait,
-            ):
-                async with ledger.inhibit_callback_triggers():
-                    self._verification_result = await verifier.async_verify()
+            self._verification_result = await verifier.async_verify()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Passive discovery strategy verification failed")
-            self._verification_result = StrategyVerificationResult(
+            self._verification_result = InboundRecoveryOutcome(
                 failure_reason="verification_error",
                 collector_pn=collector_pn,
             )
@@ -2141,6 +2162,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "has_strong_identity": bool(
                     getattr(session, "has_strong_identity", False)
                 ),
+                # The registry-certified identity source and the raw listener
+                # observation: the verifier builds the typed proof from these
+                # (strong-source gate + negotiated live wire, informative).
+                "collector_identity_source": str(
+                    getattr(session, "identity_source", "") or ""
+                ),
+                "raw": dict(getattr(session, "raw", None) or {}),
             }
             for session in sessions
         )
@@ -4158,6 +4186,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._apply_verified_connection_strategy(data)
         data.update(migrate_entry_axes(data, options))
+        # The typed InboundRecoveryProof (if this flow verified one) becomes the
+        # entry's RecoveryContract HERE, in the same terminal create path as the
+        # entry itself -- written only through the model's single-writer API,
+        # never as loose fields and never into options. An entry-create failure
+        # below therefore persists nothing.
+        if self._verification_proof is not None:
+            from .connection.recovery_contract import RecoveryContract
+
+            proof = self._verification_proof
+            RecoveryContract.empty_for_pn(
+                proof.collector_pn,
+                identity_source=proof.identity_source,
+            ).with_inbound_proof(
+                proof,
+                updated_at=proof.verified_at,
+            ).write_to(data)
         # Item 1 -- strict collector-PN invariant on the auto/passive path too: no
         # normal collector entry without a durable PN (peer IP is never identity).
         if collector_identity_binding_required(data, options):

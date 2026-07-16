@@ -230,6 +230,17 @@ class FakeCollectorService:
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="fake_collector_heartbeat")
             self._reader_task = asyncio.create_task(self._reader_loop(), name="fake_collector_reader")
 
+    async def _reboot_and_reconnect(self) -> None:
+        """Simulated reboot: close the reverse TCP, then autonomously re-dial."""
+
+        endpoint = self._last_discovery
+        await self._close_tcp_only()
+        # Forget the endpoint guard so _ensure_reverse_tcp really reconnects.
+        self._last_discovery = None
+        await asyncio.sleep(max(0.0, self._scenario.reboot_reconnect_delay))
+        if endpoint is not None:
+            await self._ensure_reverse_tcp(endpoint[0], endpoint[1])
+
     async def _close_tcp_only(self) -> None:
         current_task = asyncio.current_task()
         heartbeat_task = self._heartbeat_task
@@ -367,7 +378,13 @@ class FakeCollectorService:
 
                 if header.fcode == FC_SET_COLLECTOR:
                     parameter = payload[0] if payload else 0
-                    response_payload = build_set_collector_response(parameter, success=False)
+                    reboots = (
+                        parameter == 29
+                        and self._scenario.set_29_mode == "reboot"
+                    )
+                    response_payload = build_set_collector_response(
+                        parameter, success=reboots
+                    )
                     await self._send_framed_response(
                         tid=header.tid,
                         fcode=header.fcode,
@@ -380,6 +397,19 @@ class FakeCollectorService:
                         parameter,
                         response_payload[0] if response_payload else -1,
                     )
+                    if reboots:
+                        # The REAL reboot lifecycle: acknowledge, then drop the
+                        # TCP session and dial back in on our own after a boot
+                        # delay -- no UDP trigger involved.
+                        _LOG.info(
+                            "Reboot accepted; dropping TCP and reconnecting in %.2fs",
+                            self._scenario.reboot_reconnect_delay,
+                        )
+                        self.create_background_task(
+                            self._reboot_and_reconnect(),
+                            name="fake_collector_reboot",
+                        )
+                        return
                     continue
 
                 if header.fcode == FC_FORWARD_TO_DEVICE:

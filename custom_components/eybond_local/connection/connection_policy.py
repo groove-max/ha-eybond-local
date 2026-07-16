@@ -404,6 +404,14 @@ def correct_migrated_connection_strategy(
         # Behaviorally-proven inbound (restarted, or a user-bound observed
         # session) is never "corrected" away by the legacy cloud-primary rule.
         return None
+    from .recovery_contract import RecoveryContract
+
+    contract = RecoveryContract.from_entry_data(data)
+    if contract is not None and contract.inbound_verified:
+        # The modern form of the same exemption: a typed inbound recovery
+        # proof (reboot -> autonomous reconnect) means inbound is genuinely
+        # verified; new entries carry this instead of legacy evidence.
+        return None
     if is_integration_managed_endpoint(resolve_endpoint_control_policy(data, options)):
         return None
     operation_mode = str(

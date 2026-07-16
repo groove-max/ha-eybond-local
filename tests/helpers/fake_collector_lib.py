@@ -94,6 +94,12 @@ class CollectorScenario:
     fc2_query_modes: Mapping[int, str] = field(default_factory=dict)
     fc4_mode: str = FC4_MODE_MODBUS_EXCEPTION
     modbus_registers: Mapping[int, int] = field(default_factory=dict)
+    # FC=3 parameter 29 (reboot/apply): "fail" keeps the legacy refusal;
+    # "reboot" ACKs the command and the service then really drops the TCP
+    # session and dials back in after ``reboot_reconnect_delay`` seconds --
+    # the full reboot -> autonomous reconnect lifecycle.
+    set_29_mode: str = "fail"
+    reboot_reconnect_delay: float = 0.3
 
 
 def parse_discovery_redirect(payload: bytes | str) -> DiscoveryRedirect:
@@ -154,6 +160,8 @@ def resolve_scenario(
     query_5_mode: str | None = None,
     query_14_mode: str | None = None,
     fc4_mode: str | None = None,
+    set_29_mode: str | None = None,
+    reboot_reconnect_delay: float = 0.3,
 ) -> CollectorScenario:
     """Resolve one declarative fake collector preset into concrete behavior."""
 
@@ -195,6 +203,8 @@ def resolve_scenario(
         first_heartbeat_delay=max(0.0, float(first_heartbeat_delay)),
         fc2_query_modes={5: resolved_query_5_mode, 14: resolved_query_14_mode},
         fc4_mode=resolved_fc4_mode,
+        set_29_mode=str(set_29_mode or "fail"),
+        reboot_reconnect_delay=float(reboot_reconnect_delay),
         modbus_registers=registers,
     )
 

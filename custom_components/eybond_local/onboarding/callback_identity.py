@@ -203,110 +203,13 @@ class _ProductionTriggerSender:
         )
 
 
-class _SessionPinnedIdentityReader:
-    """Authoritative full-PN read, pinned to exactly one claimed session id.
-
-    Both wires reuse the transports' claimed-session mechanism EXCLUSIVELY: the
-    transports are constructed with NO collector_ip and NO collector_pn, so the
-    only route they can resolve is the claimed session id -- never a socket
-    picked by peer IP, a PN index, or "the current connection". (Passing the
-    caller's ``expected_pn`` as the transport's ``collector_pn`` would re-open
-    PN routing: a second live socket of the same collector could then serve the
-    read, and the certified session<->PN binding would be about the wrong
-    socket.) The two shapes reuse the integration's existing reads:
-
-    * framed  -> the neutral ``CollectorWireManagementSession.query_collector_pn``
-      (FC=2 parameter 2);
-    * at_text -> the DTUPN query (``AT+DTUPN``).
-
-    Both replies are also stamped into the listener inventory by the transport
-    itself (``fc2_parameter_2`` / ``at_dtupn``), which is how the session becomes
-    strongly identified for the shared matcher immediately afterwards.
-    """
-
-    def __init__(self, *, host: str, request_timeout: float = 5.0) -> None:
-        self._host = host
-        self._request_timeout = float(request_timeout)
-
-    async def async_read_full_pn(
-        self,
-        *,
-        session_id: str,
-        session_protocol: str,
-        listener_port: int,
-        expected_pn: str = "",
-    ) -> tuple[str, str]:
-        wire = str(session_protocol or "").strip().lower()
-        if wire == WIRE_FRAMED:
-            return (await self._async_read_framed(session_id, listener_port, expected_pn), "fc2_parameter_2")
-        if wire == WIRE_AT_TEXT:
-            return (await self._async_read_at(session_id, listener_port, expected_pn), "at_dtupn")
-        # Fail closed: an unknown/raw/untrusted wire is not something we may guess
-        # at. Guessing here is exactly how a wrong frame gets written to a
-        # stranger's socket.
-        logger.debug("Identity read skipped: untrusted wire %r", session_protocol)
-        return ("", "")
-
-    async def _async_read_framed(
-        self, session_id: str, listener_port: int, expected_pn: str
-    ) -> str:
-        from ..collector.collector_wire import CollectorWireManagementSession
-        from ..collector.transport import SharedEybondTransport
-
-        # collector_ip/collector_pn stay EMPTY on purpose: the claimed session
-        # id must be the transport's only route (see the class docstring).
-        transport = SharedEybondTransport(
-            host=self._host,
-            port=int(listener_port),
-            request_timeout=self._request_timeout,
-            heartbeat_interval=60.0,
-            collector_ip="",
-            collector_pn="",
-        )
-        transport.set_claimed_session_provider(lambda: session_id)
-        # The NEUTRAL management session: FC=2 parameter 2 and nothing else. The
-        # SmartESS subclass would drag provider/cloud/catalog concerns into a
-        # module that must know only "collector" and "wire".
-        return await self._async_with_transport(
-            transport,
-            lambda: CollectorWireManagementSession(transport).query_collector_pn(),
-        )
-
-    async def _async_read_at(
-        self, session_id: str, listener_port: int, expected_pn: str
-    ) -> str:
-        from ..collector.transport import SharedCollectorAtTransport
-
-        transport = SharedCollectorAtTransport(
-            host=self._host,
-            port=int(listener_port),
-            request_timeout=self._request_timeout,
-            collector_ip="",
-            collector_pn="",
-            collector_session_protocol=WIRE_AT_TEXT,
-        )
-        transport.set_claimed_session_provider(lambda: session_id)
-
-        async def _query() -> str:
-            response = await transport.async_query("DTUPN")
-            return str(getattr(response, "value", "") or "").strip()
-
-        return await self._async_with_transport(transport, _query)
-
-    async def _async_with_transport(self, transport: Any, read) -> str:
-        """Start, read, and ALWAYS stop -- on success, error and cancellation."""
-
-        await transport.start()
-        try:
-            connected = await transport.wait_until_connected(
-                timeout=self._request_timeout
-            )
-            if not connected:
-                return ""
-            return str(await read() or "").strip()
-        finally:
-            with suppress(Exception):
-                await transport.stop()
+# THE production reader, extracted to a neutral reusable module so the inbound
+# recovery verifier shares the exact same session-pinned implementation (one
+# wire switch, one identity matcher). Kept under the old private name because
+# it IS this module's default-reader seam.
+from ..collector.session_identity_reader import (  # noqa: E402  (seam placement)
+    SessionPinnedIdentityReader as _SessionPinnedIdentityReader,
+)
 
 
 def _session_views(hass: Any) -> tuple[dict[str, Any], ...]:

@@ -483,6 +483,18 @@ class RecoveryContract:
             updated_at=_clean_str(updated_at) if _valid_timestamp(updated_at) else "",
         )
 
+    def write_to(self, data: "dict[str, object]") -> None:
+        """Persist this (validated) contract into one entry-data dict.
+
+        THE single production writer of the canonical key: every layer that
+        wants to persist a contract goes through this method, so the store
+        cannot fork into loose fields, an options copy, or a second location.
+        The object is valid by construction (``__post_init__``), so what lands
+        in ``data`` is exactly what the parser will accept back.
+        """
+
+        data[RECOVERY_CONTRACT_KEY] = self.to_record()
+
     @classmethod
     def from_entry_data(cls, data: Mapping[str, object] | None) -> "RecoveryContract | None":
         """Read the ONE canonical key from ``ConfigEntry.data``.

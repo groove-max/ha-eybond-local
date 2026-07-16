@@ -43,6 +43,17 @@ class OnboardingTimeoutPolicy:
     # giving up. The wire carries no correlation token, so attempts are
     # serialized; this bounds the queue rather than letting a caller hang.
     callback_causality_lease_wait: float = 30.0
+    # Inbound recovery verification budgets (the reboot/reconnect transaction).
+    # How long the observed session may take to become strongly identified
+    # after the consented read-only identity probe.
+    inbound_strong_identity_timeout: float = 30.0
+    # How long after a confirmed reboot the OLD socket may take to actually
+    # close. The collector itself must drop it; we never close it for it.
+    inbound_restart_disconnect_timeout: float = 45.0
+    # Old factory collectors can take well over a minute to boot and re-open
+    # their outbound link; bounded but generous, polled from the in-memory
+    # session inventory (no UDP loops).
+    inbound_reconnect_timeout: float = 180.0
     # The detector owns the manual onboarding work budget above.  A wrapper may
     # wait this little bit longer only so the detector can materialize and
     # return its partial result after its own deadline expires.  This is not

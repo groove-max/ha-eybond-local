@@ -934,6 +934,31 @@ class CallbackSessionRegistry:
             return None
         return self.session_handle_for_pn(pn)
 
+    def session_handle_for_claimed_session(self, entry_id: str) -> SessionHandle | None:
+        """Negotiated handle for EXACTLY the socket this entry's claim holds.
+
+        Unlike :meth:`session_handle_for_entry` (PN-ranked across live sessions
+        of a promoted durable identity), this is SESSION-ID-pinned: right for a
+        transient verification claim that has not been promoted to a durable PN
+        yet, and for management operations that must land on the one socket the
+        claim owns -- never a same-PN sibling. Returns ``None`` when the claim
+        holds no socket or the socket is no longer observed.
+        """
+
+        sid = self.claimed_session_id(entry_id)
+        if not sid:
+            return None
+        for session in self._normalized_sessions():
+            if session.session_id != sid:
+                continue
+            if session.state == SESSION_STATE_CLOSED:
+                # A closed socket has no live wire: its remembered
+                # protocol_shape must never resurrect a management adapter for
+                # a connection that no longer exists.
+                return None
+            return negotiate_session_adapters(session.raw)
+        return None
+
     def owned_session_location(self, entry_id: str) -> CallbackSession | None:
         """Return the best live observed session for one entry's claimed identity.
 

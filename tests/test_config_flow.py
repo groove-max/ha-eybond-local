@@ -5094,6 +5094,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         # Identity is never recovery evidence: the key must not exist at all.
         self.assertNotIn(CONF_CONNECTION_STRATEGY_EVIDENCE, result["data"])
+        # And a certified callback identity NEVER mints a RecoveryContract.
+        self.assertNotIn("recovery_contract", result["data"])
         # The durable PN drives the entry unique id (durable identity, not IP).
         self.assertEqual(flow._test_unique_id, "collector:V001020SYN62344022")
         # The persisted entry is identity-bound: NOT an offline PN-less entry.
@@ -5101,6 +5103,48 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             collector_identity_binding_required(result["data"], result.get("options") or {})
         )
+
+    async def test_user_confirmed_session_creates_no_recovery_contract(self) -> None:
+        # A user explicitly binding an OBSERVED session is honest inbound
+        # provenance (legacy user_confirmed_session evidence) -- but nothing was
+        # rebooted and nothing was proven about reconnection after loss, so NO
+        # RecoveryContract may appear.
+        from custom_components.eybond_local.const import (
+            CONF_CONNECTION_STRATEGY_EVIDENCE,
+            CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
+        )
+
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "",
+            "driver_hint": "auto",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "discovery_target": "",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+        }
+        flow._manual_result = OnboardingResult(
+            connection_mode="manual", next_action="create_pending_entry"
+        )
+        flow._manual_chosen_strategy = CONNECTION_STRATEGY_INBOUND
+        flow._manual_verified_full_pn = "V001020SYN62344022"
+        flow._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
+        flow._verified_strategy_evidence = (
+            CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION
+        )
+
+        result = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(result["type"], "create_entry")
+        # The legacy user-binding evidence remains (its own honest provenance)...
+        self.assertEqual(
+            result["data"][CONF_CONNECTION_STRATEGY_EVIDENCE],
+            CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
+        )
+        # ...but it is NOT recovery: no contract is minted.
+        self.assertNotIn("recovery_contract", result["data"])
 
     async def test_callback_verification_unconfirmed_creates_no_normal_entry(self) -> None:
         # Item 5: a callback verification was in play (a passive-discovery
@@ -9075,14 +9119,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # remains an explicit choice and keeps the peer IP as an editable hint.
     async def test_verification_failure_falls_through_to_manual_with_peer_prefill(self) -> None:
         from custom_components.eybond_local.onboarding.strategy_verification import (
-            StrategyVerificationResult,
+            InboundRecoveryOutcome,
         )
 
         flow = self._make_flow()
         await flow.async_step_integration_discovery(self._discovery_info())
 
         async def _fake_run() -> None:
-            flow._verification_result = StrategyVerificationResult(
+            flow._verification_result = InboundRecoveryOutcome(
                 failure_reason="restart_not_supported",
                 collector_pn=self.FULL_PN,
             )
@@ -9149,30 +9193,44 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Success continues the normal passive-candidate routing.
         self.assertIn(result["type"], {"form", "menu"})
         self.assertIn(result["step_id"], {"driver_choice", "detection_summary"})
+        # Strategy is the flow's INTENT; the verifier produced a typed PROOF
+        # and no legacy evidence.
         self.assertEqual(flow._verified_connection_strategy, "inbound")
-        self.assertEqual(flow._verified_strategy_evidence, sv.EVIDENCE_REBOOT_RECONNECT)
+        self.assertEqual(flow._verified_strategy_evidence, "")
+        proof = flow._verification_proof
+        self.assertIsNotNone(proof)
+        self.assertEqual(proof.collector_pn, self.FULL_PN)
+        self.assertEqual(proof.method, "reboot_reconnect_no_trigger")
         # Item 2: the claim existed during the restart AND is HELD after a
-        # successful inbound proof -- it is handed off at entry creation, not
-        # released, so the runtime owns the session before it starts.
+        # successful inbound proof -- retargeted onto the NEW socket, handed
+        # off at entry creation, so the runtime owns the session it will use.
         self.assertTrue(claim_owner_during_restart[0].startswith("strategy_verification:"))
-        self.assertTrue(
-            registry.owner_for_pn(self.FULL_PN).startswith("strategy_verification:")
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("strategy_verification:"))
+        self.assertEqual(registry.claimed_session_id(owner), self.NEW_SESSION)
+
+        # Entry-data stamping: explicit inbound, NO evidence key; the typed
+        # proof becomes the entry's RecoveryContract instead.
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RecoveryContract,
         )
 
-        # Entry-data stamping: explicit inbound + evidence, no peer IP persisted.
         data = {
             "connection_mode": "callback_listener",
             "collector_ip": self.PEER_IP,
             "collector_operation_mode": "smartess_cloud_home_assistant",
         }
         flow._apply_verified_connection_strategy(data)
+        RecoveryContract.empty_for_pn(
+            proof.collector_pn, identity_source=proof.identity_source
+        ).with_inbound_proof(proof, updated_at=proof.verified_at).write_to(data)
         data.update(cp.migrate_entry_axes(data, {}))
         self.assertEqual(data["connection_strategy"], "inbound")
-        self.assertEqual(data["connection_strategy_evidence"], "reboot_reconnect")
+        self.assertNotIn("connection_strategy_evidence", data)
         self.assertEqual(data["endpoint_control_policy"], "external")
         self.assertEqual(data["collector_ip"], "")
-        # The behaviorally-verified inbound entry is exempt from the legacy
-        # cloud-primary migration correction.
+        # The recovery-proven inbound entry is exempt from the legacy
+        # cloud-primary migration correction (contract-based exemption).
         self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
 
     async def test_verification_rebinds_stale_flow_to_current_session(self) -> None:
@@ -9252,7 +9310,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         result = flow._verification_result
         assert result is not None
         self.assertTrue(result.inbound_verified)
-        self.assertEqual(result.evidence, sv.EVIDENCE_REBOOT_RECONNECT)
+        self.assertIsNotNone(result.proof)
+        self.assertEqual(result.proof.method, "reboot_reconnect_no_trigger")
 
     async def test_inbound_verification_blocks_concurrent_callback_trigger(self) -> None:
         """A pending/runtime callback cannot contaminate the reboot proof."""
@@ -9404,8 +9463,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 await task
 
         self.assertTrue(task.cancelled())
-        # Ordering: restart channel fully closed BEFORE the claim was released.
-        self.assertEqual(order, ["close", "release"])
+        # Ordering: restart channel fully closed BEFORE the claim was released
+        # (idempotent close may run more than once; release exactly once, last).
+        self.assertEqual(order[0], "close")
+        self.assertEqual(order[-1], "release")
+        self.assertEqual(order.count("release"), 1)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(flow._verification_claim_owner, "")
 
@@ -9646,10 +9708,33 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         data = created["data"]
         self.assertEqual(data["collector_pn"], self.FULL_PN)
         self.assertEqual(data["connection_strategy"], "inbound")
-        self.assertEqual(data["connection_strategy_evidence"], "reboot_reconnect")
+        # NO legacy reboot evidence is written anymore...
+        self.assertNotIn("connection_strategy_evidence", data)
         self.assertEqual(data["endpoint_control_policy"], "external")
         self.assertEqual(data["collector_ip"], "")
         self.assertIn(self.FULL_PN, created["title"])
+        # ...the typed proof landed as the entry's RecoveryContract instead, in
+        # the SAME terminal create path, under the one canonical key.
+        from custom_components.eybond_local.connection.recovery_contract import (
+            INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+            RecoveryContract,
+        )
+
+        contract = RecoveryContract.from_entry_data(data)
+        self.assertIsNotNone(contract)
+        self.assertTrue(contract.inbound_verified)
+        self.assertFalse(contract.callback_verified)
+        self.assertEqual(contract.collector_pn, self.FULL_PN)
+        self.assertEqual(
+            contract.inbound_proof.method,
+            INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+        )
+        self.assertEqual(contract.inbound_proof.identity_source, "at_dtupn")
+        # verified_at came from the injected aware clock and round-trips.
+        from datetime import datetime
+
+        parsed_ts = datetime.fromisoformat(contract.inbound_proof.verified_at)
+        self.assertIsNotNone(parsed_ts.tzinfo)
 
     # 12. Cancel/error cleanup: removing the flow cancels the verification task.
     async def test_flow_removal_cancels_verification_task(self) -> None:
@@ -9918,6 +10003,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(CONF_CONNECTION_STRATEGY, created.get("options") or {})
         self.assertNotIn("connection_strategy_evidence", created["data"])
+        self.assertNotIn("recovery_contract", created["data"])
 
     async def test_generic_manual_inbound_never_adopts_a_foreign_candidate(self) -> None:
         # Item 3 regression: ONE unclaimed strong collector exists globally, but
