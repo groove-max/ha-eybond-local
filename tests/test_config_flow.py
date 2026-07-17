@@ -9130,17 +9130,33 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "verify_connection_failed")
+        # Three EXPLICIT actions -- no abstract "Manual".
         self.assertEqual(
             result["menu_options"],
-            ["verify_connection_retry", "manual"],
+            [
+                "verify_connection_retry",
+                "verify_connection_manual_callback",
+                "verify_connection_cancel",
+            ],
         )
+        # A typed, human explanation of the exact reason (not a raw code).
+        explanation = result["description_placeholders"]["failure_explanation"]
+        self.assertNotIn("`", explanation)
+        self.assertNotIn("restart_not_supported", explanation)
+        self.assertGreater(len(explanation), 20)
+
         retry = await flow.async_step_verify_connection_retry()
         self.assertEqual(retry["type"], "form")
         self.assertEqual(retry["step_id"], "verify_connection")
 
-        result = await flow.async_step_manual()
+        # The EXPLICIT callback action opens the existing manual step with
+        # callback_on_demand pre-selected and the peer IP as an editable hint.
+        result = await flow.async_step_verify_connection_manual_callback()
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(
+            flow._manual_preselected_strategy, "callback_on_demand"
+        )
         # Peer IP is prefilled purely as an editable hint...
         self.assertEqual(flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         # ...with honest labeling about router/VPN/port-forward setups.
@@ -9148,6 +9164,155 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("router", note.lower())
         # No strategy was guessed and no entry was created.
         self.assertEqual(flow._verified_connection_strategy, "")
+        # The inbound verification context was cleared on the handoff.
+        self.assertIsNone(flow._strategy_verification_context)
+
+    # Batch 7 -- the failure screen explains the exact reason in the user's
+    # language (ru/uk), never the raw code, for every inbound failure code.
+    async def test_verification_failed_explanation_is_localized(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            InboundRecoveryOutcome,
+        )
+
+        for code in (
+            "restart_not_supported",
+            "inbound_reconnect_timeout",
+            "recovery_silent_probe_failed",
+            "reconnected_session_untrusted",
+        ):
+            english = {}
+            for language in ("en", "ru", "uk"):
+                flow = self._make_flow()
+                flow.context = {"language": language}
+                await flow.async_step_integration_discovery(self._discovery_info())
+                flow._verification_result = InboundRecoveryOutcome(
+                    failure_reason=code, collector_pn=self.FULL_PN
+                )
+                await flow._async_ensure_translation_bundle()
+                result = await flow.async_step_verify_connection_failed()
+                explanation = result["description_placeholders"]["failure_explanation"]
+                self.assertNotIn(code, explanation)
+                self.assertNotIn("`", explanation)
+                english[language] = explanation
+            with self.subTest(code=code):
+                self.assertNotEqual(english["ru"], english["en"])
+                self.assertNotEqual(english["uk"], english["en"])
+                self.assertTrue(any("Ѐ" <= ch <= "ӿ" for ch in english["ru"]))
+
+    # B. A collector observed via a temporary callback session fails inbound
+    # verification; the user EXPLICITLY chooses manual callback, and the
+    # existing callback path (not a new matcher) proves it.
+    async def test_failed_inbound_handoff_to_explicit_manual_callback(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            InboundRecoveryOutcome,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        async def _fake_run() -> None:
+            # Inbound autonomous reconnect was NOT proven; the failure path
+            # already released any strategy-verification claim.
+            flow._verification_result = InboundRecoveryOutcome(
+                failure_reason="inbound_reconnect_timeout",
+                collector_pn=self.FULL_PN,
+            )
+
+        with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
+            failed = await self._drive_verification(flow)
+        self.assertEqual(failed["step_id"], "verify_connection_failed")
+        # No inbound owner survives into the callback attempt.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+        # The EXPLICIT callback action opens the manual step.
+        manual = await flow.async_step_verify_connection_manual_callback()
+        self.assertEqual(manual["step_id"], "manual")
+        self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
+        self.assertEqual(flow._manual_defaults.get("collector_ip"), self.PEER_IP)
+        # The expected strong PN from discovery is preserved for the matcher.
+        self.assertEqual(flow._verification_expected_pn, self.FULL_PN)
+
+        # Submitting the manual form runs the EXISTING callback identity path;
+        # the collector answers OUR trigger with a new strong session, and the
+        # flow reaches the callback recovery consent -- no second verifier.
+        with self._identity_wire(
+            inventory,
+            answers=[self._inventory_session(self.NEW_SESSION, self.FULL_PN)],
+            read_pn=self.FULL_PN,
+        ):
+            routed = await flow.async_step_manual(
+                self._manual_input(self.PEER_IP, connection_strategy="callback_on_demand")
+            )
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
+        self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
+        # A callback owner now holds the certified session (a NEW owner id).
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("callback_verification:"))
+
+    # C. Cancelling from the failure screen aborts cleanly: no claim, no task,
+    # no prepared handoff -- and no entry.
+    async def test_cancel_from_failure_screen_is_clean(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            InboundRecoveryOutcome,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        async def _fake_run() -> None:
+            flow._verification_result = InboundRecoveryOutcome(
+                failure_reason="restart_not_confirmed",
+                collector_pn=self.FULL_PN,
+            )
+
+        with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
+            failed = await self._drive_verification(flow)
+        self.assertEqual(failed["step_id"], "verify_connection_failed")
+
+        cancelled = await flow.async_step_verify_connection_cancel()
+        self.assertEqual(cancelled["type"], "abort")
+        self.assertEqual(cancelled["reason"], "discovery_cancelled")
+        # Nothing is owned, held or prepared for the PN.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertIsNone(flow._strategy_verification_context)
+
+    async def test_cancel_during_progress_cleans_up_via_async_remove(self) -> None:
+        import asyncio
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        started = asyncio.Event()
+
+        async def _hang() -> None:
+            # The verifier claims the session, then never resolves until cancel.
+            registry.claim_session("strategy_verification:hang", session_id=self.OLD_SESSION)
+            flow._verification_registry = registry
+            flow._verification_claim_owner = "strategy_verification:hang"
+            started.set()
+            await asyncio.sleep(60)
+
+        with patch.object(flow, "_async_run_strategy_verification", side_effect=_hang):
+            await flow.async_step_verify_connection({})
+            progress = await flow.async_step_verify_connection_progress()
+            self.assertEqual(progress["type"], "progress")
+            await asyncio.wait_for(started.wait(), timeout=5.0)
+            task = flow._verification_task
+
+            flow.async_remove()  # frontend closed the flow mid-progress
+
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5.0)
+
+        # The claim is released by the task's finally; nothing survives.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     # 1./13. Verified inbound: entry data gets inbound + external + evidence,
     # and no unverified peer address is persisted as collector_ip.

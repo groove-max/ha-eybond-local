@@ -1538,6 +1538,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # truth BEFORE any active operation runs (inbound must never probe) and
         # it is what gets persisted as the canonical entry.data strategy.
         self._manual_chosen_strategy = ""
+        # A strategy pre-selected on the manual form's selector purely because
+        # the user chose an explicit action that implies it (e.g. "configure a
+        # callback connection by hand" after inbound verification failed). It
+        # is only a form DEFAULT -- the user still confirms it, and it is never
+        # inferred from discovery/peer IP/cloud family.
+        self._manual_preselected_strategy = ""
         # Callback-trigger ledger generation sampled immediately BEFORE this
         # flow's own active callback attempt, so the shared matcher can prove the
         # attempt's trigger provenance (exactly one trigger: ours).
@@ -1924,18 +1930,38 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         return await self.async_step_verify_connection_failed()
 
+    @_with_translation_bundle
     async def async_step_verify_connection_failed(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Keep a failed verification in this flow and offer explicit recovery."""
+        """Keep a failed inbound verification in this flow, honestly explained.
+
+        The autonomous-reconnect check did not prove a permanent inbound
+        collector. The exact typed reason is surfaced in the user's language
+        (the SAME recovery-explanation mapping the manual callback path uses),
+        and three EXPLICIT actions are offered -- retry the inbound check,
+        deliberately configure a callback connection by hand, or cancel. The
+        flow never auto-classifies the collector as callback_on_demand and
+        never sends a UDP trigger from here.
+        """
 
         del user_input
+        failure_reason = str(
+            getattr(self._verification_result, "failure_reason", "") or ""
+        )
         return self.async_show_menu(
             step_id="verify_connection_failed",
-            menu_options=["verify_connection_retry", "manual"],
+            menu_options=[
+                "verify_connection_retry",
+                "verify_connection_manual_callback",
+                "verify_connection_cancel",
+            ],
             description_placeholders={
                 "collector_pn": self._verification_expected_pn,
+                "failure_explanation": self._recovery_failure_explanation(
+                    failure_reason
+                ),
             },
         )
 
@@ -1950,6 +1976,48 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._recovery_terminal = RecoveryTerminalInput.none()
         self._verification_task = None
         return await self.async_step_verify_connection()
+
+    async def async_step_verify_connection_manual_callback(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """EXPLICIT user intent: configure a callback connection by hand.
+
+        This is the only bridge from a failed inbound verification to the
+        callback path, and it happens ONLY because the user chose it. It opens
+        the EXISTING manual step -- no new matcher/verifier/trigger -- with
+        callback_on_demand pre-selected (because the user asked for it, never
+        inferred), the observed peer IP prefilled purely as an editable route
+        hint, and the expected strong PN preserved. The inbound
+        strategy-verification claim was already released on the failure path,
+        so no owner survives into the new callback attempt.
+        """
+
+        del user_input
+        self._strategy_verification_context = None
+        self._verification_result = None
+        self._recovery_terminal = RecoveryTerminalInput.none()
+        # Only a form DEFAULT; the manual step still requires the user to
+        # submit, and its own callback identity/recovery path proves it.
+        self._manual_preselected_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        return await self.async_step_manual()
+
+    async def async_step_verify_connection_cancel(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Cancel the discovery flow cleanly: no claim, task, channel or card.
+
+        The inbound verification claim was already released on the failure
+        path; release any stray recovery state and abort so the discovery card
+        disappears and the exact same session is not immediately republished.
+        """
+
+        del user_input
+        self._release_verification_claim()
+        self._release_unadopted_recovery_outcome()
+        self._strategy_verification_context = None
+        return self.async_abort(reason="discovery_cancelled")
 
     async def _async_adopt_enriched_collector_pn(self, full_pn: str):
         """Propagate a weak->strong enriched FULL PN through every flow model.
@@ -3624,11 +3692,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     values=defaults,
                 ),
                 # The user states HOW the collector connects. This is the CANONICAL
-                # connection_strategy and is saved straight into entry.data.
+                # connection_strategy and is saved straight into entry.data. An
+                # explicit user action may PRE-SELECT it (e.g. "configure a
+                # callback connection by hand"), but the user still confirms.
                 vol.Required(
                     CONF_CONNECTION_STRATEGY,
                     default=str(
                         defaults.get(CONF_CONNECTION_STRATEGY)
+                        or self._manual_preselected_strategy
                         or CONNECTION_STRATEGY_INBOUND
                     ),
                 ): _connection_strategy_selector(
@@ -4235,6 +4306,32 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "common.dynamic.recovery_fail_ownership_unavailable",
                 "The verified connection is no longer held for this collector. "
                 "Run the verification again.",
+            ),
+            # Inbound autonomous-reconnect verification (passive discovery)
+            # failures, surfaced honestly on the discovery failure screen.
+            "strong_identity_timeout": (
+                "common.dynamic.recovery_fail_strong_identity_timeout",
+                "The collector's identity could not be confirmed before the "
+                "check timed out. Try again, or configure the connection by "
+                "hand.",
+            ),
+            "restart_not_confirmed": (
+                "common.dynamic.recovery_fail_restart_not_confirmed",
+                "The collector did not confirm the restart request, so its "
+                "reconnection could not be verified. Try again, or configure "
+                "the connection by hand.",
+            ),
+            "disconnect_not_observed": (
+                "common.dynamic.recovery_fail_disconnect_not_observed",
+                "The collector did not drop and re-establish its connection "
+                "after the restart, so automatic reconnection was not proven. "
+                "Try again, or configure a callback connection by hand.",
+            ),
+            "reconnected_session_untrusted": (
+                "common.dynamic.recovery_fail_reconnected_untrusted",
+                "A connection came back after the restart but its identity "
+                "could not be trusted. Try again, or configure the connection "
+                "by hand.",
             ),
         }
         key, fallback = explanations.get(

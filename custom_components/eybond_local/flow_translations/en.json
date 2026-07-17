@@ -478,7 +478,11 @@
       "recovery_fail_inbound_timeout": "The collector did not reconnect on its own after the restart. Try again, or save a Pending Device that waits for it.",
       "recovery_fail_restart_unsupported": "This collector cannot be restarted for verification over its connection. Save a Pending Device instead.",
       "recovery_fail_ownership_unavailable": "The verified connection is no longer held for this collector. Run the verification again.",
-      "recovery_fail_generic": "The recovery verification did not succeed. You can try again, change the settings, or save a Pending Device."
+      "recovery_fail_generic": "The recovery verification did not succeed. You can try again, change the settings, or save a Pending Device.",
+      "recovery_fail_strong_identity_timeout": "The collector's identity could not be confirmed before the check timed out. Try again, or configure the connection by hand.",
+      "recovery_fail_restart_not_confirmed": "The collector did not confirm the restart request, so its reconnection could not be verified. Try again, or configure the connection by hand.",
+      "recovery_fail_disconnect_not_observed": "The collector did not drop and re-establish its connection after the restart, so automatic reconnection was not proven. Try again, or configure a callback connection by hand.",
+      "recovery_fail_reconnected_untrusted": "A connection came back after the restart but its identity could not be trusted. Try again, or configure the connection by hand."
     }
   }
 }

@@ -237,11 +237,12 @@
         "description": "Collector {collector_pn} connected from {peer_ip}. Before adding it, Home Assistant needs to check whether this connection is permanent or only temporary (for example, left over from an earlier reconnect request). The check restarts the collector and briefly interrupts its connection - monitoring and the vendor app may be unavailable for a few minutes. Press Submit to restart the collector and start the check."
       },
       "verify_connection_failed": {
-        "title": "Connection check needs another step",
-        "description": "Home Assistant could not confirm that collector {collector_pn} reconnects permanently. The collector was not added. You can repeat the automatic check or enter a reachable collector address for the existing callback check.",
+        "title": "Automatic connection check did not succeed",
+        "description": "Collector **{collector_pn}**: {failure_explanation}\n\nThe collector was not added. Choose what to do next.",
         "menu_options": {
-          "verify_connection_retry": "Repeat automatic check",
-          "manual": "Enter collector address manually"
+          "verify_connection_retry": "Retry the automatic reconnection check",
+          "verify_connection_manual_callback": "Configure a callback connection by hand",
+          "verify_connection_cancel": "Cancel"
         }
       },
       "reconfigure": {
@@ -347,7 +348,8 @@
       "reconfigure_entry_missing": "The entry to reconfigure no longer exists.",
       "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair.",
       "recovery_contract_conflict": "The verified recovery proof could not be stored: the entry already carries a recovery record for a different collector or one that cannot be read. Remove or repair that entry, then try again.",
-      "recovery_ownership_unavailable": "The verified recovery session is no longer held for this collector. Run the verification again."
+      "recovery_ownership_unavailable": "The verified recovery session is no longer held for this collector. Run the verification again.",
+      "discovery_cancelled": "Discovery was cancelled. The collector can be added again later."
     }
   },
   "options": {
