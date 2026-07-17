@@ -217,7 +217,9 @@
           "manual_probe_again": "Probe again",
           "manual_edit_settings": "Edit settings",
           "manual_smartess_cloud_assist": "Refine via SmartESS cloud",
-          "manual_create_pending": "Save Pending Device"
+          "manual_create_pending": "Save Pending Device",
+          "manual_bootstrap_framed": "Silent collector: query with EyeBond framed protocol",
+          "manual_bootstrap_at": "Silent collector: query with AT command protocol"
         }
       },
       "advanced_setup": {
@@ -279,12 +281,40 @@
             }
           }
         }
+      },
+      "manual_recovery_confirm": {
+        "title": "Verify the callback route",
+        "description": "Collector **{collector_pn}** answered at {collector_ip} — its identity is confirmed. Before the entry is saved, Home Assistant should verify it can REGAIN this collector after a connection loss.\n\nVerification will:\n1. Restart the collector (it briefly stops reporting).\n2. Wait to see whether it reconnects on its own.\n3. If it stays silent, send ONE addressed callback request.\n\nA normal callback entry is created only after this recovery route is proven. You can also test the address again, change the values, or save a read-only Pending Device without verification.",
+        "menu_options": {
+          "manual_recovery_verify": "Verify recovery (restarts the collector)",
+          "manual_probe_again": "Probe again",
+          "manual_edit_settings": "Edit settings",
+          "manual_create_pending": "Save as Pending Device (no verification)"
+        }
+      },
+      "manual_recovery_inbound_confirm": {
+        "title": "Collector reconnects on its own",
+        "description": "Collector **{collector_pn}** proved it reconnects to Home Assistant BY ITSELF after a restart — no callback request was needed (none was sent).\n\nSave it as an inbound collector? Home Assistant will passively wait for its connections and never send callback triggers.",
+        "menu_options": {
+          "manual_recovery_accept_inbound": "Save as inbound collector",
+          "manual_recovery_decline_inbound": "Do not save — back to options"
+        }
+      },
+      "manual_recovery_failed": {
+        "title": "Recovery verification did not succeed",
+        "description": "Collector **{collector_pn}**: {failure_explanation}\n\nNo entry was created. You can run a full new attempt, change the address/settings, or save a read-only Pending Device that waits for the collector.",
+        "menu_options": {
+          "manual_probe_again": "Try again (new attempt)",
+          "manual_edit_settings": "Edit settings",
+          "manual_create_pending": "Save as Pending Device"
+        }
       }
     },
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond collectors…",
       "shadow_learning": "{control_discovery_hint}",
-      "verify_connection": "Confirming collector {collector_pn} identity, then restarting it and waiting for it to reconnect on its own. This can take up to three minutes on older collectors."
+      "verify_connection": "Confirming collector {collector_pn} identity, then restarting it and waiting for it to reconnect on its own. This can take up to three minutes on older collectors.",
+      "manual_recovery_verify": "Verifying the recovery route for collector {collector_pn}: restarting it, waiting for its own reconnection, then (only if needed) sending one addressed callback request. This can take a couple of minutes."
     },
     "error": {
       "invalid_ip": "Invalid IPv4 address.",

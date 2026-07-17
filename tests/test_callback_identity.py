@@ -1230,3 +1230,329 @@ class CausalLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    """The FIRST fully-silent socket: explicit typed bootstrap intent only."""
+
+    class _FakeListener:
+        def __init__(self, live, *, silent_ids=(), identify_pn="", raise_on_identify=False):
+            self._live = live
+            self.silent = list(silent_ids)
+            self.identify_calls: list[tuple[str, str]] = []
+            self._identify_pn = identify_pn
+            self._raise = raise_on_identify
+
+        def silent_pending_collector_sessions(self):
+            return tuple(
+                {"session_id": sid, "state": "parked_waiting_for_identity"}
+                for sid in self.silent
+            )
+
+        async def async_identify_pending_session(self, session_id, *, session_protocol):
+            self.identify_calls.append((session_id, session_protocol))
+            if self._raise:
+                raise OSError("probe io error")
+            if not self._identify_pn:
+                return ""
+            self.silent = [sid for sid in self.silent if sid != session_id]
+            shape = "eybond_framed" if session_protocol == "eybond_framed" else "at_text"
+            state = "routed_framed" if shape == "eybond_framed" else "routed_at_text"
+            # Production records the identity into the SAME inventory read --
+            # the session is visible instantly, never briefly "neither silent
+            # nor readable".
+            self._live.sessions.append(
+                _observed(session_id, self._identify_pn, state=state, shape=shape)
+            )
+            return self._identify_pn
+
+    def _listener_patch(self, listener):
+        async def _acquire(_host, _port):
+            return listener
+
+        async def _release(_listener, **_kwargs):
+            return None
+
+        return patch.multiple(
+            "custom_components.eybond_local.collector.transport",
+            _acquire_shared_listener=_acquire,
+            _release_shared_listener=_release,
+        )
+
+    async def _run(self, *, listener, request, reader=None, sender=None, initial=()):
+        live = getattr(listener, "_live")
+        registry = CallbackSessionRegistry(sessions_source=live)
+        hass = _FakeHass(registry)
+        with _no_probe_scope(), self._listener_patch(listener):
+            outcome = await async_run_callback_identity_transaction(
+                hass,
+                request,
+                reader=reader if reader is not None else _Reader(),
+                sender=sender if sender is not None else _Sender(),
+            )
+        return outcome, registry
+
+    def test_intent_constructor_is_strict(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            BOOTSTRAP_SOURCE_EXPLICIT_USER,
+            OnboardingWireProbeIntent,
+        )
+
+        OnboardingWireProbeIntent(protocol="eybond_framed", session_id="s-1")
+        OnboardingWireProbeIntent(protocol="at_text", session_id="s-1")
+        for bad in (
+            dict(protocol="modbus", session_id="s-1"),
+            dict(protocol="", session_id="s-1"),
+            dict(protocol=b"eybond_framed", session_id="s-1"),
+            dict(protocol="eybond_framed", session_id=""),
+            dict(protocol="eybond_framed", session_id=" s-1 "),
+            dict(protocol="eybond_framed", session_id=123),
+            dict(protocol="eybond_framed", session_id="s-1", source="cloud_family"),
+            dict(protocol="eybond_framed", session_id="s-1", source=""),
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    OnboardingWireProbeIntent(**bad)
+        self.assertEqual(BOOTSTRAP_SOURCE_EXPLICIT_USER, "explicit_user_selection")
+
+    async def test_duck_intent_is_rejected_before_any_trigger(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_WIRE_PROBE_FAILED,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(live)
+        sender = _Sender()
+        duck = SimpleNamespace(
+            protocol="eybond_framed",
+            session_id="s-silent",
+            source="explicit_user_selection",
+        )
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(bootstrap_probe=duck),
+            sender=sender,
+        )
+
+        self.assertEqual(outcome.result, IDENTITY_WIRE_PROBE_FAILED)
+        self.assertEqual(sender.calls, 0)  # nothing was triggered
+        self.assertEqual(listener.identify_calls, [])
+
+    async def test_silent_session_yields_typed_result_with_exact_target(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_SESSION_SILENT,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(live)
+        sender = _Sender(on_send=lambda: listener.silent.append("s-silent"))
+        outcome, registry = await self._run(
+            listener=listener, request=_request(), sender=sender
+        )
+
+        self.assertEqual(outcome.result, IDENTITY_SESSION_SILENT)
+        self.assertEqual(outcome.silent_bootstrap_offer.session_id, "s-silent")
+        self.assertFalse(outcome.identity_certified)
+        # No probe ran without an explicit intent, nothing was claimed.
+        self.assertEqual(listener.identify_calls, [])
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "")
+
+    async def test_two_silent_sessions_stay_ambiguous(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_SESSION_SILENT,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(live)
+        sender = _Sender(
+            on_send=lambda: listener.silent.extend(["s-a", "s-b"])
+        )
+        outcome, _registry = await self._run(
+            listener=listener, request=_request(), sender=sender
+        )
+
+        self.assertEqual(outcome.result, IDENTITY_SESSION_SILENT)
+        self.assertIsNone(outcome.silent_bootstrap_offer)  # no single target
+        self.assertEqual(listener.identify_calls, [])
+
+    async def test_no_session_at_all_stays_plain_timeout(self) -> None:
+        live = _Live(())
+        listener = self._FakeListener(live)
+        outcome, _registry = await self._run(listener=listener, request=_request())
+
+        self.assertEqual(outcome.result, IDENTITY_TIMEOUT)
+        self.assertIsNone(outcome.silent_bootstrap_offer)
+
+    async def test_framed_intent_probes_exactly_the_bound_session(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            OnboardingWireProbeIntent,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(
+            live, silent_ids=["s-silent"], identify_pn=FULL_PN
+        )
+        reader = _Reader(pn=FULL_PN, source="fc2_parameter_2")
+        sender = _Sender()
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(
+                bootstrap_probe=OnboardingWireProbeIntent(
+                    protocol="eybond_framed", session_id="s-silent"
+                )
+            ),
+            reader=reader,
+            sender=sender,
+        )
+
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        # The continuation NEVER re-triggers: zero new set>server sequences.
+        self.assertEqual(sender.calls, 0)
+        self.assertEqual(listener.identify_calls, [("s-silent", "eybond_framed")])
+        self.assertEqual(outcome.session_id, "s-silent")
+        self.assertEqual(outcome.collector_pn, FULL_PN)
+        # The certified read still ran session-pinned on the bound socket.
+        self.assertEqual(reader.calls[0]["session_id"], "s-silent")
+        self.assertEqual(
+            registry.prepared_handoff_identity(outcome.handoff_owner, FULL_PN),
+            FULL_PN,
+        )
+
+    async def test_at_intent_probes_with_at_wire(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            OnboardingWireProbeIntent,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(live, silent_ids=["s-silent"], identify_pn=FULL_PN)
+        reader = _Reader(pn=FULL_PN, source="at_dtupn")
+        outcome, _registry = await self._run(
+            listener=listener,
+            request=_request(
+                bootstrap_probe=OnboardingWireProbeIntent(
+                    protocol="at_text", session_id="s-silent"
+                )
+            ),
+            reader=reader,
+        )
+
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        self.assertEqual(listener.identify_calls, [("s-silent", "at_text")])
+        self.assertEqual(outcome.session_protocol, "at_text")
+
+    async def test_failed_probe_is_typed_and_never_falls_back(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_WIRE_PROBE_FAILED,
+            OnboardingWireProbeIntent,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(live, silent_ids=["s-silent"], identify_pn="")
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(
+                bootstrap_probe=OnboardingWireProbeIntent(
+                    protocol="eybond_framed", session_id="s-silent"
+                )
+            ),
+        )
+
+        self.assertEqual(outcome.result, IDENTITY_WIRE_PROBE_FAILED)
+        # EXACTLY one probe, on exactly the chosen wire -- no second protocol.
+        self.assertEqual(listener.identify_calls, [("s-silent", "eybond_framed")])
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "")
+
+    async def test_probe_io_error_is_typed(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_WIRE_PROBE_FAILED,
+            OnboardingWireProbeIntent,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(
+            live, silent_ids=["s-silent"], raise_on_identify=True
+        )
+        outcome, _registry = await self._run(
+            listener=listener,
+            request=_request(
+                bootstrap_probe=OnboardingWireProbeIntent(
+                    protocol="eybond_framed", session_id="s-silent"
+                )
+            ),
+        )
+        self.assertEqual(outcome.result, IDENTITY_WIRE_PROBE_FAILED)
+
+    async def test_gone_bound_session_is_typed_stale_and_never_rebound(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_SILENT_SESSION_STALE,
+            OnboardingWireProbeIntent,
+        )
+
+        live = _Live(())
+        # The bound socket is GONE; a different silent one (possibly a foreign
+        # collector behind the same NAT) is live instead. The continuation
+        # sends NO trigger, so nothing new is attributable to it.
+        listener = self._FakeListener(
+            live, silent_ids=["s-other"], identify_pn=FULL_PN
+        )
+        sender = _Sender()
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(
+                bootstrap_probe=OnboardingWireProbeIntent(
+                    protocol="eybond_framed", session_id="s-bound-gone"
+                )
+            ),
+            sender=sender,
+        )
+
+        # NOT probed, NOT rebound: typed stale, explicit new attempt only.
+        self.assertEqual(listener.identify_calls, [])
+        self.assertEqual(outcome.result, IDENTITY_SILENT_SESSION_STALE)
+        self.assertIsNone(outcome.silent_bootstrap_offer)
+        # And the continuation sent ZERO datagrams of its own.
+        self.assertEqual(sender.calls, 0)
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "")
+
+    async def test_probed_foreign_pn_fails_the_expected_match(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            OnboardingWireProbeIntent,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(
+            live, silent_ids=["s-silent"], identify_pn=OTHER_FULL_PN
+        )
+        reader = _Reader(pn=OTHER_FULL_PN, source="fc2_parameter_2")
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(
+                expected_pn=FULL_PN,
+                bootstrap_probe=OnboardingWireProbeIntent(
+                    protocol="eybond_framed", session_id="s-silent"
+                ),
+            ),
+            reader=reader,
+        )
+
+        self.assertFalse(outcome.identity_certified)
+        self.assertEqual(outcome.result, "callback_identity_mismatch")
+        # Fail-closed: nothing stayed claimed for either identity.
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(OTHER_FULL_PN), "")
+
+    async def test_intent_appears_in_no_persisted_confirmed_vocabulary(self) -> None:
+        # The ephemeral capability must be invisible to the persistence layer.
+        confirmed = (
+            REPO_ROOT
+            / "custom_components/eybond_local/connection/confirmed_session_protocol.py"
+        ).read_text()
+        self.assertNotIn("OnboardingWireProbeIntent", confirmed)
+        self.assertNotIn("bootstrap_probe", confirmed)
+        contract = (
+            REPO_ROOT
+            / "custom_components/eybond_local/connection/recovery_contract.py"
+        ).read_text()
+        self.assertNotIn("OnboardingWireProbeIntent", contract)

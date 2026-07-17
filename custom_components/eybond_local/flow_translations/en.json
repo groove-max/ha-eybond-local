@@ -469,7 +469,16 @@
       "pending_status_callback_identity_conflict": "That collector is already linked to another entry; nothing was linked",
       "pending_status_callback_identity_ambiguous": "More than one collector answered; none was linked",
       "pending_status_callback_trigger_not_sent": "The connection request could not be sent; nothing was linked",
-      "pending_status_callback_trigger_interference": "Another connection request interfered; nothing was linked"
+      "pending_status_callback_trigger_interference": "Another connection request interfered; nothing was linked",
+      "recovery_fail_silent_ambiguous": "More than one collector connected silently at the same time, so none could be identified. Make sure only the collector you are adding can reach Home Assistant, then try again.",
+      "recovery_fail_identity_mismatch": "A different collector answered on the reconnected connection. Check that the address reaches the collector you are adding, then try again.",
+      "recovery_fail_silent_probe_failed": "The collector reconnected but did not answer the identity query. It may use the other protocol, or it may need another attempt.",
+      "recovery_fail_silent_probe_unavailable": "Home Assistant could not open the connection needed to identify the reconnected collector. Check the listener address and port, then try again.",
+      "recovery_fail_callback_timeout": "The collector did not reconnect after the restart. Check the address and that the collector can reach Home Assistant, then try again.",
+      "recovery_fail_inbound_timeout": "The collector did not reconnect on its own after the restart. Try again, or save a Pending Device that waits for it.",
+      "recovery_fail_restart_unsupported": "This collector cannot be restarted for verification over its connection. Save a Pending Device instead.",
+      "recovery_fail_ownership_unavailable": "The verified connection is no longer held for this collector. Run the verification again.",
+      "recovery_fail_generic": "The recovery verification did not succeed. You can try again, change the settings, or save a Pending Device."
     }
   }
 }

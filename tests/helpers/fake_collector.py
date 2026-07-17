@@ -219,6 +219,7 @@ class FakeCollectorService:
                 peer[1],
             )
 
+            self.rx_seen_on_connection = False
             self._heartbeat_ready = asyncio.Event()
             if self._scenario.first_heartbeat_delay <= 0:
                 self._heartbeat_ready.set()
@@ -311,6 +312,10 @@ class FakeCollectorService:
         return self._unsolicited_tid
 
     async def _send_heartbeat(self, *, reason: str, tid: int | None = None) -> None:
+        if not getattr(self, "rx_seen_on_connection", False):
+            # Unsolicited application bytes BEFORE the peer asked anything --
+            # the e2e silent-socket assertions count these.
+            self.pre_rx_heartbeats = getattr(self, "pre_rx_heartbeats", 0) + 1
         frame = build_unsolicited_heartbeat(
             tid=self._next_unsolicited_tid() if tid is None else int(tid) & 0xFFFF,
             pn=self._profile.pn,
@@ -333,6 +338,7 @@ class FakeCollectorService:
         try:
             while True:
                 prefix = await reader.readexactly(3)
+                self.rx_seen_on_connection = True
                 if prefix == b"AT+":
                     line = prefix + await reader.readuntil(b"\n")
                     await self._handle_at(line)
@@ -354,7 +360,17 @@ class FakeCollectorService:
                 )
 
                 if header.fcode == FC_HEARTBEAT:
-                    if not self._heartbeat_ready.is_set():
+                    # ``first_heartbeat_delay`` models a SILENT collector: it
+                    # gates only UNSOLICITED heartbeats. A real device still
+                    # answers the server's FC=1 request immediately -- exactly
+                    # like it answers FC=2/FC=4 queries (a reply is never an
+                    # unsolicited byte). ``fc1_reply_mode="gated"`` keeps the
+                    # legacy fully-asleep-heartbeat-engine shape on request.
+                    if (
+                        getattr(self._scenario, "fc1_reply_mode", "immediate")
+                        == "gated"
+                        and not self._heartbeat_ready.is_set()
+                    ):
                         _LOG.info(
                             "Heartbeat response delayed wait_remaining=%.3fs",
                             self._scenario.first_heartbeat_delay,

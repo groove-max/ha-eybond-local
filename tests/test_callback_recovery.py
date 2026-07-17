@@ -38,6 +38,10 @@ from custom_components.eybond_local.onboarding.strategy_verification import (
     FAILURE_CALLBACK_INTERFERENCE,
     FAILURE_CALLBACK_PROOF_INVALID,
     FAILURE_CALLBACK_TIMEOUT,
+    FAILURE_RECOVERY_IDENTITY_MISMATCH,
+    FAILURE_SILENT_PROBE_FAILED,
+    FAILURE_SILENT_PROBE_UNAVAILABLE,
+    FAILURE_SILENT_SESSION_AMBIGUOUS,
     FAILURE_CAUSALITY_BUSY,
     FAILURE_OWNERSHIP_UNAVAILABLE,
     FAILURE_RECONNECTED_SESSION_UNTRUSTED,
@@ -1720,3 +1724,317 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SilentReconnectProbeTests(unittest.IsolatedAsyncioTestCase):
+    """FULLY silent recovery reconnects: trusted-wire authority, one probe."""
+
+    class _FakeSilentProbe:
+        def __init__(self, inventory, *, silent=(), identify_pn=""):
+            self._inventory = inventory
+            self.silent = list(silent)
+            self.identify_calls: list[tuple[str, str]] = []
+            self._identify_pn = identify_pn
+            self.available = True
+
+        def snapshot_silent_session_ids(self):
+            return frozenset(self.silent)
+
+        async def async_identify_exact_session(self, session_id, *, session_protocol):
+            self.identify_calls.append((session_id, session_protocol))
+            if not self._identify_pn:
+                return ""
+            self.silent = [sid for sid in self.silent if sid != session_id]
+            self._inventory.sessions.append(_session(session_id, self._identify_pn))
+            return self._identify_pn
+
+    class _WireChannel(_FakeChannel):
+        """A channel that vouches the observed wire and drops the old socket."""
+
+        def __init__(self, inventory, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self._inventory = inventory
+
+        def observed_wire(self) -> str:
+            return "eybond_framed"
+
+        async def async_send_restart(self) -> None:
+            await super().async_send_restart()
+            self._inventory.sessions = [
+                s for s in self._inventory.sessions if s["session_id"] != OLD_SESSION
+            ]
+
+    async def test_silent_autonomous_reconnect_is_probed_and_recovered(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+
+        def _reboot_makes_silent_socket():
+            probe.silent.append(NEW_SESSION)
+
+        original_restart = channel.async_send_restart
+
+        async def _restart():
+            await original_restart()
+            _reboot_makes_silent_socket()
+
+        channel.async_send_restart = _restart  # type: ignore[method-assign]
+        sender = _Sender(ledger=ledger)
+
+        outcome = await _verifier(
+            channel,
+            inventory,
+            ledger=ledger,
+            sender=sender,
+            silent_session_probe=probe,
+            policy=replace(FAST_POLICY, inbound_reconnect_timeout=1.0),
+        ).async_verify()
+
+        self.assertTrue(outcome.inbound_recovered, outcome.failure_reason)
+        # Exactly ONE session-pinned probe, on the PRE-REBOOT observed wire.
+        self.assertEqual(probe.identify_calls, [(NEW_SESSION, "eybond_framed")])
+        # Zero UDP: the autonomous phase never triggers.
+        self.assertEqual(sender.routes, [])
+        self.assertEqual(ledger.snapshot_generation(), 0)
+
+    async def test_silent_callback_answer_is_probed_after_one_trigger(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+        sender = _Sender(
+            ledger=ledger, on_send=lambda: probe.silent.append(NEW_SESSION)
+        )
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+        self.assertEqual(probe.identify_calls, [(NEW_SESSION, "eybond_framed")])
+        self.assertEqual(len(sender.routes), 1)  # exactly one sequence
+        self.assertEqual(ledger.snapshot_generation(), 1)
+
+    async def test_two_silent_candidates_are_ambiguous_not_timeout(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+        sender = _Sender(
+            ledger=ledger,
+            on_send=lambda: probe.silent.extend(["s-x", "s-y"]),
+        )
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertFalse(outcome.callback_verified)
+        # Two sockets DID arrive -- honest ambiguity, never a plain timeout.
+        self.assertEqual(
+            outcome.failure_reason, FAILURE_SILENT_SESSION_AMBIGUOUS
+        )
+        self.assertEqual(probe.identify_calls, [])  # ambiguity: no guessing
+
+    async def test_ambiguity_resolving_to_one_candidate_succeeds(self) -> None:
+        # Two silent sockets at first; one closes, leaving a single valid
+        # candidate that then identifies as our collector -> success.
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+
+        def _two_then_one():
+            probe.silent.extend(["s-decoy", NEW_SESSION])
+
+            async def _drop_decoy():
+                await asyncio.sleep(0.03)
+                if "s-decoy" in probe.silent:
+                    probe.silent.remove("s-decoy")
+
+            asyncio.get_running_loop().create_task(_drop_decoy())
+
+        sender = _Sender(ledger=ledger, on_send=_two_then_one)
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+            policy=replace(FAST_POLICY, callback_recovery_session_wait=2.0),
+        ).async_verify()
+
+        self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+        self.assertEqual(probe.identify_calls, [(NEW_SESSION, "eybond_framed")])
+
+    async def test_foreign_probed_pn_is_definitive_identity_mismatch(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=OTHER_FULL_PN)
+        retargets: list[str] = []
+        sender = _Sender(
+            ledger=ledger, on_send=lambda: probe.silent.append(NEW_SESSION)
+        )
+
+        outcome = await _verifier(
+            channel,
+            inventory,
+            ledger=ledger,
+            sender=sender,
+            silent_session_probe=probe,
+            retarget_claim=lambda sid: retargets.append(sid) or True,
+        ).async_verify()
+
+        self.assertFalse(outcome.callback_verified)
+        # A foreign strong PN answered: definitive, distinct from timeout.
+        self.assertEqual(
+            outcome.failure_reason, FAILURE_RECOVERY_IDENTITY_MISMATCH
+        )
+        # Probed exactly once; the foreign identity was never retargeted.
+        self.assertEqual(probe.identify_calls, [(NEW_SESSION, "eybond_framed")])
+        self.assertEqual(retargets, [])
+
+    async def test_probe_query_without_pn_is_probe_failed(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn="")  # no answer
+        sender = _Sender(
+            ledger=ledger, on_send=lambda: probe.silent.append(NEW_SESSION)
+        )
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertFalse(outcome.callback_verified)
+        self.assertEqual(outcome.failure_reason, FAILURE_SILENT_PROBE_FAILED)
+        self.assertEqual(probe.identify_calls, [(NEW_SESSION, "eybond_framed")])
+
+    async def test_unavailable_probe_channel_is_typed(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+        probe.available = False  # the channel could not open its listener
+        sender = _Sender(
+            ledger=ledger, on_send=lambda: probe.silent.append(NEW_SESSION)
+        )
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertFalse(outcome.callback_verified)
+        self.assertEqual(
+            outcome.failure_reason, FAILURE_SILENT_PROBE_UNAVAILABLE
+        )
+        self.assertEqual(probe.identify_calls, [])  # never queried
+
+    async def test_no_socket_at_all_stays_plain_timeout(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)  # stays empty
+        sender = _Sender(ledger=ledger)  # nothing ever dials in
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertFalse(outcome.callback_verified)
+        # NOTHING arrived: the honest reason is the plain callback timeout.
+        self.assertEqual(outcome.failure_reason, FAILURE_CALLBACK_TIMEOUT)
+        self.assertEqual(probe.identify_calls, [])
+
+    async def test_inbound_silent_diagnosis_does_not_block_callback_success(
+        self,
+    ) -> None:
+        # The autonomous inbound window sees an AMBIGUOUS pair (diagnostic),
+        # then the callback phase's own window gets a clean single silent
+        # answer -> callback success. The inbound diagnosis never leaks.
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+
+        # During the inbound window (no trigger yet) two decoys are silent.
+        probe.silent.extend(["inbound-a", "inbound-b"])
+
+        def _callback_answer():
+            # The callback trigger clears the inbound decoys and produces the
+            # single real answer of THIS phase's baseline.
+            probe.silent.clear()
+            probe.silent.append(NEW_SESSION)
+
+        sender = _Sender(ledger=ledger, on_send=_callback_answer)
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+            policy=replace(FAST_POLICY, inbound_reconnect_timeout=0.2),
+        ).async_verify()
+
+        self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+        self.assertEqual(probe.identify_calls, [(NEW_SESSION, "eybond_framed")])
+
+    async def test_inbound_only_silent_diagnosis_is_surfaced(self) -> None:
+        # InboundRecoveryVerifier (no callback route): a silent probe failure
+        # in the autonomous window is surfaced, not collapsed to timeout.
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            InboundRecoveryVerifier,
+        )
+
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = self._WireChannel(inventory)
+        probe = self._FakeSilentProbe(inventory, identify_pn="")
+
+        original_restart = channel.async_send_restart
+
+        async def _restart():
+            await original_restart()
+            probe.silent.append(NEW_SESSION)
+
+        channel.async_send_restart = _restart  # type: ignore[method-assign]
+
+        outcome = await InboundRecoveryVerifier(
+            collector_pn=FULL_PN,
+            session_id=OLD_SESSION,
+            restart_channel=channel,
+            sessions_source=inventory,
+            clock=lambda: TS,
+            policy=replace(FAST_POLICY, inbound_reconnect_timeout=1.0),
+            ledger=ledger,
+            retarget_claim=lambda _sid: True,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertFalse(outcome.inbound_verified)
+        self.assertEqual(outcome.failure_reason, FAILURE_SILENT_PROBE_FAILED)
+
+    async def test_no_authority_means_no_probe(self) -> None:
+        # The channel cannot vouch for a wire (no observed_wire): silent
+        # candidates stay unprobed -- fail-closed, exactly as before (a plain
+        # timeout; the wire-authority contract is unchanged).
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = _reset_drops_old(inventory)  # no observed_wire method
+        probe = self._FakeSilentProbe(inventory, identify_pn=FULL_PN)
+        sender = _Sender(
+            ledger=ledger, on_send=lambda: probe.silent.append(NEW_SESSION)
+        )
+
+        outcome = await _verifier(
+            channel, inventory, ledger=ledger, sender=sender,
+            silent_session_probe=probe,
+        ).async_verify()
+
+        self.assertFalse(outcome.callback_verified)
+        self.assertEqual(outcome.failure_reason, FAILURE_CALLBACK_TIMEOUT)
+        self.assertEqual(probe.identify_calls, [])

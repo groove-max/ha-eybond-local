@@ -2433,6 +2433,68 @@ class _SharedEybondListener:
                 self._resume_pending_watch(pending)
             return None
 
+    def silent_pending_collector_sessions(self) -> tuple[dict[str, object], ...]:
+        """Live pending sockets that have volunteered NO identity yet.
+
+        The onboarding bootstrap view: ``discovered_collector_sessions``
+        deliberately hides PN-less sockets (they are not discovery
+        candidates), but a callback identity attempt must be able to tell "a
+        TCP session arrived and stayed silent" apart from "nothing arrived".
+        Only session ids and lifecycle states are exposed -- no bytes, no
+        wire guess, no peer-IP identity.
+        """
+
+        sessions: list[dict[str, object]] = []
+        for pending in self._pending_sockets.values():
+            session_id = str(pending.session_id or "").strip()
+            if not session_id:
+                continue
+            entry = self._session_inventory.get(session_id)
+            if str(getattr(entry, "collector_pn", "") or "").strip():
+                continue
+            state = str(getattr(entry, "state", "") or "").strip()
+            if state.startswith("closed"):
+                continue
+            sessions.append({"session_id": session_id, "state": state})
+        return tuple(sessions)
+
+    async def async_identify_pending_session(
+        self,
+        session_id: str,
+        *,
+        session_protocol: str,
+    ) -> str:
+        """ONE read-only identity probe of one exact silent pending socket.
+
+        The onboarding-bootstrap entry point into the SAME probe algorithm the
+        confirmed-owner route activation uses
+        (``_identify_pending_socket_for_route``): pause the sniffer, send the
+        single identity query of the given wire (framed FC=2 parameter 2 /
+        ``AT+DTUPN``), record a strong identity on a valid reply, and keep the
+        socket watched either way. Returns the PN or ``""`` -- never guesses,
+        never retries, never falls back to another protocol.
+        """
+
+        async with self._pending_route_lock:
+            pending = self._select_pending_socket_by_session_id(session_id)
+            if pending is None:
+                return ""
+            await self._pause_pending_sniff(pending)
+            if not self._pending_socket_still_registered(pending):
+                return ""
+            pending_pn = await self._identify_pending_socket_for_route(
+                pending,
+                session_protocol=session_protocol,
+            )
+            if not self._pending_socket_still_registered(pending):
+                return pending_pn
+            if not pending_pn:
+                self._mark_session_state(
+                    pending.session_id, "waiting_for_route_identity"
+                )
+            self._resume_pending_watch(pending)
+            return pending_pn
+
     def _select_pending_socket_by_session_id(
         self,
         session_id: str,

@@ -140,7 +140,16 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         return int(transport.get_extra_info("sockname")[1])
 
     async def _dial_in_and_wait(self, service: FakeCollectorService) -> str:
-        """Plumbing dial-in (the passive-discovery topology), NOT a trigger."""
+        """Plumbing dial-in (the passive-discovery topology), NOT a trigger.
+
+        The transaction's precondition is an already-identified live session
+        (onboarding certified it), so the FIRST socket may announce itself.
+        Every socket the collector opens AFTER this point is FULLY SILENT:
+        the engine's pre-reboot trusted-wire authority must drive the single
+        session-pinned FC=2 probe in BOTH recovery phases.
+        """
+
+        import dataclasses as _dc
 
         redirect = f"set>server=127.0.0.1:{self._tcp_port};".encode("ascii")
         await service.handle_discovery(redirect, ("127.0.0.1", 0))
@@ -148,6 +157,10 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         while True:
             for session in self._registry.observed_sessions_per_socket():
                 if not session.state.startswith("closed"):
+                    service._scenario = _dc.replace(
+                        service._scenario, first_heartbeat_delay=3600.0
+                    )
+                    service.pre_rx_heartbeats = 0
                     return session.session_id
             if asyncio.get_running_loop().time() >= deadline:
                 raise AssertionError("collector never dialed in")
@@ -207,6 +220,9 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
             get_callback_trigger_ledger().snapshot_generation(), generation_before
         )
 
+        # The silent reconnect answered ONLY the engine's authorized FC=2
+        # probe: the collector volunteered zero unsolicited bytes after reset.
+        self.assertEqual(getattr(service, "pre_rx_heartbeats", 0), 0)
         proof = outcome.callback_proof
         self.assertEqual(proof.method, CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT)
         self.assertEqual(proof.collector_pn, FULL_PN)
@@ -302,6 +318,7 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
             get_callback_trigger_ledger().snapshot_generation(), generation_before
         )
 
+        self.assertEqual(getattr(service, "pre_rx_heartbeats", 0), 0)
         proof = outcome.inbound_proof
         self.assertEqual(proof.method, INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER)
         self.assertEqual(proof.collector_pn, FULL_PN)

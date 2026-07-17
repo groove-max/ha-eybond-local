@@ -77,6 +77,7 @@ from .const import (
     PENDING_ATTEMPT_WAITING_CALLBACK,
     PENDING_ATTEMPT_WAITING_INBOUND,
     PENDING_UNIQUE_ID_PREFIX,
+    CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
@@ -212,9 +213,12 @@ from .connection.session_registry import (
     identity_source_is_strong,
     pn_is_same_identity,
 )
+from .connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
 from .onboarding.callback_identity import (
+    BOOTSTRAP_SOURCE_EXPLICIT_USER,
     CallbackIdentityOutcome,
     CallbackIdentityRequest,
+    OnboardingWireProbeIntent,
     async_run_callback_identity_transaction,
 )
 from .onboarding.recovery_terminalization import (
@@ -223,11 +227,13 @@ from .onboarding.recovery_terminalization import (
     verify_prepared_handoff,
 )
 from .onboarding.strategy_verification import (
+    CallbackRecoveryRoute,
     EVIDENCE_USER_CONFIRMED_SESSION,
     FAILURE_SESSION_CLAIMED,
     InboundRecoveryOutcome,
     InboundRecoveryVerifier,
     ObservedSessionRestartChannel,
+    async_run_callback_recovery_transaction,
 )
 from .onboarding.timeouts import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -1550,6 +1556,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._verification_registry: Any = None
         self._manual_verified_full_pn = ""
         self._manual_verified_session_id = ""
+        # The typed continuation target surfaced by a callback_session_silent
+        # attempt: the exact socket the explicit bootstrap protocol binds to.
+        self._manual_silent_offer = None
+        # Manual callback recovery verification (the second, user-consented
+        # transaction after a certified identity). The outcome is held ONLY
+        # between the progress task and adoption/decline -- its exact prepared
+        # owner is released on any path that abandons it (async_remove, retry,
+        # decline, failure routing).
+        self._manual_recovery_task: asyncio.Task | None = None
+        self._manual_recovery_outcome = None
+        self._manual_recovery_error = ""
         # The expectation DECLARED before this flow's first callback attempt
         # (passive discovery, or the PN an entry already stores), as opposed to
         # one a previous attempt adopted from its own probe result. ``None`` =
@@ -1602,6 +1619,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             task.cancel()
         else:
             self._release_verification_claim()
+        recovery_task = self._manual_recovery_task
+        self._manual_recovery_task = None
+        if recovery_task is not None and not recovery_task.done():
+            # The recovery wrapper's own finally releases ITS claim; the flow
+            # only cancels the producer task here.
+            recovery_task.cancel()
+        # A completed-but-unadopted recovery outcome still owns a prepared
+        # handoff: release exactly that owner (a no-op once adopted -- the
+        # flow refs and the handed_off flag govern it from then on).
+        self._release_unadopted_recovery_outcome()
         self._strategy_verification_context = None
 
     @staticmethod
@@ -2095,11 +2122,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # The verifier OWNS its causal window: it takes the exclusive callback
         # causality lease before the baseline and holds the trigger inhibitor
         # for the whole verification -- this flow cannot forget to wrap it.
+        from .collector.silent_session_probe import (
+            SilentSessionIdentityProbeChannel,
+        )
+
+        silent_probe = SilentSessionIdentityProbeChannel(
+            host=_PASSIVE_LISTENER_HOST, port=port
+        )
+        await silent_probe.async_open()
         verifier = InboundRecoveryVerifier(
             collector_pn=collector_pn,
             session_id=session_id,
             restart_channel=channel,
             sessions_source=self._verification_sessions_source,
+            silent_session_probe=silent_probe,
             clock=_aware_clock,
             policy=_ONBOARDING_TIMEOUT_POLICY,
             callback_trigger_generation=(
@@ -2125,6 +2161,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             # Ordering matters: fully close the restart channel (and the socket
             # it claimed) BEFORE deciding on the claim, so no other owner can grab
             # the identity while our socket is still open.
+            with suppress(Exception):
+                await silent_probe.async_close()
             with suppress(Exception):
                 await channel.async_close()
             result = self._verification_result
@@ -3361,7 +3399,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         return self._async_show_manual_form(user_input, errors)
 
-    async def _async_run_manual_callback_attempt(self, settings: dict[str, Any]) -> str:
+    async def _async_run_manual_callback_attempt(
+        self,
+        settings: dict[str, Any],
+        *,
+        bootstrap_probe: "OnboardingWireProbeIntent | None" = None,
+    ) -> str:
         """Run ONE complete manual callback attempt. Returns a typed error, or "".
 
         Every active manual callback path goes through here -- the first submit,
@@ -3394,7 +3437,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._verification_expected_pn = self._manual_declared_expected_pn
         self._manual_verified_full_pn = ""
         self._manual_verified_session_id = ""
+        self._manual_silent_offer = None
         self._release_verification_claim()
+        # A retry is a FULL new transaction: any held (unadopted) recovery
+        # outcome is released and the previous attempt's recovery proof/owner
+        # is never reused.
+        self._release_unadopted_recovery_outcome()
+        self._manual_recovery_error = ""
+        self._recovery_terminal = RecoveryTerminalInput.none()
 
         outcome = await async_run_callback_identity_transaction(
             self.hass,
@@ -3407,9 +3457,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 expected_pn=self._verification_expected_pn,
                 old_session_id=self._verification_old_session_id,
                 owner_prefix="callback_verification",
+                bootstrap_probe=bootstrap_probe,
             ),
         )
         if not outcome.identity_certified:
+            # The typed continuation target: the ONLY thing a user-selected
+            # bootstrap probe may later bind to.
+            self._manual_silent_offer = getattr(
+                outcome, "silent_bootstrap_offer", None
+            )
             return outcome.result or "callback_timeout"
 
         # Adopt the certified proof. The transaction's owner already holds a
@@ -3494,6 +3550,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 else ""
             )
             self._verified_strategy_evidence = ""
+            if (
+                self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                and not self._recovery_terminal.has_proof
+            ):
+                # An answered one-shot certifies THIS session's identity; it
+                # does NOT prove the callback route will regain the collector
+                # after the session is lost. A normal callback_on_demand entry
+                # is created only after the recovery verification below -- the
+                # user consents explicitly first (it reboots the collector).
+                return await self.async_step_manual_recovery_confirm()
         if (
             self._manual_result is not None
             and self._manual_result.match is not None
@@ -3711,10 +3777,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not self._manual_config:
             return await self.async_step_manual()
 
-        menu_options = [
-            MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
-            MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
-        ]
+        menu_options = []
+        last_error = str(getattr(self._manual_result, "last_error", "") or "")
+        if (
+            last_error in ("callback_session_silent", "onboarding_wire_probe_failed")
+            and self._manual_silent_offer is not None
+        ):
+            # Advanced recovery for a genuinely SILENT device: the user (and
+            # only the user) may pick the bootstrap protocol for exactly one
+            # read-only identity query on the next attempt's new session.
+            menu_options.append("manual_bootstrap_framed")
+            menu_options.append("manual_bootstrap_at")
+        menu_options.extend(
+            [
+                MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+            ]
+        )
         if self._can_offer_smartess_cloud_assist(self._manual_result):
             menu_options.append("manual_smartess_cloud_assist")
         menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
@@ -3763,6 +3842,49 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             )
         return await self._async_route_after_manual_callback_success()
 
+    async def async_step_manual_bootstrap_framed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """The user explicitly chose the EyeBond framed bootstrap protocol."""
+
+        del user_input
+        return await self._async_manual_bootstrap_retry(WIRE_FRAMED)
+
+    async def async_step_manual_bootstrap_at(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """The user explicitly chose the AT command bootstrap protocol."""
+
+        del user_input
+        return await self._async_manual_bootstrap_retry(WIRE_AT_TEXT)
+
+    async def _async_manual_bootstrap_retry(self, protocol: str) -> ConfigFlowResult:
+        """One FULL new attempt whose silent socket may be probed on ``protocol``.
+
+        The typed intent is the ONLY wire authority for a first-ever silent
+        socket: explicit user selection, one attempt, one causally-new session,
+        one read-only identity query. Everything else (trigger, claim, matcher,
+        reader, prepared handoff) is the one shared identity transaction.
+        """
+
+        if not self._manual_config:
+            return await self.async_step_manual()
+        offer = self._manual_silent_offer
+        if offer is None:
+            return await self.async_step_manual_confirm()
+        intent = OnboardingWireProbeIntent.for_offer(offer, protocol=protocol)
+        verification_error = await self._async_run_manual_callback_attempt(
+            self._manual_config,
+            bootstrap_probe=intent,
+        )
+        if verification_error:
+            return await self._async_route_after_manual_callback_failure(
+                verification_error
+            )
+        return await self._async_route_after_manual_callback_success()
+
     async def async_step_manual_edit_settings(
         self,
         user_input: dict[str, Any] | None = None,
@@ -3790,6 +3912,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         del user_input
         if not self._manual_config:
             return await self.async_step_manual()
+        if (
+            self._manual_verified_full_pn
+            and self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+            and not self._recovery_terminal.has_proof
+        ):
+            # Identity alone must not mint a normal callback entry (the pcap
+            # regression: such an entry deadlocks on the next silent socket).
+            # Without a proven recovery route the honest save is the explicit
+            # PENDING entry; the normal entry is created via the recovery
+            # verification path.
+            return await self._async_create_pending_collector_entry()
         result = await self._async_create_manual_entry(
             self._manual_config, self._manual_result
         )
@@ -3798,6 +3931,370 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             # identity yet). That is exactly the pending case: save it explicitly.
             return await self._async_create_pending_collector_entry()
         return result
+
+    # ---- steps: manual callback recovery verification ----
+
+    @_with_translation_bundle
+    async def async_step_manual_recovery_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Explicit consent BEFORE the recovery experiment touches the collector.
+
+        The identity transaction proved WHO is on the wire; it did not prove
+        the callback route can regain the collector after the session is lost
+        (the exact gap behind the silent-socket deadlock regression). The user
+        is told honestly what verification does -- reboot, a bounded inbound
+        wait, at most ONE addressed trigger -- and nothing runs without their
+        explicit choice.
+        """
+
+        del user_input
+        if not self._manual_config or not self._manual_verified_full_pn:
+            return await self.async_step_manual()
+        return self.async_show_menu(
+            step_id="manual_recovery_confirm",
+            menu_options=[
+                "manual_recovery_verify",
+                MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+                MANUAL_CONFIRM_ACTION_CREATE_PENDING,
+            ],
+            description_placeholders={
+                "collector_pn": self._manual_verified_full_pn,
+                "collector_ip": str(
+                    self._manual_config.get(CONF_COLLECTOR_IP) or ""
+                ).strip(),
+            },
+        )
+
+    async def async_step_manual_recovery_verify(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Run the callback recovery transaction as a bounded progress task."""
+
+        del user_input
+        if not self._manual_config or not self._manual_verified_full_pn:
+            return await self.async_step_manual()
+        task = self._manual_recovery_task
+        if task is None:
+            task = self.hass.async_create_task(
+                self._async_run_manual_recovery_transaction()
+            )
+            self._manual_recovery_task = task
+        if task.done():
+            self._manual_recovery_task = None
+            return self.async_show_progress_done(
+                next_step_id="manual_recovery_result"
+            )
+        return self.async_show_progress(
+            step_id="manual_recovery_verify",
+            progress_action="manual_recovery_verify",
+            progress_task=task,
+            description_placeholders={
+                "collector_pn": self._manual_verified_full_pn,
+            },
+        )
+
+    def _manual_callback_recovery_route(
+        self, settings: dict[str, Any]
+    ) -> CallbackRecoveryRoute:
+        """Build the recovery route ONLY from validated form/listener config.
+
+        * ``trigger_target_ip`` -- the explicitly entered collector address;
+        * ``trigger_udp_port`` -- the configured UDP port;
+        * ``advertised_ha_host``/``advertised_ha_port`` -- the explicit
+          advertised endpoint when configured, else the canonical configured
+          HA server host / listener TCP port (NAT: the advertised value goes
+          into the payload verbatim and is never replaced by a bind address);
+        * ``listener_port`` -- the real configured listener port;
+        * ``bind_ip`` -- the configured server host the existing listener
+          setup binds its sender on.
+
+        NOTHING here comes from the connected socket's peer IP, hostnames,
+        cloud family, endpoint classification, collector kind/driver or a
+        persisted expected session protocol.
+        """
+
+        server_ip = str(settings.get(CONF_SERVER_IP) or "").strip()
+        tcp_port = int(settings.get(CONF_TCP_PORT) or 0)
+        advertised_host = (
+            str(settings.get(CONF_ADVERTISED_SERVER_IP) or "").strip() or server_ip
+        )
+        advertised_port = int(settings.get(CONF_ADVERTISED_TCP_PORT) or 0) or tcp_port
+        return CallbackRecoveryRoute(
+            bind_ip=server_ip,
+            trigger_target_ip=str(settings.get(CONF_COLLECTOR_IP) or "").strip(),
+            trigger_udp_port=int(settings.get(CONF_UDP_PORT) or 0),
+            advertised_ha_host=advertised_host,
+            advertised_ha_port=advertised_port,
+            listener_port=tcp_port,
+        )
+
+    async def _async_run_manual_recovery_transaction(self) -> None:
+        """THE production caller of the callback recovery transaction.
+
+        Immutable attempt input: the durable full PN and the exact live
+        session id certified by THIS attempt's identity transaction. The
+        identity transaction's prepared owner is released first (its job --
+        session<->PN identity -- is done); the recovery wrapper then claims
+        exactly the saved session id under its own ``callback_recovery:<uuid>``
+        owner. The socket is never re-found by IP or PN.
+        """
+
+        self._manual_recovery_error = ""
+        self._release_unadopted_recovery_outcome()
+        collector_pn = str(self._manual_verified_full_pn or "").strip()
+        session_id = str(self._manual_verified_session_id or "").strip()
+        registry = self._callback_session_registry()
+        if not collector_pn or not session_id or registry is None:
+            self._manual_recovery_error = "recovery_session_unavailable"
+            return
+        route = self._manual_callback_recovery_route(self._manual_config)
+        # Hand the session over: identity owner out, recovery owner in.
+        self._release_verification_claim()
+
+        def _aware_clock() -> str:
+            from datetime import datetime, timezone
+
+            return datetime.now(timezone.utc).isoformat()
+
+        try:
+            outcome = await async_run_callback_recovery_transaction(
+                registry=registry,
+                collector_pn=collector_pn,
+                session_id=session_id,
+                route=route,
+                clock=_aware_clock,
+                policy=_ONBOARDING_TIMEOUT_POLICY,
+                listener_host=_PASSIVE_LISTENER_HOST,
+            )
+        except asyncio.CancelledError:
+            # The wrapper's own finally released its claim; the flow holds
+            # nothing (the identity owner was released above).
+            raise
+        except Exception:
+            logger.exception("Manual callback recovery transaction failed")
+            self._manual_recovery_error = "recovery_transaction_failed"
+            return
+        self._manual_recovery_outcome = outcome
+
+    @_with_translation_bundle
+    async def async_step_manual_recovery_result(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Map the typed recovery outcome; never guess a strategy."""
+
+        del user_input
+        outcome = self._manual_recovery_outcome
+        if outcome is not None and outcome.callback_verified:
+            # The proven route matches the user's chosen strategy: adopt and
+            # create in one explicit continuation.
+            return await self._async_finalize_recovery_entry(
+                CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+            )
+        if outcome is not None and outcome.inbound_recovered:
+            # The collector proved AUTONOMOUS reconnection -- zero triggers
+            # were sent. This is honestly surfaced; it never silently becomes
+            # a callback_on_demand entry.
+            return await self.async_step_manual_recovery_inbound_confirm()
+        failure = (
+            self._manual_recovery_error
+            or str(getattr(outcome, "failure_reason", "") or "")
+            or "callback_recovery_timeout"
+        )
+        self._release_unadopted_recovery_outcome()
+        self._manual_recovery_error = failure
+        return await self.async_step_manual_recovery_failed()
+
+    async def _async_finalize_recovery_entry(self, strategy: str) -> ConfigFlowResult:
+        """Adopt the outcome's exact prepared owner, then run the terminal path.
+
+        The producer owns the prepared owner until adoption succeeds: a False/
+        raising adoption releases exactly ``outcome.handoff_owner`` through the
+        same domain registry (never by PN lookup) and routes to the typed
+        failure menu. Only AFTER successful adoption is the user's explicit
+        strategy intent recorded; the existing Batch-5 terminal then owns the
+        whole persistence + handoff lifecycle.
+        """
+
+        outcome = self._manual_recovery_outcome
+        self._manual_recovery_outcome = None
+        if outcome is None:
+            self._manual_recovery_error = "recovery_session_unavailable"
+            return await self.async_step_manual_recovery_failed()
+        try:
+            adopted = self._adopt_callback_recovery_outcome(outcome)
+        except Exception:
+            logger.exception("Callback recovery adoption failed")
+            adopted = False
+        if not adopted:
+            self._release_exact_recovery_owner(outcome)
+            self._manual_recovery_error = "recovery_ownership_unavailable"
+            return await self.async_step_manual_recovery_failed()
+        self._verified_connection_strategy = strategy
+        self._verified_strategy_evidence = ""
+        return await self._async_create_manual_entry(
+            self._manual_config, self._manual_result
+        )
+
+    @_with_translation_bundle
+    async def async_step_manual_recovery_inbound_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """The collector reconnected on its own: ask before saving it as inbound."""
+
+        del user_input
+        outcome = self._manual_recovery_outcome
+        if outcome is None or not outcome.inbound_recovered:
+            return await self.async_step_manual_recovery_failed()
+        return self.async_show_menu(
+            step_id="manual_recovery_inbound_confirm",
+            menu_options=[
+                "manual_recovery_accept_inbound",
+                "manual_recovery_decline_inbound",
+            ],
+            description_placeholders={
+                "collector_pn": str(outcome.collector_pn or ""),
+            },
+        )
+
+    async def async_step_manual_recovery_accept_inbound(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        # The user explicitly confirmed the proven autonomous reconnection:
+        # THAT confirmation is the inbound intent (never inferred from the
+        # proof itself). The inbound proof travels through the same
+        # RecoveryTerminalInput/terminal path.
+        return await self._async_finalize_recovery_entry(CONNECTION_STRATEGY_INBOUND)
+
+    async def async_step_manual_recovery_decline_inbound(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        self._release_unadopted_recovery_outcome()
+        self._manual_recovery_error = "recovery_inbound_declined"
+        return await self.async_step_manual_recovery_failed()
+
+    def _recovery_failure_explanation(self, code: str) -> str:
+        """A localized, human sentence for one typed recovery failure code.
+
+        Never shows the raw code to the user: each honest silent/recovery
+        cause gets its own plain explanation. An unknown code falls back to a
+        generic sentence (the code still goes to the logs, not the UI).
+        """
+
+        explanations = {
+            "recovery_silent_session_ambiguous": (
+                "common.dynamic.recovery_fail_silent_ambiguous",
+                "More than one collector connected silently at the same time, "
+                "so none could be identified. Make sure only the collector you "
+                "are adding can reach Home Assistant, then try again.",
+            ),
+            "recovery_identity_mismatch": (
+                "common.dynamic.recovery_fail_identity_mismatch",
+                "A different collector answered on the reconnected connection. "
+                "Check that the address reaches the collector you are adding, "
+                "then try again.",
+            ),
+            "recovery_silent_probe_failed": (
+                "common.dynamic.recovery_fail_silent_probe_failed",
+                "The collector reconnected but did not answer the identity "
+                "query. It may use the other protocol, or it may need another "
+                "attempt.",
+            ),
+            "recovery_silent_probe_unavailable": (
+                "common.dynamic.recovery_fail_silent_probe_unavailable",
+                "Home Assistant could not open the connection needed to "
+                "identify the reconnected collector. Check the listener "
+                "address/port, then try again.",
+            ),
+            "callback_recovery_timeout": (
+                "common.dynamic.recovery_fail_callback_timeout",
+                "The collector did not reconnect after the restart. Check the "
+                "address and that the collector can reach Home Assistant, then "
+                "try again.",
+            ),
+            "inbound_reconnect_timeout": (
+                "common.dynamic.recovery_fail_inbound_timeout",
+                "The collector did not reconnect on its own after the restart. "
+                "Try again, or save a Pending Device that waits for it.",
+            ),
+            "restart_not_supported": (
+                "common.dynamic.recovery_fail_restart_unsupported",
+                "This collector cannot be restarted for verification over its "
+                "connection. Save a Pending Device instead.",
+            ),
+            "recovery_ownership_unavailable": (
+                "common.dynamic.recovery_fail_ownership_unavailable",
+                "The verified connection is no longer held for this collector. "
+                "Run the verification again.",
+            ),
+        }
+        key, fallback = explanations.get(
+            code,
+            (
+                "common.dynamic.recovery_fail_generic",
+                "The recovery verification did not succeed. You can try again, "
+                "change the settings, or save a Pending Device.",
+            ),
+        )
+        return self._tr(key, fallback)
+
+    @_with_translation_bundle
+    async def async_step_manual_recovery_failed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Typed recovery failure with the explicit next actions preserved."""
+
+        del user_input
+        self._release_unadopted_recovery_outcome()
+        return self.async_show_menu(
+            step_id="manual_recovery_failed",
+            menu_options=[
+                MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+                MANUAL_CONFIRM_ACTION_CREATE_PENDING,
+            ],
+            description_placeholders={
+                "collector_pn": self._manual_verified_full_pn
+                or self._verification_expected_pn,
+                "failure_explanation": self._recovery_failure_explanation(
+                    self._manual_recovery_error or ""
+                ),
+            },
+        )
+
+    def _release_exact_recovery_owner(self, outcome) -> None:
+        """Release exactly ``outcome.handoff_owner`` -- never anyone else's.
+
+        A no-op when the owner was already ADOPTED (flow refs govern it then,
+        Batch-5 lifecycle) and for failure outcomes (no owner). Never looks
+        owners up by PN.
+        """
+
+        owner = str(getattr(outcome, "handoff_owner", "") or "").strip()
+        if not owner or owner == self._verification_claim_owner:
+            return
+        registry = self._callback_session_registry()
+        if registry is not None:
+            with suppress(Exception):
+                registry.release(owner)
+
+    def _release_unadopted_recovery_outcome(self) -> None:
+        """Release a held-but-not-adopted recovery outcome's prepared owner."""
+
+        outcome = self._manual_recovery_outcome
+        self._manual_recovery_outcome = None
+        if outcome is not None:
+            self._release_exact_recovery_owner(outcome)
 
     async def _async_create_pending_collector_entry(self) -> ConfigFlowResult:
         """Create an explicit pending-collector entry (no durable PN yet).
@@ -7085,6 +7582,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             "callback_trigger_interference": (
                 "common.dynamic.manual_probe_callback_trigger_interference",
                 "Another callback request overlapped this attempt, so its answer could not be attributed safely.",
+            ),
+            # HONEST taxonomy: the TCP session DID arrive -- calling this
+            # "did not call back" sends users debugging the wrong layer.
+            "callback_session_silent": (
+                "common.dynamic.manual_probe_callback_session_silent",
+                "The collector CONNECTED to Home Assistant but stayed silent: it sent no identity on its own. Choose its protocol below so one read-only identity query can be sent.",
+            ),
+            "onboarding_wire_probe_failed": (
+                "common.dynamic.manual_probe_onboarding_wire_probe_failed",
+                "The silent collector did not answer the identity query on the selected protocol. It may use the other protocol -- this is never guessed automatically.",
+            ),
+            "callback_silent_session_unavailable": (
+                "common.dynamic.manual_probe_callback_silent_session_unavailable",
+                "The silent connection this attempt was bound to has closed. Run a new attempt to let the collector connect again.",
             ),
         }
 

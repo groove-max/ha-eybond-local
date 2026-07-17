@@ -126,6 +126,48 @@ FAILURE_CALLBACK_PROOF_INVALID = "callback_proof_invalid"
 # collector. A wiring bug must never cost the user a pointless reboot.
 FAILURE_OWNERSHIP_UNAVAILABLE = "recovery_ownership_unavailable"
 
+# FULLY-SILENT reconnect diagnoses. A TCP socket demonstrably arrived (it is
+# in the listener's silent-pending view), so collapsing these into a plain
+# "timeout" is dishonest -- each names a different observable cause.
+FAILURE_SILENT_SESSION_AMBIGUOUS = "recovery_silent_session_ambiguous"
+FAILURE_RECOVERY_IDENTITY_MISMATCH = "recovery_identity_mismatch"
+FAILURE_SILENT_PROBE_FAILED = "recovery_silent_probe_failed"
+FAILURE_SILENT_PROBE_UNAVAILABLE = "recovery_silent_probe_unavailable"
+
+# Typed observations of ONE silent-candidate probe poll (never exceptions as
+# control flow). ``_SILENT_OBS_TO_FAILURE`` maps the terminal ones to the
+# typed failures above; ``no_candidate`` / ``same_identity_observed`` are not
+# failures (the wait keeps going / the finder succeeds).
+_SILENT_OBS_NONE = "no_candidate"
+_SILENT_OBS_AMBIGUOUS = "ambiguous"
+_SILENT_OBS_PROBE_FAILED = "probe_failed"
+_SILENT_OBS_FOREIGN = "foreign_identity"
+_SILENT_OBS_SAME = "same_identity_observed"
+_SILENT_OBS_UNAVAILABLE = "probe_unavailable"
+
+_SILENT_OBS_TO_FAILURE = {
+    _SILENT_OBS_AMBIGUOUS: FAILURE_SILENT_SESSION_AMBIGUOUS,
+    _SILENT_OBS_PROBE_FAILED: FAILURE_SILENT_PROBE_FAILED,
+    _SILENT_OBS_FOREIGN: FAILURE_RECOVERY_IDENTITY_MISMATCH,
+    _SILENT_OBS_UNAVAILABLE: FAILURE_SILENT_PROBE_UNAVAILABLE,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ReconnectWaitResult:
+    """Outcome of one bounded same-PN reconnect wait.
+
+    ``session_id`` is non-empty on success (the finder resolved a new
+    same-identity socket). ``silent_failure`` is a typed failure reason ONLY
+    when the wait ended without a session AND a silent socket was observed
+    that could not become that session (ambiguous / foreign / probe failed /
+    channel unavailable). Empty ``silent_failure`` means no silent socket was
+    ever observed -- the caller then uses its plain reconnect/callback timeout.
+    """
+
+    session_id: str = ""
+    silent_failure: str = ""
+
 
 class SessionUnavailableError(RuntimeError):
     """The observed session could not be claimed/activated for the restart."""
@@ -241,6 +283,31 @@ class CallbackRecoveryRoute:
         """Opaque snapshot of the advertised endpoint (for the proof)."""
 
         return f"{self.advertised_ha_host}:{self.advertised_ha_port}"
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryWireProbeAuthority:
+    """Immutable wire authority for probing SILENT recovery reconnects.
+
+    Captured ONLY from the trusted, observed, non-conflicting live
+    ``SessionHandle`` of the very session the engine is about to reboot --
+    never from an expected protocol, cloud family, endpoint, collector kind,
+    peer IP or persisted hint. It permits the engine's single session-pinned
+    identity query per causally-new silent candidate on the previously
+    observed wire; it is not evidence, never persisted, and dies with the
+    verification attempt.
+    """
+
+    collector_pn: str
+    session_protocol: str
+    old_session_id: str
+
+    def __post_init__(self) -> None:
+        for value in (self.collector_pn, self.session_protocol, self.old_session_id):
+            if type(value) is not str or not value or value != value.strip():
+                raise ValueError("recovery_wire_authority_invalid")
+        if self.session_protocol not in ("eybond_framed", "at_text"):
+            raise ValueError("recovery_wire_authority_protocol_invalid")
 
 
 def _required_token(value: object) -> bool:
@@ -493,6 +560,7 @@ class _ControlledResetRecoveryEngine:
         retarget_claim: Callable[[str], bool] | None = None,
         prepare_handoff: Callable[[str], str] | None = None,
         probe_reconnected_identity: Callable[[str], Any] | None = None,
+        silent_session_probe: Any = None,
         ledger: Any = None,
         poll_interval: float = _DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> None:
@@ -526,6 +594,14 @@ class _ControlledResetRecoveryEngine:
         # ready-to-handoff capabilities, never re-discovered by PN.
         self._prepare_handoff = prepare_handoff
         self._probe_reconnected_identity = probe_reconnected_identity
+        # The narrow public transport boundary for FULLY SILENT reconnects
+        # (see collector.silent_session_probe). Optional: without it the
+        # engine sees only sessions that volunteer identity, as before.
+        self._silent_session_probe = silent_session_probe
+        # Captured from the TRUSTED live handle right before the reboot; the
+        # only wire authority a silent-reconnect probe may use.
+        self._wire_authority: RecoveryWireProbeAuthority | None = None
+        self._pending_baseline: frozenset[str] = frozenset()
         self._ledger = ledger
         self._disconnect_timeout = max(
             0.0, float(policy.inbound_restart_disconnect_timeout)
@@ -592,6 +668,44 @@ class _ControlledResetRecoveryEngine:
     def _observed_session_entry(self) -> Mapping[str, Any] | None:
         return self._session_entry(self._session_id)
 
+    def _capture_wire_authority(self) -> None:
+        """Freeze the silent-reconnect probe authority from the trusted handle.
+
+        Called AFTER strong identity, BEFORE the reboot: the old session is
+        still live and its negotiated wire is positive observed evidence. A
+        channel that cannot vouch for a wire yields no authority -- silent
+        candidates then simply cannot be probed (fail-closed, as before).
+        """
+
+        self._wire_authority = None
+        observed_wire = getattr(self._restart_channel, "observed_wire", None)
+        if not callable(observed_wire):
+            return
+        try:
+            wire = str(observed_wire() or "").strip()
+        except Exception:
+            wire = ""
+        if not wire:
+            return
+        try:
+            self._wire_authority = RecoveryWireProbeAuthority(
+                collector_pn=self._collector_pn,
+                session_protocol=wire,
+                old_session_id=self._session_id,
+            )
+        except ValueError:
+            self._wire_authority = None
+
+    def _snapshot_pending_baseline(self) -> None:
+        probe = self._silent_session_probe
+        if probe is None:
+            self._pending_baseline = frozenset()
+            return
+        try:
+            self._pending_baseline = frozenset(probe.snapshot_silent_session_ids())
+        except Exception:
+            self._pending_baseline = frozenset()
+
     def _capture_baseline(self) -> None:
         """Record EVERY session id visible right now (plus the old socket).
 
@@ -652,21 +766,48 @@ class _ControlledResetRecoveryEngine:
                 return session_id
         return ""
 
-    async def _async_wait_for_new_same_pn_session(self, deadline: float) -> str:
+    async def _async_wait_for_new_same_pn_session(
+        self, deadline: float
+    ) -> _ReconnectWaitResult:
         """One shared bounded wait for a NEW strong same-PN session.
 
         Used by BOTH phases (inbound reconnect and callback session): weak
         same-identity candidates get exactly ONE claim-retarget + authoritative
         enrichment attempt each; a duplicate probe is structurally impossible.
-        Returns "" on deadline.
+
+        Returns a typed :class:`_ReconnectWaitResult`. A demonstrably-arrived
+        FULLY-SILENT socket that cannot become the session is diagnosed
+        honestly instead of collapsing into a plain timeout: a foreign strong
+        PN is definitive and returns at once (no retarget/claim); ambiguity, a
+        query that ran without a strong PN, and an unavailable probe channel
+        keep waiting for passive evidence and, only at the deadline, surface
+        their own typed failure. No silent socket ever observed -> empty
+        ``silent_failure`` and the caller's plain timeout.
         """
 
         loop = asyncio.get_running_loop()
         identity_probe_attempted: set[str] = set()
+        silent_probe_attempted: set[str] = set()
+        last_silent_failure = ""
         while True:
             new_session_id = self._find_new_inbound_session()
             if new_session_id:
-                return new_session_id
+                return _ReconnectWaitResult(session_id=new_session_id)
+            observation = await self._async_probe_single_silent_candidate(
+                silent_probe_attempted
+            )
+            if observation == _SILENT_OBS_FOREIGN:
+                # A demonstrably foreign strong PN answered on the exact
+                # bound socket: definitive, and never retargeted or claimed.
+                return _ReconnectWaitResult(
+                    silent_failure=FAILURE_RECOVERY_IDENTITY_MISMATCH
+                )
+            failure = _SILENT_OBS_TO_FAILURE.get(observation)
+            if failure:
+                # Sticky diagnosis: keep waiting (passive evidence may still
+                # resolve to a valid same-PN session), but remember the most
+                # recent honest cause for the deadline.
+                last_silent_failure = failure
             weak_session_id = self._find_new_weak_identity_candidate()
             if (
                 weak_session_id
@@ -690,8 +831,80 @@ class _ControlledResetRecoveryEngine:
                             exc,
                         )
             if loop.time() >= deadline:
-                return ""
+                return _ReconnectWaitResult(silent_failure=last_silent_failure)
             await asyncio.sleep(self._poll_interval)
+
+    async def _async_probe_single_silent_candidate(self, attempted: set[str]) -> str:
+        """One identity query per causally-new FULLY SILENT candidate.
+
+        Returns a typed observation (never raises for flow control):
+
+        * ``no_candidate`` -- no causally-new silent socket (or no silent
+          probing wired at all);
+        * ``probe_unavailable`` -- a probe channel exists but could not open;
+        * ``ambiguous`` -- two or more causally-new silent sockets (never
+          probed -- the answer cannot be attributed to one);
+        * ``same_identity_observed`` -- the exact socket answered with the
+          same durable identity (recorded in the inventory; the normal
+          same-PN finder takes over next poll);
+        * ``foreign_identity`` -- it answered with a DIFFERENT strong PN;
+        * ``probe_failed`` -- the query ran and produced no strong PN.
+
+        The query is session-pinned to that one id on the PREVIOUSLY OBSERVED
+        wire -- no second protocol, no retry.
+        """
+
+        probe = self._silent_session_probe
+        authority = self._wire_authority
+        if probe is None or authority is None:
+            # No silent-probe capability wired / no trusted wire authority:
+            # the wire-authority contract is unchanged, this simply means the
+            # silent path is inert here.
+            return _SILENT_OBS_NONE
+        if not getattr(probe, "available", True):
+            return _SILENT_OBS_UNAVAILABLE
+        try:
+            live_silent = frozenset(probe.snapshot_silent_session_ids())
+        except Exception:
+            return _SILENT_OBS_NONE
+        candidates = frozenset(
+            session_id
+            for session_id in live_silent
+            if session_id not in self._pending_baseline
+            and session_id not in self._baseline_session_ids
+            and session_id != self._session_id
+            and session_id not in attempted
+        )
+        if not candidates:
+            return _SILENT_OBS_NONE
+        if len(candidates) != 1:
+            return _SILENT_OBS_AMBIGUOUS
+        candidate = next(iter(candidates))
+        attempted.add(candidate)
+        try:
+            probed_pn = await probe.async_identify_exact_session(
+                candidate,
+                session_protocol=authority.session_protocol,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info("Silent reconnect probe failed on %s: %s", candidate, exc)
+            return _SILENT_OBS_PROBE_FAILED
+        probed_pn = str(probed_pn or "").strip()
+        if not probed_pn:
+            return _SILENT_OBS_PROBE_FAILED
+        if not pn_is_same_identity(self._collector_pn, probed_pn):
+            logger.info(
+                "Silent reconnect candidate %s answered foreign identity", candidate
+            )
+            return _SILENT_OBS_FOREIGN
+        logger.debug(
+            "Silent reconnect candidate %s identified as same collector via %s",
+            candidate,
+            authority.session_protocol,
+        )
+        return _SILENT_OBS_SAME
 
     def _new_session_proof_fields(
         self, new_session_id: str
@@ -863,7 +1076,11 @@ class _ControlledResetRecoveryEngine:
 
         # Baseline of ALL currently-visible sessions, captured before restart
         # (and, thanks to the lease, after every other attempt's causal window
-        # has fully closed).
+        # has fully closed). The silent-pending snapshot and the trusted-wire
+        # probe authority freeze at the same causal point: the old session is
+        # still live, so its negotiated wire is positive observed evidence.
+        self._capture_wire_authority()
+        self._snapshot_pending_baseline()
         self._capture_baseline()
 
         # waiting_for_strong_identity -> restart_requested. The reboot goes
@@ -922,14 +1139,21 @@ class _ControlledResetRecoveryEngine:
         # bounded inbound window always runs first: autonomous recovery must be
         # excluded before any callback may be proven.
         self._enter(STATE_WAITING_FOR_INBOUND_RECONNECT)
-        new_session_id = await self._async_wait_for_new_same_pn_session(
+        wait = await self._async_wait_for_new_same_pn_session(
             loop.time() + self._reconnect_timeout
         )
+        new_session_id = wait.session_id
         if not new_session_id:
             if self._callback_route is not None:
                 # The expected transition to the callback phase, not a failure.
+                # A diagnostic from THIS autonomous inbound window (silent
+                # ambiguity, a foreign answer, a failed/unavailable probe)
+                # must NOT pre-empt a provable callback success -- the
+                # callback phase runs its own post-reset baseline/window.
                 return None
-            return self._fail(FAILURE_RECONNECT_TIMEOUT)
+            # Inbound-only: surface the honest silent diagnosis when a socket
+            # demonstrably arrived; otherwise the plain reconnect timeout.
+            return self._fail(wait.silent_failure or FAILURE_RECONNECT_TIMEOUT)
 
         # Defense in depth behind the lease+inhibitor: if ANY callback trigger
         # was recorded anywhere in the integration meanwhile, the reconnect
@@ -1016,7 +1240,9 @@ class _ControlledResetRecoveryEngine:
         assert route is not None  # dispatch guarantee
 
         # POST-RESET baseline: the inbound window's sockets (none matched) and
-        # anything else visible now can never be the callback answer.
+        # anything else visible now can never be the callback answer -- the
+        # silent-pending snapshot moves to the same causal point.
+        self._snapshot_pending_baseline()
         self._capture_baseline()
 
         attempt = self._attempt
@@ -1047,11 +1273,14 @@ class _ControlledResetRecoveryEngine:
             return self._fail(FAILURE_TRIGGER_NOT_SENT)
 
         self._enter(STATE_WAITING_FOR_CALLBACK_SESSION)
-        new_session_id = await self._async_wait_for_new_same_pn_session(
+        wait = await self._async_wait_for_new_same_pn_session(
             loop.time() + self._callback_wait_timeout
         )
+        new_session_id = wait.session_id
         if not new_session_id:
-            return self._fail(FAILURE_CALLBACK_TIMEOUT)
+            # Only THIS phase's post-reset baseline/window fed the wait, so a
+            # silent diagnosis here is attributable to the callback attempt.
+            return self._fail(wait.silent_failure or FAILURE_CALLBACK_TIMEOUT)
         if attempt is not None and attempt.foreign_sends:
             # A foreign trigger fired inside OUR window: the new session is not
             # attributable to our sequence.
@@ -1326,6 +1555,12 @@ async def async_run_callback_recovery_transaction(
         session_id_provider=_claimed_session_id,
         handle_provider=lambda: registry.session_handle_for_claimed_session(owner),
     )
+    from ..collector.silent_session_probe import SilentSessionIdentityProbeChannel
+
+    silent_probe = SilentSessionIdentityProbeChannel(
+        host=listener_host, port=route.listener_port
+    )
+    await silent_probe.async_open()
 
     async def _probe_reconnected_identity(_new_session_id: str) -> str:
         # The engine already retargeted the claim onto the candidate; the
@@ -1345,6 +1580,7 @@ async def async_run_callback_recovery_transaction(
         retarget_claim=_retarget,
         prepare_handoff=_prepare,
         probe_reconnected_identity=_probe_reconnected_identity,
+        silent_session_probe=silent_probe,
         ledger=ledger,
         poll_interval=poll_interval,
     )
@@ -1354,6 +1590,8 @@ async def async_run_callback_recovery_transaction(
         succeeded = outcome.callback_verified or outcome.inbound_recovered
         return outcome
     finally:
+        with suppress(Exception):
+            await silent_probe.async_close()
         with suppress(Exception):
             await channel.async_close()
         if not succeeded:
@@ -1431,6 +1669,24 @@ class ObservedSessionRestartChannel:
         if not resolved:
             raise SessionUnavailableError(FAILURE_SESSION_UNAVAILABLE)
         return resolved
+
+    def observed_wire(self) -> str:
+        """The live negotiated wire of the trusted handle, or "" fail-closed.
+
+        The ONLY legitimate source of a silent-reconnect probe authority: the
+        REAL observed, non-conflicting SessionHandle of the session this
+        channel claims. No fallback of any kind.
+        """
+
+        try:
+            handle = self._resolve_trusted_handle()
+        except SessionUnavailableError:
+            return ""
+        if handle.uses_framed_wire:
+            return "eybond_framed"
+        if handle.uses_at_text_wire:
+            return "at_text"
+        return ""
 
     def _resolve_trusted_handle(self) -> Any:
         """Resolve the REAL, trusted, live negotiated SessionHandle -- or fail.
@@ -1605,6 +1861,10 @@ __all__ = [
     "CallbackRecoveryVerifier",
     "EVIDENCE_USER_CONFIRMED_SESSION",
     "FAILURE_CALLBACK_INTERFERENCE",
+    "FAILURE_RECOVERY_IDENTITY_MISMATCH",
+    "FAILURE_SILENT_PROBE_FAILED",
+    "FAILURE_SILENT_PROBE_UNAVAILABLE",
+    "FAILURE_SILENT_SESSION_AMBIGUOUS",
     "FAILURE_CALLBACK_PROOF_INVALID",
     "FAILURE_CALLBACK_TIMEOUT",
     "FAILURE_OWNERSHIP_UNAVAILABLE",

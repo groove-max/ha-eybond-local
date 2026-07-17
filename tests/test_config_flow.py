@@ -4806,7 +4806,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_manual(self._manual_callback_input())
 
         self.assertEqual(result["type"], "menu")
-        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(result["step_id"], "manual_recovery_confirm")
         self.assertEqual(flow._manual_verified_full_pn, answered_pn)
         # The strangers stayed unclaimed and unadopted.
         self.assertEqual(registry.owner_for_pn("V000405SYN94677058"), "")
@@ -5046,19 +5046,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["collector_pn"], "")
         self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
-    async def test_manual_callback_verified_pn_is_persisted_into_entry(self) -> None:
-        # Scenario 1 (behavioral test A, entry level): a manual/known-IP callback
-        # identity transaction certified the strong full collector PN. The
-        # created entry persists that durable PN and the USER-CHOSEN
-        # callback_on_demand strategy -- and NO recovery evidence: a certified
-        # identity is not proof the callback route works again later, so
-        # CONF_CONNECTION_STRATEGY_EVIDENCE must be absent.
+    async def test_manual_callback_identity_alone_saves_pending_not_normal(self) -> None:
+        # Batch 6 (the pcap regression gate): a certified callback identity
+        # WITHOUT a proven recovery route must never mint a normal
+        # callback_on_demand entry -- such an entry deadlocks on its next
+        # silent socket. The explicit save is a PENDING entry instead; the
+        # normal entry is created only via the recovery verification path.
         from custom_components.eybond_local.const import (
-            CONF_COLLECTOR_PN,
-            CONF_CONNECTION_STRATEGY_EVIDENCE,
-        )
-        from custom_components.eybond_local.connection.connection_policy import (
-            collector_identity_binding_required,
+            CONF_ENTRY_ROLE,
+            ENTRY_ROLE_PENDING_COLLECTOR,
         )
 
         flow = self._make_flow()
@@ -5084,24 +5080,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
         flow._verified_strategy_evidence = ""
 
+        self.assertFalse(flow._recovery_terminal.has_proof)
         result = await flow.async_step_manual_create_pending()
 
+        # The honest save: an explicit PENDING entry -- never a normal entry
+        # wearing a PN whose recovery route was never proven.
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"][CONF_COLLECTOR_PN], "V001020SYN62344022")
+        self.assertEqual(result["data"][CONF_ENTRY_ROLE], ENTRY_ROLE_PENDING_COLLECTOR)
+        self.assertEqual(result["data"]["collector_pn"], "")
         self.assertEqual(
             result["data"][CONF_CONNECTION_STRATEGY],
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
-        # Identity is never recovery evidence: the key must not exist at all.
-        self.assertNotIn(CONF_CONNECTION_STRATEGY_EVIDENCE, result["data"])
-        # And a certified callback identity NEVER mints a RecoveryContract.
+        # A certified callback identity NEVER mints a RecoveryContract.
         self.assertNotIn("recovery_contract", result["data"])
-        # The durable PN drives the entry unique id (durable identity, not IP).
-        self.assertEqual(flow._test_unique_id, "collector:V001020SYN62344022")
-        # The persisted entry is identity-bound: NOT an offline PN-less entry.
-        # (The canonical strategy alone carries this -- no evidence needed.)
-        self.assertFalse(
-            collector_identity_binding_required(result["data"], result.get("options") or {})
+        self.assertNotEqual(
+            getattr(flow, "_test_unique_id", ""), "collector:V001020SYN62344022"
         )
 
     async def test_user_confirmed_session_creates_no_recovery_contract(self) -> None:
@@ -9497,7 +9491,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
 
         self.assertEqual(result["type"], "menu")
-        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(result["step_id"], "manual_recovery_confirm")
         # The strategy is the user's form choice, re-affirmed -- never inferred.
         self.assertEqual(flow._verified_connection_strategy, "callback_on_demand")
         self.assertEqual(flow._manual_chosen_strategy, "callback_on_demand")
@@ -9797,19 +9791,28 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=_passthrough_enrich,
         ):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
-            self.assertEqual(result["step_id"], "manual_confirm")
+            self.assertEqual(result["step_id"], "manual_recovery_confirm")
 
-            # The owner is a UNIQUE per-attempt id (never a PN-derived id).
-            owner = registry.owner_for_pn(self.FULL_PN)
-            self.assertTrue(owner.startswith("callback_verification:"))
-            self.assertEqual(registry.claimed_session_id(owner), self.NEW_SESSION)
-            self.assertEqual(registry.claimed_identity(owner), self.FULL_PN)
+            # The identity owner is a UNIQUE per-attempt id (never PN-derived).
+            identity_owner = registry.owner_for_pn(self.FULL_PN)
+            self.assertTrue(identity_owner.startswith("callback_verification:"))
+            self.assertEqual(
+                registry.claimed_session_id(identity_owner), self.NEW_SESSION
+            )
+            self.assertEqual(registry.claimed_identity(identity_owner), self.FULL_PN)
 
-            created = await flow.async_step_manual_create_pending()
+        # The user consents; the recovery transaction proves the route and its
+        # own owner replaces the identity owner (released by the producer).
+        created, _calls = await self._drive_recovery_verified(flow, registry)
 
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"][CONF_COLLECTOR_PN], self.FULL_PN)
+        # The entry carries the proven recovery route (callback branch).
+        self.assertIn("callback", created["data"]["recovery_contract"])
         self.assertTrue(flow._callback_ownership_handed_off)
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("callback_recovery:"))
+        self.assertEqual(registry.claimed_identity(identity_owner), "")
 
         # Flow cleanup must NOT release a committed handoff.
         flow.async_remove()
@@ -9928,7 +9931,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             read_pn=self.FULL_PN,
         ):
             result_a = await flow_a.async_step_manual(self._manual_input("192.168.1.60"))
-        self.assertEqual(result_a["step_id"], "manual_confirm")
+        self.assertEqual(result_a["step_id"], "manual_recovery_confirm")
         owner_a = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner_a.startswith("callback_verification:"))
 
@@ -9987,17 +9990,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return result
 
         routed = await self._drive_generic_callback(flow, detector)
-        self.assertEqual(routed["step_id"], "manual_confirm")
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_create_pending()
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
+        del _passthrough_enrich  # the recovery drive patches its own enrich
+        registry = flow._callback_session_registry()
+        created, _calls = await self._drive_recovery_verified(flow, registry)
 
         # A NORMAL entry (the PN was found immediately), carrying the chosen
-        # strategy canonically in data -- as USER INTENT, with no recovery
-        # evidence invented from the identity success.
+        # strategy canonically in data -- as USER INTENT, with the PROVEN
+        # recovery route in the contract (never legacy strategy evidence).
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
         self.assertEqual(created["data"].get("entry_role", ""), "")
@@ -10007,7 +10007,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn(CONF_CONNECTION_STRATEGY, created.get("options") or {})
         self.assertNotIn("connection_strategy_evidence", created["data"])
-        self.assertNotIn("recovery_contract", created["data"])
+        self.assertIn("callback", created["data"]["recovery_contract"])
 
     async def test_generic_manual_inbound_never_adopts_a_foreign_candidate(self) -> None:
         # Item 3 regression: ONE unclaimed strong collector exists globally, but
@@ -10172,7 +10172,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             routed = await self._drive_generic_callback(flow, detector)
 
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         self.assertEqual([event for event, _scope_id in events], ["begin", "end"])
         self.assertEqual(events[0][1], events[1][1])
         self.assertTrue(events[0][1].startswith("callback_verification:"))
@@ -10204,7 +10204,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 self._manual_input("192.168.1.60", connection_strategy="callback_on_demand")
             )
 
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_verification:"))
@@ -10231,7 +10231,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return result
 
         routed = await self._drive_generic_callback(flow, detector)
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         # Only the target identity was claimed ...
         self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
         owner = registry.owner_for_pn(self.FULL_PN)
@@ -10240,14 +10240,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # ... and the pre-existing stranger is untouched.
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
 
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_create_pending()
+        del _passthrough_enrich  # the recovery drive patches its own enrich
+        created, _calls = await self._drive_recovery_verified(flow, registry)
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
+        # The stranger is STILL untouched after recovery + creation.
+        self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
 
     async def test_generic_callback_without_detector_pn_creates_no_normal_entry(self) -> None:
         # BLOCKER 1: one pre-existing foreign session; the active attempt does NOT
@@ -10334,17 +10332,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return result
 
         routed = await self._drive_generic_callback(flow, detector)
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
 
-        owner = registry.owner_for_pn(self.FULL_PN)
-        self.assertTrue(owner.startswith("callback_verification:"))
+        identity_owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(identity_owner.startswith("callback_verification:"))
 
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_create_pending()
+        del _passthrough_enrich  # the recovery drive patches its own enrich
+        created, _calls = await self._drive_recovery_verified(flow, registry)
 
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(
@@ -10352,13 +10346,19 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
         self.assertNotIn(CONF_CONNECTION_STRATEGY, created.get("options") or {})
-        # Strategy is the user's choice; identity success adds NO evidence.
+        # Strategy is the user's choice; the identity/recovery successes add
+        # NO legacy evidence -- the proof lives in the RecoveryContract.
         self.assertNotIn("connection_strategy_evidence", created["data"])
-        # The handoff was prepared for the certified identity.
+        self.assertIn("callback", created["data"]["recovery_contract"])
+        # The handoff was prepared for the RECOVERY transaction's owner (the
+        # identity owner was released at the recovery handover).
         self.assertTrue(flow._callback_ownership_handed_off)
+        owner = registry.owner_for_pn(self.FULL_PN)
+        self.assertTrue(owner.startswith("callback_recovery:"))
         self.assertEqual(
             registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
         )
+        self.assertEqual(registry.claimed_identity(identity_owner), "")
 
     async def test_pre_existing_session_never_substitutes_for_the_answer(self) -> None:
         # BLOCKER 2 (D): the ONLY strong session existed BEFORE our trigger and
@@ -10727,10 +10727,28 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             "_async_enrich_manual_pending_collector_profile",
             side_effect=_passthrough_enrich,
         ):
-            await flow.async_step_manual(self._manual_input("192.168.1.60"))
+            routed = await flow.async_step_manual(self._manual_input("192.168.1.60"))
+            self.assertEqual(routed["step_id"], "manual_recovery_confirm")
+
+        # Recovery verifies; HA's create then throws AFTER the capability was
+        # verified -- the adopted recovery owner must be fully rolled back.
+        tx, _calls = self._recovery_transaction_stub(registry)
+        with patch(
+            "custom_components.eybond_local.config_flow."
+            "async_run_callback_recovery_transaction",
+            side_effect=tx,
+        ), patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            progress = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(progress["type"], "progress")
+            await flow._manual_recovery_task
+            await flow.async_step_manual_recovery_verify()
             with patch.object(flow, "async_create_entry", side_effect=_raise):
                 with self.assertRaises(RuntimeError):
-                    await flow.async_step_manual_create_pending()
+                    await flow.async_step_manual_recovery_result()
 
         # The committed handoff was rolled back: flag reset, owner released, so a
         # retry (or another flow) is not permanently blocked.
@@ -10783,9 +10801,86 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             results=(self._manual_result_with_pn(pn),), on_detect=_answers
         )
         routed = await self._drive_generic_callback(flow, detector)
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        # Batch 6: a certified identity routes to the RECOVERY consent -- the
+        # normal callback entry needs the proven recovery route first.
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         self.assertEqual(flow._manual_verified_full_pn, pn)
         return flow._verification_claim_owner
+
+    def _recovery_transaction_stub(
+        self, registry, *, owner="callback_recovery:flowtest"
+    ):
+        """Scripted transaction: the exact end state the real wrapper leaves.
+
+        Claims the saved session under the transaction's own owner (the
+        identity owner was released by the producer just before), promotes,
+        prepares, and returns a REAL callback_verified outcome carrying that
+        exact owner. Also records every call's kwargs for route assertions.
+        """
+
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+        )
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            RecoveryVerificationOutcome,
+            STATE_CALLBACK_VERIFIED,
+        )
+
+        calls: list[dict] = []
+
+        async def _tx(**kwargs):
+            calls.append(kwargs)
+            pn = kwargs["collector_pn"]
+            registry.claim_session(owner, session_id=kwargs["session_id"])
+            registry.promote_claim_to_full_pn(owner, pn)
+            registry.prepare_handoff(owner, pn)
+            route = kwargs["route"]
+            return RecoveryVerificationOutcome(
+                status=STATE_CALLBACK_VERIFIED,
+                collector_pn=pn,
+                new_session_id=kwargs["session_id"],
+                callback_proof=CallbackRecoveryProof(
+                    method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                    collector_pn=pn,
+                    identity_source="fc2_parameter_2",
+                    verified_at="2026-07-17T10:00:00+00:00",
+                    trigger_target=route.trigger_target,
+                    advertised_ha_endpoint=route.advertised_ha_endpoint,
+                    listener_port=route.listener_port,
+                ),
+                handoff_owner=owner,
+            )
+
+        return _tx, calls
+
+    async def _drive_recovery_verified(
+        self, flow, registry, *, owner="callback_recovery:flowtest"
+    ):
+        """Progress -> completed task -> result step (adoption + terminal)."""
+
+        tx, calls = self._recovery_transaction_stub(registry, owner=owner)
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        with patch(
+            "custom_components.eybond_local.config_flow."
+            "async_run_callback_recovery_transaction",
+            side_effect=tx,
+        ), patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            progress = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(progress["type"], "progress")
+            await flow._manual_recovery_task
+            done = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(done["type"], "progress_done")
+            self.assertEqual(done["next_step_id"], "manual_recovery_result")
+            result = await flow.async_step_manual_recovery_result()
+        return result, calls
 
     async def _probe_again(self, flow, detector):
         # A retry is a FULL new attempt: a new identity transaction (new lease,
@@ -10820,7 +10915,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 on_detect=_b_answers,
             ),
         )
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
 
         # The first attempt's claim on A is released, not merely overwritten.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
@@ -10833,23 +10928,17 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._manual_verified_full_pn, self.OTHER_FULL_PN)
         self.assertEqual(flow._verification_claim_owner, owner_b)
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_create_pending()
+        created, _calls = await self._drive_recovery_verified(flow, registry)
 
         # The entry is B, and ONLY B ...
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["collector_pn"], self.OTHER_FULL_PN)
         self.assertEqual(getattr(flow, "_test_unique_id", ""), f"collector:{self.OTHER_FULL_PN}")
-        # ... the handoff certifies B ...
+        # ... the handoff certifies B under the RECOVERY owner ...
+        recovery_owner = registry.owner_for_pn(self.OTHER_FULL_PN)
+        self.assertTrue(recovery_owner.startswith("callback_recovery:"))
         self.assertEqual(
-            registry.prepared_handoff_identity(owner_b, self.OTHER_FULL_PN),
+            registry.prepared_handoff_identity(recovery_owner, self.OTHER_FULL_PN),
             self.OTHER_FULL_PN,
         )
         # ... and no owner is left holding A anywhere in the registry.
@@ -10964,7 +11053,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertEqual(routed["step_id"], "manual_confirm")
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         self.assertEqual(flow._manual_verified_full_pn, self.OTHER_FULL_PN)
         owner_b = registry.owner_for_pn(self.OTHER_FULL_PN)
         self.assertTrue(owner_b.startswith("callback_verification:"))
@@ -11380,6 +11469,367 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, sentinel)
 
+    # ---- Batch 6: manual callback recovery wiring (targeted) ----
+
+    async def _identity_success(self, flow, inventory):
+        with self._identity_wire(
+            inventory,
+            answers=[self._inventory_session(self.NEW_SESSION, self.FULL_PN)],
+            read_pn=self.FULL_PN,
+        ):
+            routed = await flow.async_step_manual(self._manual_input("192.168.1.60"))
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
+        return routed
+
+    async def test_user_decline_sends_no_reboot_and_no_udp(self) -> None:
+        # The consent menu ran; the user picks "save pending" instead of
+        # verifying. The recovery transaction (reboot + trigger) never runs.
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+
+        async def _passthrough_enrich(_user_input, result):
+            return result
+
+        with patch(
+            "custom_components.eybond_local.config_flow."
+            "async_run_callback_recovery_transaction",
+            side_effect=AssertionError("declined recovery must not reboot/trigger"),
+        ), patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            consent = await flow.async_step_manual_recovery_confirm()
+            self.assertEqual(consent["type"], "menu")
+            self.assertIn("manual_recovery_verify", consent["menu_options"])
+            created = await flow.async_step_manual_create_pending()
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["entry_role"], "pending_collector")
+
+    async def test_recovery_route_is_form_values_never_peer_ip(self) -> None:
+        # The answering socket has a DIFFERENT peer IP (NAT); the route must
+        # carry the explicitly entered collector IP and the configured
+        # advertised endpoint verbatim -- never the observed peer address, and
+        # the advertised host is never replaced by the local bind address.
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        # NAT-shaped form values: explicit advertised endpoint.
+        flow._manual_config["advertised_server_ip"] = "198.51.100.7"
+        flow._manual_config["advertised_tcp_port"] = 48899
+
+        _created, calls = await self._drive_recovery_verified(flow, registry)
+
+        (kwargs,) = calls
+        route = kwargs["route"]
+        self.assertEqual(route.trigger_target_ip, "192.168.1.60")  # form value
+        self.assertEqual(route.advertised_ha_host, "198.51.100.7")
+        self.assertEqual(route.advertised_ha_port, 48899)
+        self.assertEqual(route.bind_ip, flow._manual_config["server_ip"])
+        self.assertNotEqual(route.advertised_ha_host, route.bind_ip)
+        self.assertEqual(route.listener_port, int(flow._manual_config["tcp_port"]))
+        # Immutable attempt input: the exact certified session id and full PN.
+        self.assertEqual(kwargs["session_id"], self.NEW_SESSION)
+        self.assertEqual(kwargs["collector_pn"], self.FULL_PN)
+
+    async def test_recovery_route_defaults_to_configured_server_endpoint(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+
+        _created, calls = await self._drive_recovery_verified(flow, registry)
+
+        (kwargs,) = calls
+        route = kwargs["route"]
+        self.assertEqual(route.advertised_ha_host, flow._manual_config["server_ip"])
+        self.assertEqual(route.advertised_ha_port, int(flow._manual_config["tcp_port"]))
+
+    def _recovery_outcome_stub(self, registry, *, status, owner, proof_kind):
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+            INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+            InboundRecoveryProof,
+        )
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            RecoveryVerificationOutcome,
+        )
+
+        async def _tx(**kwargs):
+            pn = kwargs["collector_pn"]
+            if owner:
+                registry.claim_session(owner, session_id=kwargs["session_id"])
+                registry.promote_claim_to_full_pn(owner, pn)
+                registry.prepare_handoff(owner, pn)
+            if proof_kind == "inbound":
+                proof = {"inbound_proof": InboundRecoveryProof(
+                    method=INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+                    collector_pn=pn,
+                    identity_source="fc2_parameter_2",
+                    verified_at="2026-07-17T10:00:00+00:00",
+                    session_protocol="eybond_framed",
+                )}
+            elif proof_kind == "callback":
+                route = kwargs["route"]
+                proof = {"callback_proof": CallbackRecoveryProof(
+                    method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                    collector_pn=pn,
+                    identity_source="fc2_parameter_2",
+                    verified_at="2026-07-17T10:00:00+00:00",
+                    trigger_target=route.trigger_target,
+                    advertised_ha_endpoint=route.advertised_ha_endpoint,
+                    listener_port=route.listener_port,
+                )}
+            else:
+                proof = {}
+            return RecoveryVerificationOutcome(
+                status=status,
+                failure_reason="" if proof else status,
+                collector_pn=pn if proof else pn,
+                new_session_id=kwargs["session_id"] if proof else "",
+                handoff_owner=owner if proof else "",
+                **proof,
+            )
+
+        return _tx
+
+    async def _drive_recovery_outcome(self, flow, tx):
+        with patch(
+            "custom_components.eybond_local.config_flow."
+            "async_run_callback_recovery_transaction",
+            side_effect=tx,
+        ):
+            progress = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(progress["type"], "progress")
+            await flow._manual_recovery_task
+            done = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(done["type"], "progress_done")
+            return await flow.async_step_manual_recovery_result()
+
+    async def test_inbound_recovered_requires_explicit_confirmation(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            STATE_INBOUND_RECOVERED,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        owner = "callback_recovery:autonomous"
+        tx = self._recovery_outcome_stub(
+            registry, status=STATE_INBOUND_RECOVERED, owner=owner, proof_kind="inbound"
+        )
+
+        result = await self._drive_recovery_outcome(flow, tx)
+
+        # NOT silently callback_on_demand: an explicit confirmation menu.
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_recovery_inbound_confirm")
+
+        async def _passthrough_enrich(_user_input, r):
+            return r
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_recovery_accept_inbound()
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["connection_strategy"], "inbound")
+        self.assertIn("inbound", created["data"]["recovery_contract"])
+        self.assertNotIn("callback", created["data"]["recovery_contract"])
+        # Inbound entries persist no unverified address.
+        self.assertEqual(created["data"]["collector_ip"], "")
+
+    async def test_inbound_recovered_decline_releases_exact_owner(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            STATE_INBOUND_RECOVERED,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        owner = "callback_recovery:autonomous2"
+        tx = self._recovery_outcome_stub(
+            registry, status=STATE_INBOUND_RECOVERED, owner=owner, proof_kind="inbound"
+        )
+
+        result = await self._drive_recovery_outcome(flow, tx)
+        self.assertEqual(result["step_id"], "manual_recovery_inbound_confirm")
+        self.assertEqual(
+            registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
+        )
+
+        declined = await flow.async_step_manual_recovery_decline_inbound()
+
+        self.assertEqual(declined["step_id"], "manual_recovery_failed")
+        # The exact prepared owner is gone; nothing else was touched.
+        self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertIsNone(flow._manual_recovery_outcome)
+
+    async def test_recovery_timeout_keeps_pending_available(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        tx = self._recovery_outcome_stub(
+            registry, status="inbound_not_verified", owner="", proof_kind=""
+        )
+
+        result = await self._drive_recovery_outcome(flow, tx)
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_recovery_failed")
+        self.assertIn("manual_create_pending", result["menu_options"])
+        # The typed failure is surfaced, not flattened to callback_timeout.
+        self.assertEqual(flow._manual_recovery_error, "inbound_not_verified")
+
+        async def _passthrough_enrich(_user_input, r):
+            return r
+
+        with patch.object(
+            flow,
+            "_async_enrich_manual_pending_collector_profile",
+            side_effect=_passthrough_enrich,
+        ):
+            created = await flow.async_step_manual_create_pending()
+        self.assertEqual(created["data"]["entry_role"], "pending_collector")
+
+    async def test_typed_restart_not_supported_reaches_the_user(self) -> None:
+        # An AT-wire collector honestly cannot reboot: the typed failure
+        # travels to the failure menu verbatim -- zero invented proof.
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        tx = self._recovery_outcome_stub(
+            registry, status="restart_not_supported", owner="", proof_kind=""
+        )
+
+        result = await self._drive_recovery_outcome(flow, tx)
+
+        self.assertEqual(result["step_id"], "manual_recovery_failed")
+        self.assertEqual(flow._manual_recovery_error, "restart_not_supported")
+        self.assertFalse(flow._recovery_terminal.has_proof)
+
+    async def test_adoption_failure_releases_exact_outcome_owner(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        owner = "callback_recovery:adoptfail"
+        tx, _calls = self._recovery_transaction_stub(registry, owner=owner)
+
+        with patch(
+            "custom_components.eybond_local.config_flow."
+            "async_run_callback_recovery_transaction",
+            side_effect=tx,
+        ), patch.object(
+            flow, "_adopt_callback_recovery_outcome", side_effect=RuntimeError("boom")
+        ):
+            progress = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(progress["type"], "progress")
+            await flow._manual_recovery_task
+            await flow.async_step_manual_recovery_verify()
+            result = await flow.async_step_manual_recovery_result()
+
+        self.assertEqual(result["step_id"], "manual_recovery_failed")
+        self.assertEqual(flow._manual_recovery_error, "recovery_ownership_unavailable")
+        # The producer released exactly the outcome's owner.
+        self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_flow_cancel_during_recovery_progress_cleans_up(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        started = asyncio.Event()
+
+        async def _hanging_tx(**_kwargs):
+            started.set()
+            await asyncio.sleep(60)
+
+        with patch(
+            "custom_components.eybond_local.config_flow."
+            "async_run_callback_recovery_transaction",
+            side_effect=_hanging_tx,
+        ):
+            progress = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(progress["type"], "progress")
+            task = flow._manual_recovery_task
+            await asyncio.wait_for(started.wait(), timeout=5.0)
+
+            flow.async_remove()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5.0)
+
+        self.assertIsNone(flow._manual_recovery_outcome)
+        # The identity owner was released at the recovery handover; nothing
+        # is left claimed for the PN.
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_async_remove_releases_unadopted_recovery_outcome(self) -> None:
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            STATE_INBOUND_RECOVERED,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        owner = "callback_recovery:abandoned"
+        tx = self._recovery_outcome_stub(
+            registry, status=STATE_INBOUND_RECOVERED, owner=owner, proof_kind="inbound"
+        )
+        result = await self._drive_recovery_outcome(flow, tx)
+        # The outcome is held (inbound confirmation pending) -- user closes.
+        self.assertEqual(result["step_id"], "manual_recovery_inbound_confirm")
+
+        flow.async_remove()
+
+        self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertIsNone(flow._manual_recovery_outcome)
+
+    async def test_retry_after_recovery_failure_is_a_fresh_transaction(self) -> None:
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await self._identity_success(flow, inventory)
+        tx = self._recovery_outcome_stub(
+            registry, status="inbound_not_verified", owner="", proof_kind=""
+        )
+        result = await self._drive_recovery_outcome(flow, tx)
+        self.assertEqual(result["step_id"], "manual_recovery_failed")
+
+        # "Probe again" = a whole new identity attempt; the failed recovery
+        # state is wiped and nothing of the old attempt is reused.
+        def _answers():
+            inventory.append(self._inventory_session("listener-18899-9", self.FULL_PN))
+
+        routed = await self._probe_again(
+            flow,
+            self._recording_detector(
+                results=(self._manual_result_with_pn(self.FULL_PN),),
+                on_detect=_answers,
+            ),
+        )
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
+        self.assertEqual(flow._manual_recovery_error, "")
+        self.assertIsNone(flow._manual_recovery_outcome)
+        self.assertFalse(flow._recovery_terminal.has_proof)
+        self.assertEqual(flow._manual_verified_session_id, "listener-18899-9")
+
 
 class CollectorOnlyResultTests(unittest.TestCase):
     """The certified identity becomes a COLLECTOR-only result -- nothing invented.
@@ -11458,3 +11908,196 @@ class CollectorOnlyResultTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
+    """The silent-session UX: honest taxonomy + explicit protocol retry."""
+
+    FULL_PN = "V001020SYN62344022"
+
+    def _make_flow(self):
+        flow = EybondLocalConfigFlow()
+        flow.hass = _FakeHass(None)
+        flow.context = {}
+        flow._local_ip = "192.168.1.50"
+        flow._auto_config = {"server_ip": "192.168.1.50"}
+        flow._interface_options = [
+            {
+                "name": "eth0",
+                "ip": "192.168.1.50",
+                "label": "eth0 - 192.168.1.50",
+                "network": "192.168.0.0/16",
+                "broadcast": "192.168.255.255",
+            }
+        ]
+        return flow
+
+    def _manual_input(self):
+        return {
+            "server_ip": "192.168.1.50",
+            "tcp_port": 18899,
+            "udp_port": 58899,
+            "collector_ip": "192.168.1.60",
+            "discovery_target": "192.168.1.255",
+            "discovery_interval": 3,
+            "heartbeat_interval": 60,
+            "driver_hint": "auto",
+            "connection_strategy": "callback_on_demand",
+        }
+
+    async def test_silent_result_offers_bootstrap_options(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            CallbackIdentityOutcome,
+            IDENTITY_SESSION_SILENT,
+        )
+
+        flow = self._make_flow()
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            SilentSessionBootstrapOffer,
+        )
+
+        outcome = CallbackIdentityOutcome(
+            result=IDENTITY_SESSION_SILENT,
+            silent_bootstrap_offer=SilentSessionBootstrapOffer("s-silent-7"),
+        )
+        with patch.object(
+            config_flow_module,
+            "async_run_callback_identity_transaction",
+            return_value=outcome,
+        ):
+            result = await flow.async_step_manual(self._manual_input())
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(flow._manual_result.last_error, "callback_session_silent")
+        self.assertEqual(flow._manual_silent_offer.session_id, "s-silent-7")
+        options = result["menu_options"]
+        self.assertIn("manual_bootstrap_framed", options)
+        self.assertIn("manual_bootstrap_at", options)
+        self.assertIn("manual_create_pending", options)
+        # The summary is honest: the session ARRIVED (never "did not call back").
+        summary = result["description_placeholders"]["probe_summary"]
+        self.assertIn("CONNECTED", summary)
+
+    async def test_plain_timeout_offers_no_bootstrap_options(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            CallbackIdentityOutcome,
+            IDENTITY_TIMEOUT,
+        )
+
+        flow = self._make_flow()
+        outcome = CallbackIdentityOutcome(result=IDENTITY_TIMEOUT)
+        with patch.object(
+            config_flow_module,
+            "async_run_callback_identity_transaction",
+            return_value=outcome,
+        ):
+            result = await flow.async_step_manual(self._manual_input())
+
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertNotIn("manual_bootstrap_framed", result["menu_options"])
+        self.assertNotIn("manual_bootstrap_at", result["menu_options"])
+
+    async def test_bootstrap_step_passes_the_typed_intent(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            CallbackIdentityOutcome,
+            IDENTITY_SESSION_SILENT,
+            OnboardingWireProbeIntent,
+        )
+
+        flow = self._make_flow()
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            SilentSessionBootstrapOffer,
+        )
+
+        silent = CallbackIdentityOutcome(
+            result=IDENTITY_SESSION_SILENT,
+            silent_bootstrap_offer=SilentSessionBootstrapOffer("s-silent-9"),
+        )
+        seen_requests: list = []
+
+        async def _tx(_hass, request, **_kwargs):
+            seen_requests.append(request)
+            return silent
+
+        with patch.object(
+            config_flow_module,
+            "async_run_callback_identity_transaction",
+            side_effect=_tx,
+        ):
+            await flow.async_step_manual(self._manual_input())
+            framed = await flow.async_step_manual_bootstrap_framed()
+            # The silent target from THIS attempt re-arms the next retry.
+            self.assertEqual(flow._manual_silent_offer.session_id, "s-silent-9")
+            at = await flow.async_step_manual_bootstrap_at()
+
+        self.assertEqual(len(seen_requests), 3)
+        self.assertIsNone(seen_requests[0].bootstrap_probe)
+        probe_framed = seen_requests[1].bootstrap_probe
+        self.assertIs(type(probe_framed), OnboardingWireProbeIntent)
+        self.assertEqual(probe_framed.protocol, "eybond_framed")
+        self.assertEqual(probe_framed.session_id, "s-silent-9")
+        self.assertEqual(probe_framed.source, "explicit_user_selection")
+        probe_at = seen_requests[2].bootstrap_probe
+        self.assertEqual(probe_at.protocol, "at_text")
+        self.assertEqual(probe_at.session_id, "s-silent-9")
+        del framed, at
+
+    async def test_bootstrap_without_target_returns_to_menu(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = self._manual_input()
+        flow._manual_silent_offer = None
+        flow._manual_result = OnboardingResult(connection_mode="manual")
+
+        result = await flow.async_step_manual_bootstrap_framed()
+
+        self.assertEqual(result["step_id"], "manual_confirm")
+
+
+class ManualRecoveryFailureExplanationTests(unittest.IsolatedAsyncioTestCase):
+    """The recovery-failed screen shows a human sentence, not a raw code."""
+
+    def _make_flow(self):
+        flow = EybondLocalConfigFlow()
+        flow.hass = _FakeHass(None)
+        flow.context = {}
+        flow._manual_verified_full_pn = "V001020SYN62344022"
+        flow._verification_expected_pn = "V001020SYN62344022"
+        return flow
+
+    async def test_each_silent_reason_maps_to_a_distinct_sentence(self) -> None:
+        flow = self._make_flow()
+        codes = [
+            "recovery_silent_session_ambiguous",
+            "recovery_identity_mismatch",
+            "recovery_silent_probe_failed",
+            "recovery_silent_probe_unavailable",
+            "callback_recovery_timeout",
+            "inbound_reconnect_timeout",
+        ]
+        sentences = {}
+        for code in codes:
+            flow._manual_recovery_error = code
+            result = await flow.async_step_manual_recovery_failed()
+            self.assertEqual(result["type"], "menu")
+            self.assertEqual(result["step_id"], "manual_recovery_failed")
+            explanation = result["description_placeholders"]["failure_explanation"]
+            # A real sentence, never the raw code or a backticked token.
+            self.assertNotIn("`", explanation)
+            self.assertNotIn(code, explanation)
+            self.assertGreater(len(explanation), 20)
+            sentences[code] = explanation
+            # The explicit next actions are preserved.
+            self.assertIn("manual_probe_again", result["menu_options"])
+            self.assertIn("manual_create_pending", result["menu_options"])
+        # The observable causes are DISTINGUISHABLE to the user.
+        self.assertEqual(len(set(sentences.values())), len(codes))
+
+    async def test_unknown_code_falls_back_without_leaking_it(self) -> None:
+        flow = self._make_flow()
+        flow._manual_recovery_error = "some_internal_code_42"
+        result = await flow.async_step_manual_recovery_failed()
+        explanation = result["description_placeholders"]["failure_explanation"]
+        self.assertNotIn("some_internal_code_42", explanation)
+        self.assertNotIn("`", explanation)
+        self.assertGreater(len(explanation), 20)

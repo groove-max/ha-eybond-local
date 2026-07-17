@@ -79,6 +79,16 @@ logger = logging.getLogger(__name__)
 # Typed outcomes. These are translation keys / status values, never raw text.
 IDENTITY_OK = ""
 IDENTITY_TIMEOUT = "callback_timeout"
+# A TCP session ARRIVED inside our causal window but volunteered neither wire
+# nor identity before the deadline. Deliberately distinct from
+# IDENTITY_TIMEOUT ("nothing arrived"): calling a live-but-silent socket "the
+# collector did not call back" sent users debugging the wrong layer. The
+# recovery for THIS result is an explicit user-selected bootstrap protocol.
+IDENTITY_SESSION_SILENT = "callback_session_silent"
+# The explicit bootstrap probe ran its single read-only identity query and the
+# socket gave no valid strong-PN answer on the chosen wire. Never triggers an
+# automatic second-protocol attempt.
+IDENTITY_WIRE_PROBE_FAILED = "onboarding_wire_probe_failed"
 IDENTITY_MISMATCH = "callback_identity_mismatch"
 IDENTITY_AMBIGUOUS = "callback_identity_ambiguous"
 IDENTITY_TRIGGER_INTERFERENCE = "callback_trigger_interference"
@@ -95,6 +105,96 @@ IDENTITY_TARGET_REQUIRED = "callback_target_required"
 # Budgets live in the ONE onboarding policy, not as magic numbers here. A request
 # may override them (tests), but production always resolves from the policy.
 _SESSION_POLL_INTERVAL = 0.25
+
+
+# The only provenance an onboarding wire-probe intent may carry.
+BOOTSTRAP_SOURCE_EXPLICIT_USER = "explicit_user_selection"
+
+# The bound silent socket disappeared before the user's bootstrap continuation
+# could run its single read-only query. A NEW attempt happens only on an
+# explicit user action -- the intent is never rebound automatically.
+IDENTITY_SILENT_SESSION_STALE = "callback_silent_session_unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class SilentSessionBootstrapOffer:
+    """The typed continuation target a silent attempt hands to the user.
+
+    Ephemeral, identity-free: it carries ONLY the exact session id the failed
+    attempt causally attributed (its window, its interference gate). It is not
+    evidence, not an owner, and never persisted; its sole use is constructing
+    an :class:`OnboardingWireProbeIntent` once the user explicitly picks a
+    protocol.
+    """
+
+    session_id: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.session_id) is not str
+            or not self.session_id
+            or self.session_id != self.session_id.strip()
+        ):
+            raise ValueError("silent_bootstrap_offer_session_invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingWireProbeIntent:
+    """Ephemeral typed capability: probe ONE silent onboarding socket's wire.
+
+    This is deliberately NOT evidence and NOT a protocol owner:
+
+    * it is not a ``ConfirmedSessionProtocolEvidence`` and never becomes one
+      by itself -- only a valid strong-PN reply on the chosen wire does;
+    * it is not a ``RecoveryContract`` input;
+    * it is never persisted and never registered as a listener-wide confirmed
+      protocol owner;
+    * it lives inside exactly ONE callback identity attempt, binds to the one
+      causally-new session of that attempt, and permits exactly ONE read-only
+      identity query (framed FC=2 parameter 2 / ``AT+DTUPN``);
+    * a wrong choice yields a typed failure -- there is NO automatic fallback
+      to the other protocol;
+    * failure/cancel destroys the capability with the attempt.
+
+    The only accepted provenance is the user's explicit selection on the
+    silent-session recovery step: nothing may mint this from collector kind,
+    PN prefix, cloud family, hostname, endpoint, peer IP or a persisted
+    expected protocol.
+    """
+
+    protocol: str
+    # The exact silent session the PREVIOUS attempt causally attributed (its
+    # window, its interference gate) and surfaced as its typed
+    # ``silent_bootstrap_offer``. The continuation binds to this socket and to
+    # NOTHING else -- never to another newly-arrived session, however
+    # tempting (a foreign same-IP socket is indistinguishable without it).
+    session_id: str
+    source: str = BOOTSTRAP_SOURCE_EXPLICIT_USER
+
+    @classmethod
+    def for_offer(
+        cls, offer: "SilentSessionBootstrapOffer", *, protocol: str
+    ) -> "OnboardingWireProbeIntent":
+        """The one constructor production uses: offer + explicit protocol."""
+
+        if type(offer) is not SilentSessionBootstrapOffer:
+            raise TypeError("silent_bootstrap_offer_required")
+        return cls(protocol=protocol, session_id=offer.session_id)
+
+    def __post_init__(self) -> None:
+        if type(self.protocol) is not str or self.protocol not in (
+            WIRE_FRAMED,
+            WIRE_AT_TEXT,
+        ):
+            raise ValueError("onboarding_wire_probe_protocol_invalid")
+        if (
+            type(self.session_id) is not str
+            or not self.session_id
+            or self.session_id != self.session_id.strip()
+        ):
+            raise ValueError("onboarding_wire_probe_session_invalid")
+        if type(self.source) is not str or self.source != BOOTSTRAP_SOURCE_EXPLICIT_USER:
+            raise ValueError("onboarding_wire_probe_source_invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +218,10 @@ class CallbackIdentityRequest:
     # value is a test override; production never passes one.
     session_wait_timeout: float = 0.0
     lease_wait_timeout: float = 0.0
+    # The ONLY wire authority for a first-ever fully-silent socket: the user's
+    # explicit bootstrap protocol selection (see OnboardingWireProbeIntent).
+    # ``None`` keeps today's passive-evidence-only behavior.
+    bootstrap_probe: OnboardingWireProbeIntent | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +252,11 @@ class CallbackIdentityOutcome:
     # The registry owner holding the PREPARED handoff. The caller passes this to
     # promotion/entry creation; it is the only thing that can certify the PN.
     handoff_owner: str = ""
+    # Set ONLY with result == IDENTITY_SESSION_SILENT and ONLY when exactly one
+    # causally-new silent socket existed in this attempt's window: the typed
+    # continuation target a user-selected bootstrap probe binds to. Never
+    # identity, never an owner.
+    silent_bootstrap_offer: "SilentSessionBootstrapOffer | None" = None
 
     @property
     def identity_certified(self) -> bool:
@@ -297,29 +406,98 @@ async def _async_wait_for_new_session(
     baseline: frozenset[str],
     old_session_id: str,
     timeout: float,
-) -> dict[str, Any] | None:
-    """Wait, bounded, for ONE new live session that is not in the baseline.
+    probe_channel: Any = None,
+    pending_baseline: frozenset[str] = frozenset(),
+    bootstrap: OnboardingWireProbeIntent | None = None,
+) -> tuple[dict[str, Any] | None, bool, str, str]:
+    """Wait, bounded, for the ONE session this attempt may own.
 
-    No detection, no identity requirement: a socket that just opened has not
-    volunteered its PN yet, and waiting for it to do so is what used to burn the
-    session. We only need something to read from.
+    Returns ``(session, silent_seen, offer_session_id, failure)``.
+
+    WITHOUT ``bootstrap`` (a triggering attempt): any causally-new live
+    session outside the baseline qualifies -- no identity requirement, we only
+    need something to read from. A causally-new PENDING socket that never
+    becomes readable is reported via ``silent_seen`` (+ ``offer_session_id``
+    when it was exactly one, the typed continuation target).
+
+    WITH ``bootstrap`` (the user's silent-session continuation): NO trigger
+    was sent, so no newly-arrived session is attributable to this attempt --
+    the ONLY session that may match, be probed or be adopted is the exact
+    bound ``bootstrap.session_id``. If that socket is gone the typed
+    ``IDENTITY_SILENT_SESSION_STALE`` failure is returned immediately; the
+    intent is never rebound to another session.
     """
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.0, float(timeout))
+    bound_session_id = str(getattr(bootstrap, "session_id", "") or "")
+    offer_session_id = ""
+    silent_seen = False
+    probed = False
     while True:
-        fresh = [
-            session
-            for session in _session_views(hass)
-            if session["session_id"]
-            and session["session_id"] not in baseline
-            and session["session_id"] != old_session_id
-            and _is_live(session)
-        ]
+        views = _session_views(hass)
+        if bootstrap is not None:
+            fresh = [
+                session
+                for session in views
+                if session["session_id"] == bound_session_id and _is_live(session)
+            ]
+        else:
+            fresh = [
+                session
+                for session in views
+                if session["session_id"]
+                and session["session_id"] not in baseline
+                and session["session_id"] != old_session_id
+                and _is_live(session)
+            ]
         if fresh:
-            return fresh[0] if len(fresh) == 1 else _prefer_readable(fresh)
+            picked = fresh[0] if len(fresh) == 1 else _prefer_readable(fresh)
+            return picked, silent_seen, offer_session_id, ""
+
+        live_silent = (
+            probe_channel.snapshot_silent_session_ids()
+            if probe_channel is not None
+            else frozenset()
+        )
+
+        if bootstrap is not None:
+            if bound_session_id not in live_silent:
+                # Not silent-pending and (above) not readable either: the
+                # bound socket is GONE. Typed, immediate, no rebinding.
+                return None, silent_seen, "", IDENTITY_SILENT_SESSION_STALE
+            if not probed:
+                probed = True
+                pn = await probe_channel.async_identify_exact_session(
+                    bound_session_id,
+                    session_protocol=bootstrap.protocol,
+                )
+                if not pn:
+                    # Wrong wire / no answer: typed failure, and deliberately
+                    # no automatic attempt with the other protocol.
+                    return None, silent_seen, "", IDENTITY_WIRE_PROBE_FAILED
+                # The strong-PN reply was recorded by the listener; the next
+                # poll sees the session as readable and the normal
+                # claim/read/match path continues unchanged.
+        else:
+            new_silent = frozenset(
+                session_id
+                for session_id in live_silent
+                if session_id not in pending_baseline
+                and session_id not in baseline
+                and session_id != old_session_id
+            )
+            if new_silent:
+                silent_seen = True
+                # Exactly ONE causally-new silent socket is an unambiguous
+                # continuation target for a LATER explicit user selection;
+                # two or more stay ambiguous and are never offered or probed.
+                offer_session_id = (
+                    next(iter(new_silent)) if len(new_silent) == 1 else ""
+                )
+
         if loop.time() >= deadline:
-            return None
+            return None, silent_seen, offer_session_id, ""
         await asyncio.sleep(_SESSION_POLL_INTERVAL)
 
 
@@ -409,12 +587,39 @@ async def _async_run_attempt(
     if registry is None:
         return CallbackIdentityOutcome(result=IDENTITY_TIMEOUT)
 
+    bootstrap = request.bootstrap_probe
+    if bootstrap is not None and type(bootstrap) is not OnboardingWireProbeIntent:
+        # Fail closed on ducks: only the strict typed capability (whose
+        # constructor pinned protocol + explicit-user provenance) may permit
+        # a bootstrap probe. Nothing is triggered, claimed or probed.
+        logger.info("Rejected non-typed onboarding wire probe intent")
+        return CallbackIdentityOutcome(result=IDENTITY_WIRE_PROBE_FAILED)
+
+    # The silent-socket taxonomy (and the optional bootstrap probe) go through
+    # the ONE narrow public transport boundary; the shared listener stays a
+    # collector-layer concern.
+    from ..collector.silent_session_probe import SilentSessionIdentityProbeChannel
+
+    probe_channel = SilentSessionIdentityProbeChannel(
+        host=str(request.server_ip or "").strip() or "0.0.0.0",
+        port=int(request.tcp_port or 0),
+    )
+    await probe_channel.async_open()
+
     baseline = frozenset(
         session["session_id"] for session in _session_views(hass) if session["session_id"]
     )
+    pending_baseline = probe_channel.snapshot_silent_session_ids()
 
     # --- 3. exactly one trigger, or none -------------------------------------
-    expected_sends = 1 if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND else 0
+    # The bootstrap CONTINUATION owns no new causal window: the silent socket
+    # was already attributed by the previous attempt's trigger, so this
+    # attempt sends ZERO datagrams and only runs its one read-only query.
+    expected_sends = (
+        1
+        if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and bootstrap is None
+        else 0
+    )
     if expected_sends:
         try:
             await (sender or _ProductionTriggerSender()).async_send(request)
@@ -437,7 +642,12 @@ async def _async_run_attempt(
     claimed = False
     try:
         # --- 4. wait for a socket -------------------------------------------
-        session = await _async_wait_for_new_session(
+        (
+            session,
+            silent_seen,
+            offer_session_id,
+            wait_failure,
+        ) = await _async_wait_for_new_session(
             hass,
             baseline=baseline,
             old_session_id=str(request.old_session_id or "").strip(),
@@ -445,8 +655,28 @@ async def _async_run_attempt(
                 request.session_wait_timeout
                 or DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_session_wait
             ),
+            probe_channel=probe_channel,
+            pending_baseline=pending_baseline,
+            bootstrap=bootstrap,
+        )
+        offer = (
+            SilentSessionBootstrapOffer(session_id=offer_session_id)
+            if offer_session_id
+            else None
         )
         if session is None:
+            if wait_failure:
+                return CallbackIdentityOutcome(
+                    result=wait_failure, silent_bootstrap_offer=offer
+                )
+            if silent_seen:
+                # A session ARRIVED and stayed silent: honest, distinct
+                # taxonomy -- the recovery is the explicit bootstrap protocol
+                # bound to exactly this socket, not another blind trigger.
+                return CallbackIdentityOutcome(
+                    result=IDENTITY_SESSION_SILENT,
+                    silent_bootstrap_offer=offer,
+                )
             return CallbackIdentityOutcome(result=IDENTITY_TIMEOUT)
 
         # Provenance is settled BEFORE we take ownership. A trigger somebody else
@@ -500,9 +730,17 @@ async def _async_run_attempt(
         # than a global generation delta: `fired` is what happened during OUR
         # window, so a concurrent flow's trigger shows up as interference instead
         # of silently confirming us.
+        match_baseline = baseline
+        if bootstrap is not None and bootstrap.session_id in match_baseline:
+            # The user-bound silent socket legitimately pre-dates this retry:
+            # the PREVIOUS attempt causally attributed it. Only that exact id
+            # is exempted; every other baseline socket stays excluded.
+            match_baseline = frozenset(
+                sid for sid in match_baseline if sid != bootstrap.session_id
+            )
         match = match_callback_answer(
             _session_views(hass),
-            baseline_session_ids=baseline,
+            baseline_session_ids=match_baseline,
             result_pn=full_pn,
             expected_pn=request.expected_pn,
             old_session_id=str(request.old_session_id or "").strip(),
@@ -547,9 +785,17 @@ async def _async_run_attempt(
         if claimed:
             with suppress(Exception):
                 registry.release(owner)
+        with suppress(Exception):
+            await probe_channel.async_close()
 
 
 __all__ = [
+    "BOOTSTRAP_SOURCE_EXPLICIT_USER",
+    "IDENTITY_SESSION_SILENT",
+    "IDENTITY_SILENT_SESSION_STALE",
+    "IDENTITY_WIRE_PROBE_FAILED",
+    "OnboardingWireProbeIntent",
+    "SilentSessionBootstrapOffer",
     "CallbackIdentityOutcome",
     "CallbackIdentityReader",
     "CallbackIdentityRequest",

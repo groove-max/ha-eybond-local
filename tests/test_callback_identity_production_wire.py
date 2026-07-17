@@ -416,3 +416,258 @@ class AtTextProductionWireTests(ProductionWireHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _SilentAtTextCollector:
+    """A fully SILENT at_text collector: dials in, says nothing, answers DTUPN."""
+
+    def __init__(self, pn: str) -> None:
+        self._pn = pn
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._task: asyncio.Task | None = None
+        self.dtupn_queries = 0
+
+    async def connect(self, host: str, port: int) -> None:
+        self._reader, self._writer = await asyncio.open_connection(host, port)
+        # ZERO unsolicited bytes -- the pcap shape. Only the serve loop runs.
+        self._task = asyncio.create_task(self._serve(), name="silent_at_collector")
+
+    async def _serve(self) -> None:
+        try:
+            while True:
+                line = await self._reader.readuntil(b"\n")
+                text = line.decode("ascii", errors="replace").strip().upper()
+                if text.startswith("AT+DTUPN"):
+                    self.dtupn_queries += 1
+                    self._writer.write(f"AT+DTUPN:{self._pn}\r\n".encode("ascii"))
+                    await self._writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionResetError, OSError):
+            return
+        except asyncio.CancelledError:
+            raise
+
+    async def stop(self) -> None:
+        task = self._task
+        self._task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if self._writer is not None:
+            self._writer.close()
+            try:
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+
+
+class SilentBootstrapProductionWireTests(ProductionWireHarness):
+    """First-ever fully silent sockets: the explicit bootstrap intent path."""
+
+    def _request(self, udp_port: int, **kwargs) -> CallbackIdentityRequest:
+        return CallbackIdentityRequest(
+            server_ip="127.0.0.1",
+            tcp_port=self._tcp_port,
+            udp_port=udp_port,
+            target_ip="127.0.0.1",
+            strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            session_wait_timeout=3.0,
+            **kwargs,
+        )
+
+    async def test_silent_framed_socket_bootstraps_via_explicit_fc2(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_SESSION_SILENT,
+            OnboardingWireProbeIntent,
+        )
+
+        udp_port = _free_port(socket.SOCK_DGRAM)
+        service = FakeCollectorService(
+            listen_ip="127.0.0.1",
+            udp_port=udp_port,
+            tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=30.0,
+            connect_timeout=2.0,
+            udp_reply="",
+            scenario=resolve_scenario(
+                preset="collector_only",
+                profile=CollectorProfile(pn=FULL_PN),
+                first_heartbeat_delay=3600.0,  # NEVER volunteers a byte
+            ),
+        )
+        await service.start()
+        try:
+            # Attempt 1 (no intent): the session ARRIVES and stays silent --
+            # the honest typed result carries the exact causally-new socket.
+            first = await asyncio.wait_for(
+                async_run_callback_identity_transaction(
+                    self._hass, self._request(udp_port)
+                ),
+                timeout=10.0,
+            )
+            self.assertEqual(first.result, IDENTITY_SESSION_SILENT)
+            self.assertIsNotNone(first.silent_bootstrap_offer)
+            self.assertFalse(first.identity_certified)
+            self.assertEqual(getattr(service, "pre_rx_heartbeats", 0), 0)
+            # No claim leaked from the silent attempt.
+            self.assertEqual(self._registry.owner_for_pn(FULL_PN), "")
+
+            # Attempt 2: the user explicitly picked the framed protocol. ONE
+            # read-only FC=2 query on exactly the bound socket certifies the
+            # full PN end to end.
+            second = await asyncio.wait_for(
+                async_run_callback_identity_transaction(
+                    self._hass,
+                    self._request(
+                        udp_port,
+                        bootstrap_probe=OnboardingWireProbeIntent(
+                            protocol=WIRE_FRAMED,
+                            session_id=first.silent_bootstrap_offer.session_id,
+                        ),
+                    ),
+                ),
+                timeout=10.0,
+            )
+        finally:
+            await service.stop()
+
+        self.assertTrue(second.identity_certified, second.result)
+        self.assertEqual(second.collector_pn, FULL_PN)
+        self.assertEqual(second.session_id, first.silent_bootstrap_offer.session_id)
+        self.assertEqual(second.identity_source, "fc2_parameter_2")
+        self.assertEqual(getattr(service, "pre_rx_heartbeats", 0), 0)
+        self._assert_certified_handoff_transfers_socket(second)
+
+    async def test_silent_at_socket_bootstraps_via_explicit_dtupn(self) -> None:
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_SESSION_SILENT,
+            OnboardingWireProbeIntent,
+        )
+
+        collector = _SilentAtTextCollector(AT_FULL_PN)
+        udp_port = _free_port(socket.SOCK_DGRAM)
+
+        class _DialingSender:
+            async def async_send(self, _request) -> None:
+                from custom_components.eybond_local.connection.callback_ledger import (
+                    get_callback_trigger_ledger,
+                )
+
+                ledger = get_callback_trigger_ledger()
+                with ledger.callback_send_scope():
+                    ledger.record(target="127.0.0.1", source="test_silent_at")
+                await collector.connect("127.0.0.1", self._tcp_port)
+
+        sender = _DialingSender()
+        sender._tcp_port = self._tcp_port
+
+        try:
+            first = await asyncio.wait_for(
+                async_run_callback_identity_transaction(
+                    self._hass, self._request(udp_port), sender=sender
+                ),
+                timeout=10.0,
+            )
+            self.assertEqual(first.result, IDENTITY_SESSION_SILENT)
+            self.assertIsNotNone(first.silent_bootstrap_offer)
+            self.assertEqual(collector.dtupn_queries, 0)
+
+            class _NoDialSender:
+                async def async_send(self, _request) -> None:
+                    from custom_components.eybond_local.connection.callback_ledger import (
+                        get_callback_trigger_ledger,
+                    )
+
+                    ledger = get_callback_trigger_ledger()
+                    with ledger.callback_send_scope():
+                        ledger.record(target="127.0.0.1", source="test_silent_at2")
+
+            second = await asyncio.wait_for(
+                async_run_callback_identity_transaction(
+                    self._hass,
+                    self._request(
+                        udp_port,
+                        bootstrap_probe=OnboardingWireProbeIntent(
+                            protocol=WIRE_AT_TEXT,
+                            session_id=first.silent_bootstrap_offer.session_id,
+                        ),
+                    ),
+                    sender=_NoDialSender(),
+                ),
+                timeout=10.0,
+            )
+        finally:
+            await collector.stop()
+
+        self.assertTrue(second.identity_certified, second.result)
+        self.assertEqual(second.collector_pn, AT_FULL_PN)
+        self.assertEqual(second.identity_source, "at_dtupn")
+        self.assertEqual(second.session_id, first.silent_bootstrap_offer.session_id)
+        self.assertGreaterEqual(collector.dtupn_queries, 1)
+        self._assert_certified_handoff_transfers_socket(second)
+
+    async def test_wrong_protocol_intent_fails_typed_without_fallback(self) -> None:
+        # An AT collector, but the user picked FRAMED: the single framed FC=2
+        # probe gets no valid answer -> typed failure, NO automatic DTUPN
+        # attempt, no claim, no evidence.
+        from custom_components.eybond_local.onboarding.callback_identity import (
+            IDENTITY_SESSION_SILENT,
+            IDENTITY_WIRE_PROBE_FAILED,
+            OnboardingWireProbeIntent,
+        )
+
+        collector = _SilentAtTextCollector(AT_FULL_PN)
+        udp_port = _free_port(socket.SOCK_DGRAM)
+
+        class _DialingSender:
+            def __init__(self, tcp_port: int) -> None:
+                self._tcp_port = tcp_port
+
+            async def async_send(self, _request) -> None:
+                from custom_components.eybond_local.connection.callback_ledger import (
+                    get_callback_trigger_ledger,
+                )
+
+                ledger = get_callback_trigger_ledger()
+                with ledger.callback_send_scope():
+                    ledger.record(target="127.0.0.1", source="test_wrong_wire")
+                if collector._writer is None:
+                    await collector.connect("127.0.0.1", self._tcp_port)
+
+        try:
+            first = await asyncio.wait_for(
+                async_run_callback_identity_transaction(
+                    self._hass,
+                    self._request(udp_port),
+                    sender=_DialingSender(self._tcp_port),
+                ),
+                timeout=10.0,
+            )
+            self.assertEqual(first.result, IDENTITY_SESSION_SILENT)
+
+            second = await asyncio.wait_for(
+                async_run_callback_identity_transaction(
+                    self._hass,
+                    self._request(
+                        udp_port,
+                        bootstrap_probe=OnboardingWireProbeIntent(
+                            protocol=WIRE_FRAMED,  # deliberately wrong
+                            session_id=first.silent_bootstrap_offer.session_id,
+                        ),
+                    ),
+                    sender=_DialingSender(self._tcp_port),
+                ),
+                timeout=10.0,
+            )
+        finally:
+            await collector.stop()
+
+        self.assertEqual(second.result, IDENTITY_WIRE_PROBE_FAILED)
+        self.assertFalse(second.identity_certified)
+        # The wrong wire was never silently retried as AT.
+        self.assertEqual(collector.dtupn_queries, 0)
+        # Nothing was claimed and no identity leaked into the inventory.
+        self.assertEqual(self._registry.owner_for_pn(AT_FULL_PN), "")

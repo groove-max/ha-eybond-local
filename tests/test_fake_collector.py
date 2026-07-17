@@ -279,6 +279,10 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
             preset=PRESET_MODBUS_SMG_READONLY,
             profile=CollectorProfile(mode=PRESET_MODBUS_SMG_READONLY),
             first_heartbeat_delay=0.25,
+            # The legacy wholesale-asleep heartbeat engine: FC=1 replies are
+            # gated too (the default now answers requests immediately, like a
+            # real silent-until-asked collector).
+            fc1_reply_mode="gated",
         )
 
         result = await self._detect_with_scenario(

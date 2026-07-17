@@ -326,7 +326,10 @@ class CallbackIdentityIsNotRecoveryProofTests(unittest.TestCase):
         )
 
         # A frozen field list: any new recovery-shaped field must be a
-        # deliberate, reviewed change here first.
+        # deliberate, reviewed change here first. ``silent_bootstrap_offer`` is
+        # identity-attempt state (the typed continuation target a
+        # user-selected bootstrap probe binds to on retry) -- it carries no
+        # identity, no wire and no recovery claim of its own.
         self.assertEqual(
             {field.name for field in fields(CallbackIdentityOutcome)},
             {
@@ -336,6 +339,7 @@ class CallbackIdentityIsNotRecoveryProofTests(unittest.TestCase):
                 "session_protocol",
                 "identity_source",
                 "handoff_owner",
+                "silent_bootstrap_offer",
             },
         )
         outcome = CallbackIdentityOutcome(result="")

@@ -103,6 +103,16 @@ class CollectorScenario:
     # callback-recovery lifecycle).
     set_29_mode: str = "fail"
     reboot_reconnect_delay: float = 0.3
+    # FC=1 heartbeat REQUEST replies: "immediate" is the real device behavior
+    # (a reply is never an unsolicited byte; first_heartbeat_delay gates only
+    # unsolicited heartbeats). "gated" keeps the legacy coupling for tests
+    # that model a device whose heartbeat engine is wholesale asleep.
+    fc1_reply_mode: str = "immediate"
+    # PI30 text forwarded over FC=4: "nak" keeps the legacy NAK reply;
+    # "success" answers the minimal PI30 command set (QPI/QMOD/QPIGS) with
+    # format-valid synthetic sentences so the real driver probe + runtime poll
+    # succeed. Unknown commands still NAK (the honest device behavior).
+    pi30_mode: str = "nak"
 
 
 def parse_discovery_redirect(payload: bytes | str) -> DiscoveryRedirect:
@@ -165,6 +175,8 @@ def resolve_scenario(
     fc4_mode: str | None = None,
     set_29_mode: str | None = None,
     reboot_reconnect_delay: float = 0.3,
+    pi30_mode: str | None = None,
+    fc1_reply_mode: str | None = None,
 ) -> CollectorScenario:
     """Resolve one declarative fake collector preset into concrete behavior."""
 
@@ -208,6 +220,8 @@ def resolve_scenario(
         fc4_mode=resolved_fc4_mode,
         set_29_mode=str(set_29_mode or "fail"),
         reboot_reconnect_delay=float(reboot_reconnect_delay),
+        pi30_mode=str(pi30_mode or "nak"),
+        fc1_reply_mode=str(fc1_reply_mode or "immediate"),
         modbus_registers=registers,
     )
 
@@ -263,9 +277,42 @@ def build_forward_response(
         return modbus_payload
 
     if _looks_like_pi30_payload(payload):
+        if scenario.pi30_mode == "success":
+            return _build_pi30_success_response(payload)
         return _build_pi30_text_response("NAK")
 
     return b""
+
+
+# Format-valid synthetic PI30 sentences (see payload/pi30.py parsers): QPIGS
+# carries 21 space-separated live fields; QMOD a single mode letter; QPI the
+# protocol id the detection decision tree anchors on. Everything else NAKs.
+_PI30_SUCCESS_REPLIES: dict[str, str] = {
+    "QPI": "PI30",
+    "QMOD": "B",
+    "QID": "96332309100452",
+    "QPIGS": (
+        "230.0 49.9 230.0 49.9 0092 0091 003 460 57.50 012 100 0069 "
+        "0014 103.8 57.45 00000 00110110 00 00 00856 010"
+    ),
+    "QPIRI": (
+        "230.0 21.7 230.0 50.0 21.7 5000 4000 48.0 46.0 42.0 56.4 54.0 "
+        "0 10 010 0 0 0 6 01 0 0 54.0 0 1"
+    ),
+    "QPIWS": "00000000000000000000000000000000000000",
+}
+
+
+def _build_pi30_success_response(payload: bytes) -> bytes:
+    command = payload.rstrip(b"\r")
+    if len(command) > 2:
+        # Strip the trailing CRC16-XMODEM the transport appended.
+        command = command[:-2]
+    text = command.decode("ascii", errors="replace").strip()
+    reply = _PI30_SUCCESS_REPLIES.get(text.upper())
+    if reply is None:
+        return _build_pi30_text_response("NAK")
+    return _build_pi30_text_response(reply)
 
 
 def build_at_reply(
