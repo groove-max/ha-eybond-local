@@ -153,8 +153,22 @@ _SUMMARY_ATTRIBUTE_MAP: dict[str, tuple[tuple[str, str], ...]] = {
         ("identified_sessions", "collector_callback_identified_session_count"),
         ("unresolved_sessions", "collector_callback_unresolved_session_count"),
         ("duplicate_peer_ips", "collector_callback_duplicate_peer_ip_count"),
-        ("session_protocol", "collector_callback_session_protocol"),
-        ("identity_strategy", "collector_callback_identity_strategy"),
+        # Keep negotiated runtime facts separate from bootstrap expectations.
+        # ``collector_callback_session_protocol`` and
+        # ``collector_callback_identity_strategy`` are legacy EXPECTED/profile
+        # hints; exposing them as generic ``session_protocol`` /
+        # ``identity_strategy`` made an AT cloud-family hint look like the live
+        # wire even while the entry was actively routing framed FC=4 traffic.
+        ("current_live_session", "collector_current_live_session"),
+        ("live_session_protocol", "collector_live_session_protocol"),
+        ("confirmed_session_protocol", "collector_confirmed_session_protocol"),
+        ("confirmed_wire_binding", "collector_confirmed_wire_binding"),
+        ("effective_wire_framing", "collector_callback_wire_framing"),
+        ("identity_sources", "collector_callback_identity_sources"),
+        ("inverter_forward_adapter", "collector_callback_inverter_forward_adapter"),
+        ("adapter_conflict", "collector_callback_adapter_conflict"),
+        ("expected_session_protocol", "collector_expected_session_protocol"),
+        ("expected_identity_strategy", "collector_callback_identity_strategy"),
     ),
 }
 

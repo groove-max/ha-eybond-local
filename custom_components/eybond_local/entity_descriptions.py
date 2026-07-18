@@ -418,7 +418,7 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
     ),
     MeasurementDescription(
         key="collector_callback_identity_status",
-        name="Collector Callback Identity",
+        name="Collector Callback Identity Status",
         icon="mdi:identifier",
         diagnostic=True,
         enabled_default=True,

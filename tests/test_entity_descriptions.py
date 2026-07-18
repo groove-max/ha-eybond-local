@@ -115,6 +115,7 @@ class EntityDescriptionsTests(unittest.TestCase):
             if item.key == "collector_callback_identity_status"
         )
 
+        self.assertEqual(description.name, "Collector Callback Identity Status")
         self.assertTrue(description.diagnostic)
         self.assertTrue(description.enabled_default)
 

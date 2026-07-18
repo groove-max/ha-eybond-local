@@ -155,6 +155,53 @@ class _FakeRegistry:
 
 
 class SensorPrecisionTests(unittest.TestCase):
+    def test_callback_identity_attributes_separate_live_confirmed_and_expected_wire(self) -> None:
+        coordinator = _FakeCoordinator("collector_callback_identity_status", "idle")
+        coordinator.data.values.update(
+            {
+                "collector_callback_identity_summary": "No unresolved sessions.",
+                "collector_callback_pending_session_count": 0,
+                "collector_callback_recent_session_count": 3,
+                "collector_callback_identified_session_count": 3,
+                "collector_callback_unresolved_session_count": 0,
+                "collector_callback_duplicate_peer_ip_count": 1,
+                # Deliberately contradictory expected vs live values: this is
+                # the real regression shape observed on HA after the refactor.
+                "collector_callback_session_protocol": "at_text",
+                "collector_callback_identity_strategy": "at_dtupn",
+                "collector_expected_session_protocol": "at_text",
+                "collector_current_live_session": "active",
+                "collector_live_session_protocol": "eybond_framed",
+                "collector_confirmed_session_protocol": "eybond_framed",
+                "collector_confirmed_wire_binding": "eybond_framed",
+                "collector_callback_wire_framing": "eybond_framed",
+                "collector_callback_identity_sources": "fc2_parameter_2",
+                "collector_callback_inverter_forward_adapter": "framed_fc4",
+                "collector_callback_adapter_conflict": False,
+            }
+        )
+        description = MeasurementDescription(
+            key="collector_callback_identity_status",
+            name="Collector Callback Identity Status",
+            diagnostic=True,
+        )
+
+        sensor = EybondValueSensor(coordinator, description)
+        attributes = sensor.extra_state_attributes
+
+        self.assertIsNotNone(attributes)
+        assert attributes is not None
+        self.assertEqual(attributes["live_session_protocol"], "eybond_framed")
+        self.assertEqual(attributes["confirmed_session_protocol"], "eybond_framed")
+        self.assertEqual(attributes["effective_wire_framing"], "eybond_framed")
+        self.assertEqual(attributes["inverter_forward_adapter"], "framed_fc4")
+        self.assertEqual(attributes["identity_sources"], "fc2_parameter_2")
+        self.assertEqual(attributes["expected_session_protocol"], "at_text")
+        self.assertEqual(attributes["expected_identity_strategy"], "at_dtupn")
+        self.assertFalse(attributes["adapter_conflict"])
+        self.assertNotIn("session_protocol", attributes)
+        self.assertNotIn("identity_strategy", attributes)
+
     def test_explicit_precision_overrides_float_fallback(self) -> None:
         coordinator = _FakeCoordinator("battery_voltage", 52.0)
         description = MeasurementDescription(
