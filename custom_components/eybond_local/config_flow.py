@@ -78,6 +78,7 @@ from .const import (
     PENDING_ATTEMPT_WAITING_INBOUND,
     PENDING_UNIQUE_ID_PREFIX,
     CONF_ADVERTISED_SERVER_IP,
+    CONF_STRATEGY_TRANSITION_STATE,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
@@ -1459,6 +1460,188 @@ def _is_ipv4(ip: str) -> bool:
 # ---------------------------------------------------------------------------
 # Config flow
 # ---------------------------------------------------------------------------
+
+_RECOVERY_FAILURE_EXPLANATIONS = {
+    "recovery_silent_session_ambiguous": (
+        "common.dynamic.recovery_fail_silent_ambiguous",
+        "More than one collector connected silently at the same time, "
+        "so none could be identified. Make sure only the collector you "
+        "are adding can reach Home Assistant, then try again.",
+    ),
+    "recovery_identity_mismatch": (
+        "common.dynamic.recovery_fail_identity_mismatch",
+        "A different collector answered on the reconnected connection. "
+        "Check that the address reaches the collector you are adding, "
+        "then try again.",
+    ),
+    "recovery_silent_probe_failed": (
+        "common.dynamic.recovery_fail_silent_probe_failed",
+        "The collector reconnected but did not answer the identity "
+        "query. It may use the other protocol, or it may need another "
+        "attempt.",
+    ),
+    "recovery_silent_probe_unavailable": (
+        "common.dynamic.recovery_fail_silent_probe_unavailable",
+        "Home Assistant could not open the connection needed to "
+        "identify the reconnected collector. Check the listener "
+        "address/port, then try again.",
+    ),
+    "callback_recovery_timeout": (
+        "common.dynamic.recovery_fail_callback_timeout",
+        "The collector did not reconnect after the restart. Check the "
+        "address and that the collector can reach Home Assistant, then "
+        "try again.",
+    ),
+    "inbound_reconnect_timeout": (
+        "common.dynamic.recovery_fail_inbound_timeout",
+        "The collector did not reconnect on its own after the restart. "
+        "Try again, or save a Pending Device that waits for it.",
+    ),
+    "restart_not_supported": (
+        "common.dynamic.recovery_fail_restart_unsupported",
+        "This collector cannot be restarted for verification over its "
+        "connection. Save a Pending Device instead.",
+    ),
+    "recovery_ownership_unavailable": (
+        "common.dynamic.recovery_fail_ownership_unavailable",
+        "The verified connection is no longer held for this collector. "
+        "Run the verification again.",
+    ),
+    # Inbound autonomous-reconnect verification (passive discovery)
+    # failures, surfaced honestly on the discovery failure screen.
+    "strong_identity_timeout": (
+        "common.dynamic.recovery_fail_strong_identity_timeout",
+        "The collector's identity could not be confirmed before the "
+        "check timed out. Try again, or configure the connection by "
+        "hand.",
+    ),
+    "restart_not_confirmed": (
+        "common.dynamic.recovery_fail_restart_not_confirmed",
+        "The collector did not confirm the restart request, so its "
+        "reconnection could not be verified. Try again, or configure "
+        "the connection by hand.",
+    ),
+    "disconnect_not_observed": (
+        "common.dynamic.recovery_fail_disconnect_not_observed",
+        "The collector did not drop and re-establish its connection "
+        "after the restart, so automatic reconnection was not proven. "
+        "Try again, or configure a callback connection by hand.",
+    ),
+    "reconnected_session_untrusted": (
+        "common.dynamic.recovery_fail_reconnected_untrusted",
+        "A connection came back after the restart but its identity "
+        "could not be trusted. Try again, or configure the connection "
+        "by hand.",
+    ),
+    # Verified strategy-transition preflight refusals (Batch 8). These happen
+    # BEFORE any collector side effect.
+    "transition_session_unavailable": (
+        "common.dynamic.transition_fail_session_unavailable",
+        "The collector is not connected right now, so the switch cannot be "
+        "verified. Wait for the collector to connect, then try again.",
+    ),
+    "transition_endpoint_required": (
+        "common.dynamic.transition_fail_endpoint_required",
+        "The Home Assistant address to write into the collector is missing. "
+        "Enter the address and port the collector can reach.",
+    ),
+    "transition_callback_route_required": (
+        "common.dynamic.transition_fail_callback_route_required",
+        "The collector address and the advertised Home Assistant callback "
+        "address are required. Enter them and try again.",
+    ),
+    "transition_rollback_endpoint_unavailable": (
+        "common.dynamic.transition_fail_rollback_unavailable",
+        "The integration manages the collector's endpoint, but no saved "
+        "previous endpoint exists to hand control back to. The switch was "
+        "not started.",
+    ),
+    "transition_endpoint_write_failed": (
+        "common.dynamic.transition_fail_endpoint_write_failed",
+        "Writing the endpoint to the collector failed, so nothing was "
+        "verified and the connection strategy was not changed. Try again.",
+    ),
+    "transition_inbound_recovered_instead": (
+        "common.dynamic.transition_fail_inbound_recovered_instead",
+        "The collector reconnected on its own instead of waiting for the "
+        "callback, so on-demand operation could not be proven. Its endpoint "
+        "still points at Home Assistant.",
+    ),
+    "transition_already_running": (
+        "common.dynamic.transition_fail_already_running",
+        "Another connection switch is already in progress for this "
+        "collector. Wait for it to finish.",
+    ),
+    "transition_runtime_unavailable": (
+        "common.dynamic.transition_fail_runtime_unavailable",
+        "The collector runtime is not loaded, so the switch cannot be "
+        "verified right now. Try again after the integration finishes "
+        "starting.",
+    ),
+    "transition_not_required": (
+        "common.dynamic.transition_fail_not_required",
+        "The collector already uses this connection strategy. Nothing to "
+        "change.",
+    ),
+    "transition_inbound_recovered_after_restore": (
+        "common.dynamic.transition_fail_recovered_after_restore",
+        "The collector reconnected on its own even though its endpoint was "
+        "already handed back to the external target, so on-demand operation "
+        "could not be proven. The connection keeps working; you can retry "
+        "the switch.",
+    ),
+    "transition_payload_forbidden": (
+        "common.dynamic.transition_fail_payload_forbidden",
+        "The switch request carried settings that only the verification "
+        "itself may change. Nothing was modified.",
+    ),
+    # The repair proved and committed the on-demand connection, but Home
+    # Assistant could not finish loading the entry afterwards. The proof is kept
+    # -- only LOADING is retried; the verification and collector reconfiguration
+    # are never repeated.
+    "transition_activation_incomplete": (
+        "common.dynamic.transition_fail_activation_incomplete",
+        "The on-demand connection was verified and saved, but Home Assistant "
+        "could not finish loading the integration. The verification and the "
+        "collector reconfiguration are not repeated -- Home Assistant just "
+        "retries loading the already-proven callback configuration.",
+    ),
+    # The running integration could not be stopped to run the repair (it stays
+    # loaded). Nothing was verified or changed; try again.
+    "transition_suspend_failed": (
+        "common.dynamic.transition_fail_suspend_failed",
+        "Home Assistant could not pause the running integration to repair the "
+        "connection, so nothing was changed. Try again in a moment.",
+    ),
+    # The repair was stopped before it changed anything, but reloading the
+    # previous configuration afterwards did not succeed -- surfaced honestly so
+    # the user knows the integration needs a manual reload.
+    "transition_restore_failed": (
+        "common.dynamic.transition_fail_restore_failed",
+        "The repair was stopped without changing anything, but the previous "
+        "configuration did not load again automatically. Reload the integration "
+        "to bring it back.",
+    ),
+}
+
+
+def _shared_recovery_failure_explanation(tr, code: str) -> str:
+    """A localized, human sentence for one typed recovery/transition failure.
+
+    ONE table for every surface (config flow, options flow): never shows the
+    raw code; unknown codes fall back to the localized generic sentence.
+    """
+
+    key, fallback = _RECOVERY_FAILURE_EXPLANATIONS.get(
+        code,
+        (
+            "common.dynamic.recovery_fail_generic",
+            "The recovery verification did not succeed. You can try again, "
+            "change the settings, or save a Pending Device.",
+        ),
+    )
+    return tr(key, fallback)
+
 
 class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     """Create a config entry for an inverter behind an EyeBond collector."""
@@ -4254,95 +4437,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return await self.async_step_manual_recovery_failed()
 
     def _recovery_failure_explanation(self, code: str) -> str:
-        """A localized, human sentence for one typed recovery failure code.
-
-        Never shows the raw code to the user: each honest silent/recovery
-        cause gets its own plain explanation. An unknown code falls back to a
-        generic sentence (the code still goes to the logs, not the UI).
-        """
-
-        explanations = {
-            "recovery_silent_session_ambiguous": (
-                "common.dynamic.recovery_fail_silent_ambiguous",
-                "More than one collector connected silently at the same time, "
-                "so none could be identified. Make sure only the collector you "
-                "are adding can reach Home Assistant, then try again.",
-            ),
-            "recovery_identity_mismatch": (
-                "common.dynamic.recovery_fail_identity_mismatch",
-                "A different collector answered on the reconnected connection. "
-                "Check that the address reaches the collector you are adding, "
-                "then try again.",
-            ),
-            "recovery_silent_probe_failed": (
-                "common.dynamic.recovery_fail_silent_probe_failed",
-                "The collector reconnected but did not answer the identity "
-                "query. It may use the other protocol, or it may need another "
-                "attempt.",
-            ),
-            "recovery_silent_probe_unavailable": (
-                "common.dynamic.recovery_fail_silent_probe_unavailable",
-                "Home Assistant could not open the connection needed to "
-                "identify the reconnected collector. Check the listener "
-                "address/port, then try again.",
-            ),
-            "callback_recovery_timeout": (
-                "common.dynamic.recovery_fail_callback_timeout",
-                "The collector did not reconnect after the restart. Check the "
-                "address and that the collector can reach Home Assistant, then "
-                "try again.",
-            ),
-            "inbound_reconnect_timeout": (
-                "common.dynamic.recovery_fail_inbound_timeout",
-                "The collector did not reconnect on its own after the restart. "
-                "Try again, or save a Pending Device that waits for it.",
-            ),
-            "restart_not_supported": (
-                "common.dynamic.recovery_fail_restart_unsupported",
-                "This collector cannot be restarted for verification over its "
-                "connection. Save a Pending Device instead.",
-            ),
-            "recovery_ownership_unavailable": (
-                "common.dynamic.recovery_fail_ownership_unavailable",
-                "The verified connection is no longer held for this collector. "
-                "Run the verification again.",
-            ),
-            # Inbound autonomous-reconnect verification (passive discovery)
-            # failures, surfaced honestly on the discovery failure screen.
-            "strong_identity_timeout": (
-                "common.dynamic.recovery_fail_strong_identity_timeout",
-                "The collector's identity could not be confirmed before the "
-                "check timed out. Try again, or configure the connection by "
-                "hand.",
-            ),
-            "restart_not_confirmed": (
-                "common.dynamic.recovery_fail_restart_not_confirmed",
-                "The collector did not confirm the restart request, so its "
-                "reconnection could not be verified. Try again, or configure "
-                "the connection by hand.",
-            ),
-            "disconnect_not_observed": (
-                "common.dynamic.recovery_fail_disconnect_not_observed",
-                "The collector did not drop and re-establish its connection "
-                "after the restart, so automatic reconnection was not proven. "
-                "Try again, or configure a callback connection by hand.",
-            ),
-            "reconnected_session_untrusted": (
-                "common.dynamic.recovery_fail_reconnected_untrusted",
-                "A connection came back after the restart but its identity "
-                "could not be trusted. Try again, or configure the connection "
-                "by hand.",
-            ),
-        }
-        key, fallback = explanations.get(
-            code,
-            (
-                "common.dynamic.recovery_fail_generic",
-                "The recovery verification did not succeed. You can try again, "
-                "change the settings, or save a Pending Device.",
-            ),
-        )
-        return self._tr(key, fallback)
+        return _shared_recovery_failure_explanation(self._tr, code)
 
     @_with_translation_bundle
     async def async_step_manual_recovery_failed(
@@ -8925,6 +9020,19 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._diagnostic_commands_result_path = ""
         self._diagnostic_publish_download_copy = False
         self._runtime_poll_interval_pending_input: dict[str, Any] = {}
+        # Verified strategy-transition state (Batch 8): the target the user
+        # picked on the runtime form, the runtime options that travel with the
+        # transition's success commit, and the progress task/result.
+        self._transition_target_strategy = ""
+        self._transition_topology_conflict = False
+        self._transition_options_payload: dict[str, Any] = {}
+        self._transition_task = None
+        self._transition_result = None
+        self._transition_error = ""
+        # A proven+committed repair whose HA lifecycle activation did not stick
+        # (async_setup returned falsy / retry / error). The proof is durable and
+        # must NEVER be rolled back or re-run; only a plain setup/reload remains.
+        self._transition_activation_incomplete = False
         self._collector_wifi_current_ssid = ""
         self._collector_wifi_network_diagnostics = ""
         self._collector_wifi_last_error = ""
@@ -9009,13 +9117,29 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         capabilities = self._collector_capabilities()
-        menu_options = ["runtime", "shadow_learning", "collector_wifi", "diagnostics"]
+        marker_present = bool(
+            str(self._config_entry.data.get(CONF_STRATEGY_TRANSITION_STATE) or "").strip()
+        )
+
+        # HIGHEST PRIORITY -- a PROVEN-but-unloaded entry (valid RecoveryContract,
+        # no recovery marker, not LOADED) gets a DEDICATED activation-only menu:
+        # it just needs loading, so nothing else (runtime / shadow / Wi-Fi /
+        # diagnostics / physical repair) applies. Recovery/activation actions
+        # always win over capability filtering.
+        if not marker_present and self._callback_proven_but_not_loaded():
+            return self.async_show_menu(
+                step_id="init",
+                menu_options=[
+                    "strategy_transition_activation_retry",
+                    "strategy_transition_cancel",
+                ],
+                description_placeholders={"bridge_note": ""},
+            )
+
+        # Capability-filtered BASE menu (a local bridge exposes no vendor-cloud
+        # actions, so cloud-only control discovery / shadow learning is hidden).
         bridge_note = ""
         if capabilities.virtual_bridge:
-            # A local bridge does not expose vendor-cloud actions, so cloud-only
-            # control discovery (shadow learning) is meaningless against it.
-            # Wi-Fi, UART, runtime, and diagnostics stay — the bridge implements
-            # them.
             menu_options = ["runtime", "collector_wifi", "diagnostics"]
             if capabilities.uart_management:
                 menu_options.insert(2, "collector_uart")
@@ -9026,6 +9150,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "shadow learning) are hidden; Wi-Fi, UART, and runtime settings remain "
                 "available.",
             )
+        else:
+            menu_options = ["runtime", "shadow_learning", "collector_wifi", "diagnostics"]
+
+        # RECOVERY takes priority OVER the capability filter: a degraded entry
+        # (recovery marker present) offers the repair FIRST -- even a virtual
+        # bridge can be degraded, and the bridge branch must NEVER drop it.
+        if marker_present:
+            menu_options.insert(0, "strategy_transition_repair")
+
         return self.async_show_menu(
             step_id="init",
             menu_options=menu_options,
@@ -9253,7 +9386,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ):
                     self._runtime_poll_interval_pending_input = dict(flat_input)
                     return await self.async_step_runtime_poll_interval()
-                return self._async_commit_runtime_options(flat_input)
+                committed = self._async_commit_runtime_options(flat_input)
+                if committed is not None:
+                    return committed
+                if self._transition_topology_conflict:
+                    errors["base"] = "topology_change_needs_separate_save"
+                else:
+                    return await self.async_step_strategy_transition()
 
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
         branch = get_connection_branch(connection_type)
@@ -9361,30 +9500,51 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
 
     def _async_commit_runtime_options(self, flat_input: dict[str, Any]) -> ConfigFlowResult:
-        """Persist the runtime form: canonical strategy to data, rest to options.
+        """Persist the runtime form; a CHANGED strategy routes to verification.
 
-        The submitted "how the collector connects" selector is the CANONICAL
-        connection_strategy and belongs in ``entry.data`` (schema v4); poll /
-        control / other runtime settings stay in ``entry.options``.
+        An UNCHANGED "how the collector connects" selector keeps the plain
+        options-update semantics: one ``async_update_entry`` with data+options,
+        then the no-op terminal ``async_create_entry(data=options)`` (HA sees
+        no options change and schedules no second reload).
 
-        Both are written in ONE ``async_update_entry`` call, so the entry reloads
-        exactly once and only after the whole state is consistent. The terminal
-        ``async_create_entry(data=options)`` below then writes the SAME options
-        Home Assistant already holds, so HA detects no change, fires no second
-        update-listener, and schedules no second reload.
+        A CHANGED strategy is an architectural transition and can NO LONGER be
+        written here (Batch 8): the user is routed into the dedicated
+        confirmation/progress/result steps, and the target strategy is
+        persisted only by the transition authority after a full verified
+        proof. The other submitted runtime settings travel WITH the
+        transition's success commit so everything lands in one reload.
         """
 
         options = self._build_runtime_options_from_flat_input(flat_input)
+        current_strategy = resolve_connection_strategy(
+            self._config_entry.data,
+            self._config_entry.options,
+        )
         strategy = str(
-            flat_input.get(
-                CONF_CONNECTION_STRATEGY,
-                resolve_connection_strategy(
-                    self._config_entry.data,
-                    self._config_entry.options,
-                ),
-            )
-            or ""
+            flat_input.get(CONF_CONNECTION_STRATEGY, current_strategy) or ""
         ).strip()
+        if strategy in CONNECTION_STRATEGIES and strategy != current_strategy:
+            if self._runtime_topology_changed(options):
+                # Typed refusal (Batch 8): a connection-topology change cannot
+                # be staged and PROVEN against the old runtime spec in the same
+                # step. Ask the user to save the connection settings first
+                # (reload), then switch the strategy separately.
+                self._transition_topology_conflict = True
+                return None
+            # Stage ONLY the orthogonal runtime options (poll / control) that
+            # travel with the transition's success commit. Topology is never
+            # carried through the transition payload.
+            self._transition_target_strategy = strategy
+            self._transition_options_payload = {
+                key: options[key]
+                for key in (CONF_POLL_MODE, CONF_POLL_INTERVAL, CONF_CONTROL_MODE)
+                if key in options
+            }
+            self._transition_result = None
+            self._transition_task = None
+            self._transition_error = ""
+            self._transition_topology_conflict = False
+            return None  # routed by the async caller below
         data = dict(self._config_entry.data)
         if strategy in CONNECTION_STRATEGIES:
             data[CONF_CONNECTION_STRATEGY] = strategy
@@ -9394,6 +9554,35 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             options=options,
         )
         return self.async_create_entry(data=options)
+
+    def _runtime_topology_changed(self, submitted_options: dict[str, Any]) -> bool:
+        """Whether the runtime form changed any connection-topology field.
+
+        Topology (bind/server IP, TCP/UDP ports, collector target, advertised
+        host/port, discovery route) cannot be staged and simultaneously proven
+        against the OLD runtime spec during a strategy switch. A change here is
+        a typed refusal, not a silent stage.
+        """
+
+        topology_keys = (
+            CONF_SERVER_IP,
+            CONF_COLLECTOR_IP,
+            CONF_TCP_PORT,
+            CONF_UDP_PORT,
+            CONF_ADVERTISED_SERVER_IP,
+            CONF_ADVERTISED_TCP_PORT,
+            CONF_DISCOVERY_TARGET,
+            CONF_DISCOVERY_INTERVAL,
+            CONF_HEARTBEAT_INTERVAL,
+        )
+        current = dict(self._config_entry.data)
+        current.update(self._config_entry.options)
+        for key in topology_keys:
+            if key not in submitted_options:
+                continue
+            if str(submitted_options.get(key)) != str(current.get(key, "")):
+                return True
+        return False
 
     def _build_runtime_options_from_flat_input(self, flat_input: dict[str, Any]) -> dict[str, Any]:
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
@@ -9453,7 +9642,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 CONF_POLL_INTERVAL,
                 self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
             )
-            return self._async_commit_runtime_options(pending)
+            committed = self._async_commit_runtime_options(pending)
+            if committed is not None:
+                return committed
+            if not self._transition_topology_conflict:
+                return await self.async_step_strategy_transition()
+            # Topology changed alongside a strategy switch: bounce back to the
+            # runtime form so the user saves connection settings first.
+            return await self.async_step_runtime()
         return self.async_show_form(
             step_id="runtime_poll_interval",
             data_schema=vol.Schema(
@@ -9469,6 +9665,713 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             errors={},
         )
+
+    # ---- steps: verified connection-strategy transition (Batch 8) --------
+    #
+    # The runtime form no longer writes a CHANGED strategy. The user lands
+    # here instead: an explicit confirmation form (direction-specific
+    # addresses, NAT-honest and editable), a progress step running the ONE
+    # transition authority, and a typed localized result. The target strategy
+    # is persisted only by the authority's success commit.
+
+    def _transition_current_strategy(self) -> str:
+        return resolve_connection_strategy(
+            self._config_entry.data,
+            self._config_entry.options,
+        )
+
+    def _transition_prefill(self) -> dict[str, Any]:
+        """Prefill ONLY previously-confirmed ADVERTISED values (NAT-honest).
+
+        Behind NAT the advertised endpoint may look nothing like this host.
+        When no advertised host/port was ever confirmed, the fields stay
+        EMPTY and explicitly require input — the local ``server_ip`` /
+        ``tcp_port`` are bind configuration and are never presented as if
+        they were the externally-advertised endpoint.
+        """
+
+        data = self._config_entry.data
+        options = self._config_entry.options
+        host = str(
+            options.get(CONF_ADVERTISED_SERVER_IP)
+            or data.get(CONF_ADVERTISED_SERVER_IP)
+            or ""
+        ).strip()
+        port = int(
+            options.get(CONF_ADVERTISED_TCP_PORT)
+            or data.get(CONF_ADVERTISED_TCP_PORT)
+            or 0
+        )
+        collector_ip = str(
+            options.get(CONF_COLLECTOR_IP) or data.get(CONF_COLLECTOR_IP) or ""
+        ).strip()
+        return {"host": host, "port": port, "collector_ip": collector_ip}
+
+    @_with_translation_bundle
+    async def async_step_strategy_transition(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Explicit confirmation: the addresses this transition will use.
+
+        Every address is editable user input (prefilled only from the entry's
+        previously-confirmed configuration): behind NAT the advertised host /
+        port may be a public address that looks nothing like this machine.
+        Nothing is derived from peer IPs or hostname shapes, and submitting
+        this form is the explicit consent for the controlled restart.
+        """
+
+        target = self._transition_target_strategy
+        if target not in CONNECTION_STRATEGIES:
+            return await self.async_step_runtime()
+        to_inbound = target == CONNECTION_STRATEGY_INBOUND
+        errors: dict[str, str] = {}
+        prefill = self._transition_prefill()
+
+        if user_input is not None:
+            flat = _flatten_sections(user_input)
+            host = str(flat.get(CONF_ADVERTISED_SERVER_IP) or "").strip()
+            port = int(flat.get(CONF_ADVERTISED_TCP_PORT) or 0)
+            collector_ip = str(flat.get(CONF_COLLECTOR_IP) or "").strip()
+            if not host:
+                errors[CONF_ADVERTISED_SERVER_IP] = "required"
+            if port <= 0 or port > 65535:
+                errors[CONF_ADVERTISED_TCP_PORT] = "invalid_selection"
+            if not to_inbound and not collector_ip:
+                errors[CONF_COLLECTOR_IP] = "callback_target_required"
+            if not errors:
+                self._transition_confirmed_input = {
+                    "host": host,
+                    "port": port,
+                    "collector_ip": collector_ip,
+                }
+                return await self.async_step_strategy_transition_progress()
+
+        schema_fields: dict[Any, Any] = {}
+        if prefill["host"]:
+            schema_fields[
+                vol.Required(CONF_ADVERTISED_SERVER_IP, default=prefill["host"])
+            ] = _IP_TEXT_SELECTOR
+        else:
+            schema_fields[vol.Required(CONF_ADVERTISED_SERVER_IP)] = _IP_TEXT_SELECTOR
+        if prefill["port"]:
+            schema_fields[
+                vol.Required(CONF_ADVERTISED_TCP_PORT, default=prefill["port"])
+            ] = _PORT_SELECTOR
+        else:
+            schema_fields[vol.Required(CONF_ADVERTISED_TCP_PORT)] = _PORT_SELECTOR
+        if not to_inbound:
+            schema_fields[
+                vol.Required(CONF_COLLECTOR_IP, default=prefill["collector_ip"])
+            ] = _IP_TEXT_SELECTOR
+        return self.async_show_form(
+            step_id="strategy_transition",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+            description_placeholders={
+                "target_strategy": self._tr(
+                    f"common.dynamic.connection_strategy_{target}", target
+                ),
+            },
+        )
+
+    async def async_step_strategy_transition_progress(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        if self._transition_task is None:
+            self._transition_task = self.hass.async_create_task(
+                self._async_run_strategy_transition_task()
+            )
+        if not self._transition_task.done():
+            return self.async_show_progress(
+                step_id="strategy_transition_progress",
+                progress_action="strategy_transition_running",
+                progress_task=self._transition_task,
+            )
+        return self.async_show_progress_done(
+            next_step_id="strategy_transition_result"
+        )
+
+    async def _async_run_strategy_transition_task(self) -> None:
+        """The progress task: assemble facade inputs, run THE authority."""
+
+        coordinator = self._coordinator()
+        if coordinator is None:
+            self._transition_error = "transition_runtime_unavailable"
+            return
+        confirmed = getattr(self, "_transition_confirmed_input", None) or {}
+        target = self._transition_target_strategy
+        host = str(confirmed.get("host") or "")
+        port = int(confirmed.get("port") or 0)
+        try:
+            if target == CONNECTION_STRATEGY_INBOUND:
+                endpoint = coordinator.format_home_assistant_callback_endpoint(
+                    host, port
+                )
+                result = await coordinator.async_run_connection_strategy_transition(
+                    target_strategy=target,
+                    inbound_endpoint=endpoint,
+                    option_payload=dict(self._transition_options_payload),
+                )
+            else:
+                result = await coordinator.async_run_connection_strategy_transition(
+                    target_strategy=target,
+                    callback_target_ip=str(confirmed.get("collector_ip") or ""),
+                    advertised_host=host,
+                    advertised_port=port,
+                    option_payload=dict(self._transition_options_payload),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # typed upstream codes travel as messages
+            logger.info("Strategy transition task failed: %s", exc)
+            self._transition_error = str(exc) or "transition_failed"
+            return
+        self._transition_result = result
+        self._transition_error = "" if result.success else str(
+            result.failure_reason or "transition_failed"
+        )
+
+    @_with_translation_bundle
+    async def async_step_strategy_transition_result(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        self._transition_task = None
+        if not self._transition_error and self._transition_result is not None:
+            # Success: the authority already committed data+options and
+            # scheduled the single reload. The terminal create_entry writes
+            # the SAME options HA now holds -> no second reload.
+            payload = dict(self._transition_options_payload)
+            self._transition_target_strategy = ""
+            self._transition_options_payload = {}
+            self._transition_result = None
+            return self.async_create_entry(data=payload)
+        return await self.async_step_strategy_transition_failed()
+
+    async def async_step_strategy_transition_repair(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Finish the degraded transition from a COLD start (Batch 8 repair).
+
+        The endpoint is already external (the restore was confirmed) and there
+        may be no live session at all (HA was restarted). The coordinator-
+        independent repair orchestrator bootstraps the management session back
+        (Phase A) and then proves callback recovery (Phase B), committing the
+        strategy and clearing the recovery state only on success. Driven as a
+        progress task so it works even without a loaded coordinator.
+        """
+
+        del user_input
+        self._transition_result = None
+        self._transition_task = None
+        self._transition_error = ""
+        self._transition_activation_incomplete = False
+        return await self.async_step_strategy_transition_repair_progress()
+
+    async def async_step_strategy_transition_repair_progress(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        if self._transition_task is None:
+            self._transition_task = self.hass.async_create_task(
+                self._async_run_degraded_repair_task()
+            )
+        if not self._transition_task.done():
+            return self.async_show_progress(
+                step_id="strategy_transition_repair_progress",
+                progress_action="strategy_transition_running",
+                progress_task=self._transition_task,
+            )
+        return self.async_show_progress_done(
+            next_step_id="strategy_transition_repair_result"
+        )
+
+    async def _async_run_degraded_repair_task(self) -> None:
+        """The repair progress task: bootstrap + proof, single-owner path."""
+
+        from homeassistant.config_entries import ConfigEntryState
+
+        from .collector.callback_bootstrap import CallbackBootstrapChannel
+        from .connection.strategy_transition_recovery import (
+            StrategyTransitionRecoveryState,
+        )
+        from .connection.strategy_transition_repair import (
+            REPAIR_STATE_INVALID,
+            async_run_degraded_recovery_repair,
+        )
+        from .onboarding.recovery_terminalization import merge_recovery_contract
+        from .onboarding.timeouts import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+        from .passive_discovery import (
+            get_callback_session_registry,
+            get_passive_callback_discovery,
+        )
+
+        state = StrategyTransitionRecoveryState.from_record(
+            self._config_entry.data.get(CONF_STRATEGY_TRANSITION_STATE)
+        )
+        if state is None:
+            self._transition_error = REPAIR_STATE_INVALID
+            return
+        registry = get_callback_session_registry(self.hass)
+        discovery = get_passive_callback_discovery(self.hass)
+        if registry is None or discovery is None:
+            self._transition_error = "transition_runtime_unavailable"
+            return
+
+        entry_id = self._config_entry.entry_id
+
+        # The SAME bootstrap+proof orchestrator repairs the degraded entry whether
+        # it is cold or already running. Only the persistence + activation boundary
+        # differs, keyed on the entry's real load state:
+        #
+        #  * UNLOADED (cold): the flow persists the terminal state directly (an
+        #    unloaded entry has no update listener, so the write triggers no
+        #    reload) and activates with a single awaited ``async_setup``;
+        #  * LOADED (degraded, a live runtime already owns the shared listener but
+        #    has no proven callback session): a RUNNING runtime would poll and
+        #    adopt the very collector session Phase A/B needs, and its
+        #    metadata-drift reload would tear the runtime down mid-proof. So the
+        #    flow first SUSPENDS that runtime (unloads only the entry's
+        #    coordinator; the domain registry + passive discovery are domain
+        #    singletons and the shared listener is pinned by the ensure lease
+        #    below, so every repair dependency survives), then runs the SAME cold
+        #    repair with exclusive use of the collector session, and activates with
+        #    the SAME single awaited ``async_setup``.
+        #
+        # Either way exactly ONE lifecycle activation runs while the flow still
+        # holds the observed-listener lease -- never a LOADED refusal, never an
+        # ``async_update_entry`` auto-reload plus a second reload.
+        was_loaded = self._config_entry.state is ConfigEntryState.LOADED
+
+        # ONE lifecycle ledger: every exit path (success, typed failure, error,
+        # cancellation) resolves to a DEFINED final entry state through the single
+        # finalization boundary below -- no fire-and-forget restore/activation.
+        lifecycle: dict[str, Any] = {
+            "suspend_attempted": False,        # set BEFORE async_unload (cancel-safe)
+            "suspended_by_flow": False,        # the flow cleanly unloaded the entry
+            "durable_commit_completed": False,  # the proof was persisted
+            "activation_completed": False,
+            "observed_token": None,            # released ONLY inside finalization
+        }
+
+        async def _commit(updates, terminal) -> str:
+            # PERSISTENCE ONLY. At commit time the entry is UNLOADED (cold, or the
+            # LOADED runtime was suspended below), so this public
+            # ``async_update_entry`` fires no update-listener reload. Activation is
+            # a SEPARATE awaited step in finalization.
+            data = dict(self._config_entry.data)
+            data.update(updates)
+            data.pop(CONF_STRATEGY_TRANSITION_STATE, None)
+            refusal = merge_recovery_contract(data, terminal)
+            if refusal:
+                return refusal
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=data
+            )
+            lifecycle["durable_commit_completed"] = True
+            return ""
+
+        # The ONE public cold-bootstrap boundary owns every listener / wire /
+        # trigger / registry-projection concern; the flow holds none of them.
+        channel = CallbackBootstrapChannel(
+            registry=registry,
+            host=state.listener_bind_host,
+            port=state.local_listener_port,
+            entry_data=self._config_entry.data,
+            entry_options=self._config_entry.options,
+            entry_pn=state.collector_pn,
+            trigger_timeout=DEFAULT_ONBOARDING_TIMEOUT_POLICY.discovery_timeout,
+        )
+
+        # ---- SUSPEND + REPAIR + DETERMINISTIC, CANCELLATION-SAFE FINALIZATION -
+        # The cancellation-safe boundary ENCOMPASSES the suspend itself: a cancel
+        # that lands mid-``async_unload`` (after the entry actually left LOADED)
+        # still routes the mandatory restore through the one finalization boundary
+        # before the ``CancelledError`` propagates. A running runtime would
+        # poll/adopt the very collector session Phase A/B needs and reload
+        # mid-proof, so a LOADED entry is SUSPENDED first; if it cannot be cleanly
+        # suspended the flow refuses with a typed reason and runs NOTHING
+        # downstream (zero listener ensure / UDP / orchestrator / commit).
+        try:
+            if was_loaded:
+                refusal = await self._suspend_runtime_for_repair(entry_id, lifecycle)
+                if refusal:
+                    self._transition_error = refusal
+                    return  # the finally still restores a partial unload
+            # The ensure lives INSIDE the finalized boundary so its token is always
+            # released through the one cleanup path, even if the ensure or the
+            # orchestrator raises. The LISTENER bind host (not the UDP trigger
+            # bind) shares the refcounted TCP listener; no private injection.
+            lifecycle["observed_token"] = (
+                await discovery.async_ensure_observed_listener(
+                    state.listener_bind_host, state.local_listener_port
+                )
+            )
+            result = await async_run_degraded_recovery_repair(
+                registry=registry,
+                owner_id=entry_id,
+                state=state,
+                channel=channel,
+                commit=_commit,
+                clock=lambda: datetime.now(timezone.utc).isoformat(),
+            )
+            self._transition_result = result
+            if not result.success:
+                self._transition_error = str(
+                    result.failure_reason or "transition_failed"
+                )
+        except asyncio.CancelledError:
+            raise  # finalize in the finally FIRST, then propagate
+        except Exception as exc:  # typed reasons travel as messages
+            logger.info("Degraded repair task failed: %s", exc)
+            self._transition_error = str(exc) or "transition_failed"
+        finally:
+            # ONE boundary resolves restore-or-activate + token release, run to
+            # completion even under cancellation (never fire-and-forget), so a
+            # cancel/error NEVER leaves the entry silently unloaded or the proof
+            # half-applied.
+            await self._await_critical(
+                self._finalize_repair_lifecycle(
+                    entry_id,
+                    was_loaded=was_loaded,
+                    lifecycle=lifecycle,
+                    discovery=discovery,
+                    registry=registry,
+                )
+            )
+
+    @staticmethod
+    async def _await_critical(coro):
+        """Run a critical finalization coroutine to COMPLETION under cancellation.
+
+        The finalization (restore of the suspended entry, or activation of the
+        proven one) MUST finish before a ``CancelledError`` propagates, so a
+        mid-flight abort never leaves the entry unloaded or the proof half-applied.
+        It runs as a shielded task; re-delivered cancellations are absorbed until
+        it completes. If the caller was cancelled at ANY point, the
+        ``CancelledError`` is re-raised AFTER the work finishes -- a successful
+        finalization NEVER turns a cancelled task into a normal completion, and
+        repeated cancels never interrupt the cleanup.
+        """
+
+        task = asyncio.ensure_future(coro)
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+                # Keep the shielded critical work alive; wait for it to finish.
+        if cancelled:
+            # Honor the caller's cancellation AFTER cleanup completed.
+            raise asyncio.CancelledError
+        error = task.exception()
+        if error is not None:
+            raise error
+        return task.result()
+
+    async def _suspend_runtime_for_repair(
+        self, entry_id: str, lifecycle: dict[str, Any]
+    ) -> str:
+        """Fail-closed suspend of the competing runtime before a LOADED repair.
+
+        The attempt is marked BEFORE the unload so a cancellation that lands
+        mid-``async_unload`` (after the entry left LOADED) still routes the
+        mandatory restore through the shared finalization boundary -- never here.
+        Returns "" on a CLEAN suspend (entry NOT_LOADED, ``suspended_by_flow`` set)
+        or a typed refusal; a partial / failed unload is restored by finalization.
+        """
+
+        from homeassistant.config_entries import ConfigEntryState
+
+        # Mark BEFORE the await: even a cancel delivered inside async_unload leaves
+        # this recorded, so finalization knows the flow owns the restore.
+        lifecycle["suspend_attempted"] = True
+        try:
+            unloaded = bool(await self.hass.config_entries.async_unload(entry_id))
+        except asyncio.CancelledError:
+            raise  # finalization (via the task's finally) restores + propagates
+        except Exception as exc:
+            logger.info("Suspend unload of %s raised: %s", entry_id, exc)
+            unloaded = False
+        if unloaded and self._config_entry.state is ConfigEntryState.NOT_LOADED:
+            lifecycle["suspended_by_flow"] = True
+            return ""
+        # NOT cleanly suspended -> typed refusal. A partial unload (entry left
+        # non-LOADED) is restored by the ONE finalization boundary, not here.
+        return "transition_suspend_failed"
+
+    async def _finalize_repair_lifecycle(
+        self,
+        entry_id: str,
+        *,
+        was_loaded: bool,
+        lifecycle: dict[str, Any],
+        discovery: Any,
+        registry: Any,
+    ) -> None:
+        """The ONE deterministic exit boundary for the degraded-repair lifecycle.
+
+        Post-commit: the proof is durable and is NEVER rolled back -- the proven
+        runtime is activated EXACTLY once (a cancel during activation completes
+        here, never leaving the entry unloaded). Pre-commit after a suspend: the
+        ORIGINAL configuration is restored with exactly one awaited setup, and a
+        restore failure is an HONEST typed reason (never suppressed). The held
+        observed-listener token is released only AFTER the restore/activation
+        attempt, through this same boundary.
+        """
+
+        from homeassistant.config_entries import ConfigEntryState
+
+        try:
+            result = self._transition_result
+            if lifecycle["durable_commit_completed"]:
+                if self._config_entry.state is not ConfigEntryState.LOADED:
+                    try:
+                        lifecycle["activation_completed"] = bool(
+                            await self.hass.config_entries.async_setup(entry_id)
+                        )
+                    except Exception as exc:  # never CancelledError (shielded)
+                        # HA recorded the honest post-setup state; the proof stays
+                        # committed. A raising activation is NOT the proof's
+                        # failure path -- it surfaces as activation-incomplete.
+                        logger.info(
+                            "Activation of proven entry did not complete: %s", exc
+                        )
+                        lifecycle["activation_completed"] = False
+                else:
+                    lifecycle["activation_completed"] = True
+                # Postcondition via the PUBLIC registry: the certified owned
+                # session must still be accepted, and HA must honestly report the
+                # entry LOADED, before we call the activation complete.
+                session_accepted = bool(
+                    result is not None
+                    and getattr(result, "outcome", None) is not None
+                    and registry.reverify_permanent_owned_session(
+                        getattr(result.outcome, "owner_certification", None)
+                    )
+                )
+                if (
+                    lifecycle["activation_completed"]
+                    and self._config_entry.state is ConfigEntryState.LOADED
+                    and session_accepted
+                ):
+                    self._transition_error = ""
+                    self._transition_activation_incomplete = False
+                else:
+                    # Durable proof STANDS; only HA's load did not complete. The
+                    # verification and collector reconfiguration are not repeated.
+                    self._transition_activation_incomplete = True
+                    self._transition_error = "transition_activation_incomplete"
+            elif (
+                was_loaded
+                and lifecycle["suspend_attempted"]
+                and self._config_entry.state is not ConfigEntryState.LOADED
+            ):
+                # The flow suspended (or began suspending) the entry and nothing
+                # was committed -- restore the ORIGINAL configuration. This covers
+                # a clean-suspend-then-failure AND a cancel delivered INSIDE the
+                # unload after the entry already left LOADED.
+                restored = False
+                try:
+                    restored = bool(
+                        await self.hass.config_entries.async_setup(entry_id)
+                    )
+                except Exception as exc:  # never CancelledError (shielded)
+                    logger.warning(
+                        "Restore of suspended entry %s after aborted repair "
+                        "failed: %s",
+                        entry_id,
+                        exc,
+                    )
+                    restored = False
+                if (
+                    not restored
+                    and self._config_entry.state is not ConfigEntryState.LOADED
+                ):
+                    # HONEST: the previously-working entry did not come back.
+                    self._transition_error = "transition_restore_failed"
+        finally:
+            token = lifecycle.get("observed_token")
+            if token is not None:
+                lifecycle["observed_token"] = None
+                await discovery.async_release_observed_listener(token)
+
+    def _callback_proven_but_not_loaded(self) -> bool:
+        """Whether the entry is a PROVEN callback config that just needs loading.
+
+        True iff the connection strategy is callback_on_demand, a valid
+        (callback-verified) RecoveryContract is present, there is NO recovery
+        marker (the physical repair is done, not pending), and the entry is not
+        LOADED. Such an entry needs a LOAD-ONLY activation retry -- never a fresh
+        Phase A/B, UDP trigger, or proof change.
+        """
+
+        from homeassistant.config_entries import ConfigEntryState
+
+        # Cheap gates first (a LOADED entry, wrong strategy, or a pending recovery
+        # marker) short-circuit BEFORE the heavier RecoveryContract parse.
+        if getattr(self._config_entry, "state", None) is ConfigEntryState.LOADED:
+            return False
+        data = self._config_entry.data
+        if (
+            str(data.get(CONF_CONNECTION_STRATEGY) or "")
+            != CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        ):
+            return False
+        if str(data.get(CONF_STRATEGY_TRANSITION_STATE) or "").strip():
+            return False  # a recovery marker means a physical repair is pending
+        from .connection.recovery_contract import RecoveryContract
+
+        contract = RecoveryContract.from_entry_data(data)
+        return contract is not None and contract.callback_verified
+
+    @_with_translation_bundle
+    async def async_step_strategy_transition_repair_result(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        del user_input
+        self._transition_task = None
+        if not self._transition_error and self._transition_result is not None:
+            # Success: the repair committed the strategy + contract, cleared
+            # the recovery state and scheduled the single reload.
+            self._transition_result = None
+            return self.async_create_entry(data=dict(self._config_entry.options))
+        if self._transition_activation_incomplete:
+            # The repair is PROVEN and committed; only HA's activation did not
+            # complete. This is NOT a repair failure -- never offer the full
+            # physical retry here.
+            return await self.async_step_strategy_transition_activation_incomplete()
+        return await self.async_step_strategy_transition_failed()
+
+    @_with_translation_bundle
+    async def async_step_strategy_transition_activation_incomplete(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """The proof committed durably but HA's activation did not complete.
+
+        The strategy, the RecoveryContract and the cleared recovery state are all
+        persisted -- the verification and the collector reconfiguration are done
+        and MUST NOT be repeated. Home Assistant only failed to load the entry
+        (setup retry / error). The sole remaining action is to retry LOADING the
+        already-proven callback configuration for the SAME entry -- no fresh proof
+        and no collector reconfiguration (Home Assistant's own same-PN callback
+        reconnect on load is a normal runtime step, not part of the repair).
+        """
+
+        del user_input
+        return self.async_show_menu(
+            step_id="strategy_transition_activation_incomplete",
+            menu_options=[
+                "strategy_transition_activation_retry",
+                "strategy_transition_cancel",
+            ],
+            description_placeholders={
+                "failure_explanation": _shared_recovery_failure_explanation(
+                    self._tr, self._transition_error
+                ),
+            },
+        )
+
+    async def async_step_strategy_transition_activation_retry(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Retry ONLY loading the already-proven entry.
+
+        A plain reload of the SAME entry -- Home Assistant re-loads the
+        already-proven callback configuration. The verification and the collector
+        reconfiguration are NEVER repeated; the degraded-repair orchestrator is
+        not invoked and the RecoveryContract / recovery-state fields are not
+        touched. The proof stays committed either way; if the reload lands the
+        entry LOADED we close the flow, otherwise we show the same
+        activation-only menu again.
+        """
+
+        del user_input
+        from homeassistant.config_entries import ConfigEntryState
+
+        # Reachable either from the in-flow activation-incomplete menu (reason
+        # already set) OR fresh from the options menu on a reopened proven entry;
+        # make sure the fallback menu has an honest reason in both cases.
+        if not self._transition_error:
+            self._transition_error = "transition_activation_incomplete"
+
+        entry_id = self._config_entry.entry_id
+        try:
+            await self.hass.config_entries.async_reload(entry_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info("Activation reload of proven entry did not complete: %s", exc)
+        if self._config_entry.state is ConfigEntryState.LOADED:
+            self._transition_activation_incomplete = False
+            self._transition_result = None
+            self._transition_error = ""
+            return self.async_create_entry(data=dict(self._config_entry.options))
+        # Still not loaded -- the proof remains committed; offer the same
+        # load-only remedy again (no verification, no collector reconfiguration).
+        return await self.async_step_strategy_transition_activation_incomplete()
+
+    @_with_translation_bundle
+    async def async_step_strategy_transition_failed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Typed transition failure with the explicit next actions."""
+
+        del user_input
+        return self.async_show_menu(
+            step_id="strategy_transition_failed",
+            menu_options=[
+                "strategy_transition",
+                "strategy_transition_keep_settings",
+                "strategy_transition_cancel",
+            ],
+            description_placeholders={
+                "failure_explanation": _shared_recovery_failure_explanation(
+                    self._tr, self._transition_error
+                ),
+            },
+        )
+
+    async def async_step_strategy_transition_keep_settings(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Save the submitted runtime settings WITHOUT changing the strategy."""
+
+        del user_input
+        options = dict(self._transition_options_payload)
+        self._transition_target_strategy = ""
+        self._transition_options_payload = {}
+        self._transition_result = None
+        self._transition_error = ""
+        self.hass.config_entries.async_update_entry(
+            self._config_entry, options=options
+        )
+        return self.async_create_entry(data=options)
+
+    async def async_step_strategy_transition_cancel(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Leave everything untouched (options included)."""
+
+        del user_input
+        self._transition_target_strategy = ""
+        self._transition_options_payload = {}
+        self._transition_result = None
+        self._transition_error = ""
+        return self.async_create_entry(data=dict(self._config_entry.options))
 
     @_with_translation_bundle
     async def async_step_diagnostic_commands(

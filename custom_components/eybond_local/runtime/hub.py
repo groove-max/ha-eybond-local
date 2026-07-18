@@ -452,6 +452,17 @@ class EybondHub:
 
         return self._link_manager.effective_advertised_server_ip
 
+    @property
+    def listener_bind_host(self) -> str:
+        """Return the ACTUAL local TCP bind host of the callback listener.
+
+        A narrow read-only pass-through of the link's own public
+        ``listener_bind_host`` -- so a cold repair can borrow the shared TCP
+        listener on the exact host the runtime binds, never a guessed one.
+        """
+
+        return self._link_manager.listener_bind_host
+
     def diagnostic_link_transport(self):
         """Return the shared payload transport for read-only diagnostic command runs.
 

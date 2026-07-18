@@ -234,6 +234,11 @@ DEFAULT_PROXY_ENABLED = False
 # record what the integration itself last wrote and when.
 CONF_ENDPOINT_WRITTEN_VALUE = "endpoint_written_value"
 CONF_ENDPOINT_WRITTEN_AT = "endpoint_written_at"
+# Typed persisted strategy-transition degraded marker (Batch 8): set when the
+# collector endpoint was CONFIRMED restored to the external target but the
+# callback strategy was never proven — the canonical strategy temporarily does
+# not match the wire reality. Cleared by the next successful transition.
+CONF_STRATEGY_TRANSITION_STATE = "connection_strategy_transition_state"
 
 DEFAULT_COLLECTOR_ADDR = 0xFF
 DEFAULT_MODBUS_DEVICE_ADDR = 1

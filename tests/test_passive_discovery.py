@@ -84,6 +84,131 @@ class _FakeListener:
         return self._sessions
 
 
+_ACQUIRE = "custom_components.eybond_local.passive_discovery._acquire_shared_listener"
+_RELEASE = "custom_components.eybond_local.passive_discovery._release_shared_listener"
+
+
+class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
+    """Batch 8B.2A: the public scoped custom-listener registration (direction B)."""
+
+    def _discovery(self):
+        hass = _FakeHass()
+        hass.data = {}
+        discovery = PassiveCallbackDiscovery(hass)
+        hass.data[DOMAIN] = {"passive_callback_discovery": discovery}
+        return discovery
+
+    async def test_ensured_custom_listener_reaches_domain_registry(self) -> None:
+        discovery = self._discovery()
+        session = {
+            "session_id": "s1",
+            "collector_pn": "V001020SYN62344022",
+            "peer_ip": "203.0.113.9",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        listener = _FakeListener((session,))
+        released: list = []
+        with patch(_ACQUIRE, AsyncMock(return_value=listener)), patch(
+            _RELEASE, AsyncMock(side_effect=lambda l: released.append(l))
+        ):
+            # A random custom port is invisible to the domain registry until ensured.
+            self.assertEqual(discovery.iter_observed_sessions(), ())
+            token = await discovery.async_ensure_observed_listener("127.0.0.1", 40001)
+            # The SAME domain registry now observes the custom-port session.
+            rows = discovery.registry.observed_sessions_per_socket()
+            self.assertTrue(
+                any(r.session_id == "s1" and r.listener_port == 40001 for r in rows)
+            )
+            # Scoped release removes it (and drops the listener ref exactly once).
+            await discovery.async_release_observed_listener(token)
+            self.assertEqual(discovery.iter_observed_sessions(), ())
+            self.assertEqual(released, [listener])
+            # Idempotent second release.
+            await discovery.async_release_observed_listener(token)
+            self.assertEqual(released, [listener])
+
+    async def test_session_deduped_by_port_and_session_id(self) -> None:
+        # A listener visible from BOTH a standard source and an ensure on the same
+        # port yields each physical session exactly once.
+        discovery = self._discovery()
+        session = {
+            "session_id": "dup",
+            "collector_pn": "V001020SYN62344022",
+            "peer_ip": "203.0.113.9",
+            "state": "routed_framed",
+        }
+        listener = _FakeListener((session,))
+        discovery._listeners[40002] = listener
+        with patch(_ACQUIRE, AsyncMock(return_value=listener)), patch(
+            _RELEASE, AsyncMock()
+        ):
+            await discovery.async_ensure_observed_listener("127.0.0.1", 40002)
+            rows = [
+                s for s in discovery.iter_observed_sessions() if s["session_id"] == "dup"
+            ]
+            self.assertEqual(len(rows), 1)
+
+    async def test_two_tokens_same_port_are_refcounted(self) -> None:
+        # Batch 8B.2A corrective: two concurrent ensures on ONE (host, port) each
+        # hold a ref; the listener stays observed until BOTH release, release is
+        # idempotent, and stop never double-releases.
+        discovery = self._discovery()
+        session = {
+            "session_id": "sess",
+            "collector_pn": "V001020SYN62344022",
+            "peer_ip": "203.0.113.9",
+            "state": "routed_framed",
+        }
+        listener = _FakeListener((session,))
+        released: list = []
+        with patch(_ACQUIRE, AsyncMock(return_value=listener)), patch(
+            _RELEASE, AsyncMock(side_effect=lambda l, **k: released.append(l))
+        ):
+            t1 = await discovery.async_ensure_observed_listener("127.0.0.1", 40100)
+            t2 = await discovery.async_ensure_observed_listener("127.0.0.1", 40100)
+
+            def _observed() -> bool:
+                return any(
+                    s["session_id"] == "sess"
+                    for s in discovery.iter_observed_sessions()
+                )
+
+            # Deduped: the physical session appears once despite two tokens.
+            self.assertEqual(
+                sum(1 for s in discovery.iter_observed_sessions() if s["session_id"] == "sess"),
+                1,
+            )
+            # First release: the second token still holds it observed.
+            await discovery.async_release_observed_listener(t1)
+            self.assertTrue(_observed())
+            self.assertEqual(len(released), 1)
+            # Second release: gone / closed.
+            await discovery.async_release_observed_listener(t2)
+            self.assertFalse(_observed())
+            self.assertEqual(len(released), 2)
+            # Idempotent: re-releasing either token drops no more refs.
+            await discovery.async_release_observed_listener(t1)
+            await discovery.async_release_observed_listener(t2)
+            self.assertEqual(len(released), 2)
+            # Stop does not double-release already-released leases.
+            await discovery.async_stop()
+            self.assertEqual(len(released), 2)
+
+    async def test_stop_releases_ensured_leases(self) -> None:
+        discovery = self._discovery()
+        listener = _FakeListener(())
+        released: list = []
+        with patch(_ACQUIRE, AsyncMock(return_value=listener)), patch(
+            _RELEASE, AsyncMock(side_effect=lambda l, **k: released.append(l))
+        ):
+            await discovery.async_ensure_observed_listener("127.0.0.1", 40003)
+            await discovery.async_stop()
+            self.assertIn(listener, released)
+            self.assertEqual(discovery._ensured_listeners, {})
+
+
 class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_active_callback_probe_scope_always_closes_service_scope(self) -> None:
         hass = _FakeHass()

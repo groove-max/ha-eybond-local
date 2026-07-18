@@ -145,13 +145,26 @@ async def test_options_flow_entry_is_not_loaded_requirement(
 async def test_runtime_options_commit_strategy_to_data_with_one_reload(
     hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime
 ) -> None:
-    """The real options manager keeps strategy canonical and reloads once."""
+    """UNCHANGED strategy stays a plain options update with exactly one reload.
+
+    Since Batch 8 a CHANGED strategy no longer commits here at all (it routes
+    into the verified transition steps); submitting the CURRENT strategy keeps
+    the plain, single-reload options semantics this test pins.
+    """
+
+    from custom_components.eybond_local.connection.connection_policy import (
+        resolve_connection_strategy,
+    )
 
     assert await hass.config_entries.async_setup(collector_entry.entry_id)
     await hass.async_block_till_done()
     assert collector_entry.state is ConfigEntryState.LOADED
     assert len(fake_runtime) == 1
     assert collector_entry.runtime_data._suppress_entry_reload_count == 0
+
+    current_strategy = resolve_connection_strategy(
+        collector_entry.data, collector_entry.options
+    )
 
     result = await hass.config_entries.options.async_init(collector_entry.entry_id)
     assert result["type"] is FlowResultType.MENU
@@ -166,7 +179,7 @@ async def test_runtime_options_commit_strategy_to_data_with_one_reload(
         {
             "poll_mode": "auto",
             "control_mode": "read_only",
-            "connection_strategy": "inbound",
+            "connection_strategy": current_strategy,
             "connection": {
                 "server_ip": SYNTHETIC_SERVER_IP,
                 "collector_ip": SYNTHETIC_COLLECTOR_IP,
@@ -182,7 +195,7 @@ async def test_runtime_options_commit_strategy_to_data_with_one_reload(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
 
-    assert collector_entry.data["connection_strategy"] == "inbound"
+    assert collector_entry.data["connection_strategy"] == current_strategy
     assert "connection_strategy" not in collector_entry.options
     assert collector_entry.state is ConfigEntryState.LOADED
     assert len(fake_runtime) == 2, "runtime options must schedule exactly one reload"

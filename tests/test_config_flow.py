@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import subprocess
+import enum
 import itertools
 import sys
 import tempfile
@@ -205,6 +206,16 @@ def _install_homeassistant_stubs() -> None:
     config_entries.ConfigFlow = ConfigFlow
     config_entries.ConfigFlowResult = dict
     config_entries.OptionsFlow = OptionsFlow
+
+    class ConfigEntryState(enum.Enum):
+        LOADED = "loaded"
+        NOT_LOADED = "not_loaded"
+        SETUP_ERROR = "setup_error"
+        SETUP_RETRY = "setup_retry"
+        MIGRATION_ERROR = "migration_error"
+        FAILED_UNLOAD = "failed_unload"
+
+    config_entries.ConfigEntryState = ConfigEntryState
     core.HomeAssistant = HomeAssistant
     core.callback = callback
     core.split_entity_id = split_entity_id
@@ -5839,6 +5850,57 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
 
+    async def test_options_init_offers_repair_for_degraded_virtual_bridge(self) -> None:
+        # Recovery beats capability filtering: a DEGRADED virtual bridge (recovery
+        # marker present) still offers the repair FIRST -- the bridge branch must
+        # never drop it.
+        options = self._make_options_flow()
+        options._config_entry.data["connection_strategy_transition_state"] = {
+            "kind": "callback_transition_unproven"
+        }
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        result = await options.async_step_init()
+
+        self.assertEqual(result["menu_options"][0], "strategy_transition_repair")
+        # The bridge base menu remains (uart shown, shadow learning hidden).
+        self.assertIn("collector_uart", result["menu_options"])
+        self.assertNotIn("shadow_learning", result["menu_options"])
+
+    async def test_options_init_proven_unloaded_shows_activation_only_menu(self) -> None:
+        # A PROVEN-but-unloaded callback config gets a DEDICATED activation-only
+        # menu that wins over ALL capability filtering -- even a virtual bridge
+        # runtime cannot inject runtime/Wi-Fi/diagnostics or drop the retry.
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+        options._callback_proven_but_not_loaded = lambda: True
+
+        result = await options.async_step_init()
+
+        self.assertEqual(
+            result["menu_options"],
+            ["strategy_transition_activation_retry", "strategy_transition_cancel"],
+        )
+        for absent in (
+            "runtime",
+            "collector_wifi",
+            "diagnostics",
+            "collector_uart",
+            "shadow_learning",
+            "strategy_transition_repair",
+        ):
+            self.assertNotIn(absent, result["menu_options"])
+
     async def test_options_collector_wifi_step_renders_current_status(self) -> None:
         options = self._make_options_flow()
 
@@ -6590,8 +6652,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge_result["type"], "form")
         self.assertNotIn(CONF_PROXY_ENABLED, bridge_result["data_schema"].schema)
 
-    async def test_options_runtime_step_persists_connection_strategy_and_disables_proxy(self) -> None:
-        # The compatibility proxy axis remains explicit and fail-closed.
+    async def test_options_runtime_step_routes_changed_strategy_to_transition(self) -> None:
+        # Batch 8: a CHANGED "how the collector connects" selection is an
+        # architectural transition. The runtime form must NOT write it — the
+        # user is routed to the dedicated verification steps instead, and the
+        # target strategy is persisted only by the transition authority.
         options = self._make_options_flow()
         options._config_entry.options = {CONF_PROXY_ENABLED: True}
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -6601,38 +6666,71 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        result = await options.async_step_runtime(
-            {
-                "poll_interval": 15,
-                "control_mode": "auto",
-                "connection_strategy": CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-                "connection": {
-                    "server_ip": "192.168.1.50",
-                    "collector_ip": "192.168.1.55",
-                    "tcp_port": 8899,
-                    "udp_port": 58899,
-                    "discovery_target": "192.168.1.255",
-                    "discovery_interval": 3,
-                    "heartbeat_interval": 60,
-                    "driver_hint": "auto",
-                },
-            }
-        )
+        submitted = {
+            "poll_interval": 15,
+            "control_mode": "auto",
+            "connection_strategy": CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            "connection": {
+                "server_ip": "192.168.1.50",
+                "collector_ip": "192.168.1.55",
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.168.1.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+                "driver_hint": "auto",
+            },
+        }
+        result = await options.async_step_runtime(dict(submitted))
 
-        self.assertEqual(result["type"], "create_entry")
-        # Canonical (v4): the submitted strategy lands in entry.DATA ...
-        self.assertEqual(
-            options._config_entry.data[CONF_CONNECTION_STRATEGY],
+        # Routed to the explicit confirmation form; NOTHING was persisted.
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "strategy_transition")
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, options._config_entry.options)
+        self.assertNotEqual(
+            options._config_entry.data.get(CONF_CONNECTION_STRATEGY),
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
-        # ... and is NEVER written to options, where it could shadow a later
-        # HA-only / Cloud+HA / bind / rollback action.
-        self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data"])
-        self.assertNotIn(CONF_CONNECTION_STRATEGY, options._config_entry.options)
-        self.assertFalse(result["data"][CONF_PROXY_ENABLED])
-        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
-        # data+options are committed in ONE atomic update -> exactly one reload.
-        updates = options.hass.config_entries.updates
+        self.assertEqual(options.hass.config_entries.updates, [])
+        # The submitted runtime settings are staged for the transition's
+        # success commit -- but ONLY the orthogonal options (poll / control),
+        # never topology or architecture axes like proxy_enabled.
+        self.assertEqual(
+            options._transition_target_strategy,
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertEqual(
+            set(options._transition_options_payload),
+            {"poll_mode", "poll_interval", "control_mode"},
+        )
+        self.assertNotIn(
+            CONF_PROXY_ENABLED, options._transition_options_payload
+        )
+
+        # An UNCHANGED strategy submission stays a plain options update.
+        unchanged = self._make_options_flow()
+        unchanged._config_entry.options = {CONF_PROXY_ENABLED: True}
+        unchanged._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+        from custom_components.eybond_local.connection.connection_policy import (
+            resolve_connection_strategy,
+        )
+
+        plain_input = dict(submitted)
+        plain_input["connection_strategy"] = resolve_connection_strategy(
+            unchanged._config_entry.data, unchanged._config_entry.options
+        )
+        plain = await unchanged.async_step_runtime(plain_input)
+        self.assertEqual(plain["type"], "create_entry")
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, plain["data"])
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, unchanged._config_entry.options)
+        self.assertFalse(plain["data"][CONF_PROXY_ENABLED])
+        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, plain["data"])
+        updates = unchanged.hass.config_entries.updates
         self.assertEqual(len(updates), 1)
         self.assertIn("data", updates[0])
         self.assertIn("options", updates[0])
@@ -12266,3 +12364,233 @@ class ManualRecoveryFailureExplanationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("some_internal_code_42", explanation)
         self.assertNotIn("`", explanation)
         self.assertGreater(len(explanation), 20)
+
+
+class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
+    """Batch 8: the options-flow confirmation/progress/result transition steps."""
+
+    def _make_flow(self, *, transition_result=None, transition_error=None):
+        from custom_components.eybond_local.connection.strategy_transition import (
+            StrategyTransitionResult,
+        )
+
+        entry = type("_Entry", (), {})()
+        entry.data = {
+            "connection_type": "eybond",
+            "server_ip": "192.168.1.50",
+            "collector_ip": "192.168.1.55",
+            "tcp_port": 8899,
+            "udp_port": 58899,
+            "connection_strategy": "inbound",
+            "control_mode": "auto",
+        }
+        entry.options = {}
+        entry.entry_id = "entry-1"
+
+        calls: list[dict] = []
+
+        class _Coordinator:
+            def format_home_assistant_callback_endpoint(self, host, port):
+                return f"{host}:{port}"
+
+            async def async_run_connection_strategy_transition(self, **kwargs):
+                calls.append(kwargs)
+                if transition_error is not None:
+                    raise RuntimeError(transition_error)
+                if transition_result is not None:
+                    return transition_result
+                return StrategyTransitionResult(
+                    success=True, target_strategy=kwargs["target_strategy"]
+                )
+
+        entry.runtime_data = _Coordinator()
+        flow = EybondLocalOptionsFlow(entry)
+        flow.hass = _FakeHass()
+        flow.context = {}
+        flow._transition_target_strategy = "callback_on_demand"
+        flow._transition_options_payload = {"poll_mode": "auto"}
+        return flow, calls
+
+    async def _drive(self, flow):
+        progress = await flow.async_step_strategy_transition_progress()
+        self.assertEqual(progress["type"], "progress")
+        await flow._transition_task
+        done = await flow.async_step_strategy_transition_progress()
+        self.assertEqual(done["type"], "progress_done")
+        return await flow.async_step_strategy_transition_result()
+
+    async def test_confirm_form_requires_explicit_addresses(self) -> None:
+        flow, _calls = self._make_flow()
+        form = await flow.async_step_strategy_transition()
+        self.assertEqual(form["type"], "form")
+        self.assertEqual(form["step_id"], "strategy_transition")
+        # The callback direction demands the collector target too.
+        missing = await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "",
+                "advertised_tcp_port": 8899,
+                "collector_ip": "",
+            }
+        )
+        self.assertEqual(missing["type"], "form")
+        self.assertIn("advertised_server_ip", missing["errors"])
+        self.assertIn("collector_ip", missing["errors"])
+
+    async def test_success_passes_verbatim_addresses_and_staged_options(self) -> None:
+        flow, calls = self._make_flow()
+        submitted = await flow.async_step_strategy_transition(
+            {
+                # A PUBLIC NAT address: travels verbatim, never localized.
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+            }
+        )
+        self.assertEqual(submitted["type"], "progress")
+        await flow._transition_task
+        done = await flow.async_step_strategy_transition_progress()
+        self.assertEqual(done["type"], "progress_done")
+        result = await flow.async_step_strategy_transition_result()
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"], {"poll_mode": "auto"})
+        self.assertEqual(len(calls), 1)
+        call = calls[0]
+        self.assertEqual(call["target_strategy"], "callback_on_demand")
+        self.assertEqual(call["callback_target_ip"], "203.0.113.10")
+        self.assertEqual(call["advertised_host"], "198.51.100.20")
+        self.assertEqual(call["advertised_port"], 19000)
+        self.assertEqual(call["option_payload"], {"poll_mode": "auto"})
+        # The options flow itself persisted NOTHING (the authority commits).
+        self.assertEqual(flow.hass.config_entries.updates, [])
+
+    async def test_inbound_direction_formats_confirmed_endpoint(self) -> None:
+        flow, calls = self._make_flow()
+        flow._transition_target_strategy = "inbound"
+        submitted = await flow.async_step_strategy_transition(
+            {"advertised_server_ip": "198.51.100.20", "advertised_tcp_port": 19000}
+        )
+        self.assertEqual(submitted["type"], "progress")
+        await flow._transition_task
+        await flow.async_step_strategy_transition_progress()
+        result = await flow.async_step_strategy_transition_result()
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(calls[0]["target_strategy"], "inbound")
+        self.assertEqual(calls[0]["inbound_endpoint"], "198.51.100.20:19000")
+
+    async def test_failure_shows_localized_menu_and_keeps_strategy(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            StrategyTransitionResult,
+        )
+
+        flow, _calls = self._make_flow(
+            transition_result=StrategyTransitionResult(
+                success=False,
+                target_strategy="callback_on_demand",
+                failure_reason="transition_rollback_endpoint_unavailable",
+            )
+        )
+        await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+            }
+        )
+        await flow._transition_task
+        await flow.async_step_strategy_transition_progress()
+        result = await flow.async_step_strategy_transition_result()
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "strategy_transition_failed")
+        self.assertEqual(
+            result["menu_options"],
+            [
+                "strategy_transition",
+                "strategy_transition_keep_settings",
+                "strategy_transition_cancel",
+            ],
+        )
+        explanation = result["description_placeholders"]["failure_explanation"]
+        self.assertNotIn("transition_rollback_endpoint_unavailable", explanation)
+        self.assertNotIn("`", explanation)
+        self.assertGreater(len(explanation), 20)
+        # Nothing was persisted by the flow on failure.
+        self.assertEqual(flow.hass.config_entries.updates, [])
+
+    async def test_keep_settings_saves_options_without_strategy(self) -> None:
+        flow, _calls = self._make_flow()
+        flow._transition_error = "transition_session_unavailable"
+        result = await flow.async_step_strategy_transition_keep_settings()
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"], {"poll_mode": "auto"})
+        updates = flow.hass.config_entries.updates
+        self.assertEqual(len(updates), 1)
+        self.assertNotIn("data", updates[0])
+        self.assertEqual(updates[0]["options"], {"poll_mode": "auto"})
+        self.assertEqual(flow._config_entry.data["connection_strategy"], "inbound")
+
+    async def test_cancel_leaves_everything_untouched(self) -> None:
+        flow, _calls = self._make_flow()
+        flow._transition_error = "transition_session_unavailable"
+        result = await flow.async_step_strategy_transition_cancel()
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(flow.hass.config_entries.updates, [])
+        self.assertEqual(flow._config_entry.data["connection_strategy"], "inbound")
+
+    async def test_runtime_unavailable_is_typed(self) -> None:
+        flow, _calls = self._make_flow()
+        flow._config_entry.runtime_data = None
+        flow._transition_confirmed_input = {
+            "host": "198.51.100.20",
+            "port": 19000,
+            "collector_ip": "203.0.113.10",
+        }
+        await flow._async_run_strategy_transition_task()
+        self.assertEqual(flow._transition_error, "transition_runtime_unavailable")
+
+
+class OptionsTransitionNatPrefillTests(unittest.IsolatedAsyncioTestCase):
+    """Blocker 7: the confirm form never presents local bind values as the
+    externally-advertised endpoint."""
+
+    def _flow(self, data):
+        entry = type("_Entry", (), {})()
+        entry.data = data
+        entry.options = {}
+        entry.entry_id = "entry-1"
+        entry.runtime_data = None
+        flow = EybondLocalOptionsFlow(entry)
+        flow.hass = _FakeHass()
+        flow.context = {}
+        flow._transition_target_strategy = "callback_on_demand"
+        return flow
+
+    async def test_no_confirmed_advertised_endpoint_means_empty_fields(self) -> None:
+        flow = self._flow(
+            {
+                "connection_type": "eybond",
+                "server_ip": "192.168.1.50",
+                "tcp_port": 8899,
+                "collector_ip": "192.168.1.55",
+                "connection_strategy": "inbound",
+            }
+        )
+        prefill = flow._transition_prefill()
+        # The LOCAL bind address/port are NOT promoted to the advertised
+        # endpoint: the fields stay empty and explicitly require input.
+        self.assertEqual(prefill["host"], "")
+        self.assertEqual(prefill["port"], 0)
+
+    async def test_confirmed_advertised_endpoint_prefills_verbatim(self) -> None:
+        flow = self._flow(
+            {
+                "connection_type": "eybond",
+                "server_ip": "192.168.1.50",
+                "tcp_port": 8899,
+                "advertised_server_ip": "public.example",
+                "advertised_tcp_port": 18899,
+                "connection_strategy": "inbound",
+            }
+        )
+        prefill = flow._transition_prefill()
+        self.assertEqual(prefill["host"], "public.example")
+        self.assertEqual(prefill["port"], 18899)

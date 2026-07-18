@@ -359,6 +359,11 @@ class RecoveryVerificationOutcome:
     inbound_proof: InboundRecoveryProof | None = None
     callback_proof: CallbackRecoveryProof | None = None
     handoff_owner: str = ""
+    # The SEPARATE permanent-owner ownership mode (Batch 8): a recovery run
+    # under an existing permanent owner carries a registry-issued
+    # ``PermanentOwnedSessionCertification`` here INSTEAD of a prepared
+    # onboarding ``handoff_owner``. The two are mutually exclusive.
+    owner_certification: Any = None
     transitions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -368,32 +373,34 @@ class RecoveryVerificationOutcome:
             self._validate_success(
                 proof=self.callback_proof,
                 proof_type=CallbackRecoveryProof,
-                handoff_required=True,
+                ownership_required=True,
             )
         elif self.status == STATE_INBOUND_RECOVERED:
             self._validate_success(
                 proof=self.inbound_proof,
                 proof_type=InboundRecoveryProof,
-                handoff_required=True,
+                ownership_required=True,
             )
         elif self.status == STATE_INBOUND_VERIFIED:
             self._validate_success(
                 proof=self.inbound_proof,
                 proof_type=InboundRecoveryProof,
-                handoff_required=False,
+                ownership_required=False,
             )
         else:
             if self.inbound_proof is not None or self.callback_proof is not None:
                 raise ValueError("proof_requires_success_status")
             if self.handoff_owner:
                 raise ValueError("handoff_owner_requires_success_status")
+            if self.owner_certification is not None:
+                raise ValueError("owner_certification_requires_success_status")
 
     def _validate_success(
         self,
         *,
         proof: Any,
         proof_type: type,
-        handoff_required: bool,
+        ownership_required: bool,
     ) -> None:
         """Fail fast on any success shape the trust boundary must refuse.
 
@@ -401,17 +408,34 @@ class RecoveryVerificationOutcome:
         value a ValueError -- both are caller bugs, never data to clean up.
         """
 
+        from ..connection.session_registry import (
+            PermanentOwnedSessionCertification,
+        )
+
         if type(proof) is not proof_type:
             raise TypeError("recovery_outcome_proof_type_invalid")
         if not _required_token(self.collector_pn):
             raise ValueError("recovery_outcome_requires_normalized_pn")
         if not _required_token(self.new_session_id):
             raise ValueError("recovery_outcome_requires_new_session_id")
-        if handoff_required:
-            if not _required_token(self.handoff_owner):
-                raise ValueError("recovery_outcome_requires_handoff_owner")
-        elif self.handoff_owner:
-            raise ValueError("handoff_owner_requires_callback_transaction")
+        has_handoff = bool(_required_token(self.handoff_owner))
+        has_certification = self.owner_certification is not None
+        if has_certification and (
+            type(self.owner_certification) is not PermanentOwnedSessionCertification
+        ):
+            raise TypeError("owner_certification_type_invalid")
+        if ownership_required:
+            # EXACTLY ONE ownership mode: the onboarding prepared handoff OR
+            # the permanent-owner certification, never both, never neither.
+            if has_handoff and has_certification:
+                raise ValueError("recovery_outcome_two_ownership_modes")
+            if not has_handoff and not has_certification:
+                raise ValueError("recovery_outcome_requires_ownership")
+        else:
+            if has_handoff:
+                raise ValueError("handoff_owner_requires_callback_transaction")
+            if has_certification:
+                raise ValueError("owner_certification_requires_callback_transaction")
         if self.failure_reason:
             raise ValueError("success_outcome_carries_failure_reason")
         if not pn_is_same_identity(self.collector_pn, proof.collector_pn):
@@ -559,6 +583,7 @@ class _ControlledResetRecoveryEngine:
         promote_claim: Callable[[str], None] | None = None,
         retarget_claim: Callable[[str], bool] | None = None,
         prepare_handoff: Callable[[str], str] | None = None,
+        owner_certifier: Callable[[str], Any] | None = None,
         probe_reconnected_identity: Callable[[str], Any] | None = None,
         silent_session_probe: Any = None,
         ledger: Any = None,
@@ -593,6 +618,15 @@ class _ControlledResetRecoveryEngine:
         # whenever a callback route is armed: those successes are consumed as
         # ready-to-handoff capabilities, never re-discovered by PN.
         self._prepare_handoff = prepare_handoff
+        # The SEPARATE permanent-owner ownership mode (mutually exclusive with
+        # prepare_handoff): called with the certified full PN after the final
+        # retarget; must return a registry-issued
+        # ``PermanentOwnedSessionCertification`` or None (None = refusal). Used
+        # by a recovery run under an existing permanent owner, so the outcome
+        # carries a real certification instead of a fake prepared handoff.
+        if prepare_handoff is not None and owner_certifier is not None:
+            raise ValueError("recovery_engine_two_ownership_modes")
+        self._owner_certifier = owner_certifier
         self._probe_reconnected_identity = probe_reconnected_identity
         # The narrow public transport boundary for FULLY SILENT reconnects
         # (see collector.silent_session_probe). Optional: without it the
@@ -629,6 +663,7 @@ class _ControlledResetRecoveryEngine:
         inbound_proof: InboundRecoveryProof | None = None,
         callback_proof: CallbackRecoveryProof | None = None,
         handoff_owner: str = "",
+        owner_certification: Any = None,
     ) -> RecoveryVerificationOutcome:
         return RecoveryVerificationOutcome(
             status=self._transitions[-1],
@@ -638,6 +673,7 @@ class _ControlledResetRecoveryEngine:
             inbound_proof=inbound_proof,
             callback_proof=callback_proof,
             handoff_owner=handoff_owner,
+            owner_certification=owner_certification,
             transitions=tuple(self._transitions),
         )
 
@@ -964,13 +1000,17 @@ class _ControlledResetRecoveryEngine:
 
         if not self._collector_pn or not self._session_id:
             return self._fail(FAILURE_SESSION_UNAVAILABLE)
+        has_ownership_commit = (
+            self._prepare_handoff is not None or self._owner_certifier is not None
+        )
         if self._retarget_claim is None or (
-            self._callback_route is not None and self._prepare_handoff is None
+            self._callback_route is not None and not has_ownership_commit
         ):
             # Every proof-bearing success ends in a claim retarget (and, for
-            # the callback transaction, a committed handoff). Without those
-            # capabilities no success can exist -- refuse BEFORE the lease and
-            # BEFORE the collector is ever rebooted.
+            # the callback transaction, a committed ownership capability --
+            # either a prepared onboarding handoff or a permanent-owner
+            # certification). Without those no success can exist -- refuse
+            # BEFORE the lease and BEFORE the collector is ever rebooted.
             return self._fail(FAILURE_OWNERSHIP_UNAVAILABLE)
         if self._callback_route is not None:
             invalid = self._callback_route.invalid_reason()
@@ -1209,9 +1249,10 @@ class _ControlledResetRecoveryEngine:
         # token travels in the outcome; a refused commit is a typed failure
         # (the wrapper then releases everything).
         handoff_owner = ""
+        owner_certification: Any = None
         if self._callback_route is not None:
-            handoff_owner = self._commit_prepared_handoff()
-            if not handoff_owner:
+            handoff_owner, owner_certification = self._commit_ownership()
+            if not handoff_owner and owner_certification is None:
                 return self._fail(FAILURE_SESSION_CLAIMED)
         self._enter(
             STATE_INBOUND_VERIFIED
@@ -1222,6 +1263,7 @@ class _ControlledResetRecoveryEngine:
             new_session_id=new_session_id,
             inbound_proof=proof,
             handoff_owner=handoff_owner,
+            owner_certification=owner_certification,
         )
 
     async def _async_callback_phase(self) -> RecoveryVerificationOutcome:
@@ -1329,11 +1371,12 @@ class _ControlledResetRecoveryEngine:
 
         if not self._retarget_claim(new_session_id):
             return self._fail(FAILURE_SESSION_CLAIMED)
-        # Retarget succeeded on the NEW socket: commit the claim as a prepared
-        # handoff under this transaction's owner. The exact token travels in
-        # the outcome -- the consumer holds a capability, not a PN to search.
-        handoff_owner = self._commit_prepared_handoff()
-        if not handoff_owner:
+        # Retarget succeeded on the NEW socket: commit the ownership capability
+        # under this transaction's owner (onboarding prepared handoff OR
+        # permanent-owner certification). The exact capability travels in the
+        # outcome -- the consumer holds it, not a PN to search.
+        handoff_owner, owner_certification = self._commit_ownership()
+        if not handoff_owner and owner_certification is None:
             return self._fail(FAILURE_SESSION_CLAIMED)
 
         self._enter(STATE_CALLBACK_VERIFIED)
@@ -1341,7 +1384,31 @@ class _ControlledResetRecoveryEngine:
             new_session_id=new_session_id,
             callback_proof=proof,
             handoff_owner=handoff_owner,
+            owner_certification=owner_certification,
         )
+
+    def _commit_ownership(self) -> tuple[str, Any]:
+        """Commit ownership via whichever mode is configured; refusal -> empty.
+
+        Returns ``(handoff_owner, owner_certification)`` with exactly one side
+        populated (or both empty on refusal). Onboarding runs use
+        ``prepare_handoff``; a permanent-owner recovery run uses
+        ``owner_certifier`` and never fabricates a prepared handoff.
+        """
+
+        if self._owner_certifier is not None:
+            try:
+                certification = self._owner_certifier(self._collector_pn)
+            except ValueError as exc:
+                logger.info(
+                    "Recovery verification: permanent-owner certification for "
+                    "%s refused: %s",
+                    self._collector_pn,
+                    exc,
+                )
+                return "", None
+            return "", certification
+        return self._commit_prepared_handoff(), None
 
     def _commit_prepared_handoff(self) -> str:
         """Commit the claim via the prepare-handoff hook; "" means refusal.
@@ -1478,8 +1545,16 @@ async def async_run_callback_recovery_transaction(
     trigger_sender: CallbackRecoveryTriggerSender | None = None,
     ledger: Any = None,
     poll_interval: float = _DEFAULT_POLL_INTERVAL_SECONDS,
+    permanent_owner_id: str | None = None,
+    owner_certifier: Callable[[str], Any] | None = None,
 ) -> RecoveryVerificationOutcome:
     """THE public callback-recovery transaction: owns the whole claim lifecycle.
+
+    Permanent-owner mode (Batch 8 repair): when ``permanent_owner_id`` +
+    ``owner_certifier`` are given, the transaction runs UNDER that existing
+    permanent owner (no transient onboarding owner, no prepared handoff), and
+    a failure does NOT release the permanent claim. The outcome then carries a
+    typed ``owner_certification`` instead of a ``handoff_owner``.
 
     Safety is structural, not contractual: this wrapper -- not a caller --
     creates the transient registry claim, wires the ownership hooks, the
@@ -1500,8 +1575,16 @@ async def async_run_callback_recovery_transaction(
     stopped, and the lease/inhibitor are gone.
     """
 
-    owner = f"callback_recovery:{uuid.uuid4().hex}"
+    permanent_mode = bool(permanent_owner_id) and owner_certifier is not None
+    owner = (
+        str(permanent_owner_id).strip()
+        if permanent_mode
+        else f"callback_recovery:{uuid.uuid4().hex}"
+    )
     try:
+        # In permanent mode the durable claim already exists; this pins it to
+        # the (already-bootstrapped) session id idempotently. In onboarding
+        # mode it creates the transient claim.
         registry.claim_session(owner, session_id=session_id)
     except ValueError as exc:
         logger.info(
@@ -1578,7 +1661,8 @@ async def async_run_callback_recovery_transaction(
         trigger_sender=trigger_sender,
         promote_claim=_promote,
         retarget_claim=_retarget,
-        prepare_handoff=_prepare,
+        prepare_handoff=None if permanent_mode else _prepare,
+        owner_certifier=owner_certifier if permanent_mode else None,
         probe_reconnected_identity=_probe_reconnected_identity,
         silent_session_probe=silent_probe,
         ledger=ledger,
@@ -1594,7 +1678,9 @@ async def async_run_callback_recovery_transaction(
             await silent_probe.async_close()
         with suppress(Exception):
             await channel.async_close()
-        if not succeeded:
+        # A permanent owner keeps its durable claim across a failed repair;
+        # only a transient onboarding owner is released here.
+        if not succeeded and not permanent_mode:
             with suppress(Exception):
                 registry.release(owner)
 

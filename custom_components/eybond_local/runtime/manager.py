@@ -19,6 +19,16 @@ class RuntimeManager(Protocol):
         ...
 
     @property
+    def listener_bind_host(self) -> str:
+        """The ACTUAL local TCP bind host of the shared callback listener.
+
+        Distinct from ``effective_server_ip`` / the UDP trigger bind: a repair's
+        shared TCP listener must be borrowed on exactly this host to refcount-
+        share the runtime's own listener.
+        """
+        ...
+
+    @property
     def collector_server_endpoint_rollback_target(self) -> str:
         ...
 

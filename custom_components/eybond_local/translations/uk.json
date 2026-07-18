@@ -410,7 +410,10 @@
           "shadow_learning": "Розширити підтримку пристрою",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "collector_uart": "Змінити швидкість UART інвертора",
-          "diagnostics": "Діагностика та сервісні інструменти"
+          "diagnostics": "Діагностика та сервісні інструменти",
+          "strategy_transition_repair": "Завершити перемикання підключення (потрібне відновлення)",
+          "strategy_transition_activation_retry": "Завантажити перевірене підключення",
+          "strategy_transition_cancel": "Скасувати"
         }
       },
       "collector_wifi": {
@@ -629,10 +632,37 @@
       },
       "pending_retry": {
         "title": "Повторити підключення"
+      },
+      "strategy_transition": {
+        "title": "Підтвердьте перемикання підключення",
+        "description": "Перемикання на **{target_strategy}** має бути перевірене контрольованим перезапуском колектора до збереження.\n\nПеревірте адреси нижче. За NAT/пробросом портів вкажіть публічний хост і порт, до яких колектор реально може дістатися — вони використовуються рівно як введені.",
+        "data": {
+          "advertised_server_ip": "Хост Home Assistant, до якого підключається колектор",
+          "advertised_tcp_port": "Порт, до якого підключається колектор",
+          "collector_ip": "Адреса колектора (для callback-запиту)"
+        }
+      },
+      "strategy_transition_failed": {
+        "title": "Перемикання підключення не підтверджено",
+        "description": "{failure_explanation}\n\nСтратегію підключення НЕ змінено. Можна повторити перевірку, зберегти інші налаштування без перемикання або скасувати.",
+        "menu_options": {
+          "strategy_transition": "Повторити перевірку",
+          "strategy_transition_keep_settings": "Зберегти інші налаштування без перемикання",
+          "strategy_transition_cancel": "Скасувати"
+        }
+      },
+      "strategy_transition_activation_incomplete": {
+        "title": "Перевірено та збережено, але ще не завантажено",
+        "description": "{failure_explanation}\n\nПідключення за потребою вже перевірено та збережено. Перевіряти заново нічого не потрібно. Можна повторити завантаження інтеграції зараз або закрити й дати Home Assistant завантажити її пізніше.",
+        "menu_options": {
+          "strategy_transition_activation_retry": "Повторити завантаження інтеграції",
+          "strategy_transition_cancel": "Закрити"
+        }
       }
     },
     "progress": {
-      "shadow_learning": "{control_discovery_hint}"
+      "shadow_learning": "{control_discovery_hint}",
+      "strategy_transition_running": "Перевірка перемикання контрольованим перезапуском колектора…"
     },
     "abort": {
       "no_pending_candidates": "Жоден неприв'язаний колектор ще не підключився до Home Assistant.",

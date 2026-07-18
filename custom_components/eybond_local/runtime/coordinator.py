@@ -70,13 +70,16 @@ from ..const import (
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN,
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE,
     COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
-    CONF_CONNECTION_STRATEGY,
     CONF_CONNECTION_TYPE,
     CONF_CONNECTION_MODE,
     CONF_CONTROL_MODE,
     CONF_ENDPOINT_CONTROL_POLICY,
+    CONF_ADVERTISED_SERVER_IP,
+    CONF_ADVERTISED_TCP_PORT,
+    CONF_CONNECTION_STRATEGY,
     CONF_ENDPOINT_WRITTEN_AT,
     CONF_ENDPOINT_WRITTEN_VALUE,
+    CONF_STRATEGY_TRANSITION_STATE,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
     CONF_DETECTION_CONFIDENCE,
@@ -4085,14 +4088,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         target_endpoint = self.collector_callback_target_endpoint
         current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
         if current_endpoint == target_endpoint:
-            # Already pointing at Home Assistant and no write happens: the
-            # collector dials Home Assistant on its own (inbound). The endpoint
-            # control policy is left to derivation (external unless a prior
-            # integration write recorded provenance) -- per the "no write =>
-            # external" rule, we do not claim ownership without a write.
-            self._persist_connection_axes(
-                {CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND}
-            )
+            # Already pointing at Home Assistant and no write happens: nothing
+            # was earned, so NO axis changes of any kind. Since Batch 8 the
+            # bind action records only endpoint-write FACTS; the connection
+            # strategy changes exclusively through the verified transition
+            # authority (a bind is not a reconnect proof).
             self._publish_snapshot_values(
                 collector_callback_endpoint_pending=None,
                 collector_callback_endpoint_pending_apply_required=None,
@@ -4110,9 +4110,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             apply_changes=True,
         )
         result["target_role"] = "home_assistant"
-        # A successful apply means the integration wrote the endpoint: the
-        # collector now dials Home Assistant (inbound) and the integration owns
-        # the endpoint (integration_managed) with recorded write provenance.
+        # A successful apply means the integration wrote the endpoint: it now
+        # manages it, with recorded write provenance. That is a FACT about the
+        # write — the connection strategy is deliberately NOT touched here:
+        # only the verified transition authority may change it, after a real
+        # reconnect proof.
         written_value = str(
             result.get("readback_endpoint")
             or result.get("requested_endpoint")
@@ -4120,7 +4122,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         self._persist_connection_axes(
             {
-                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
                 CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_INTEGRATION_MANAGED,
                 CONF_ENDPOINT_WRITTEN_VALUE: written_value,
                 CONF_ENDPOINT_WRITTEN_AT: datetime.now(timezone.utc).isoformat(),
@@ -4223,14 +4224,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             await self.async_request_refresh()
         else:
             # A successful rollback hands endpoint control back to the external
-            # target: the collector points elsewhere again (callback_on_demand)
-            # and the integration no longer manages the endpoint (external), so
-            # the recorded write provenance is cleared.
+            # target and clears the write provenance. That is the endpoint-write
+            # FACT only — the connection strategy is deliberately NOT touched
+            # (Batch 8): a rollback is not a callback proof, and only the
+            # verified transition authority may change the strategy.
             self._persist_connection_axes(
-                {
-                    CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-                    CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_EXTERNAL,
-                },
+                {CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_EXTERNAL},
                 clear=(CONF_ENDPOINT_WRITTEN_VALUE, CONF_ENDPOINT_WRITTEN_AT),
             )
             self._publish_snapshot_values(
@@ -5525,8 +5524,350 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         return None
 
+    def format_home_assistant_callback_endpoint(self, host: str, port: int) -> str:
+        """Format ONE user-confirmed host/port as this entry's callback endpoint.
+
+        Wraps the single endpoint-formatting rule (protocol/template shaping
+        from the collector's currently reported endpoint) around a
+        caller-supplied address: the host/port come from the user verbatim —
+        behind NAT they may be a public address — and are never replaced by a
+        local interface guess.
+        """
+
+        template_endpoint = str(
+            self.data.values.get("collector_server_endpoint")
+            or self.collector_server_endpoint_rollback_target
+            or ""
+        ).strip()
+        return home_assistant_callback_endpoint(
+            server_host=str(host or "").strip(),
+            listener_port=int(port or 0),
+            template_endpoint=template_endpoint,
+            cloud_family=self.collector_cloud_family,
+        )
+
+    async def async_run_connection_strategy_transition(
+        self,
+        *,
+        target_strategy: str,
+        inbound_endpoint: str = "",
+        callback_target_ip: str = "",
+        advertised_host: str = "",
+        advertised_port: int = 0,
+        legacy_operation_mode: str = "",
+        option_payload: dict[str, Any] | None = None,
+    ):
+        """THE verified strategy-transition facade entry point (Batch 8).
+
+        Every high-level "switch how the collector connects" action — the
+        options-flow selector, the legacy operation-mode select — funnels
+        here. This method only ASSEMBLES the runtime-bound dependencies; the
+        order, the proof requirements and the axis-write policy live in
+        ``connection.strategy_transition.async_run_strategy_transition``.
+
+        Addresses are caller-confirmed input: ``inbound_endpoint`` is the
+        endpoint the user (or a previously-confirmed configuration) stated,
+        and the callback route's advertised host/port default to the entry's
+        configured advertised values — never to a peer IP and never to a
+        local-vs-external guess.
+        """
+
+        from ..collector.silent_session_probe import SilentSessionIdentityProbeChannel
+        from ..connection.callback_ledger import get_callback_trigger_ledger
+        from ..connection.strategy_transition import (
+            TRANSITION_ALREADY_RUNNING,
+            StrategyTransitionResult,
+            async_run_strategy_transition,
+            trusted_transition_wire,
+        )
+        from ..onboarding.recovery_terminalization import merge_recovery_contract
+        from ..onboarding.strategy_verification import CallbackRecoveryRoute
+        from ..passive_discovery import get_callback_session_registry
+
+        target = str(target_strategy or "").strip()
+        entry_id = self.config_entry.entry_id
+        # Atomic per-entry exclusive lease: acquired SYNCHRONOUSLY before the
+        # first await/side effect (no check-then-await-then-set window), and
+        # always released in the finally below — cancellation included.
+        from ..connection.strategy_transition import (
+            STRATEGY_TRANSITION_LEASES,
+        )
+
+        # THE one production lease: acquired SYNCHRONOUSLY here, and the
+        # try/finally opens IMMEDIATELY after a successful acquire so that
+        # dependency assembly, probe construction/open, payload validation
+        # and the transition all release the lease on any exception or
+        # cancellation. A second concurrent call is typed-refused.
+        if not STRATEGY_TRANSITION_LEASES.acquire(entry_id):
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=target,
+                failure_reason=TRANSITION_ALREADY_RUNNING,
+            )
+        silent_probe = None
+        try:
+            from ..connection.strategy_transition_recovery import (
+                StrategyTransitionRecoveryState,
+            )
+
+            registry = get_callback_session_registry(self.hass)
+            spec = self._connection_spec
+
+            def _resolve_owned_session_id() -> str:
+                """The entry's LIVE owned session id, from the registry's truth."""
+
+                if registry is None:
+                    return ""
+                sid = str(registry.claimed_session_id(entry_id) or "")
+                if sid:
+                    for session in registry.observed_sessions_per_socket():
+                        if session.session_id == sid and not session.state.startswith(
+                            "closed"
+                        ):
+                            return sid
+                for session in registry.observed_sessions_per_socket():
+                    if (
+                        session.owner_entry_id == entry_id
+                        and not session.state.startswith("closed")
+                    ):
+                        return session.session_id
+                return ""
+
+            # EXPLICIT registry op (not a PN search inside the wire resolver):
+            # pin the durable by-PN claim to the live owned socket so the exact
+            # session-pinned wire authority can resolve. Idempotent, never binds
+            # a foreign socket.
+            if registry is not None:
+                _pin_sid = _resolve_owned_session_id()
+                if _pin_sid:
+                    registry.pin_owner_claim_to_session(entry_id, _pin_sid)
+
+            def _claimed_session_id() -> str:
+                return _resolve_owned_session_id()
+
+            def _live_wire() -> str:
+                # The ONE wire authority: the registry's session-PINNED trusted
+                # SessionHandle boundary (owner + claim.session_id + handle
+                # session_id all agree, strict observed, no conflict) — never the
+                # inventory protocol string, never a same-PN sibling.
+                if registry is None:
+                    return ""
+                return trusted_transition_wire(
+                    registry, entry_id, str(registry.claimed_session_id(entry_id) or "")
+                )
+
+            # Build the callback route FIRST so the confirmed-restore hook can
+            # snapshot the exact repair route into the persisted recovery state.
+            callback_route = None
+            if target == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+                # NAT-strict: the advertised host/port are EXPLICIT caller input
+                # (the confirm form / the entry's explicit advertised_* config).
+                # No silent fallback to a local interface address or local port.
+                effective_host = str(advertised_host or "").strip()
+                effective_port = int(advertised_port or 0)
+                target_ip = str(callback_target_ip or "").strip() or str(
+                    getattr(spec, "collector_ip", "") or ""
+                ).strip()
+                if target_ip and effective_host and effective_port:
+                    callback_route = CallbackRecoveryRoute(
+                        bind_ip=str(getattr(spec, "server_ip", "") or "0.0.0.0"),
+                        trigger_target_ip=target_ip,
+                        trigger_udp_port=int(getattr(spec, "udp_port", 0) or 0),
+                        advertised_ha_host=effective_host,
+                        advertised_ha_port=effective_port,
+                        listener_port=int(getattr(spec, "tcp_port", 0) or 0),
+                    )
+
+            restore_endpoint = ""
+            if target == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+                restore_endpoint = str(
+                    self.collector_server_endpoint_rollback_target or ""
+                ).strip()
+
+            # PRE-BUILD the TYPED recovery state (startable pending phase) from
+            # the route + durable PN, BEFORE any physical side effect. It
+            # carries only what the repair reads (route + PN); a value it cannot
+            # validate yields None, and the authority then refuses the
+            # transition instead of ever leaving "endpoint external, no recovery
+            # state". The authority (not this facade) owns WHEN it is persisted.
+            def _build_recovery_state():
+                if callback_route is None:
+                    return None
+                try:
+                    state = StrategyTransitionRecoveryState.create(
+                        collector_pn=self.config_entry.data.get(CONF_COLLECTOR_PN),
+                        now=datetime.now(timezone.utc).isoformat(),
+                        trigger_target_host=callback_route.trigger_target_ip,
+                        trigger_udp_port=callback_route.trigger_udp_port,
+                        advertised_host=callback_route.advertised_ha_host,
+                        advertised_port=callback_route.advertised_ha_port,
+                        # TWO distinct transport binds: the UDP trigger bind is
+                        # the route's bind_ip (effective server IP); the TCP
+                        # listener bind is the runtime's ACTUAL listener host, so
+                        # a cold repair borrows the very same shared listener the
+                        # runtime binds (never a hardcoded host).
+                        trigger_bind_host=callback_route.bind_ip,
+                        listener_bind_host=str(
+                            getattr(self._runtime, "listener_bind_host", "") or ""
+                        ),
+                        local_listener_port=callback_route.listener_port,
+                    )
+                except (ValueError, TypeError):
+                    return None
+                # Only accept a state whose record round-trips through the strict
+                # parser -- what is persisted later is provably valid.
+                if StrategyTransitionRecoveryState.from_record(state.to_record()) is None:
+                    return None
+                return state
+
+            recovery_state = _build_recovery_state()
+
+            current_endpoint = str(
+                self.data.values.get("collector_server_endpoint") or ""
+            ).strip()
+            endpoint_needs_write = bool(inbound_endpoint) and (
+                self._endpoint_effective_parts(current_endpoint)
+                != self._endpoint_effective_parts(inbound_endpoint)
+            )
+
+            async def _write_endpoint(endpoint: str) -> dict[str, object]:
+                return await self._runtime.async_set_collector_server_endpoint(
+                    endpoint,
+                    apply_changes=True,
+                )
+
+            async def _reboot() -> dict[str, object]:
+                return await self._runtime.async_reboot_collector()
+
+            def _on_written(value: str) -> None:
+                self._persist_connection_axes(
+                    {
+                        CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+                        CONF_ENDPOINT_WRITTEN_VALUE: value,
+                        CONF_ENDPOINT_WRITTEN_AT: datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                self._publish_snapshot_values(collector_server_endpoint=value)
+
+            def _persist_pending(state) -> None:
+                # WRITE-AHEAD durable intent (physical write only; the authority
+                # owns the ORDER and calls this BEFORE the first side effect).
+                # The old strategy, endpoint-control policy and endpoint-write
+                # provenance are LEFT UNCHANGED -- only the pending recovery
+                # marker is added, so a crash between here and the confirmed
+                # restore is a repairable pending state, never a silent
+                # strategy/policy flip.
+                self._persist_connection_axes(
+                    {CONF_STRATEGY_TRANSITION_STATE: state.to_record()}
+                )
+
+            def _persist_confirmed(state) -> None:
+                # ONE durable write at the CONFIRMED restore (no crash window):
+                # the policy becomes external, the endpoint-write provenance is
+                # cleared, AND the recovery state advances to the
+                # confirmed-unproven phase supplied by the authority. If HA
+                # crashes right after this, the entry is never a silently-flat
+                # "inbound + external": it holds the recoverable state.
+                self._persist_connection_axes(
+                    {
+                        CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_EXTERNAL,
+                        CONF_STRATEGY_TRANSITION_STATE: state.to_record(),
+                    },
+                    clear=(CONF_ENDPOINT_WRITTEN_VALUE, CONF_ENDPOINT_WRITTEN_AT),
+                )
+
+            def _on_restored(value: str) -> None:
+                # UI-only: reflect the restored endpoint in the live snapshot.
+                # The DURABLE entry-data write happened in ``_persist_confirmed``
+                # (ONE write) at the same confirmed-restore boundary.
+                self._publish_snapshot_values(collector_server_endpoint=value)
+
+            async def _prepare_local_listener(port: int) -> None:
+                # NAT split: prepare the LOCAL listener bind port — never the
+                # advertised/forwarded port the collector is told about.
+                ensure_listener = getattr(
+                    self._runtime, "async_ensure_callback_listener", None
+                )
+                if ensure_listener is not None and int(port or 0) > 0:
+                    await ensure_listener(int(port))
+
+            async def _commit(
+                updates: dict[str, Any], terminal, option_updates
+            ) -> str:
+                data = dict(self.config_entry.data)
+                data.update(updates)
+                # Only a TRUE strategy commit clears the recovery state: an
+                # ``inbound_recovered_after_restore`` merge (no strategy in
+                # ``updates``) leaves the state, because a single autonomous
+                # reconnect on an already-external endpoint does not prove a
+                # durable inbound future.
+                if CONF_CONNECTION_STRATEGY in updates:
+                    data.pop(CONF_STRATEGY_TRANSITION_STATE, None)
+                refusal = merge_recovery_contract(data, terminal)
+                if refusal:
+                    return refusal
+                options = None
+                if option_updates:
+                    options = dict(self.config_entry.options)
+                    options.update(option_updates)
+                self._async_update_entry_without_reload(data=data, options=options)
+                # Exactly ONE reload, and only after the whole terminal state
+                # (axes + contract) is consistent.
+                self.hass.config_entries.async_schedule_reload(entry_id)
+                return ""
+
+            silent_probe = SilentSessionIdentityProbeChannel(
+                host=str(getattr(spec, "server_ip", "") or "0.0.0.0"),
+                port=int(getattr(spec, "tcp_port", 0) or 0),
+            )
+            await silent_probe.async_open()
+            return await async_run_strategy_transition(
+                target_strategy=target,
+                current_strategy=self.connection_strategy,
+                collector_pn=str(
+                    self.config_entry.data.get(CONF_COLLECTOR_PN) or ""
+                ),
+                owner_id=entry_id,
+                registry=registry,
+                claimed_session_id=_claimed_session_id,
+                live_wire=_live_wire,
+                clock=lambda: datetime.now(timezone.utc).isoformat(),
+                commit=_commit,
+                ledger=get_callback_trigger_ledger(),
+                inbound_endpoint=inbound_endpoint,
+                endpoint_needs_write=endpoint_needs_write,
+                write_endpoint=_write_endpoint,
+                reboot=_reboot,
+                prepare_listener=_prepare_local_listener,
+                local_listener_port=int(getattr(spec, "tcp_port", 0) or 0),
+                on_endpoint_written=_on_written,
+                callback_route=callback_route,
+                endpoint_control_policy=self.endpoint_control_policy,
+                restore_endpoint=restore_endpoint,
+                on_endpoint_restored=_on_restored,
+                persist_pending=_persist_pending,
+                persist_confirmed=_persist_confirmed,
+                recovery_state=recovery_state,
+                legacy_operation_mode=legacy_operation_mode,
+                option_payload=option_payload,
+                silent_session_probe=silent_probe,
+            )
+        finally:
+            STRATEGY_TRANSITION_LEASES.release(entry_id)
+            if silent_probe is not None:
+                await silent_probe.async_close()
+
     async def async_set_collector_operation_mode(self, mode: str) -> str:
-        """Persist one collector ownership mode and apply its runtime side effects."""
+        """Legacy operation-mode select: a FACADE over the transition authority.
+
+        Cloud+HA / HA-only is exactly the inbound / callback_on_demand
+        transition with the entry's previously-confirmed endpoints. The select
+        no longer writes any architecture axis itself: the target strategy is
+        persisted only after the authority's full verified success, and a
+        failed verification raises the typed reason without touching the
+        axes. The legacy mode value itself travels as the success commit's
+        extra payload so it can never diverge from the canonical strategy.
+        """
 
         normalized_mode = str(mode or "").strip()
         if normalized_mode not in COLLECTOR_OPERATION_MODES:
@@ -5540,117 +5881,49 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if change_reason is not None:
             raise RuntimeError(change_reason)
 
-        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
-        current_parts = self._endpoint_effective_parts(current_endpoint)
-        applied_endpoint = ""
-        applied_status = ""
+        # NAT-strict for BOTH directions: the advertised HA host/port the
+        # collector is told must be EXPLICIT confirmed configuration
+        # (advertised_server_ip/advertised_tcp_port). A local interface address
+        # / local listener port is never silently promoted to the externally
+        # advertised endpoint — without the confirmed values the switch refuses
+        # typed. The local bind host/port stay separate (the runtime's own
+        # listener), never mixed with the advertised endpoint.
+        advertised_host = str(
+            self.config_entry.options.get(CONF_ADVERTISED_SERVER_IP)
+            or self.config_entry.data.get(CONF_ADVERTISED_SERVER_IP)
+            or ""
+        ).strip()
+        advertised_port = int(
+            self.config_entry.options.get(CONF_ADVERTISED_TCP_PORT)
+            or self.config_entry.data.get(CONF_ADVERTISED_TCP_PORT)
+            or 0
+        )
 
         if normalized_mode == COLLECTOR_OPERATION_HA_ONLY:
+            if not advertised_host or not advertised_port:
+                raise RuntimeError("transition_endpoint_required")
             await self._async_remember_collector_server_endpoint(self.data)
-            target_endpoint = self.collector_callback_target_endpoint
-            if not target_endpoint:
-                raise RuntimeError("collector_operation_mode_target_unavailable")
-            await self._async_prepare_home_assistant_callback_listener(target_endpoint)
-            target_parts = self._endpoint_effective_parts(target_endpoint)
-            if current_parts != target_parts:
-                self._collector_operation_pending_target_endpoint = target_endpoint
-                self._publish_snapshot_values(
-                    collector_operation_endpoint_sync_status="waiting_for_collector",
-                    collector_operation_endpoint_sync_error=None,
-                )
-                try:
-                    result = await self._runtime.async_set_collector_server_endpoint(
-                        target_endpoint,
-                        apply_changes=True,
-                    )
-                except Exception as exc:
-                    self._collector_operation_pending_target_endpoint = ""
-                    self._publish_snapshot_values(
-                        collector_operation_endpoint_sync_status="failed",
-                        collector_operation_endpoint_sync_error=str(exc),
-                    )
-                    raise
-                applied_endpoint = str(
-                    result.get("readback_endpoint")
-                    or result.get("requested_endpoint")
-                    or target_endpoint
-                )
-                applied_status = str(result.get("status") or "applied")
-                self._collector_operation_pending_target_endpoint = applied_endpoint
+            inbound_endpoint = self.format_home_assistant_callback_endpoint(
+                advertised_host, advertised_port
+            )
+            result = await self.async_run_connection_strategy_transition(
+                target_strategy=CONNECTION_STRATEGY_INBOUND,
+                inbound_endpoint=inbound_endpoint,
+                legacy_operation_mode=normalized_mode,
+            )
         else:
-            rollback_endpoint = self.proxy_capture_upstream_endpoint
-            if current_endpoint and not self._endpoint_looks_like_local_collector_callback(
-                current_endpoint
-            ):
-                rollback_endpoint = ""
-            elif not rollback_endpoint:
-                raise RuntimeError(
-                    "collector_operation_mode_rollback_endpoint_unavailable"
-                )
-            target_parts = self._endpoint_effective_parts(rollback_endpoint)
-            if rollback_endpoint and current_parts != target_parts:
-                self._collector_operation_pending_target_endpoint = rollback_endpoint
-                self._publish_snapshot_values(
-                    collector_operation_endpoint_sync_status="waiting_for_collector",
-                    collector_operation_endpoint_sync_error=None,
-                )
-                try:
-                    result = await self._runtime.async_set_collector_server_endpoint(
-                        rollback_endpoint,
-                        apply_changes=True,
-                    )
-                except Exception as exc:
-                    self._collector_operation_pending_target_endpoint = ""
-                    self._publish_snapshot_values(
-                        collector_operation_endpoint_sync_status="failed",
-                        collector_operation_endpoint_sync_error=str(exc),
-                    )
-                    raise
-                applied_endpoint = str(
-                    result.get("readback_endpoint")
-                    or result.get("requested_endpoint")
-                    or rollback_endpoint
-                )
-                applied_status = str(result.get("status") or "applied")
-                self._collector_operation_pending_target_endpoint = applied_endpoint
-
-        data = dict(self.config_entry.data)
-        options = dict(self.config_entry.options)
-        data[CONF_COLLECTOR_OPERATION_MODE] = normalized_mode
-        options[CONF_COLLECTOR_OPERATION_MODE] = normalized_mode
-        # Switching the operation mode is an explicit user action, so it also
-        # sets the new connection architecture axes. Home-Assistant-only means
-        # the integration wrote the endpoint (integration_managed) and the
-        # collector now dials Home Assistant on its own (inbound); SmartESS+HA
-        # restores the endpoint to the vendor cloud and hands control back
-        # (external / callback_on_demand).
-        if normalized_mode == COLLECTOR_OPERATION_HA_ONLY:
-            data[CONF_CONNECTION_STRATEGY] = CONNECTION_STRATEGY_INBOUND
-            if applied_endpoint:
-                # The integration wrote the endpoint, so it now manages it.
-                data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_INTEGRATION_MANAGED
-                data[CONF_ENDPOINT_WRITTEN_VALUE] = applied_endpoint
-                data[CONF_ENDPOINT_WRITTEN_AT] = datetime.now(timezone.utc).isoformat()
-            else:
-                # The endpoint already equalled the target: no write happened, so
-                # the integration does not own it -- inbound + external.
-                data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_EXTERNAL
-                data.pop(CONF_ENDPOINT_WRITTEN_VALUE, None)
-                data.pop(CONF_ENDPOINT_WRITTEN_AT, None)
-        else:
-            data[CONF_CONNECTION_STRATEGY] = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-            data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_EXTERNAL
-            data.pop(CONF_ENDPOINT_WRITTEN_VALUE, None)
-            data.pop(CONF_ENDPOINT_WRITTEN_AT, None)
-        self._async_update_entry_without_reload(data=data, options=options)
+            result = await self.async_run_connection_strategy_transition(
+                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                advertised_host=advertised_host,
+                advertised_port=advertised_port,
+                legacy_operation_mode=normalized_mode,
+            )
+        if not result.success:
+            raise RuntimeError(
+                str(result.failure_reason or "transition_failed")
+            )
 
         self._configure_reverse_discovery_mode()
-        if applied_endpoint:
-            self._publish_snapshot_values(
-                collector_server_endpoint=applied_endpoint,
-                collector_operation_endpoint_sync_status=applied_status,
-                collector_operation_endpoint_sync_error=None,
-            )
         await self.async_request_refresh()
         return normalized_mode
 

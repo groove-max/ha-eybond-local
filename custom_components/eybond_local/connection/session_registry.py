@@ -170,6 +170,24 @@ def _state_from_inventory(inventory_state: str, identity_source: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class PermanentOwnedSessionCertification:
+    """A registry-issued permanent-owner recovery capability (Batch 8).
+
+    The typed, exact-type capability a recovery run UNDER an existing permanent
+    owner produces — deliberately DISTINCT from the onboarding prepared-handoff
+    slot. It certifies exactly one ``(owner_id, session_id, collector_pn)``
+    triple and asserts nothing about an ownership transfer. Only the registry
+    constructs it (``certify_permanent_owned_session``) and only the registry
+    re-verifies it (``reverify_permanent_owned_session``); a forged look-alike
+    fails the strict ``type() is`` re-check at commit time.
+    """
+
+    owner_id: str
+    session_id: str
+    collector_pn: str
+
+
+@dataclass(frozen=True, slots=True)
 class CallbackSession:
     """One normalized inbound collector session with ownership state."""
 
@@ -563,6 +581,77 @@ class CallbackSessionRegistry:
             return None
         return self._attach_owner(matched)
 
+    def claim_identity(self, entry_id: str, collector_pn: object) -> None:
+        """Record a PN-ONLY durable ownership claim WITHOUT scanning sessions.
+
+        The identity-only intent a cold repair needs BEFORE any socket exists: it
+        asserts durable ownership of a collector PN and nothing about a socket.
+        Unlike :meth:`claim` it NEVER inspects the observed session inventory, so
+        it can never auto-bind a ``session_id`` / ``session_protocol`` -- binding a
+        socket is a separate, post-proof step
+        (:meth:`retarget_claim_to_reconnected_session`). Peer IP is never consulted.
+
+        This asserts identity ownership ONLY. It is exactly three operations and
+        nothing else: (1) create a fresh PN-only claim; (2) fill a COMPLETELY
+        empty, unbound claim; (3) short->full enrich an already PN-bearing claim
+        of the same identity. It must NEVER turn a transient session/protocol/
+        handoff claim into a durable identity claim -- promoting a bound socket to
+        a durable identity is :meth:`promote_claim_to_full_pn` after strong
+        exact-session evidence, and this identity-only API must not become a
+        second promotion path (not even when a bound socket happens to report the
+        same PN -- it does not look).
+
+        Contract:
+
+        * the single-owner guard runs FIRST -- a PN owned by another entry raises
+          ``ValueError('session_already_claimed:<pn>:<other>')`` before any mutation;
+        * an existing PN-BEARING claim: same identity -> short->full enrichment;
+          a foreign identity -> ``ValueError('claim_identity_mismatch:<current>:<pn>')``;
+          its ``session_id`` / ``session_protocol`` / ``handoff_pending`` are preserved;
+        * an existing PN-LESS claim: if it carries ANY ``session_id`` /
+          ``session_protocol`` / ``handoff_pending`` it is a transient session
+          claim -> ``ValueError('claim_identity_transient_claim_conflict')`` with NO
+          mutation; only a COMPLETELY empty claim may take the PN;
+        * no existing claim -> a fresh PN-only claim.
+
+        Never scans the inventory, never looks up a PN in observations, never
+        matches by peer IP, never re-binds a socket. Every refusal is BEFORE any
+        mutation. Returns ``None``: it asserts ownership intent, never a socket.
+        """
+
+        entry_id = str(entry_id or "").strip()
+        if not entry_id:
+            raise ValueError("entry_id_required")
+        pn = normalize_pn(collector_pn)
+        if not pn:
+            raise ValueError("collector_pn_required")
+        # Single-owner guard FIRST, before any mutation.
+        other = self.owner_for_pn(pn)
+        if other and other != entry_id:
+            raise ValueError(f"session_already_claimed:{pn}:{other}")
+        existing = self._claims.get(entry_id)
+        if existing is None:
+            self._claims[entry_id] = _Claim(entry_id=entry_id, collector_pn=pn)
+            return None
+        if existing.collector_pn:
+            # PN-bearing claim: same-identity short->full enrichment, or foreign
+            # refusal. session_id / session_protocol / handoff_pending untouched.
+            if not pn_is_same_identity(existing.collector_pn, pn):
+                raise ValueError(
+                    f"claim_identity_mismatch:{existing.collector_pn}:{pn}"
+                )
+            existing.collector_pn = prefer_full_pn(existing.collector_pn, pn)
+            return None
+        # PN-less claim: only a COMPLETELY empty, unbound claim may take a PN. A
+        # transient session/protocol/handoff claim is NOT silently promoted to a
+        # durable identity claim -- that would let identity-only intent assert
+        # identity A over a physically-bound socket B, a contradiction the
+        # certification would only catch later. Refuse BEFORE any mutation.
+        if existing.session_id or existing.session_protocol or existing.handoff_pending:
+            raise ValueError("claim_identity_transient_claim_conflict")
+        existing.collector_pn = pn
+        return None
+
     def claim_session(
         self,
         entry_id: str,
@@ -698,6 +787,171 @@ class CallbackSessionRegistry:
 
         claim = self._claims.get(str(entry_id or "").strip())
         return claim.session_id if claim is not None else ""
+
+    def _certify_owner_pn(self, owner: str, sid: str) -> str:
+        """Shared certification core: durable full PN, or "" fail-closed."""
+
+        if not owner or not sid:
+            return ""
+        claim = self._claims.get(owner)
+        if claim is None or claim.session_id != sid:
+            return ""
+        claim_pn = normalize_pn(claim.collector_pn)
+        if not claim_pn:
+            return ""
+        for session in self._normalized_sessions():
+            if session.session_id != sid:
+                continue
+            if session.state == SESSION_STATE_CLOSED:
+                return ""
+            if not session.has_strong_identity:
+                return ""
+            if not pn_is_same_identity(session.collector_pn, claim_pn):
+                return ""
+            session_owner = self._owner_for_session(session)
+            if session_owner and session_owner != owner:
+                return ""
+            return prefer_full_pn(claim_pn, session.collector_pn)
+        return ""
+
+    def certify_owner_reconnected_session(
+        self,
+        entry_id: str,
+        session_id: object,
+    ) -> str:
+        """Certify a PERMANENT owner's recovered session — the honest capability.
+
+        Certifies that EXACTLY this owner's claim currently holds EXACTLY this
+        session id, that the session is live with a STRONG observed identity,
+        that the identity is the claim's own durable PN, and that no other
+        owner holds the socket. Returns the durable full PN, or ``""``
+        fail-closed. Deliberately NOT a handoff and NO PN lookup.
+        """
+
+        return self._certify_owner_pn(
+            str(entry_id or "").strip(), str(session_id or "").strip()
+        )
+
+    def certify_permanent_owned_session(
+        self,
+        entry_id: str,
+        session_id: object,
+    ) -> "PermanentOwnedSessionCertification | None":
+        """Issue a TYPED permanent-owner capability, or ``None`` fail-closed.
+
+        The exact-type object the recovery transaction consumes INSTEAD of the
+        onboarding ``handoff_owner`` slot: it says nothing about a prepared
+        onboarding handoff, only that this exact owner/session/durable-PN triple
+        is registry-certified right now. Re-check it just before commit with
+        :meth:`reverify_permanent_owned_session`.
+        """
+
+        owner = str(entry_id or "").strip()
+        sid = str(session_id or "").strip()
+        certified_pn = self._certify_owner_pn(owner, sid)
+        if not certified_pn:
+            return None
+        return PermanentOwnedSessionCertification(
+            owner_id=owner, session_id=sid, collector_pn=certified_pn
+        )
+
+    def reverify_permanent_owned_session(
+        self,
+        certification: object,
+    ) -> bool:
+        """Re-certify a previously-issued capability against LIVE registry state.
+
+        Fail-closed: the object must literally be a
+        :class:`PermanentOwnedSessionCertification` (no ducks), and the same
+        owner/session must STILL certify to the same durable identity. A stale
+        capability (the claim was retargeted away, the socket closed, the PN
+        changed) is rejected.
+        """
+
+        if type(certification) is not PermanentOwnedSessionCertification:
+            return False
+        certified_pn = self._certify_owner_pn(
+            certification.owner_id, certification.session_id
+        )
+        if not certified_pn:
+            return False
+        return pn_is_same_identity(certified_pn, certification.collector_pn)
+
+    def pin_owner_claim_to_session(
+        self,
+        entry_id: str,
+        session_id: object,
+    ) -> bool:
+        """Explicitly pin a durable by-PN claim to a live session it owns.
+
+        A runtime entry owns its identity durably by PN; the claim record may
+        carry no session id until an explicit operation records one. This is
+        that operation (idempotent): it pins ``claim.session_id`` to a session
+        that is LIVE, of the claim's OWN durable PN, and not owned by another
+        entry. It never changes identity, never binds a foreign socket, and is
+        the explicit prerequisite the exact wire resolver demands instead of a
+        PN search. Returns whether the claim now names the session.
+        """
+
+        owner = str(entry_id or "").strip()
+        sid = str(session_id or "").strip()
+        if not owner or not sid:
+            return False
+        claim = self._claims.get(owner)
+        if claim is None:
+            return False
+        if claim.session_id == sid:
+            return True
+        claim_pn = normalize_pn(claim.collector_pn)
+        if not claim_pn:
+            return False
+        for session in self._normalized_sessions():
+            if session.session_id != sid:
+                continue
+            if session.state == SESSION_STATE_CLOSED:
+                return False
+            if not pn_is_same_identity(session.collector_pn, claim_pn):
+                return False
+            session_owner = self._owner_for_session(session)
+            if session_owner and session_owner != owner:
+                return False
+            claim.session_id = sid
+            return True
+        return False
+
+    def session_handle_for_owned_session(
+        self,
+        entry_id: str,
+        session_id: object,
+    ) -> SessionHandle | None:
+        """Negotiated handle for a session THIS owner's claim EXACTLY pins.
+
+        Stricter than :meth:`session_handle_for_claimed_session`: all three of
+        the registry claim owner, ``claim.session_id`` and the passed
+        ``session_id`` must agree, and the socket must be live and not owned by
+        anyone else. There is NO PN search and NO fallback to another same-PN
+        session -- if the claim is not pinned to this exact socket, the caller
+        must run an explicit registry operation first. Returns ``None``
+        fail-closed for a closed/mismatched/foreign-owned session.
+        """
+
+        owner = str(entry_id or "").strip()
+        sid = str(session_id or "").strip()
+        if not owner or not sid:
+            return None
+        claim = self._claims.get(owner)
+        if claim is None or claim.session_id != sid:
+            return None
+        for session in self._normalized_sessions():
+            if session.session_id != sid:
+                continue
+            if session.state == SESSION_STATE_CLOSED:
+                return None
+            session_owner = self._owner_for_session(session)
+            if session_owner and session_owner != owner:
+                return None
+            return negotiate_session_adapters(session.raw)
+        return None
 
     def retarget_claim_to_reconnected_session(
         self,

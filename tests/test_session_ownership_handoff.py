@@ -53,6 +53,109 @@ def _observed(session_id, pn, *, peer_ip="203.0.113.9", state="", source=""):
     }
 
 
+class ClaimIdentityTests(unittest.TestCase):
+    """Batch 8B.1: PN-only ownership intent that never scans/binds a socket."""
+
+    def _registry(self, sessions=()):
+        return CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
+
+    def test_creates_pn_only_claim_without_scanning_sessions(self) -> None:
+        # A matching strong observed session exists, yet claim_identity binds
+        # NO session id and does not enrich from the socket.
+        reg = self._registry(
+            [_observed("s1", FULL_PN, state="routed_framed", source="fc2_parameter_2")]
+        )
+        self.assertIsNone(reg.claim_identity("entry", SHORT_PN))
+        self.assertEqual(reg.claimed_identity("entry"), SHORT_PN)  # NOT enriched
+        self.assertEqual(reg.claimed_session_id("entry"), "")  # NOT bound
+
+    def test_same_identity_enriches_short_to_full_only(self) -> None:
+        reg = self._registry()
+        reg.claim_identity("entry", SHORT_PN)
+        reg.claim_identity("entry", FULL_PN)  # same identity, fuller spelling
+        self.assertEqual(reg.claimed_identity("entry"), FULL_PN)
+        self.assertEqual(reg.claimed_session_id("entry"), "")
+
+    def test_session_bound_pn_less_claim_refuses_foreign_identity(self) -> None:
+        # THE trust-boundary hole: a transient claim already bound to socket B
+        # (which reports PN B) must NOT gain durable identity A -- one claim can
+        # never own identity A AND physical socket B. Refuse before any mutation.
+        reg = self._registry(
+            [_observed("socket-B", OTHER_FULL_PN, state="routed_at_text", source="at_dtupn")]
+        )
+        reg.claim_session("entry", session_id="socket-B")
+        self.assertEqual(reg.claimed_identity("entry"), "")  # PN-less transient
+        self.assertEqual(reg.claimed_session_id("entry"), "socket-B")
+        with self.assertRaises(ValueError):
+            reg.claim_identity("entry", FULL_PN)
+        # No mutation whatsoever.
+        self.assertEqual(reg.claimed_identity("entry"), "")
+        self.assertEqual(reg.claimed_session_id("entry"), "socket-B")
+        self.assertEqual(reg.owner_for_pn(FULL_PN), "")
+
+    def test_session_bound_pn_less_claim_refuses_even_matching_identity(self) -> None:
+        # Even when the bound socket reports the SAME PN, identity-only intent is
+        # not a second promotion path: that is promote_claim_to_full_pn's job.
+        reg = self._registry(
+            [_observed("socket-A", FULL_PN, state="routed_framed", source="fc2_parameter_2")]
+        )
+        reg.claim_session("entry", session_id="socket-A")
+        with self.assertRaises(ValueError):
+            reg.claim_identity("entry", FULL_PN)
+        self.assertEqual(reg.claimed_identity("entry"), "")  # still PN-less
+        self.assertEqual(reg.claimed_session_id("entry"), "socket-A")
+
+    def test_protocol_only_pn_less_claim_is_refused(self) -> None:
+        reg = self._registry()
+        reg.claim("entry", session_protocol="eybond_framed")  # protocol-only, PN-less
+        self.assertEqual(_claim_protocol(reg, "entry"), "eybond_framed")
+        with self.assertRaises(ValueError):
+            reg.claim_identity("entry", FULL_PN)
+        self.assertEqual(reg.claimed_identity("entry"), "")  # unchanged
+        self.assertEqual(_claim_protocol(reg, "entry"), "eybond_framed")  # unchanged
+
+    def test_completely_empty_claim_accepts_pn(self) -> None:
+        reg = self._registry()
+        reg.claim("entry")  # a completely empty, unbound claim
+        self.assertEqual(reg.claimed_identity("entry"), "")
+        reg.claim_identity("entry", FULL_PN)  # allowed: nothing to contradict
+        self.assertEqual(reg.claimed_identity("entry"), FULL_PN)
+        self.assertEqual(reg.claimed_session_id("entry"), "")
+
+    def test_preserves_existing_session_protocol_and_handoff(self) -> None:
+        reg = self._registry(
+            [_observed("s1", FULL_PN, state="routed_at_text", source="at_dtupn")]
+        )
+        reg.claim("verify:x", collector_pn=FULL_PN, session_id="s1")
+        self.assertTrue(reg.prepare_handoff("verify:x", FULL_PN))
+        # An identity-only re-claim with the short PN enriches nothing here (PN is
+        # already full) and, crucially, resets neither the session nor the handoff.
+        reg.claim_identity("verify:x", SHORT_PN)
+        self.assertEqual(reg.claimed_session_id("verify:x"), "s1")
+        self.assertEqual(
+            reg.prepared_handoff_identity("verify:x", FULL_PN), FULL_PN
+        )
+
+    def test_foreign_identity_of_same_owner_raises_before_mutation(self) -> None:
+        reg = self._registry()
+        reg.claim_identity("entry", FULL_PN)
+        with self.assertRaises(ValueError):
+            reg.claim_identity("entry", OTHER_FULL_PN)
+        self.assertEqual(reg.claimed_identity("entry"), FULL_PN)  # unchanged
+
+    def test_pn_owned_by_another_owner_raises(self) -> None:
+        reg = self._registry()
+        reg.claim_identity("entry-A", FULL_PN)
+        with self.assertRaises(ValueError):
+            reg.claim_identity("entry-B", FULL_PN)
+        self.assertEqual(reg.owner_for_pn(FULL_PN), "entry-A")
+
+    def test_empty_pn_is_refused(self) -> None:
+        reg = self._registry()
+        with self.assertRaises(ValueError):
+            reg.claim_identity("entry", "")
+
+
 class HandoffLifecycleTests(unittest.TestCase):
     def test_prepare_then_complete_moves_claim_atomically_no_gap(self) -> None:
         sessions = [_observed("s1", FULL_PN, state="routed_framed", source="at_dtupn")]

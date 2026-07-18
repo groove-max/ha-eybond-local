@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import inspect
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
@@ -102,6 +103,13 @@ class PassiveCallbackDiscovery:
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
         self._listeners: dict[int, Any] = {}
+        # Scoped, token-keyed EXTRA shared listeners a caller (e.g. the cold
+        # degraded-repair flow on a random custom port) has asked the domain
+        # registry to also observe. Each token holds one refcounted shared
+        # listener reference on (host, port); the SAME physical listener every
+        # other borrower sees, so the domain registry and a repair's
+        # CallbackBootstrapChannel observe ONE socket. Released by token.
+        self._ensured_listeners: dict[str, tuple[str, int, Any]] = {}
         self._task: asyncio.Task | None = None
         self._notified: set[str] = set()
         self._weak_identity_first_seen: dict[str, float] = {}
@@ -302,15 +310,24 @@ class PassiveCallbackDiscovery:
             self._task = self._hass.async_create_task(self._async_run())
 
     def iter_observed_sessions(self) -> tuple[dict[str, object], ...]:
-        """Return raw inbound sessions across all passive listeners.
+        """Return raw inbound sessions across all observed listeners.
 
         Each session dict is the shared listener's ``discovered_collector_sessions``
         shape, augmented with the listener port and the confirmed session
-        protocol. This is the source the callback session registry reads.
+        protocol. This is the source the callback session registry reads. Both
+        the standard passive listeners AND any scoped ``ensure``-registered custom
+        listeners are read; a physical session is deduped by
+        ``(listener_port, session_id)`` so a listener visible from more than one
+        source is never counted twice.
         """
 
         sessions: list[dict[str, object]] = []
-        for port, listener in tuple(self._listeners.items()):
+        seen: set[tuple[int, str]] = set()
+        listeners: list[tuple[int, Any]] = list(self._listeners.items())
+        listeners.extend(
+            (port, listener) for _host, port, listener in self._ensured_listeners.values()
+        )
+        for port, listener in listeners:
             inventory_provider = getattr(listener, "discovered_collector_sessions", None)
             if not callable(inventory_provider):
                 continue
@@ -321,6 +338,12 @@ class PassiveCallbackDiscovery:
             for session in observed:
                 if not isinstance(session, dict):
                     continue
+                session_id = str(session.get("session_id") or "").strip()
+                key = (int(port), session_id)
+                if session_id and key in seen:
+                    continue
+                if session_id:
+                    seen.add(key)
                 enriched = dict(session)
                 enriched.setdefault("listener_port", int(port))
                 enriched.setdefault(
@@ -332,6 +355,45 @@ class PassiveCallbackDiscovery:
                 )
                 sessions.append(enriched)
         return tuple(sessions)
+
+    async def async_ensure_observed_listener(self, host: str, port: int) -> str:
+        """Scope the shared listener on ``(host, port)`` into the domain registry.
+
+        PUBLIC, refcount-safe boundary the cold repair uses to make a custom
+        (random) callback port observable by the DOMAIN registry -- without any
+        private access to listener internals or a second registry. It borrows the
+        SAME refcounted shared listener every other consumer sees, so the domain
+        registry and the repair's ``CallbackBootstrapChannel`` observe ONE
+        physical socket. Returns a release token; the registration lasts until
+        :meth:`async_release_observed_listener` is called with it (the caller owns
+        the lease for the whole repair -- both Phase A and Phase B).
+        """
+
+        host = str(host or "").strip() or _LISTENER_HOST
+        port = int(port or 0)
+        if port <= 0:
+            raise ValueError("listener_port_required")
+        listener = await _acquire_shared_listener(host, port)
+        try:
+            token = f"observed:{host}:{port}:{uuid.uuid4().hex}"
+            self._ensured_listeners[token] = (host, port, listener)
+        except BaseException:
+            # Acquired the refcount but never handed out a releasable token
+            # (cancellation / failure between acquire and registration): release
+            # it here, synchronously, so it never leaks -- no background cleanup.
+            await _release_shared_listener(listener)
+            raise
+        return token
+
+    async def async_release_observed_listener(self, token: str) -> None:
+        """Release one scoped observed-listener lease (idempotent)."""
+
+        entry = self._ensured_listeners.pop(str(token or ""), None)
+        if entry is None:
+            return
+        _host, _port, listener = entry
+        with suppress(Exception):
+            await _release_shared_listener(listener)
 
     async def async_stop(self) -> None:
         """Stop passive discovery and release listener references."""
@@ -347,6 +409,10 @@ class PassiveCallbackDiscovery:
         for listener in tuple(self._listeners.values()):
             await self._async_release_listener_bounded(listener)
         self._listeners.clear()
+        # Release any scoped observed-listener leases still open at shutdown.
+        for _host, _port, listener in tuple(self._ensured_listeners.values()):
+            await self._async_release_listener_bounded(listener)
+        self._ensured_listeners.clear()
 
     async def _async_release_listener_bounded(self, listener: Any) -> None:
         """Release one passive listener without blocking Home Assistant shutdown.

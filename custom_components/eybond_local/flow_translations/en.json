@@ -482,7 +482,21 @@
       "recovery_fail_strong_identity_timeout": "The collector's identity could not be confirmed before the check timed out. Try again, or configure the connection by hand.",
       "recovery_fail_restart_not_confirmed": "The collector did not confirm the restart request, so its reconnection could not be verified. Try again, or configure the connection by hand.",
       "recovery_fail_disconnect_not_observed": "The collector did not drop and re-establish its connection after the restart, so automatic reconnection was not proven. Try again, or configure a callback connection by hand.",
-      "recovery_fail_reconnected_untrusted": "A connection came back after the restart but its identity could not be trusted. Try again, or configure the connection by hand."
+      "recovery_fail_reconnected_untrusted": "A connection came back after the restart but its identity could not be trusted. Try again, or configure the connection by hand.",
+      "transition_fail_session_unavailable": "The collector is not connected right now, so the switch cannot be verified. Wait for the collector to connect, then try again.",
+      "transition_fail_endpoint_required": "The Home Assistant address to write into the collector is missing. Enter the address and port the collector can reach.",
+      "transition_fail_callback_route_required": "The collector address and the advertised Home Assistant callback address are required. Enter them and try again.",
+      "transition_fail_rollback_unavailable": "The integration manages the collector's endpoint, but no saved previous endpoint exists to hand control back to. The switch was not started.",
+      "transition_fail_endpoint_write_failed": "Writing the endpoint to the collector failed, so nothing was verified and the connection strategy was not changed. Try again.",
+      "transition_fail_inbound_recovered_instead": "The collector reconnected on its own instead of waiting for the callback, so on-demand operation could not be proven. Its endpoint still points at Home Assistant.",
+      "transition_fail_already_running": "Another connection switch is already in progress for this collector. Wait for it to finish.",
+      "transition_fail_runtime_unavailable": "The collector runtime is not loaded, so the switch cannot be verified right now. Try again after the integration finishes starting.",
+      "transition_fail_not_required": "The collector already uses this connection strategy. Nothing to change.",
+      "transition_fail_recovered_after_restore": "The collector reconnected on its own even though its endpoint was already handed back to the external target, so on-demand operation could not be proven. The connection keeps working; you can retry the switch.",
+      "transition_fail_payload_forbidden": "The switch request carried settings that only the verification itself may change. Nothing was modified.",
+      "transition_fail_activation_incomplete": "The on-demand connection was verified and saved, but Home Assistant could not finish loading the integration. The verification and the collector reconfiguration are not repeated -- Home Assistant just retries loading the already-proven callback configuration.",
+      "transition_fail_suspend_failed": "Home Assistant could not pause the running integration to repair the connection, so nothing was changed. Try again in a moment.",
+      "transition_fail_restore_failed": "The repair was stopped without changing anything, but the previous configuration did not load again automatically. Reload the integration to bring it back."
     }
   }
 }

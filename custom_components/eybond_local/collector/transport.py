@@ -1789,6 +1789,11 @@ class _SharedEybondListener:
             except OSError as exc:
                 self._ref_count = max(0, self._ref_count - 1)
                 raise CollectorListenerBindError(self._host, self._port, exc) from exc
+            except BaseException:
+                # Cancelled (or any failure) mid-bind: NEVER leak the refcount the
+                # increment above reserved -- the bind never became a live server.
+                self._ref_count = max(0, self._ref_count - 1)
+                raise
             logger.info("Shared EyeBond listener listening on %s:%d", self._host, self._port)
 
     async def release(self) -> bool:
@@ -3550,7 +3555,9 @@ async def _acquire_listener_locked(host: str, port: int) -> _SharedEybondListene
         _LISTENERS[(host, int(port))] = listener
     try:
         await listener.acquire()
-    except Exception:
+    except BaseException:
+        # Cancellation included: drop a never-bound, unreferenced listener so a
+        # cancelled acquire leaks neither a refcount nor a registry entry.
         if listener._server is None and listener._ref_count == 0:
             _LISTENERS.pop((listener._host, listener._port), None)
         raise

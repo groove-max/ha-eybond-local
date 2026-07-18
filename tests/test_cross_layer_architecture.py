@@ -459,5 +459,452 @@ class IdentityConsumersNeverMintRecoveryEvidenceTests(unittest.TestCase):
             )
 
 
+class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
+    """Batch 8: ONE authority writes connection_strategy on live entries.
+
+    Allowed writer boundaries (each a different LIFECYCLE, not a different
+    implementation): entry creation (config_flow), schema migration
+    (__init__ / connection_policy), the pending-collector intent editor
+    (config_flow pending steps; a pending entry has no live connection to
+    prove anything against), and the verified transition authority
+    (connection/strategy_transition.py). Every OTHER production module —
+    the runtime coordinator, selects, buttons, services, discovery — must
+    contain NO write of the key at all.
+    """
+
+    ALLOWED_WRITER_FILES = {
+        "config_flow.py",
+        "__init__.py",
+        "connection_policy.py",
+        "strategy_transition.py",
+        # The coordinator-independent degraded-repair orchestrator is part of
+        # the ONE transition authority (it commits strategy only on a proven
+        # callback recovery, same rule as strategy_transition.py).
+        "strategy_transition_repair.py",
+        "const.py",
+        # Diagnostics snapshot builder: it MIRRORS the axes into a support
+        # bundle dict; it never writes entry.data.
+        "bundle.py",
+    }
+
+    @staticmethod
+    def _strategy_key_writes(source: str) -> int:
+        """Count writes of the connection_strategy key (assign or dict key)."""
+
+        tree = ast.parse(source)
+
+        def _is_key(node: ast.AST) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id == "CONF_CONNECTION_STRATEGY"
+            if isinstance(node, ast.Constant):
+                return node.value == "connection_strategy"
+            return False
+
+        count = 0
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                for target in targets:
+                    if isinstance(target, ast.Subscript) and _is_key(target.slice):
+                        count += 1
+            elif isinstance(node, ast.Dict):
+                for key in node.keys:
+                    if key is not None and _is_key(key):
+                        count += 1
+        return count
+
+    def test_only_the_authority_and_lifecycle_boundaries_write_strategy(self) -> None:
+        offenders: dict[str, int] = {}
+        for path in sorted(_CC.rglob("*.py")):
+            writes = self._strategy_key_writes(_read(path))
+            if writes and path.name not in self.ALLOWED_WRITER_FILES:
+                offenders[str(path.relative_to(_CC))] = writes
+        self.assertEqual(
+            offenders,
+            {},
+            msg=(
+                "connection_strategy writes outside the allowed lifecycle "
+                f"boundaries: {offenders}"
+            ),
+        )
+
+    @staticmethod
+    def _method_source(module_source: str, method_name: str) -> str:
+        """Extract one method body via AST (no runtime import of the module)."""
+
+        tree = ast.parse(module_source)
+        lines = module_source.splitlines()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name == method_name
+            ):
+                return "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        raise AssertionError(f"method not found: {method_name}")
+
+    def test_coordinator_has_no_strategy_write_and_facades_call_authority(self) -> None:
+        source = _read(_CC / "runtime" / "coordinator.py")
+        self.assertEqual(self._strategy_key_writes(source), 0)
+        # The legacy operation-mode select is a FACADE: its implementation
+        # must route through the one transition entry point.
+        mode_source = self._method_source(
+            source, "async_set_collector_operation_mode"
+        )
+        self.assertIn("async_run_connection_strategy_transition", mode_source)
+
+    def test_full_control_endpoint_edit_never_touches_axes(self) -> None:
+        # G: a raw endpoint edit is a low-level write, never a strategy switch
+        # and never an axis writer of any kind.
+        source = _read(_CC / "runtime" / "coordinator.py")
+        for method_name in (
+            "async_set_raw_collector_server_endpoint",
+            "async_set_collector_server_endpoint",
+        ):
+            method_source = self._method_source(source, method_name)
+            for banned in (
+                "CONF_CONNECTION_STRATEGY",
+                "connection_strategy",
+                "_persist_connection_axes",
+            ):
+                self.assertNotIn(
+                    banned,
+                    method_source,
+                    msg=f"{method_name} must not write {banned}",
+                )
+
+    def test_bind_and_rollback_record_facts_never_strategy(self) -> None:
+        source = _read(_CC / "runtime" / "coordinator.py")
+        for method_name in (
+            "async_bind_collector_to_home_assistant",
+            "async_rollback_collector_server_endpoint",
+        ):
+            method_source = self._method_source(source, method_name)
+            self.assertNotIn(
+                "CONF_CONNECTION_STRATEGY",
+                method_source,
+                msg=f"{method_name} may record endpoint facts, never strategy",
+            )
+
+    def test_authority_writes_strategy_only_in_success_updates(self) -> None:
+        # Structural: inside strategy_transition.py the ONLY strategy writes
+        # are the two success-commit ``updates`` dicts (inbound + callback).
+        source = _read(_CC / "connection" / "strategy_transition.py")
+        self.assertEqual(self._strategy_key_writes(source), 2)
+
+
+class DegradedRepairBoundaryGuards(unittest.TestCase):
+    """Batch 8B.1: the cold-repair transaction owns no lower-layer internals.
+
+    The repair delegates ALL listener/wire/trigger/projection I/O to the public
+    ``CallbackBootstrapChannel`` and ALL matching to the shared matcher, and the
+    config flow holds no listener internals.
+    """
+
+    _REPAIR = _CC / "connection" / "strategy_transition_repair.py"
+    _CONFIG_FLOW = _CC / "config_flow.py"
+
+    def test_repair_imports_no_private_onboarding_or_transport_names(self) -> None:
+        tree = ast.parse(_read(self._REPAIR))
+        offenders: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            module = node.module
+            if not ("onboarding" in module or "transport" in module):
+                continue
+            for alias in node.names:
+                if alias.name.startswith("_"):
+                    offenders.append(f"{module}.{alias.name}")
+        self.assertEqual(
+            offenders, [], f"repair imports private lower-layer names: {offenders}"
+        )
+
+    def test_repair_defines_no_second_matcher_and_uses_the_shared_one(self) -> None:
+        source = _read(self._REPAIR)
+        tree = ast.parse(source)
+        defined = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        # The old parallel matcher is gone...
+        self.assertNotIn("_new_strong_same_pn_session_id", defined)
+        # ...and the ONE shared matcher is used instead of a re-derived rule.
+        self.assertIn("match_callback_answer", _code_identifiers(source))
+
+    def test_repair_has_no_raw_wire_switch_or_peer_or_family_identity(self) -> None:
+        source = _read(self._REPAIR)
+        seen = _code_identifiers(source) | _code_string_literals(source)
+        # No raw protocol_shape/session_protocol wire selection; no peer IP /
+        # cloud family / collector kind / hostname ever in identity or wire.
+        forbidden = {
+            "protocol_shape",
+            "session_protocol",
+            "peer_ip",
+            "cloud_family",
+            "collector_kind",
+            "hostname",
+        }
+        self.assertEqual(
+            forbidden & seen, set(), f"repair leaks lower-layer wire/identity: {forbidden & seen}"
+        )
+
+    def test_config_flow_touches_no_listener_internals(self) -> None:
+        seen = _code_identifiers(_read(self._CONFIG_FLOW))
+        for internal in (
+            "_acquire_shared_listener",
+            "_release_shared_listener",
+            "async_identify_pending_session",
+        ):
+            self.assertNotIn(
+                internal, seen, f"config_flow must not touch listener internal {internal}"
+            )
+
+    def test_repair_uses_the_channel_ledger_not_a_global(self) -> None:
+        # BLOCKER 3 (8B.1 follow-up): ONE causality authority. The repair never
+        # fetches the process-global ledger itself -- it uses channel.ledger, the
+        # exact ledger the channel's sender records through -- so the lease that
+        # admits the send and the counter that attributes it cannot diverge.
+        ids = _code_identifiers(_read(self._REPAIR))
+        self.assertNotIn("get_callback_trigger_ledger", ids)
+
+    def test_repair_binds_identity_only_before_proof(self) -> None:
+        # BLOCKER 2 (8B.1 follow-up): the pre-UDP intent is identity-only; a
+        # socket-binding claim()/claim_session() is not used for it.
+        ids = _code_identifiers(_read(self._REPAIR))
+        self.assertIn("claim_identity", ids)
+
+
+class ColdRepairHaTestGuards(unittest.TestCase):
+    """Batch 8B.2A: the real-HA repair test proves a TRUE cold repair.
+
+    Structurally bans the pre-8B.2A shortcuts that let the old test pass without
+    exercising production wiring.
+    """
+
+    _HA_TEST = REPO_ROOT / "tests_ha" / "test_ha_strategy_transition_repair.py"
+
+    def test_ha_repair_test_uses_no_cold_repair_shortcuts(self) -> None:
+        source = _read(self._HA_TEST)
+        banned = {
+            # Manual listener wiring / private discovery internals.
+            "_acquire_shared_listener": "manual shared-listener acquire",
+            "_release_shared_listener": "manual shared-listener release",
+            "._listeners": "private discovery listener injection",
+            # Bypassing the real flow manager.
+            "async_step_": "direct flow step call",
+            ".async_remove(": "flow removal instead of options.async_abort",
+            # Hand-written verification outcome / proof.
+            "RecoveryVerificationOutcome(": "hand-built verification outcome",
+            "CallbackRecoveryProof(": "hand-built recovery proof",
+            # Manual registry claim / session pin / certification.
+            "pin_owner_claim_to_session": "manual session pin",
+            ".claim_session(": "manual transient session claim",
+            "certify_permanent_owned_session": "manual certification",
+            "retarget_claim_to_reconnected_session": "manual retarget",
+        }
+        found = [why for token, why in banned.items() if token in source]
+        self.assertEqual(found, [], f"cold-repair HA test uses shortcuts: {found}")
+
+
+class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
+    """Batch 8B.2A loaded-lifecycle: a LOADED degraded entry is repaired by the
+    ONE orchestrator (no LOADED refusal, no second matcher, no private coordinator
+    access), and the activation retry re-runs ONLY the load -- never the repair or
+    the proof state."""
+
+    _CONFIG_FLOW = _CC / "config_flow.py"
+
+    @staticmethod
+    def _method_source(module_source: str, method_name: str) -> str:
+        tree = ast.parse(module_source)
+        lines = module_source.splitlines()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name == method_name
+            ):
+                return "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        raise AssertionError(f"method not found: {method_name}")
+
+    def test_no_dead_end_loaded_refusal_reason_anywhere(self) -> None:
+        # The dead-end LOADED refusal is gone from the flow AND every locale: a
+        # LOADED entry is repaired, never refused.
+        self.assertNotIn(
+            "transition_repair_requires_unloaded_entry", _read(self._CONFIG_FLOW)
+        )
+        for locale in ("en", "ru", "uk"):
+            self.assertNotIn(
+                "transition_fail_requires_unloaded_entry",
+                _read(_CC / "flow_translations" / f"{locale}.json"),
+            )
+
+    def test_config_flow_never_calls_private_coordinator_persist(self) -> None:
+        # The flow reaches the runtime only through public boundaries; it never
+        # calls the coordinator's private without-reload persist helper.
+        self.assertNotIn(
+            "_async_update_entry_without_reload", _read(self._CONFIG_FLOW)
+        )
+
+    def test_loaded_repair_reuses_one_orchestrator_and_suspends_runtime(self) -> None:
+        task = self._method_source(
+            _read(self._CONFIG_FLOW), "_async_run_degraded_repair_task"
+        )
+        # The ONE orchestrator -- never a second matcher/bootstrap/proof pipeline
+        # inlined for the LOADED path.
+        self.assertIn("async_run_degraded_recovery_repair", task)
+        # The LOADED path SUSPENDS the competing runtime through the fail-closed
+        # helper so the ONE orchestrator runs with exclusive session access.
+        self.assertIn("_suspend_runtime_for_repair", task)
+        for banned in (
+            "async_persist_proven_callback_transition",
+            "async_run_callback_bootstrap_transaction",
+            "async_run_callback_recovery_transaction",
+        ):
+            self.assertNotIn(banned, task, f"repair task must not use {banned}")
+
+    def test_suspend_is_fail_closed_before_ensure(self) -> None:
+        source = _read(self._CONFIG_FLOW)
+        task = self._method_source(source, "_async_run_degraded_repair_task")
+        suspend = self._method_source(source, "_suspend_runtime_for_repair")
+        # The suspend runs BEFORE the listener ensure, and a refusal returns early
+        # (0 ensure / UDP / commit downstream).
+        i_suspend = task.index("_suspend_runtime_for_repair")
+        i_ensure = task.index("async_ensure_observed_listener")
+        self.assertLess(i_suspend, i_ensure, "suspend must precede the ensure")
+        gate = task[i_suspend:i_ensure]
+        self.assertIn("if refusal:", gate)
+        self.assertIn("return", gate)
+        # The suspend checks the unload RESULT + entry STATE, restores a partial
+        # unload, and returns a typed reason -- never a bare unload.
+        self.assertIn("async_unload", suspend)
+        self.assertIn("ConfigEntryState", suspend)
+        self.assertIn("transition_suspend_failed", suspend)
+
+    def test_lifecycle_finalization_is_awaited_not_fire_and_forget(self) -> None:
+        source = _read(self._CONFIG_FLOW)
+        task = self._method_source(source, "_async_run_degraded_repair_task")
+        fin = self._method_source(source, "_finalize_repair_lifecycle")
+        # ONE finalization boundary, AWAITED through the cancellation-safe helper.
+        self.assertIn("_await_critical", task)
+        self.assertIn("_finalize_repair_lifecycle", task)
+        # No fire-and-forget restore/activation in the task or the finalization.
+        for body, name in ((task, "repair task"), (fin, "finalization")):
+            self.assertNotIn("async_create_task", body, f"{name}: no fire-and-forget")
+            self.assertNotIn("ensure_future", body, f"{name}: no fire-and-forget")
+        # The finalization owns the token release and the typed restore failure.
+        self.assertIn("async_release_observed_listener", fin)
+        self.assertIn("transition_restore_failed", fin)
+
+    def test_no_suppress_around_restore_or_activation(self) -> None:
+        source = _read(self._CONFIG_FLOW)
+        for method in (
+            "_async_run_degraded_repair_task",
+            "_finalize_repair_lifecycle",
+            "_suspend_runtime_for_repair",
+        ):
+            body = self._method_source(source, method)
+            self.assertNotIn(
+                "suppress(", body,
+                f"{method} must surface restore/activation errors, not suppress them",
+            )
+
+    def test_typed_suspend_and_restore_reasons_are_localized(self) -> None:
+        flow = _read(self._CONFIG_FLOW)
+        for code in ("transition_suspend_failed", "transition_restore_failed"):
+            self.assertIn(code, flow)  # typed reasons in the explanations table
+        for locale in ("en", "ru", "uk"):
+            dynamic = _read(_CC / "flow_translations" / f"{locale}.json")
+            for key in (
+                "transition_fail_suspend_failed",
+                "transition_fail_restore_failed",
+            ):
+                self.assertIn(key, dynamic, f"{key} missing from {locale}")
+
+    def test_suspend_is_inside_the_cancellation_safe_boundary(self) -> None:
+        # The suspend must run INSIDE the try whose finally awaits the ONE
+        # finalization -- a cancel mid-suspend restores through that boundary.
+        task = self._method_source(
+            _read(self._CONFIG_FLOW), "_async_run_degraded_repair_task"
+        )
+        i_try = task.index("\n        try:")
+        i_suspend = task.index("_suspend_runtime_for_repair")
+        i_finally = task.index("\n        finally:")
+        i_await_critical = task.index("_await_critical")
+        self.assertLess(i_try, i_suspend, "suspend must be inside the try")
+        self.assertLess(i_suspend, i_finally, "suspend must precede the finally")
+        self.assertLess(i_finally, i_await_critical, "finally awaits _await_critical")
+
+    def test_suspend_marks_attempt_before_unload(self) -> None:
+        suspend = self._method_source(
+            _read(self._CONFIG_FLOW), "_suspend_runtime_for_repair"
+        )
+        i_mark = suspend.index('"suspend_attempted"')
+        i_unload = suspend.index("config_entries.async_unload")  # the CALL, not docs
+        self.assertLess(
+            i_mark, i_unload, "suspend_attempted must be set BEFORE the unload"
+        )
+
+    def test_await_critical_reraises_cancellation_after_completion(self) -> None:
+        helper = self._method_source(_read(self._CONFIG_FLOW), "_await_critical")
+        # Tracks a cancel and re-raises it AFTER the shielded work completes -- a
+        # successful result never turns a cancelled task into a normal completion.
+        self.assertIn("cancelled = True", helper)
+        self.assertIn("raise asyncio.CancelledError", helper)
+        self.assertIn("asyncio.shield", helper)
+
+    def test_init_menu_recovery_beats_capability_filtering(self) -> None:
+        # Several classes define async_step_init; anchor on the unique options-flow
+        # menu logic in the whole file rather than a mis-picked method.
+        flow = _read(self._CONFIG_FLOW)
+        i_proven = flow.index("not marker_present and self._callback_proven_but_not_loaded()")
+        i_bridge = flow.index("if capabilities.virtual_bridge:")
+        i_repair = flow.index('menu_options.insert(0, "strategy_transition_repair")')
+        # The proven-but-unloaded activation-only menu is decided BEFORE the
+        # capability (virtual-bridge) filtering...
+        self.assertLess(i_proven, i_bridge, "activation-only menu precedes filtering")
+        # ...and the repair is inserted AFTER the bridge branch, so the bridge can
+        # never drop it.
+        self.assertLess(i_bridge, i_repair, "bridge branch must not drop the repair")
+
+    def test_listener_acquire_is_cancellation_safe(self) -> None:
+        transport = _read(_CC / "collector" / "transport.py")
+        # The bind decrements the reserved refcount on ANY failure incl. cancel.
+        acquire = self._method_source(transport, "acquire")
+        self.assertIn("except BaseException", acquire)
+        self.assertIn("_ref_count", acquire)
+        # The locked get-or-create drops a never-bound listener on cancel too.
+        locked = self._method_source(transport, "_acquire_listener_locked")
+        self.assertIn("except BaseException", locked)
+        # The public ensure releases the refcount if it never hands out a token.
+        ensure = self._method_source(
+            _read(_CC / "passive_discovery.py"), "async_ensure_observed_listener"
+        )
+        self.assertIn("_release_shared_listener", ensure)
+        self.assertIn("except BaseException", ensure)
+
+    def test_activation_retry_reloads_only_never_repairs_or_touches_proof(self) -> None:
+        retry = self._method_source(
+            _read(self._CONFIG_FLOW),
+            "async_step_strategy_transition_activation_retry",
+        )
+        # It re-runs ONLY the load...
+        self.assertIn("async_reload", retry)
+        # ...never the degraded-repair orchestrator...
+        self.assertNotIn("async_run_degraded_recovery_repair", retry)
+        # ...and never writes the RecoveryContract / recovery-state fields.
+        for banned in (
+            "merge_recovery_contract",
+            "CONF_STRATEGY_TRANSITION_STATE",
+            "recovery_contract",
+            "async_update_entry",
+        ):
+            self.assertNotIn(
+                banned, retry, f"activation retry must not touch {banned}"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

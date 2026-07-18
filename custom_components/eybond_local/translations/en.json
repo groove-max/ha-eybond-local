@@ -410,7 +410,10 @@
           "shadow_learning": "Expand device support",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
-          "diagnostics": "Diagnostics and service tools"
+          "diagnostics": "Diagnostics and service tools",
+          "strategy_transition_repair": "Finish the connection switch (recovery required)",
+          "strategy_transition_activation_retry": "Load the verified connection",
+          "strategy_transition_cancel": "Cancel"
         }
       },
       "collector_wifi": {
@@ -629,10 +632,37 @@
       },
       "pending_retry": {
         "title": "Retry connection"
+      },
+      "strategy_transition": {
+        "title": "Confirm the connection switch",
+        "description": "Switching to **{target_strategy}** must be verified with a controlled collector restart before it is saved.\n\nCheck the addresses below. Behind NAT/port-forwarding enter the public host and port the collector can really reach — they are used exactly as written.",
+        "data": {
+          "advertised_server_ip": "Home Assistant host the collector connects to",
+          "advertised_tcp_port": "Port the collector connects to",
+          "collector_ip": "Collector address (for the callback request)"
+        }
+      },
+      "strategy_transition_failed": {
+        "title": "The connection switch was not verified",
+        "description": "{failure_explanation}\n\nThe connection strategy was NOT changed. You can retry the verification, keep the other submitted settings without switching, or cancel.",
+        "menu_options": {
+          "strategy_transition": "Retry the verification",
+          "strategy_transition_keep_settings": "Keep the other settings without switching",
+          "strategy_transition_cancel": "Cancel"
+        }
+      },
+      "strategy_transition_activation_incomplete": {
+        "title": "Verified and saved, but not loaded yet",
+        "description": "{failure_explanation}\n\nThe on-demand connection is already verified and saved. Nothing needs to be verified again. You can retry loading the integration now, or close and let Home Assistant load it later.",
+        "menu_options": {
+          "strategy_transition_activation_retry": "Retry loading the integration",
+          "strategy_transition_cancel": "Close"
+        }
       }
     },
     "progress": {
-      "shadow_learning": "{control_discovery_hint}"
+      "shadow_learning": "{control_discovery_hint}",
+      "strategy_transition_running": "Verifying the connection switch with a controlled collector restart…"
     },
     "abort": {
       "no_pending_candidates": "No unlinked collector has connected to Home Assistant yet.",

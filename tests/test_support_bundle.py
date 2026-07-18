@@ -418,6 +418,147 @@ class SupportBundleTests(unittest.TestCase):
         ):
             self.assertNotIn(secret, serialized)
 
+    def test_bundle_never_leaks_strategy_transition_recovery_route(self) -> None:
+        # Batch 8A: the persisted degraded recovery state carries the full
+        # repair route (trigger target / advertised HA endpoint / local bind).
+        # The support bundle exposes ONLY the typed diagnostics view; the whole
+        # serialized bundle must contain none of the route values or components.
+        from custom_components.eybond_local.connection.strategy_transition_recovery import (
+            StrategyTransitionRecoveryState,
+        )
+        from custom_components.eybond_local.const import (
+            CONF_STRATEGY_TRANSITION_STATE,
+        )
+
+        state = StrategyTransitionRecoveryState.create(
+            collector_pn="V001020SYN62344022",
+            now="2026-07-16T10:00:00+00:00",
+            trigger_target_host="203.0.113.77",
+            trigger_udp_port=58899,
+            advertised_host="public.forward.example",
+            advertised_port=48899,
+            trigger_bind_host="10.9.8.7",
+            listener_bind_host="10.9.8.7",
+            local_listener_port=18899,
+        )
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG 6200",
+            connected=True,
+            collector={"collector_pn": "V001020SYN62344022"},
+            inverter=None,
+            values={},
+            data={
+                "server_ip": "192.168.1.50",
+                "collector_pn": "V001020SYN62344022",
+                CONF_STRATEGY_TRANSITION_STATE: state.to_record(),
+            },
+            options={},
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+        )
+
+        # The redacted diagnostics view IS present (kind / route-completeness),
+        # and it is the typed diagnostics -- not the raw record.
+        identity = raw["roles"]["diagnostics"]["collector_identity"]
+        state_diag = identity["connection_strategy_transition_state"]
+        self.assertEqual(state_diag["kind"], "callback_transition_unproven")
+        self.assertTrue(state_diag["route_complete"])
+        # Blocker 5: the lifecycle PHASE is surfaced (redacted diagnostics only,
+        # a bounded enum value) so support can tell a write-ahead pending state
+        # from a confirmed-unproven one -- while the raw route stays out.
+        from custom_components.eybond_local.connection.strategy_transition_recovery import (
+            RECOVERY_PHASE_PENDING,
+            RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
+        )
+
+        self.assertIn(
+            state_diag["phase"],
+            {RECOVERY_PHASE_PENDING, RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN},
+        )
+        self.assertNotIn("trigger_target_host", state_diag)
+        self.assertNotIn("advertised_host", state_diag)
+        self.assertNotIn("trigger_bind_host", state_diag)
+        self.assertNotIn("listener_bind_host", state_diag)
+
+        # The verbatim entry-data copy is a redacted pointer, not the record.
+        self.assertIsInstance(
+            raw["entry"]["data"][CONF_STRATEGY_TRANSITION_STATE], str
+        )
+        self.assertIn(
+            "redacted", raw["entry"]["data"][CONF_STRATEGY_TRANSITION_STATE]
+        )
+
+        # Non-disclosure over the WHOLE serialized bundle: no route value or
+        # component anywhere.
+        serialized = json.dumps(raw)
+        for secret in (
+            "203.0.113.77",
+            "public.forward.example",
+            "10.9.8.7",
+            "203.0.113.77:58899",
+            "public.forward.example:48899",
+        ):
+            self.assertNotIn(secret, serialized)
+
+    def test_bundle_shows_confirmed_phase_for_persisted_confirmed_state(self) -> None:
+        # Batch 8A.1: a persisted CONFIRMED-unproven recovery state must surface
+        # its phase in the redacted diagnostics as exactly the confirmed phase
+        # (never the pending default), while still leaking no route value.
+        from custom_components.eybond_local.connection.strategy_transition_recovery import (
+            RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
+            StrategyTransitionRecoveryState,
+        )
+        from custom_components.eybond_local.const import (
+            CONF_STRATEGY_TRANSITION_STATE,
+        )
+
+        confirmed = StrategyTransitionRecoveryState.create(
+            collector_pn="V001020SYN62344022",
+            now="2026-07-16T10:00:00+00:00",
+            trigger_target_host="203.0.113.77",
+            trigger_udp_port=58899,
+            advertised_host="public.forward.example",
+            advertised_port=48899,
+            trigger_bind_host="10.9.8.7",
+            listener_bind_host="10.9.8.7",
+            local_listener_port=18899,
+        ).with_phase(
+            RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
+            now="2026-07-16T11:00:00+00:00",
+        )
+        # The persisted record round-trips to the confirmed phase (guards the
+        # persistence fix end to end through what the coordinator stores).
+        record = confirmed.to_record()
+        self.assertEqual(record["phase"], RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN)
+
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG 6200",
+            connected=True,
+            collector={"collector_pn": "V001020SYN62344022"},
+            inverter=None,
+            values={},
+            data={
+                "server_ip": "192.168.1.50",
+                "collector_pn": "V001020SYN62344022",
+                CONF_STRATEGY_TRANSITION_STATE: record,
+            },
+            options={},
+            profile_name="smg_modbus.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+        )
+        state_diag = raw["roles"]["diagnostics"]["collector_identity"][
+            "connection_strategy_transition_state"
+        ]
+        self.assertEqual(
+            state_diag["phase"], RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN
+        )
+        # Still no raw route anywhere in the serialized bundle.
+        serialized = json.dumps(raw)
+        for secret in ("203.0.113.77", "public.forward.example", "10.9.8.7"):
+            self.assertNotIn(secret, serialized)
+
     def test_bundle_recovery_section_reports_absent_contract_honestly(self) -> None:
         raw = build_support_bundle_payload(
             entry_id="entry123",

@@ -65,22 +65,52 @@ def _present(source: dict[str, Any], *keys: str) -> dict[str, Any]:
 
 
 def _redact_recovery_contract(data: dict[str, Any]) -> dict[str, Any]:
-    """Strip the raw recovery record from the bundle's verbatim entry data.
+    """Strip the raw recovery records from the bundle's verbatim entry data.
 
-    The RecoveryContract's callback proof carries opaque route/endpoint
-    snapshots (trigger target, advertised HA endpoint). A support bundle shows
-    the proof STRUCTURE -- ``roles.diagnostics.recovery`` (booleans, methods,
-    timestamps) -- but never the network values themselves, so the raw record
-    is replaced with a pointer, not copied.
+    The RecoveryContract's callback proof AND the strategy-transition recovery
+    state both carry opaque route/endpoint snapshots (trigger target, advertised
+    HA endpoint, local bind host). A support bundle shows only the STRUCTURE
+    (booleans, kind, timestamps, route-completeness) -- never the network values
+    themselves -- so each raw record is replaced with a pointer, never copied.
     """
 
     from ..connection.recovery_contract import RECOVERY_CONTRACT_KEY
+    from ..const import CONF_STRATEGY_TRANSITION_STATE
 
-    if RECOVERY_CONTRACT_KEY not in data:
-        return data
     redacted = dict(data)
-    redacted[RECOVERY_CONTRACT_KEY] = "**redacted: see roles.diagnostics.recovery**"
+    if RECOVERY_CONTRACT_KEY in redacted:
+        redacted[RECOVERY_CONTRACT_KEY] = (
+            "**redacted: see roles.diagnostics.recovery**"
+        )
+    if CONF_STRATEGY_TRANSITION_STATE in redacted:
+        redacted[CONF_STRATEGY_TRANSITION_STATE] = (
+            "**redacted: see roles.diagnostics.collector_identity"
+            ".connection_strategy_transition_state**"
+        )
     return redacted
+
+
+def _strategy_transition_state_diagnostics(data: dict[str, Any]) -> dict[str, Any]:
+    """The redacted diagnostics view of the strategy-transition recovery state.
+
+    Returns ``{}`` when no state is persisted; otherwise ONLY the typed
+    ``StrategyTransitionRecoveryState.diagnostics()`` (kind / timestamps /
+    route-completeness), never the raw route/endpoint. A malformed persisted
+    record is reported as an opaque flag, never echoed back.
+    """
+
+    from ..connection.strategy_transition_recovery import (
+        StrategyTransitionRecoveryState,
+    )
+    from ..const import CONF_STRATEGY_TRANSITION_STATE
+
+    record = data.get(CONF_STRATEGY_TRANSITION_STATE)
+    if not record:
+        return {}
+    state = StrategyTransitionRecoveryState.from_record(record)
+    if state is None:
+        return {"present": True, "malformed": True}
+    return state.diagnostics()
 
 
 def _build_diagnostics_split(
@@ -123,6 +153,12 @@ def _build_diagnostics_split(
             "connection_strategy": axes.get("connection_strategy", ""),
             "connection_strategy_evidence": axes.get("connection_strategy_evidence", ""),
             "endpoint_control_policy": axes.get("endpoint_control_policy", ""),
+            # Recovery-required status, REDACTED: only the typed diagnostics
+            # view (kind / timestamps / route-completeness), NEVER the raw
+            # route/endpoint values the persisted record carries.
+            "connection_strategy_transition_state": (
+                _strategy_transition_state_diagnostics(data)
+            ),
             # Stable identity devcode (heartbeat), NOT the volatile last frame.
             "devcode": values.get("collector_devcode", ""),
         },

@@ -174,6 +174,45 @@ class RecoveryTerminalInput:
             **kwargs,
         )
 
+    @classmethod
+    def from_permanent_owner_transaction(cls, outcome: Any) -> "RecoveryTerminalInput":
+        """From a recovery run UNDER an existing permanent owner (Batch 8).
+
+        Same strict outcome/proof validation as
+        :meth:`from_callback_transaction`, but the terminal deliberately
+        carries NO ``prepared_handoff_owner``: a permanent owner's recovered
+        session is certified by the registry's
+        ``certify_owner_reconnected_session`` capability, not by an onboarding
+        prepare/complete handoff — pretending otherwise would fake an
+        ownership-transfer capability the registry never issued.
+        """
+
+        from ..connection.session_registry import (
+            PermanentOwnedSessionCertification,
+        )
+        from .strategy_verification import RecoveryVerificationOutcome
+
+        if type(outcome) is not RecoveryVerificationOutcome:
+            raise TypeError("recovery_verification_outcome_required")
+        # A permanent-owner outcome MUST carry the typed certification and NO
+        # prepared onboarding handoff -- the two ownership modes never mix.
+        if outcome.handoff_owner:
+            raise ValueError("permanent_owner_outcome_carries_handoff")
+        if type(outcome.owner_certification) is not PermanentOwnedSessionCertification:
+            raise TypeError("permanent_owner_certification_required")
+        if outcome.callback_verified:
+            proof: Any = outcome.callback_proof
+            kwargs = {"callback_proof": proof}
+        elif outcome.inbound_recovered:
+            proof = outcome.inbound_proof
+            kwargs = {"inbound_proof": proof}
+        else:
+            raise ValueError("recovery_verification_outcome_not_verified")
+        return cls(
+            collector_pn=prefer_full_pn(outcome.collector_pn, proof.collector_pn),
+            **kwargs,
+        )
+
 
 def merge_recovery_contract(
     data: MutableMapping[str, Any],
