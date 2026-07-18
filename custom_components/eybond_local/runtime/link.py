@@ -1928,6 +1928,25 @@ class EybondRuntimeLinkManager:
         await self._async_follow_owned_session_listener()
         self._apply_live_wire_to_transports()
 
+        # A registry-owned exact session is already causally certified for this
+        # entry. It may still be parked while the freshly-created transport
+        # facade starts, so ``self.connected`` can be false even though the
+        # physical socket is present and claimable. Activate/wait for that exact
+        # socket BEFORE considering a new callback trigger. If it cannot be used,
+        # fail this attempt closed; a later attempt may trigger only after the
+        # registry no longer exposes the stale owned session. Never overwrite a
+        # proven handoff with another set>server sequence merely because a
+        # co-located foreign socket delayed facade activation.
+        if (
+            self._reverse_discovery_enabled
+            and not self.connected
+            and self._claimed_session_id()
+        ):
+            return await self._async_await_callback_session(
+                timeout=timeout,
+                require_heartbeat=require_heartbeat,
+            )
+
         # callback_on_demand: send exactly ONE UDP callback trigger for this
         # attempt, then bounded-wait for the inbound session. inbound entries
         # have _reverse_discovery_enabled=False and never reach this, so they

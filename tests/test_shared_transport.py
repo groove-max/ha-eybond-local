@@ -3024,7 +3024,7 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         pending.reader.feed_eof()
         await asyncio.sleep(0.1)
 
-    async def test_new_connection_replaces_parked_socket_from_same_ip(self) -> None:
+    async def test_same_ip_parked_sockets_coexist_by_session_id(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         first = self._pending(listener, session_id="s1", remote_ip="203.0.113.10")
         sniff_first = asyncio.create_task(listener._sniff_pending_socket(first))
@@ -3038,14 +3038,14 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.4)
 
         self.assertTrue(second.parked)
-        self.assertTrue(first.writer.closed)
-        self.assertFalse(listener._pending_socket_still_registered(first))
+        self.assertFalse(first.writer.closed)
+        self.assertTrue(listener._pending_socket_still_registered(first))
         self.assertTrue(listener._pending_socket_still_registered(second))
 
+        first.reader.feed_eof()
         second.reader.feed_eof()
+        await asyncio.wait_for(sniff_first, timeout=2.0)
         await asyncio.wait_for(sniff_second, timeout=2.0)
-        with self.assertRaises(asyncio.CancelledError):
-            await sniff_first
 
 
 class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):

@@ -2656,7 +2656,14 @@ class _SharedEybondListener:
             pass
 
     def _evict_parked_sockets(self, new_pending: _PendingCollectorSocket) -> None:
-        """Bound parked sockets: replace same-IP parks, cap the total count."""
+        """Bound parked sockets by count; never collapse sessions by peer IP.
+
+        Multiple collectors behind one NAT legitimately share a peer IP. Their
+        accepted sockets remain independent by ``session_id`` until strong PN
+        evidence and registry ownership resolve them. Resource safety comes from
+        the total parked-socket cap plus each socket's TTL, not from treating an
+        address as collector identity.
+        """
 
         def _close(parked: _PendingCollectorSocket, state: str) -> None:
             self._remove_pending_socket(parked)
@@ -2667,13 +2674,6 @@ class _SharedEybondListener:
             self._mark_session_state(parked.session_id, state)
             parked.writer.close()
 
-        for candidate in tuple(self._pending_sockets.values()):
-            if (
-                candidate.parked
-                and candidate is not new_pending
-                and candidate.remote_ip == new_pending.remote_ip
-            ):
-                _close(candidate, "parked_replaced")
         parked_sockets = [
             candidate
             for candidate in self._pending_sockets.values()

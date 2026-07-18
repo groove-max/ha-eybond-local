@@ -1397,6 +1397,74 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         self.assertEqual(handle.collector_pn, self._PN)
         self.assertEqual(handle.wire, "eybond_framed")
 
+    def test_callback_on_demand_activates_exact_owned_session_without_trigger(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        target = self._session(self._PN)
+        target["session_id"] = "listener-8899-target"
+        foreign = self._session(self._FOREIGN_PN)
+        foreign["session_id"] = "listener-8899-foreign"
+        inventory = [target, foreign]
+        domain = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
+        domain.claim(
+            "entry-target",
+            collector_pn=self._PN,
+            session_id="listener-8899-target",
+        )
+        manager.set_callback_ownership(domain, "entry-target")
+        transport = _ClaimRecordingTransport(
+            connected=False,
+            connect_result=True,
+            observed_sessions=(target, foreign),
+        )
+        manager._transport = transport  # type: ignore[assignment]
+
+        ok, probe = self._run_connect(manager)
+
+        self.assertTrue(ok)
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(manager._callback_trigger_count, 0)
+        self.assertIsNotNone(transport.claim_provider)
+        self.assertEqual(transport.claim_provider(), "listener-8899-target")
+        self.assertEqual(domain.owner_for_pn(self._FOREIGN_PN), "")
+
+    def test_callback_on_demand_does_not_retrigger_while_exact_session_is_unusable(
+        self,
+    ) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        target = self._session(self._PN)
+        target["session_id"] = "listener-8899-target"
+        foreign = self._session(self._FOREIGN_PN)
+        foreign["session_id"] = "listener-8899-foreign"
+        domain = CallbackSessionRegistry(
+            sessions_source=lambda: (target, foreign)
+        )
+        domain.claim(
+            "entry-target",
+            collector_pn=self._PN,
+            session_id="listener-8899-target",
+        )
+        manager.set_callback_ownership(domain, "entry-target")
+        transport = _ClaimRecordingTransport(
+            connected=False,
+            connect_result=False,
+            observed_sessions=(target, foreign),
+        )
+        manager._transport = transport  # type: ignore[assignment]
+
+        ok, probe = self._run_connect(manager)
+
+        self.assertFalse(ok)
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(manager._callback_trigger_count, 0)
+        self.assertEqual(transport.connected_waits, [0.2])
+        self.assertEqual(
+            manager.callback_trigger_diagnostics()["collector_callback_state"],
+            "callback_timeout",
+        )
+        self.assertIsNotNone(transport.claim_provider)
+        self.assertEqual(transport.claim_provider(), "listener-8899-target")
+        self.assertEqual(domain.owner_for_pn(self._FOREIGN_PN), "")
+
     def test_inbound_never_sends_trigger_even_when_disconnected(self) -> None:
         manager = self._manager(callback_on_demand=False, collector_pn=self._PN)
         manager._transport = _FakeTransport(connected=False, connect_result=False)  # type: ignore[assignment]
