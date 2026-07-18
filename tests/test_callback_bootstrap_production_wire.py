@@ -64,7 +64,9 @@ from fake_collector import FakeCollectorService  # noqa: E402
 from fake_collector_lib import CollectorProfile, resolve_scenario  # noqa: E402
 
 FULL_PN = "V001020SYN62344022"
+FOREIGN_FRAMED_PN = "V000405SYN94677058"
 AT_FULL_PN = "E50000200000000001"
+FOREIGN_AT_PN = "E50000200000000099"
 TS = "2026-07-17T10:00:00+00:00"
 _HARNESS_TIMEOUT = 8.0
 
@@ -240,23 +242,26 @@ class FramedBootstrapWireTests(BootstrapProductionWireHarness):
             outcome = await self._run(
                 state=self._state(udp_port=udp_port, pn=FULL_PN), channel=channel
             )
+
+            self.assertEqual(outcome.kind, BOOTSTRAP_CERTIFIED, outcome.kind)
+            self.assertIsInstance(
+                outcome.certification, PermanentOwnedSessionCertification
+            )
+            self.assertEqual(outcome.certification.collector_pn, FULL_PN)
+            # Inspect the live registry before stopping the collector. Stopping it
+            # legitimately removes the socket from the listener inventory.
+            session = self._session_view(outcome.session_id)
+            self.assertTrue(session.has_strong_identity)
+            self.assertEqual(session.identity_source, "fc2_parameter_2")
+            self.assertEqual(session.collector_pn, FULL_PN)
+            self.assertEqual(
+                self._registry.claimed_session_id("entry-repair"), outcome.session_id
+            )
+            self.assertTrue(
+                self._registry.reverify_permanent_owned_session(outcome.certification)
+            )
         finally:
             await service.stop()
-
-        self.assertEqual(outcome.kind, BOOTSTRAP_CERTIFIED, outcome.kind)
-        self.assertIsInstance(outcome.certification, PermanentOwnedSessionCertification)
-        self.assertEqual(outcome.certification.collector_pn, FULL_PN)
-        # The read stamped the REAL inventory: only bytes on the socket can do it.
-        session = self._session_view(outcome.session_id)
-        self.assertTrue(session.has_strong_identity)
-        self.assertEqual(session.identity_source, "fc2_parameter_2")
-        self.assertEqual(session.collector_pn, FULL_PN)
-        self.assertEqual(
-            self._registry.claimed_session_id("entry-repair"), outcome.session_id
-        )
-        self.assertTrue(
-            self._registry.reverify_permanent_owned_session(outcome.certification)
-        )
 
 
 class AtTextBootstrapWireTests(BootstrapProductionWireHarness):
@@ -274,17 +279,122 @@ class AtTextBootstrapWireTests(BootstrapProductionWireHarness):
             outcome = await self._run(
                 state=self._state(udp_port=udp_port, pn=AT_FULL_PN), channel=channel
             )
+
+            self.assertEqual(outcome.kind, BOOTSTRAP_CERTIFIED, outcome.kind)
+            self.assertEqual(outcome.certification.collector_pn, AT_FULL_PN)
+            # Inspect the live registry before closing the collector socket.
+            self.assertGreaterEqual(collector.dtupn_queries, 1)
+            session = self._session_view(outcome.session_id)
+            self.assertTrue(session.has_strong_identity)
+            self.assertEqual(session.identity_source, "at_dtupn")
         finally:
             await dial
             await collector.stop()
 
-        self.assertEqual(outcome.kind, BOOTSTRAP_CERTIFIED, outcome.kind)
-        self.assertEqual(outcome.certification.collector_pn, AT_FULL_PN)
-        # The read demonstrably hit THIS socket: only real bytes increment it.
-        self.assertGreaterEqual(collector.dtupn_queries, 1)
-        session = self._session_view(outcome.session_id)
-        self.assertTrue(session.has_strong_identity)
-        self.assertEqual(session.identity_source, "at_dtupn")
+
+def _send_set_server(udp_port: int, advertised_host: str, advertised_port: int) -> None:
+    """Fire one ``set>server=host:port;`` datagram so a fake collector dials in.
+
+    The same production redirect a collector reacts to -- used here to co-locate a
+    FOREIGN collector at the SAME 127.0.0.1 before the target's bootstrap runs.
+    """
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.sendto(
+            f"set>server={advertised_host}:{advertised_port};".encode("ascii"),
+            ("127.0.0.1", int(udp_port)),
+        )
+    finally:
+        sock.close()
+
+
+class FramedAdversarialWireTests(BootstrapProductionWireHarness):
+    """Batch 8B.2B.1: a FOREIGN framed collector co-located at the SAME peer IP
+    (baseline) is never mistaken for the target -- the fresh FC=2 reconnect of the
+    target is certified by strong PN, not by address or socket order."""
+
+    async def test_colocated_foreign_baseline_certifies_only_target(self) -> None:
+        a_udp = _free_port(socket.SOCK_DGRAM)
+        b_udp = _free_port(socket.SOCK_DGRAM)
+        target = FakeCollectorService(
+            listen_ip="127.0.0.1", udp_port=a_udp, tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=30.0, connect_timeout=2.0, udp_reply="",
+            scenario=resolve_scenario(
+                preset="collector_only", profile=CollectorProfile(pn=FULL_PN),
+                first_heartbeat_delay=3600.0,  # target stays SILENT until FC=2
+            ),
+        )
+        foreign = FakeCollectorService(
+            listen_ip="127.0.0.1", udp_port=b_udp, tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=0.2, connect_timeout=2.0, udp_reply="",
+            scenario=resolve_scenario(
+                preset="collector_only", profile=CollectorProfile(pn=FOREIGN_FRAMED_PN),
+                first_heartbeat_delay=0.1,  # foreign identifies itself as B early
+            ),
+        )
+        await target.start()
+        await foreign.start()
+        try:
+            # The FOREIGN collector dials into the SAME listener FIRST (baseline).
+            _send_set_server(b_udp, "127.0.0.1", self._tcp_port)
+            await asyncio.sleep(0.5)  # let B connect + identify into the baseline
+            channel = self._channel(protocol="eybond_framed", pn=FULL_PN)
+            outcome = await self._run(
+                state=self._state(udp_port=a_udp, pn=FULL_PN), channel=channel
+            )
+
+            self.assertEqual(outcome.kind, BOOTSTRAP_CERTIFIED, outcome.kind)
+            self.assertEqual(outcome.certification.collector_pn, FULL_PN)
+            # Inspect both live sockets before stopping either collector; shutdown
+            # legitimately removes them from the listener inventory.
+            session = self._session_view(outcome.session_id)
+            self.assertTrue(session.has_strong_identity)
+            self.assertEqual(session.identity_source, "fc2_parameter_2")
+            self.assertEqual(session.collector_pn, FULL_PN)
+            self.assertEqual(self._registry.owner_for_pn(FOREIGN_FRAMED_PN), "")
+            self.assertEqual(
+                self._registry.claimed_session_id("entry-repair"), outcome.session_id
+            )
+        finally:
+            await target.stop()
+            await foreign.stop()
+
+
+class AtTextAdversarialWireTests(BootstrapProductionWireHarness):
+    """Batch 8B.2B.1: a FOREIGN AT collector dialing in at the SAME peer IP is read
+    via DTUPN and rejected by strong PN -- a typed identity mismatch, never
+    certified or owned. The read demonstrably hit THIS socket (DTUPN counter)."""
+
+    async def test_colocated_foreign_at_socket_is_typed_mismatch(self) -> None:
+        udp_port = _free_port(socket.SOCK_DGRAM)  # fire-and-forget
+        foreign = _SilentAtTextCollector(FOREIGN_AT_PN)  # dials in at 127.0.0.1
+        channel = self._channel(protocol="at_text", pn=AT_FULL_PN)  # targets A
+
+        async def _dials_in() -> None:
+            await asyncio.sleep(0.4)  # after the transaction's baseline -> FRESH
+            await foreign.connect("127.0.0.1", self._tcp_port)
+
+        dial = asyncio.get_running_loop().create_task(_dials_in())
+        try:
+            outcome = await self._run(
+                state=self._state(udp_port=udp_port, pn=AT_FULL_PN), channel=channel
+            )
+        finally:
+            await dial
+            await foreign.stop()
+
+        # The foreign PN was read over the wire (DTUPN) but is not the target ->
+        # typed mismatch; nothing certified, nothing owned by the foreign PN.
+        from custom_components.eybond_local.connection.strategy_transition_repair import (
+            BOOTSTRAP_IDENTITY_MISMATCH,
+        )
+
+        self.assertEqual(outcome.kind, BOOTSTRAP_IDENTITY_MISMATCH, outcome.kind)
+        self.assertIsNone(outcome.certification)
+        self.assertGreaterEqual(foreign.dtupn_queries, 1)  # read hit THIS socket
+        self.assertEqual(self._registry.claimed_session_id("entry-repair"), "")
+        self.assertEqual(self._registry.owner_for_pn(FOREIGN_AT_PN), "")
 
 
 if __name__ == "__main__":
