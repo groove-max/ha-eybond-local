@@ -358,6 +358,7 @@ from custom_components.eybond_local.models import (
     DriverMatch,
     OnboardingResult,
     ProbeTarget,
+    TargetDetectionEvidence,
 )
 from custom_components.eybond_local.onboarding.detection import DiscoveryTarget
 from custom_components.eybond_local.support.workflow import build_support_workflow_state
@@ -9243,6 +9244,121 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(legacy_flow._verification_expected_pn, self.OTHER_FULL_PN)
         self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         self.assertEqual(legacy_flow._verified_connection_strategy, "")
+
+    async def test_stale_passive_scan_session_requires_restart_verification(self) -> None:
+        """Deleting an entry must not turn its old callback into inbound proof."""
+
+        from dataclasses import replace
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.255",
+                    source="callback_listener",
+                    ip=self.PEER_IP,
+                    session_protocol="eybond_framed",
+                    connected=True,
+                    collector=CollectorInfo(collector_pn=self.FULL_PN),
+                ),
+                connection_mode="callback_listener",
+                next_action="manual_driver_selection",
+                detection=TargetDetectionEvidence(
+                    depth="fast",
+                    status="collector_only",
+                    reason="callback_session_inventory",
+                    details={
+                        "session_id": self.OLD_SESSION,
+                        "collector_identity_source": "at_dtupn",
+                    },
+                ),
+            )
+        }
+
+        selected = await flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
+        self.assertEqual(selected["type"], "form")
+        self.assertEqual(selected["step_id"], "verify_connection")
+        self.assertEqual(
+            flow._strategy_verification_context,
+            {
+                "collector_pn": self.FULL_PN,
+                "session_id": self.OLD_SESSION,
+                "port": 8899,
+                "peer_ip": self.PEER_IP,
+                "identity_source": "at_dtupn",
+            },
+        )
+
+        restarts: list[str] = []
+
+        class _FakeChannel:
+            def __init__(self, **_kwargs) -> None:
+                return None
+
+            async def async_send_restart(self) -> None:
+                restarts.append("restart")
+                # The stale callback socket dies with the reboot and the
+                # collector does NOT reconnect autonomously.
+                inventory.clear()
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_close(self) -> None:
+                return None
+
+        policy = replace(
+            config_flow_module._ONBOARDING_TIMEOUT_POLICY,
+            inbound_restart_disconnect_timeout=0.05,
+            inbound_reconnect_timeout=0.05,
+            inbound_strong_identity_timeout=0.05,
+            callback_causality_lease_wait=0.5,
+        )
+        with patch.object(
+            config_flow_module, "ObservedSessionRestartChannel", _FakeChannel
+        ), patch.object(
+            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", policy
+        ):
+            failed = await self._drive_verification(flow)
+
+        self.assertEqual(restarts, ["restart"])
+        self.assertEqual(failed["step_id"], "verify_connection_failed")
+        self.assertEqual(flow._verified_connection_strategy, "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_auto_terminal_refuses_legacy_inferred_external_inbound(self) -> None:
+        """Fresh auto entries never use callback_listener as inbound authority."""
+
+        flow = self._make_flow()
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="callback_listener",
+                ip=self.PEER_IP,
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.FULL_PN),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+            detection=TargetDetectionEvidence(
+                depth="fast",
+                status="collector_only",
+                reason="callback_session_inventory",
+            ),
+        )
+        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
+
+        with patch.object(
+            flow,
+            "_create_entry_with_handoff",
+            side_effect=AssertionError("unverified inbound reached create terminal"),
+        ):
+            result = await flow._async_create_entry_from_result()
+
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "recovery_ownership_unavailable")
 
     # Verification failure stays retryable in THIS discovery flow. Manual setup
     # remains an explicit choice and keeps the peer IP as an editable hint.

@@ -2318,6 +2318,15 @@ class OnboardingDetector:
                     status="collector_only",
                     reason="callback_session_inventory",
                     details={
+                        # Keep the exact observed socket attached to the
+                        # in-memory onboarding result.  The config flow must
+                        # restart/verify THIS session before a passive callback
+                        # candidate may become an inbound entry; PN/peer-IP
+                        # re-selection is not an equivalent proof.
+                        "session_id": str(session.get("session_id") or "").strip(),
+                        "collector_identity_source": str(
+                            session.get("collector_identity_source") or ""
+                        ).strip(),
                         "session_state": state,
                         "collector_session_protocol": collector_session_protocol,
                         "collector_session_protocol_shape": protocol_shape,

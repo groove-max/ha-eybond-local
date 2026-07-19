@@ -61,6 +61,7 @@ from .connection.entry import (
 )
 from .connection.connection_policy import (
     collector_identity_binding_required,
+    resolve_endpoint_control_policy,
     resolve_connection_strategy,
 )
 from .connection.models import build_connection_spec, build_connection_spec_from_values
@@ -140,6 +141,7 @@ from .const import (
     DEFAULT_UDP_PORT,
     DOMAIN,
     DRIVER_HINT_AUTO,
+    ENDPOINT_CONTROL_EXTERNAL,
     ENTRY_ROLE_LISTENER,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
@@ -1985,29 +1987,21 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         self._set_selected_result(next(iter(self._autodetect_results.values())))
         self._detection_summary_context = "auto"
-        self._verification_next_step = (
-            "driver_choice"
-            if self._selected_result_needs_driver_choice()
-            else "detection_summary"
-        )
         observed_session_id = str(discovery_info.get("session_id") or "").strip()
         if observed_session_id:
             # An observed inbound TCP session is NOT proof of a permanent
             # inbound configuration (a factory collector may only be connected
             # because of an earlier temporary UDP callback). Verify the
             # strategy behaviorally before persisting it.
-            self._strategy_verification_context = {
-                "collector_pn": collector_pn,
-                "session_id": observed_session_id,
-                "port": tcp_port,
-                "peer_ip": peer_ip,
-                "identity_source": str(
+            return await self._async_begin_observed_session_verification(
+                collector_pn=collector_pn,
+                session_id=observed_session_id,
+                port=tcp_port,
+                peer_ip=peer_ip,
+                identity_source=str(
                     discovery_info.get("collector_identity_source") or ""
                 ).strip(),
-            }
-            self._verification_expected_pn = collector_pn
-            self._verification_old_session_id = observed_session_id
-            return await self.async_step_verify_connection()
+            )
         # Discovery payload without a session id: reboot verification is
         # impossible, and an unverified session must NEVER become an inbound
         # entry. Continue on the existing manual callback step (peer IP is only
@@ -2020,6 +2014,95 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             collector_pn,
         )
         return await self.async_step_manual()
+
+    async def _async_begin_observed_session_verification(
+        self,
+        *,
+        collector_pn: str,
+        session_id: str,
+        port: int,
+        peer_ip: str,
+        identity_source: str,
+    ) -> ConfigFlowResult:
+        """Route every observed callback session through the ONE verifier.
+
+        Integration discovery and the passive phase of a user-started scan are
+        merely two source adapters for the same physical fact.  Neither may
+        persist ``inbound`` from ``callback_listener`` alone: the exact socket
+        must survive the existing controlled restart/reconnect transaction.
+        """
+
+        self._verification_next_step = (
+            "driver_choice"
+            if self._selected_result_needs_driver_choice()
+            else "detection_summary"
+        )
+        self._strategy_verification_context = {
+            "collector_pn": str(collector_pn or "").strip(),
+            "session_id": str(session_id or "").strip(),
+            "port": int(port),
+            "peer_ip": str(peer_ip or "").strip(),
+            "identity_source": str(identity_source or "").strip(),
+        }
+        self._verification_expected_pn = str(collector_pn or "").strip()
+        self._verification_old_session_id = str(session_id or "").strip()
+        return await self.async_step_verify_connection()
+
+    async def _async_verify_selected_passive_scan_result(
+        self,
+    ) -> ConfigFlowResult | None:
+        """Start restart verification for a passive callback scan result.
+
+        Returns ``None`` for every non-passive result.  A passive result without
+        its exact session reference fails closed onto the existing manual path;
+        it is never allowed to fall through to legacy axis inference.
+        """
+
+        result = self._selected_result
+        if result is None or str(result.connection_mode or "").strip() != "callback_listener":
+            return None
+        collector = result.collector
+        collector_info = collector.collector if collector is not None else None
+        collector_pn = str(
+            getattr(collector_info, "collector_pn", "") or ""
+        ).strip()
+        details = dict(getattr(result.detection, "details", None) or {})
+        session_id = str(details.get("session_id") or "").strip()
+        identity_source = str(
+            details.get("collector_identity_source") or ""
+        ).strip()
+        peer_ip = str(getattr(collector, "ip", "") or "").strip()
+
+        if not session_id and collector_pn:
+            # Compatibility for an in-memory result created before the exact
+            # session field was projected: re-resolve only by the same durable
+            # PN under the registry's centralized strong/weak identity rule.
+            registry = self._callback_session_registry()
+            if registry is not None:
+                current = registry.current_session_for_pn(
+                    collector_pn,
+                    require_exact=not identity_source_is_strong(identity_source),
+                )
+                if current is not None:
+                    session_id = str(current.session_id or "").strip()
+                    identity_source = str(current.identity_source or "").strip()
+
+        if not collector_pn or not session_id:
+            self._verification_expected_pn = collector_pn
+            self._verification_old_session_id = ""
+            logger.info(
+                "Passive scan candidate has no exact observable session; "
+                "requiring manual callback verification instead of inferring inbound"
+            )
+            return await self.async_step_manual()
+
+        return await self._async_begin_observed_session_verification(
+            collector_pn=collector_pn,
+            session_id=session_id,
+            port=int(self._auto_config.get(CONF_TCP_PORT, DEFAULT_TCP_PORT)),
+            peer_ip=peer_ip,
+            identity_source=identity_source,
+        )
 
     # ---- steps: connection-strategy verification (passive discovery) ----
 
@@ -3033,6 +3116,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else:
                 self._set_selected_result(result)
                 self._detection_summary_context = "auto"
+                verification = await self._async_verify_selected_passive_scan_result()
+                if verification is not None:
+                    return verification
                 if self._selected_result_needs_driver_choice():
                     return await self.async_step_driver_choice()
                 return await self.async_step_detection_summary()
@@ -4912,6 +4998,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             logger.info("Recovery terminal refused the contract merge: %s", refusal)
             self._release_verification_claim()
             return self.async_abort(reason="recovery_contract_conflict")
+        if self._fresh_passive_scan_entry_is_unverified(data, options):
+            # Fresh entries must carry an explicit authority for their recovery
+            # strategy.  ``migrate_entry_axes`` may still derive legacy entries,
+            # but its callback_listener/HA-only fallback is never sufficient to
+            # create a new external inbound entry.
+            logger.info(
+                "Refusing fresh unverified external inbound entry for collector %s",
+                collector_pn,
+            )
+            self._release_verification_claim()
+            return self.async_abort(reason="recovery_ownership_unavailable")
         # Item 1 -- strict collector-PN invariant on the auto/passive path too: no
         # normal collector entry without a durable PN (peer IP is never identity).
         if collector_identity_binding_required(data, options):
@@ -4925,6 +5022,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             lambda: self.async_create_entry(title=title, data=data, options=options),
             recovery=self._recovery_terminal,
         )
+
+    def _fresh_passive_scan_entry_is_unverified(
+        self, data: dict[str, Any], options: dict[str, Any]
+    ) -> bool:
+        """Whether callback inventory reached the terminal without verification.
+
+        This is a defense-in-depth guard for the exact scan source fixed in this
+        batch, not a new global entry policy.  Other explicit/manual and virtual
+        bridge terminals retain their existing semantics.
+        """
+
+        detection = getattr(self._selected_result, "detection", None)
+        if str(getattr(detection, "reason", "") or "").strip() != (
+            "callback_session_inventory"
+        ):
+            return False
+
+        if resolve_connection_strategy(data, options) != CONNECTION_STRATEGY_INBOUND:
+            return False
+        if resolve_endpoint_control_policy(data, options) != ENDPOINT_CONTROL_EXTERNAL:
+            return False
+        if (
+            str(data.get(CONF_CONNECTION_STRATEGY_EVIDENCE) or "").strip()
+            == EVIDENCE_USER_CONFIRMED_SESSION
+        ):
+            return False
+        from .connection.recovery_contract import RecoveryContract
+
+        contract = RecoveryContract.from_entry_data(data)
+        return contract is None or not contract.inbound_verified
 
     def _apply_verified_connection_strategy(self, data: dict[str, Any]) -> None:
         """Persist the canonical strategy -- and evidence ONLY when one exists.

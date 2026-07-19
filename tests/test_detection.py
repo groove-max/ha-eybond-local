@@ -427,6 +427,26 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             },
             {"manual_driver_selection"},
         )
+        passive_by_pn = {
+            result.collector.collector.collector_pn: result
+            for result in results
+            if (
+                result.collector is not None
+                and result.collector.collector is not None
+                and result.collector.collector.collector_pn
+                in {"E5000099990001", "E5000099990002"}
+            )
+        }
+        self.assertEqual(
+            passive_by_pn["E5000099990001"].detection.details["session_id"],
+            "listener-8899-1",
+        )
+        self.assertEqual(
+            passive_by_pn["E5000099990002"].detection.details[
+                "collector_identity_source"
+            ],
+            "framed_heartbeat",
+        )
 
     async def test_auto_detect_accepts_total_timeout_kwarg(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")

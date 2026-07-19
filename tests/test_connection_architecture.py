@@ -166,10 +166,11 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
         )
         self.assertIn(C.CONF_PROXY_ENABLED, axes)
 
-    def test_accepting_passive_candidate_is_inbound_external(self) -> None:
-        # Simulate the data a passive-discovery candidate carries into entry
-        # creation: connection_mode=callback_listener. It must become an inbound,
-        # external entry.
+    def test_legacy_callback_listener_migrates_to_inbound_external(self) -> None:
+        # Legacy persisted entries carried only connection_mode.  Keep their
+        # migration deterministic, but do not treat this mapping as authority
+        # for fresh entry creation: config flow verifies passive scan sessions
+        # before this legacy resolver can reach its terminal.
         candidate_data = {
             C.CONF_CONNECTION_MODE: "callback_listener",
             C.CONF_COLLECTOR_PN: "V00ABC1234567890",
