@@ -292,8 +292,14 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
             heartbeat_timeout=0.05,
         )
 
+        # A briefly-silent framed collector is now IDENTIFIED by the onboarding
+        # silent-identity probe (one FC=2 parameter-2 read on its exact socket)
+        # during the connect window, rather than waiting on the delayed
+        # heartbeat. Detection still matches; because identification no longer
+        # depends on the heartbeat, the "collector_heartbeat_not_observed"
+        # diagnostic warning is superseded by a clean match.
         self.assertIsNotNone(result.match)
-        self.assertIn("collector_heartbeat_not_observed", result.warnings)
+        self.assertTrue(result.collector.connected)
 
     async def test_reverse_connect_delay_can_hold_result_at_not_connected(self) -> None:
         scenario = resolve_scenario(

@@ -3254,21 +3254,28 @@ class _SharedEybondListener:
             self._mark_session_state(pending.session_id, "route_identity_read_failed")
             return ""
 
+        # A WEAK identity read from the first bytes (e.g. a framed heartbeat's
+        # SHORT PN) is recorded but does NOT end the read: it is UPGRADED to the
+        # strong/full PN by the identity query below. An already-STRONG chunk
+        # (fc2_parameter_2 / at_dtupn) is authoritative and returns immediately.
+        weak_pn = ""
         if chunk:
             pending.initial_bytes += chunk
             self._mark_session_first_bytes(pending.session_id, chunk)
             collector_pn, source = _collector_pn_from_initial_chunk(chunk)
             if collector_pn:
                 self._mark_session_identity(pending.session_id, collector_pn, source)
-                return collector_pn
-            return ""
+                if identity_source_is_strong(source):
+                    return collector_pn
+                weak_pn = collector_pn
 
         protocol = str(session_protocol or "").strip().lower()
         if not protocol:
             protocol = self._single_registered_session_protocol()
         probe = _identity_probe_payload_for_session_protocol(protocol)
         if not probe:
-            return ""
+            # No wire to upgrade with: keep whatever weak identity we already read.
+            return weak_pn
 
         self._mark_session_state(pending.session_id, f"probing_route_identity_{protocol}")
         try:
@@ -3277,17 +3284,18 @@ class _SharedEybondListener:
             response = await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
         except asyncio.TimeoutError:
             self._mark_session_state(pending.session_id, "route_identity_probe_timeout")
-            return ""
+            return weak_pn
         except Exception:
             self._mark_session_state(pending.session_id, "route_identity_probe_failed")
-            return ""
+            return weak_pn
 
         collector_pn, source = _collector_pn_from_initial_chunk(response)
         if collector_pn:
             self._mark_session_first_bytes(pending.session_id, response)
             self._mark_session_identity(pending.session_id, collector_pn, source)
             return collector_pn
-        return ""
+        # The upgrade produced nothing usable: never LOSE the weak identity.
+        return weak_pn
 
     async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
         chunk, exhausted = await self._read_pending_initial_chunk(pending)

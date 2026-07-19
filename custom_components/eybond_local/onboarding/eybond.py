@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from itertools import islice
 import ipaddress
 import logging
+import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
@@ -22,6 +23,7 @@ from ..collector.cloud_family import (
     collector_cloud_family_observation_from_endpoint,
 )
 from ..collector.discovery import (
+    DiscoveryProbeResult,
     async_send_callback_trigger,
     async_send_callback_trigger_replies,
 )
@@ -776,11 +778,14 @@ class OnboardingDetector:
         This keeps the BLE handoff path narrow: it probes only the collector IP that
         just received Wi-Fi credentials and does not reopen broadcast discovery.
 
-        There is no raw session-protocol / provenance argument: onboarding never
-        arms an active identity probe from a hint. A silent session is identified
-        only through the existing passive SessionHandle/registry path; if that
-        yields no live evidence the caller sees an honest
-        collector_not_connected / identity-not-confirmed outcome.
+        There is no raw session-protocol / provenance argument here, and this path
+        infers no wire from a hint. (The automatic detect path DOES do an active
+        exact-session framed FC=2 identity read for a fully-silent/weak collector
+        -- see ``_async_trigger_connect_identify`` -- but only on the ONE
+        post-baseline session it observed, under the callback lease, with a typed
+        framed-only capability, never from an address/protocol hint.) If no live
+        session is identified the caller sees an honest collector_not_connected /
+        identity-not-confirmed outcome.
         """
 
         collector_ip = str(collector_ip or "").strip()
@@ -945,6 +950,171 @@ class OnboardingDetector:
         aggregated.extend(fallback_results)
         return tuple(self._dedupe_results(aggregated))
 
+    async def _async_trigger_connect_identify(
+        self,
+        *,
+        target: DiscoveryTarget,
+        transport: Any,
+        candidate: CollectorCandidate,
+        discovery_timeout: float,
+        connect_timeout: float,
+    ) -> tuple[Any, bool, "SilentIdentityResolution", bool]:
+        """Send THIS attempt's ONE callback trigger UNDER the exclusive callback
+        causality lease, then identify the collector on its EXACT post-baseline
+        session -- fully silent, weak (short framed heartbeat) or already-strong --
+        by at most ONE framed FC=2 parameter-2 read.
+
+        A collector that has ALREADY volunteered a STRONG identity
+        (``fc2_parameter_2`` / ``at_dtupn``) is accepted by the exact-session
+        selector on its EXACT post-baseline session and is NEVER re-probed. A
+        collector that is fully silent, or that volunteered only a WEAK short
+        framed-heartbeat PN, is UPGRADED on that SAME exact session id by at most
+        ONE framed FC=2 parameter-2 read -- even when a stale same-peer-IP park
+        makes ``_select_pending_socket`` ambiguous (the transport is then pinned to
+        that session id; NO second trigger, NO peer-IP identity). Only
+        post-baseline session observations are eligible; two of them are typed
+        ambiguity (never a peer-IP / arrival-order pick).
+
+        HONEST causality: the lease serialises only THIS process's competing
+        callback sends. It does NOT exclude a delayed earlier callback, an
+        external trigger or a self-initiated inbound connect, so a post-baseline
+        session is merely one *observed inside an integration-serialised trigger
+        window* -- the strong identity is proven by the exact-session FC=2 read
+        (or an already-recorded strong source), not by the lease. This is NOT a
+        RecoveryProof and NOT proof of any
+        ``connection_strategy``; no RecoveryContract and no inbound/callback
+        strategy is created here.
+
+        Fail-closed: if another owner already holds the trigger lease, THIS
+        attempt sends NOTHING (an out-of-lease send is refused by
+        ``callback_send_scope``) and returns an honest not-connected outcome. The
+        exact-session read is TCP evidence -- it does not depend on a UDP reply --
+        while the connect budget stays bounded by the timeout policy. The wire is
+        the attempt's own typed authority: nothing reads collector kind, cloud,
+        hostname, peer IP, PN prefix or a persisted protocol, and no listener-wide
+        owner is registered.
+
+        Returns ``(probe, connected, silent_identity, lease_busy)`` -- ``lease_busy``
+        is a DISTINCT signal (not not-connected) so the caller can surface a typed
+        ``callback_causality_lease_busy`` outcome that a later scan attempt retries.
+        """
+
+        from ..collector.silent_session_probe import (
+            SilentSessionIdentityProbeChannel,
+        )
+        from ..connection.callback_ledger import (
+            CallbackCausalityBusyError,
+            get_callback_trigger_ledger,
+        )
+        from .silent_scan_probe import (
+            DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
+            AutomaticFramedIdentityIntent,
+            SilentIdentityResolution,
+            async_resolve_silent_session_identity,
+        )
+
+        async def _send_trigger() -> Any:
+            probe = await async_send_callback_trigger(
+                bind_ip=self._connection.server_ip,
+                advertised_server_ip=self._connection.effective_advertised_server_ip,
+                advertised_server_port=self._connection.effective_advertised_tcp_port,
+                target_ip=target.ip,
+                udp_port=self._connection.udp_port,
+                timeout=discovery_timeout,
+                source="onboarding_detect_probe",
+            )
+            candidate.udp_reply = probe.reply
+            candidate.udp_reply_from = probe.reply_from
+            # candidate.ip tracks the ROUTE address (the UDP reply source -- the
+            # collector's own route hint), NEVER the TCP peer (which lives only in
+            # CollectorInfo.remote_ip and must not become the transport's owner).
+            if probe.reply_from:
+                candidate.ip = probe.reply_from.split(":", 1)[0]
+                transport.set_collector_ip(candidate.ip)
+            return probe
+
+        def _effective_connect_timeout(probe: Any) -> float:
+            if not probe.reply and target.source != "known_ip":
+                return min(connect_timeout, _CONNECT_TIMEOUT_WITHOUT_UDP_REPLY)
+            return connect_timeout
+
+        supports_silent_identity = callable(
+            getattr(transport, "observed_collector_sessions", None)
+        ) and callable(getattr(transport, "set_claimed_session_provider", None))
+        if not supports_silent_identity:
+            # A transport without the session-inventory facade cannot support
+            # exact-session identity (nothing to snapshot, nothing to pin). Take
+            # the unchanged normal path.
+            probe = await _send_trigger()
+            connected = await transport.wait_until_connected(
+                _effective_connect_timeout(probe)
+            )
+            return probe, connected, SilentIdentityResolution(), False
+
+        probe_channel = SilentSessionIdentityProbeChannel(
+            host=_LISTENER_BIND_HOST, port=self._connection.tcp_port
+        )
+        await probe_channel.async_open()
+        ledger = get_callback_trigger_ledger()
+        owner = f"onboarding_silent_identity:{uuid.uuid4().hex}"
+        silent_identity = SilentIdentityResolution()
+        connected = False
+        lease_busy = False
+        probe: Any = None
+        try:
+            try:
+                # ONE framed attempt, ONE trigger, all UNDER the exclusive lease.
+                # A busy lease is bounded by the connect budget so it fails fast.
+                async with ledger.causality_lease(
+                    owner, timeout=max(0.1, connect_timeout)
+                ):
+                    # ONE union-view baseline (PN-less pending AND already-identified
+                    # sessions, by session id) BEFORE the trigger; only post-baseline
+                    # session ids are eligible.
+                    baseline = frozenset(
+                        obs.session_id
+                        for obs in probe_channel.snapshot_session_observations()
+                    )
+                    probe = await _send_trigger()
+                    effective = _effective_connect_timeout(probe)
+                    # Identity on the EXACT post-baseline session -- silent, weak
+                    # (short framed heartbeat) or already-strong -- never a peer-IP
+                    # claim (which would grab the stale same-peer park). TCP evidence
+                    # that does NOT depend on a UDP reply; bounded by the connect
+                    # budget so a deliberately slow reverse dial-in still times out.
+                    if probe_channel.available:
+                        loop = asyncio.get_running_loop()
+                        silent_identity = await async_resolve_silent_session_identity(
+                            probe_channel,
+                            wire_intent=AutomaticFramedIdentityIntent(),
+                            baseline=baseline,
+                            deadline=(
+                                loop.time()
+                                + min(DEFAULT_SILENT_IDENTITY_WAIT_SECONDS, effective)
+                            ),
+                        )
+                    if silent_identity.identified:
+                        _sid = silent_identity.session_id
+                        # Pin the transport to the EXACT identified session id so
+                        # the connect + driver sweep proceed on it -- never a
+                        # peer-IP pick, NO second trigger.
+                        transport.set_claimed_session_provider(lambda: _sid)
+                    connected = await transport.wait_until_connected(effective)
+            except CallbackCausalityBusyError:
+                # LEASE BUSY -- distinct from not-connected. Another owner holds the
+                # trigger lease, so THIS attempt sends NOTHING (an out-of-lease send
+                # is refused by callback_send_scope) and signals a typed lease-busy
+                # outcome so a later scan attempt can retry on a clean window. Zero
+                # callback sends for this target; the raw lease error never escapes.
+                lease_busy = True
+                probe = DiscoveryProbeResult(
+                    target_ip=target.ip, message="", local_port=0
+                )
+                connected = False
+        finally:
+            await probe_channel.async_close()
+        return probe, connected, silent_identity, lease_busy
+
     async def _async_detect_target(
         self,
         target: DiscoveryTarget,
@@ -989,25 +1159,39 @@ class OnboardingDetector:
         # / timeout / start failure alike.
         try:
             await transport.start()
-            probe = await async_send_callback_trigger(
-                bind_ip=self._connection.server_ip,
-                advertised_server_ip=self._connection.effective_advertised_server_ip,
-                advertised_server_port=self._connection.effective_advertised_tcp_port,
-                target_ip=target.ip,
-                udp_port=self._connection.udp_port,
-                timeout=discovery_timeout,
-                source="onboarding_detect_probe",
+            # ONE callback trigger, then EXACT post-baseline session identity (a
+            # fully-silent, weak-heartbeat or already-strong collector the peer-IP
+            # claim cannot pick -- e.g. behind a stale same-IP park -- is pinned by
+            # its exact session id, not by peer IP).
+            (
+                probe,
+                connected,
+                silent_identity,
+                lease_busy,
+            ) = await self._async_trigger_connect_identify(
+                target=target,
+                transport=transport,
+                candidate=candidate,
+                discovery_timeout=discovery_timeout,
+                connect_timeout=connect_timeout,
             )
-            candidate.udp_reply = probe.reply
-            candidate.udp_reply_from = probe.reply_from
-            if probe.reply_from:
-                candidate.ip = probe.reply_from.split(":", 1)[0]
-                transport.set_collector_ip(candidate.ip)
-
-            effective_connect_timeout = connect_timeout
-            if not probe.reply and target.source != "known_ip":
-                effective_connect_timeout = min(connect_timeout, _CONNECT_TIMEOUT_WITHOUT_UDP_REPLY)
-            connected = await transport.wait_until_connected(timeout=effective_connect_timeout)
+            if lease_busy:
+                # A concurrent owner held the callback causality lease: nothing was
+                # triggered and the collector was NOT checked. This is a distinct,
+                # RETRYABLE condition -- never reported as collector_not_connected /
+                # reverse_tcp_not_connected. Zero callback sends.
+                return _with_detection_evidence(
+                    OnboardingResult(
+                        collector=candidate,
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=target.source,
+                        next_action="manual_input",
+                        last_error="callback_causality_lease_busy",
+                    ),
+                    depth=depth,
+                    status="callback_causality_lease_busy",
+                    reason="callback_causality_lease_busy",
+                )
             if not connected:
                 warnings: list[str] = []
                 if probe.reply:
@@ -1029,9 +1213,60 @@ class OnboardingDetector:
             candidate.connected = True
             heartbeat_seen = await transport.wait_until_heartbeat(timeout=heartbeat_timeout)
             candidate.collector = transport.collector_info
-            if candidate.collector.remote_ip:
+            if candidate.collector.remote_ip and not silent_identity.identified:
+                # Volunteering (non-silent) path keeps its existing behaviour. For a
+                # silent target identified by EXACT session id, the ROUTE address
+                # stays candidate.ip and the transport's owner; the TCP peer lives
+                # only in CollectorInfo.remote_ip and must NOT become the owner
+                # (ownership never transfers from the route hint to the peer IP).
                 candidate.ip = candidate.collector.remote_ip
                 transport.set_collector_ip(candidate.ip)
+            if silent_identity.identified and candidate.collector is not None:
+                # Reconcile the exact-session FC=2 identity with whatever the
+                # activated connection reports, through the ONE centralized short/
+                # full-PN authority -- never a peer-IP or prefix decision here.
+                from ..connection.session_registry import (
+                    pn_is_same_identity,
+                    prefer_full_pn,
+                )
+
+                current_pn = str(candidate.collector.collector_pn or "").strip()
+                probed_pn = silent_identity.collector_pn
+                if not current_pn:
+                    # No volunteered PN: accept the strong probed identity.
+                    candidate.collector = replace(
+                        candidate.collector, collector_pn=probed_pn
+                    )
+                elif pn_is_same_identity(current_pn, probed_pn):
+                    # Same collector, short vs full: keep the fuller spelling.
+                    candidate.collector = replace(
+                        candidate.collector,
+                        collector_pn=prefer_full_pn(current_pn, probed_pn),
+                    )
+                else:
+                    # The activated session reports a FOREIGN identity vs the
+                    # exact-session read: the socket the transport ended up on is
+                    # not the collector we identified. Fail closed -- no result, no
+                    # claim, no handoff, no peer-IP identity decision.
+                    logger.info(
+                        "Silent identity probe read a PN the activated session "
+                        "contradicts; failing closed (no identity adopted)"
+                    )
+                    # Adopt NO identity: clear the PN off the candidate so no
+                    # result, claim or handoff carries the conflicting collector.
+                    candidate.collector = replace(candidate.collector, collector_pn="")
+                    return _with_detection_evidence(
+                        OnboardingResult(
+                            collector=candidate,
+                            connection_type=CONNECTION_TYPE_EYBOND,
+                            connection_mode=target.source,
+                            next_action="manual_input",
+                            last_error="collector_identity_mismatch",
+                        ),
+                        depth=depth,
+                        status="collector_identity_mismatch",
+                        reason="probed_identity_conflicts_with_activated_session",
+                    )
 
             smartess_probe = await _async_probe_smartess_onboarding(transport)
             if candidate.collector is not None and smartess_probe is not None:

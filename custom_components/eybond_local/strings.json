@@ -344,6 +344,7 @@
       "callback_trigger_interference": "Another connection request ran at the same time, so the answer could not be attributed. Try again."
     },
     "abort": {
+      "collector_identity_required": "This collector could not be identified. Enter an address Home Assistant can reach the collector on so its identity is confirmed, then try again.",
       "already_configured": "This collector or inverter is already configured.",
       "reconfigure_entry_missing": "The entry to reconfigure no longer exists.",
       "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair.",
