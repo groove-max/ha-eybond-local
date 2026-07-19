@@ -69,7 +69,10 @@ from .timeouts import (
     OnboardingDeadline,
     default_deep_driver_sweep_seconds,
 )
-from .silent_scan_probe import SilentIdentityResolution
+from .silent_scan_probe import (
+    DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
+    SilentIdentityResolution,
+)
 from ..models import CollectorCandidate, CollectorInfo, OnboardingResult, TargetDetectionEvidence
 
 logger = logging.getLogger(__name__)
@@ -368,8 +371,18 @@ async def async_probe_fallback_targets(
     targets: Iterable[DiscoveryTarget],
     timeout: float = _UNICAST_FALLBACK_PROBE_TIMEOUT,
     concurrency: int = _UNICAST_FALLBACK_CONCURRENCY,
+    identity_listener_host: str = "",
+    identity_listener_port: int = 0,
+    identity_wait_seconds: float = 0.0,
 ) -> tuple[DiscoveryTarget, ...]:
-    """Probe one list of direct unicast targets concurrently and keep responders only."""
+    """Probe direct unicast targets and retain an unambiguous exact-session fact.
+
+    Targets stay concurrent inside one batch. Production callers provide the
+    shared listener coordinates; then one exclusive trigger window covers the
+    whole batch. Exactly one responder plus exactly one post-baseline session may
+    carry a strong typed handoff into detection. Multiple responders/sessions
+    remain fail-closed, without a peer-IP or arrival-order tiebreak.
+    """
 
     async def _probe(target: DiscoveryTarget) -> DiscoveryTarget | None:
         try:
@@ -395,15 +408,71 @@ async def async_probe_fallback_targets(
     iterator = iter(targets)
     deduped: dict[str, DiscoveryTarget] = {}
     batch_size = max(1, concurrency)
-    while True:
-        batch = tuple(islice(iterator, batch_size))
-        if not batch:
-            break
-        discovered = await asyncio.gather(*(_probe(target) for target in batch))
-        for target in discovered:
-            if target is None:
-                continue
-            deduped[target.ip] = target
+    probe_channel = None
+    if identity_listener_port > 0:
+        from ..collector.silent_session_probe import (
+            SilentSessionIdentityProbeChannel,
+        )
+
+        probe_channel = SilentSessionIdentityProbeChannel(
+            host=identity_listener_host or _LISTENER_BIND_HOST,
+            port=identity_listener_port,
+        )
+        await probe_channel.async_open()
+    try:
+        while True:
+            batch = tuple(islice(iterator, batch_size))
+            if not batch:
+                break
+
+            async def _send_batch() -> tuple[DiscoveryTarget | None, ...]:
+                return tuple(await asyncio.gather(*(_probe(target) for target in batch)))
+
+            resolution = SilentIdentityResolution()
+            if probe_channel is not None:
+                from ..connection.callback_ledger import CallbackCausalityBusyError
+                from .silent_scan_probe import (
+                    async_run_automatic_framed_identity_window,
+                )
+
+                try:
+                    discovered, resolution = (
+                        await async_run_automatic_framed_identity_window(
+                            probe_channel,
+                            trigger=_send_batch,
+                            identify_if=lambda replies: sum(
+                                target is not None for target in replies
+                            )
+                            == 1,
+                            lease_owner=f"onboarding_fallback_identity:{uuid.uuid4().hex}",
+                            lease_timeout=max(
+                                0.1,
+                                timeout + max(0.0, identity_wait_seconds),
+                            ),
+                            identity_wait_seconds=identity_wait_seconds,
+                        )
+                    )
+                except CallbackCausalityBusyError:
+                    # This batch sent nothing; a later scan can retry it without
+                    # misreporting an unidentified collector.
+                    discovered = ()
+            else:
+                discovered = await _send_batch()
+
+            responding = tuple(target for target in discovered if target is not None)
+            if len(responding) == 1 and resolution.identified:
+                responding = (
+                    replace(
+                        responding[0],
+                        collector_pn=resolution.collector_pn,
+                        observed_session=resolution,
+                    ),
+                )
+            for target in responding:
+                deduped[target.ip] = target
+    finally:
+        if probe_channel is not None:
+            await probe_channel.async_close()
     return tuple(deduped.values())
 
 
@@ -921,6 +990,9 @@ class OnboardingDetector:
                         network_cidr=unicast_network_cidr,
                     ),
                     timeout=fallback_timeout or min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT),
+                    identity_listener_host=_LISTENER_BIND_HOST,
+                    identity_listener_port=self._connection.tcp_port,
+                    identity_wait_seconds=DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
                 )
         finally:
             if listener is not None:
@@ -1888,13 +1960,9 @@ class OnboardingDetector:
             )
             from ..connection.callback_ledger import (
                 CallbackCausalityBusyError,
-                get_callback_trigger_ledger,
             )
             from .silent_scan_probe import (
-                DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
-                AutomaticFramedIdentityIntent,
-                SilentIdentityResolution,
-                async_resolve_silent_session_identity,
+                async_run_automatic_framed_identity_window,
             )
 
             resolution = SilentIdentityResolution()
@@ -1907,27 +1975,13 @@ class OnboardingDetector:
             try:
                 timeout = deadline.bounded_timeout(discovery_timeout)
                 if timeout is None or timeout > 0:
-                    ledger = get_callback_trigger_ledger()
                     owner = f"onboarding_broadcast_identity:{uuid.uuid4().hex}"
                     lease_timeout = deadline.bounded_timeout(
                         discovery_timeout + DEFAULT_SILENT_IDENTITY_WAIT_SECONDS
                     )
                     try:
-                        async with ledger.causality_lease(
-                            owner,
-                            timeout=max(
-                                0.1,
-                                lease_timeout
-                                if lease_timeout is not None
-                                else discovery_timeout
-                                + DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
-                            ),
-                        ):
-                            baseline = frozenset(
-                                observation.session_id
-                                for observation in probe_channel.snapshot_session_observations()
-                            )
-                            replies = await async_send_callback_trigger_replies(
+                        async def _send_broadcast():
+                            return await async_send_callback_trigger_replies(
                                 bind_ip=self._connection.server_ip,
                                 advertised_server_ip=self._connection.effective_advertised_server_ip,
                                 advertised_server_port=self._connection.effective_advertised_tcp_port,
@@ -1936,28 +1990,33 @@ class OnboardingDetector:
                                 timeout=timeout or discovery_timeout,
                                 source="onboarding_broadcast_scan",
                             )
-                            unique_reply_ips = {
-                                reply.reply_from.split(":", 1)[0]
-                                for reply in replies
-                                if reply.reply_from
-                            }
-                            # One route response + one post-baseline session is
-                            # the only unambiguous association. Multiple devices
-                            # remain fail-closed and continue through the existing
-                            # target-specific path without any peer-IP tiebreak.
-                            if len(unique_reply_ips) == 1 and probe_channel.available:
-                                remaining = deadline.remaining_seconds()
-                                wait_seconds = DEFAULT_SILENT_IDENTITY_WAIT_SECONDS
-                                if remaining is not None:
-                                    wait_seconds = min(wait_seconds, max(0.0, remaining))
-                                if wait_seconds > 0:
-                                    resolution = await async_resolve_silent_session_identity(
-                                        probe_channel,
-                                        wire_intent=AutomaticFramedIdentityIntent(),
-                                        baseline=baseline,
-                                        deadline=asyncio.get_running_loop().time()
-                                        + wait_seconds,
-                                    )
+
+                        remaining = deadline.remaining_seconds()
+                        wait_seconds = DEFAULT_SILENT_IDENTITY_WAIT_SECONDS
+                        if remaining is not None:
+                            wait_seconds = min(wait_seconds, max(0.0, remaining))
+                        replies, resolution = (
+                            await async_run_automatic_framed_identity_window(
+                                probe_channel,
+                                trigger=_send_broadcast,
+                                identify_if=lambda observed_replies: len(
+                                    {
+                                        reply.reply_from.split(":", 1)[0]
+                                        for reply in observed_replies
+                                        if reply.reply_from
+                                    }
+                                )
+                                == 1,
+                                lease_owner=owner,
+                                lease_timeout=(
+                                    lease_timeout
+                                    if lease_timeout is not None
+                                    else discovery_timeout
+                                    + DEFAULT_SILENT_IDENTITY_WAIT_SECONDS
+                                ),
+                                identity_wait_seconds=wait_seconds,
+                            )
+                        )
                     except CallbackCausalityBusyError:
                         # Another callback-producing operation owns the window;
                         # this scan sends nothing and may be retried normally.
@@ -2034,6 +2093,9 @@ class OnboardingDetector:
                 network_cidr="",
             ),
             timeout=timeout or min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT),
+            identity_listener_host=_LISTENER_BIND_HOST,
+            identity_listener_port=self._connection.tcp_port,
+            identity_wait_seconds=DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
         )
         return tuple(target for target in replied_targets if target.ip not in known_ips)
 

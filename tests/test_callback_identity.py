@@ -1249,6 +1249,13 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 for sid in self.silent
             )
 
+        def discovered_collector_sessions(self):
+            # Production publishes the same exact session through this public
+            # strong-observation view immediately after the wire probe records
+            # its PN. The channel's post-probe trust boundary deliberately
+            # re-reads this view; keep the fake faithful to that contract.
+            return tuple(self._live.sessions)
+
         async def async_identify_pending_session(self, session_id, *, session_protocol):
             self.identify_calls.append((session_id, session_protocol))
             if self._raise:

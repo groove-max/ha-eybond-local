@@ -204,6 +204,74 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
         # broadcast-created socket instead of sending a second trigger (rsp=2).
         self.assertEqual(ledger.snapshot_generation() - generation_before, 1)
 
+    async def test_unicast_fallback_created_socket_is_identified_before_target_phase(
+        self,
+    ) -> None:
+        """When subnet broadcast gets no reply, the /24 fallback trigger owns
+        the same first-socket handoff. Detection must not send a second sequence
+        to a collector that keeps its already-open callback socket.
+        """
+
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        route = "127.0.0.2"
+        udp_port = _free_port(socket.SOCK_DGRAM)
+        target = _silent_framed_service(
+            udp_port=udp_port,
+            pn=TARGET_PN,
+            listen_ip=route,
+            tcp_bind_ip="127.0.0.1",
+        )
+        await target.start()
+        ledger = get_callback_trigger_ledger()
+        generation_before = ledger.snapshot_generation()
+        try:
+            detector = OnboardingDetector(
+                server_ip="127.0.0.1",
+                tcp_port=self._tcp_port,
+                udp_port=udp_port,
+            )
+            with (
+                patch(
+                    "custom_components.eybond_local.onboarding.eybond."
+                    "async_send_callback_trigger_replies",
+                    new=AsyncMock(return_value=()),
+                ),
+                patch(
+                    "custom_components.eybond_local.onboarding.eybond."
+                    "iter_unicast_fallback_targets",
+                    return_value=(
+                        DiscoveryTarget(ip=route, source="subnet_unicast"),
+                    ),
+                ),
+            ):
+                results = await asyncio.wait_for(
+                    detector.async_auto_detect(
+                        discovery_targets=(
+                            DiscoveryTarget(ip="127.0.0.255", source="broadcast"),
+                        ),
+                        attempts=1,
+                        enrich_runtime_details=False,
+                        total_timeout=_HARNESS_TIMEOUT,
+                    ),
+                    timeout=_HARNESS_TIMEOUT + 2.0,
+                )
+        finally:
+            await target.stop()
+
+        result = _result_with_pn(results, TARGET_PN)
+        self.assertIsNotNone(
+            result,
+            f"fallback-created socket was not handed off; PNs={_result_pns(results)}",
+        )
+        self.assertEqual(result.collector.ip, route)
+        self.assertEqual(result.collector.collector.remote_ip, "127.0.0.1")
+        self.assertEqual(ledger.snapshot_generation() - generation_before, 1)
+
     async def test_scan_identifies_fresh_silent_framed_collector_behind_stale_same_ip_park(
         self,
     ) -> None:

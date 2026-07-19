@@ -36,7 +36,9 @@ strategy.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
 from ..connection.session_handle import WIRE_FRAMED
 
@@ -105,6 +107,56 @@ class SilentIdentityResolution:
 # attempts serialize only briefly on the exclusive lease; the caller further
 # bounds it by the connect budget.
 DEFAULT_SILENT_IDENTITY_WAIT_SECONDS = 3.0
+
+_TriggerResult = TypeVar("_TriggerResult")
+
+
+async def async_run_automatic_framed_identity_window(
+    probe_channel,
+    *,
+    trigger: Callable[[], Awaitable[_TriggerResult]],
+    identify_if: Callable[[_TriggerResult], bool],
+    lease_owner: str,
+    lease_timeout: float,
+    identity_wait_seconds: float,
+) -> tuple[_TriggerResult, SilentIdentityResolution]:
+    """Run one automatic trigger window and bind its sole fresh session.
+
+    This is the shared causal boundary for both the initial subnet-broadcast
+    expansion and a concurrent unicast-fallback batch. The caller decides only
+    whether the trigger result is unambiguous enough to attempt identity; this
+    function owns the process-wide lease, captures the exact-session baseline
+    before any datagram is sent, and performs the one framed identity read after
+    the trigger operation completes. It proves identity, never connection
+    strategy or trigger causality.
+    """
+
+    from ..connection.callback_ledger import get_callback_trigger_ledger
+
+    ledger = get_callback_trigger_ledger()
+    async with ledger.causality_lease(
+        lease_owner,
+        timeout=max(0.1, float(lease_timeout)),
+    ):
+        baseline = frozenset(
+            observation.session_id
+            for observation in probe_channel.snapshot_session_observations()
+        )
+        trigger_result = await trigger()
+        resolution = SilentIdentityResolution()
+        wait_seconds = max(0.0, float(identity_wait_seconds))
+        if (
+            identify_if(trigger_result)
+            and getattr(probe_channel, "available", False)
+            and wait_seconds > 0
+        ):
+            resolution = await async_resolve_silent_session_identity(
+                probe_channel,
+                wire_intent=AutomaticFramedIdentityIntent(),
+                baseline=baseline,
+                deadline=asyncio.get_running_loop().time() + wait_seconds,
+            )
+        return trigger_result, resolution
 
 
 async def async_resolve_silent_session_identity(
@@ -191,5 +243,6 @@ __all__ = [
     "AutomaticFramedIdentityIntent",
     "DEFAULT_SILENT_IDENTITY_WAIT_SECONDS",
     "SilentIdentityResolution",
+    "async_run_automatic_framed_identity_window",
     "async_resolve_silent_session_identity",
 ]
