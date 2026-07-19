@@ -4301,6 +4301,43 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.connection_mode, "callback_listener")
         self.assertEqual(result.collector.collector.collector_pn, "V000405SYN94677058")
 
+    async def test_do_scan_passive_shortcut_never_starts_periodic_progress_updater(self) -> None:
+        flow = self._make_flow()
+        passive_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn="V000405SYN94677058"),
+            ),
+            connection_mode="callback_listener",
+            next_action="manual_driver_selection",
+        )
+
+        class _FakeDetector:
+            async def async_passive_detect(self, **kwargs):
+                return (passive_result,)
+
+            async def async_auto_detect(self, **kwargs):
+                raise AssertionError("passive shortcut must not run active detection")
+
+        def _reject_background_task(coro):
+            coro.close()
+            raise AssertionError("passive shortcut must not start a periodic updater")
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ), patch(
+            "custom_components.eybond_local.config_flow.asyncio.create_task",
+            side_effect=_reject_background_task,
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(len(flow._autodetect_results), 1)
+        self.assertEqual(flow._scan_progress_stage, "finalizing")
+
     async def test_do_scan_merges_passive_callback_with_active_results_when_passive_is_existing(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
         existing.data.update({"collector_pn": "V000405SYN94677058"})

@@ -2871,7 +2871,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 + 30.0
             )
         self._scan_progress_stage = "discovering"
-        progress_updater = asyncio.create_task(self._async_update_scan_progress_loop())
         detector = create_onboarding_manager(
             build_connection_spec_from_values(
                 self._current_connection_type(),
@@ -2906,6 +2905,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         probe_scope_id = f"config_flow_scan:{id(self)}:{uuid.uuid4().hex}"
         if passive_discovery is not None:
             passive_discovery.begin_active_probe_scope(probe_scope_id)
+        # Only the active scan needs a periodic updater.  Starting it before
+        # the passive shortcut used to leak an infinite updater whenever an
+        # already-observed collector completed the scan early.  The leaked
+        # task kept publishing 97% over the next scan's live progress.
+        progress_updater = asyncio.create_task(self._async_update_scan_progress_loop())
         try:
             async with _async_timeout(scan_timeout):
                 if self._scan_mode == SETUP_MODE_DEEP_SCAN:
