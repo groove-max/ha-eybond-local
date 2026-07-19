@@ -75,13 +75,29 @@ class SilentIdentityResolution:
 
     session_id: str = ""
     collector_pn: str = ""
+    identity_source: str = ""
     # Two or more post-baseline sessions appeared in the union view: attribution is
     # impossible without a peer-IP / order tiebreak, so nothing is probed/adopted.
     ambiguous: bool = False
 
     @property
     def identified(self) -> bool:
-        return bool(self.session_id and self.collector_pn)
+        """Whether this outcome carries a normalized strong exact-session fact."""
+
+        from ..connection.session_registry import identity_source_is_strong
+
+        return bool(
+            type(self.session_id) is str
+            and self.session_id
+            and self.session_id == self.session_id.strip()
+            and type(self.collector_pn) is str
+            and self.collector_pn
+            and self.collector_pn == self.collector_pn.strip()
+            and type(self.identity_source) is str
+            and self.identity_source
+            and self.identity_source == self.identity_source.strip()
+            and identity_source_is_strong(self.identity_source)
+        )
 
 
 # The bounded window (seconds) the resolution waits, under the lease, for the
@@ -148,7 +164,9 @@ async def async_resolve_silent_session_identity(
             if pn and identity_source_is_strong(obs.identity_source):
                 # Already strong -> accept + pin the EXACT session, NO re-probe.
                 return SilentIdentityResolution(
-                    session_id=obs.session_id, collector_pn=pn
+                    session_id=obs.session_id,
+                    collector_pn=pn,
+                    identity_source=str(obs.identity_source or "").strip(),
                 )
             # PN-less silent OR weak framed heartbeat -> upgrade to a strong/full
             # PN with ONE framed FC=2 read on the SAME exact session id.
@@ -156,7 +174,9 @@ async def async_resolve_silent_session_identity(
                 obs.session_id, session_protocol=WIRE_FRAMED
             )
             return SilentIdentityResolution(
-                session_id=obs.session_id, collector_pn=str(probed or "").strip()
+                session_id=obs.session_id,
+                collector_pn=str(probed or "").strip(),
+                identity_source="fc2_parameter_2" if probed else "",
             )
         if len(fresh) > 1:
             # Never resolve ambiguity by peer IP or arrival order.

@@ -138,6 +138,72 @@ class SilentScanIdentityHarness(unittest.IsolatedAsyncioTestCase):
 
 
 class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
+    async def test_broadcast_created_socket_is_identified_before_target_phase(
+        self,
+    ) -> None:
+        """The real E500 sequence is two-phase unless identity is captured at
+        broadcast expansion: the first set>server creates one silent socket;
+        a later targeted command is answered as "already connected" and creates
+        no second socket. The first trigger window must therefore certify and
+        hand off the exact session so target detection sends no second sequence.
+        """
+
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        route = "127.0.0.2"
+        udp_port = _free_port(socket.SOCK_DGRAM)
+        target = _silent_framed_service(
+            udp_port=udp_port,
+            pn=TARGET_PN,
+            listen_ip=route,
+            tcp_bind_ip="127.0.0.1",
+        )
+        await target.start()
+        ledger = get_callback_trigger_ledger()
+        generation_before = ledger.snapshot_generation()
+        try:
+            from unittest.mock import AsyncMock
+
+            detector = OnboardingDetector(
+                server_ip="127.0.0.1",
+                tcp_port=self._tcp_port,
+                udp_port=udp_port,
+            )
+            # A collector-only result normally starts the unrelated /24 fallback
+            # sweep. This regression concerns the broadcast->target handoff, so
+            # keep the harness bounded after that production path completes.
+            detector._async_auto_unicast_fallback_targets = AsyncMock(
+                return_value=()
+            )
+            results = await asyncio.wait_for(
+                detector.async_auto_detect(
+                    # Source=broadcast exercises expansion even though the
+                    # loopback route is unicast-addressable in this harness.
+                    discovery_targets=(
+                        DiscoveryTarget(ip=route, source="broadcast"),
+                    ),
+                    attempts=1,
+                    enrich_runtime_details=False,
+                    total_timeout=_HARNESS_TIMEOUT,
+                ),
+                timeout=_HARNESS_TIMEOUT + 2.0,
+            )
+        finally:
+            await target.stop()
+
+        result = _result_with_pn(results, TARGET_PN)
+        self.assertIsNotNone(
+            result,
+            f"first-trigger socket was not handed off; PNs={_result_pns(results)}",
+        )
+        self.assertEqual(result.collector.ip, route)
+        self.assertEqual(result.collector.collector.remote_ip, "127.0.0.1")
+        # One logical set>server sequence: target detection activated the exact
+        # broadcast-created socket instead of sending a second trigger (rsp=2).
+        self.assertEqual(ledger.snapshot_generation() - generation_before, 1)
+
     async def test_scan_identifies_fresh_silent_framed_collector_behind_stale_same_ip_park(
         self,
     ) -> None:
@@ -329,6 +395,39 @@ class SilentResolutionSemanticsTests(unittest.IsolatedAsyncioTestCase):
             deadline=loop.time() + deadline_after,
             poll_interval=0.02,
         )
+
+    async def test_resolution_is_identified_only_with_strong_normalized_evidence(
+        self,
+    ) -> None:
+        from custom_components.eybond_local.onboarding.silent_scan_probe import (
+            SilentIdentityResolution,
+        )
+
+        self.assertTrue(
+            SilentIdentityResolution(
+                session_id="fresh",
+                collector_pn=TARGET_PN,
+                identity_source="fc2_parameter_2",
+            ).identified
+        )
+        for resolution in (
+            SilentIdentityResolution(
+                session_id="fresh",
+                collector_pn=TARGET_PN[:14],
+                identity_source="framed_heartbeat",
+            ),
+            SilentIdentityResolution(
+                session_id=" fresh",
+                collector_pn=TARGET_PN,
+                identity_source="fc2_parameter_2",
+            ),
+            SilentIdentityResolution(
+                session_id="fresh",
+                collector_pn=TARGET_PN,
+                identity_source=" fc2_parameter_2",
+            ),
+        ):
+            self.assertFalse(resolution.identified)
 
     async def test_fresh_silent_session_is_framed_probed(self) -> None:
         channel = _RecordingProbeChannel([[_obs("fresh")]], pn=TARGET_PN)

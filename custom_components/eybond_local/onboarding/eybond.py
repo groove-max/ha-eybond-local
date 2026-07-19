@@ -69,6 +69,7 @@ from .timeouts import (
     OnboardingDeadline,
     default_deep_driver_sweep_seconds,
 )
+from .silent_scan_probe import SilentIdentityResolution
 from ..models import CollectorCandidate, CollectorInfo, OnboardingResult, TargetDetectionEvidence
 
 logger = logging.getLogger(__name__)
@@ -181,14 +182,16 @@ class DiscoveryTarget:
     """One onboarding discovery target.
 
     An onboarding target never carries an inferred/expected session protocol: a
-    hint may not arm an active probe or register a confirmed owner. Active probe
-    authority comes ONLY from validated runtime confirmed evidence, and a passive
-    observed session is handled by the existing SessionHandle/registry path.
+    hint may not arm an active probe or register a confirmed owner. An automatic
+    broadcast expansion may carry one strict ``SilentIdentityResolution`` that
+    was observed on an exact session inside that same trigger window. It is an
+    identity handoff only, not connection-strategy evidence.
     """
 
     ip: str
     source: str
     collector_pn: str = ""
+    observed_session: SilentIdentityResolution | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1142,6 +1145,30 @@ class OnboardingDetector:
         # collector's real wire passively; active-probe authority is the runtime's
         # validated confirmed evidence alone.
         transport = SharedEybondTransport(**transport_kwargs)
+        observed_session = (
+            target.observed_session
+            if type(target.observed_session) is SilentIdentityResolution
+            and target.observed_session.identified
+            else None
+        )
+        preidentified_session_id = (
+            observed_session.session_id if observed_session is not None else ""
+        )
+        preidentified_pn = (
+            observed_session.collector_pn if observed_session is not None else ""
+        )
+        preidentified_source = (
+            observed_session.identity_source if observed_session is not None else ""
+        )
+        preidentified = observed_session is not None
+        if preidentified:
+            # The broadcast expansion already proved this exact socket inside
+            # the first trigger window. Pin it before start/activation and do
+            # NOT send a second set>server (collectors that answer rsp=2 keep the
+            # first socket and would otherwise be excluded by a later baseline).
+            transport.set_claimed_session_provider(
+                lambda: preidentified_session_id
+            )
         candidate = CollectorCandidate(
             target_ip=target.ip,
             source=target.source,
@@ -1159,22 +1186,35 @@ class OnboardingDetector:
         # / timeout / start failure alike.
         try:
             await transport.start()
-            # ONE callback trigger, then EXACT post-baseline session identity (a
-            # fully-silent, weak-heartbeat or already-strong collector the peer-IP
-            # claim cannot pick -- e.g. behind a stale same-IP park -- is pinned by
-            # its exact session id, not by peer IP).
-            (
-                probe,
-                connected,
-                silent_identity,
-                lease_busy,
-            ) = await self._async_trigger_connect_identify(
-                target=target,
-                transport=transport,
-                candidate=candidate,
-                discovery_timeout=discovery_timeout,
-                connect_timeout=connect_timeout,
-            )
+            if preidentified:
+                probe = DiscoveryProbeResult(
+                    target_ip=target.ip,
+                    message="",
+                    local_port=0,
+                )
+                silent_identity = SilentIdentityResolution(
+                    session_id=preidentified_session_id,
+                    collector_pn=preidentified_pn,
+                    identity_source=preidentified_source,
+                )
+                lease_busy = False
+                connected = await transport.wait_until_connected(connect_timeout)
+            else:
+                # ONE callback trigger, then EXACT post-baseline session identity
+                # (a fully-silent, weak-heartbeat or already-strong collector the
+                # peer-IP claim cannot pick is pinned by its exact session id).
+                (
+                    probe,
+                    connected,
+                    silent_identity,
+                    lease_busy,
+                ) = await self._async_trigger_connect_identify(
+                    target=target,
+                    transport=transport,
+                    candidate=candidate,
+                    discovery_timeout=discovery_timeout,
+                    connect_timeout=connect_timeout,
+                )
             if lease_busy:
                 # A concurrent owner held the callback causality lease: nothing was
                 # triggered and the collector was NOT checked. This is a distinct,
@@ -1836,23 +1876,101 @@ class OnboardingDetector:
                     expanded.append(target)
                 continue
 
-            timeout = deadline.bounded_timeout(discovery_timeout)
-            if timeout is None or timeout > 0:
-                try:
-                    replies = await async_send_callback_trigger_replies(
-                        bind_ip=self._connection.server_ip,
-                        advertised_server_ip=self._connection.effective_advertised_server_ip,
-                        advertised_server_port=self._connection.effective_advertised_tcp_port,
-                        target_ip=target.ip,
-                        udp_port=self._connection.udp_port,
-                        timeout=timeout or discovery_timeout,
-                        source="onboarding_broadcast_scan",
+            # The broadcast set>server is often the trigger that creates a
+            # collector's ONLY callback socket. Some collectors answer a later
+            # targeted set>server with rsp>server=2 and keep that first socket,
+            # so taking the identity baseline only in _async_detect_target is one
+            # phase too late. Capture and identify the exact session in THIS
+            # trigger window, while holding the same process-wide causality
+            # lease as every other callback-producing operation.
+            from ..collector.silent_session_probe import (
+                SilentSessionIdentityProbeChannel,
+            )
+            from ..connection.callback_ledger import (
+                CallbackCausalityBusyError,
+                get_callback_trigger_ledger,
+            )
+            from .silent_scan_probe import (
+                DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
+                AutomaticFramedIdentityIntent,
+                SilentIdentityResolution,
+                async_resolve_silent_session_identity,
+            )
+
+            resolution = SilentIdentityResolution()
+            replies = ()
+            probe_channel = SilentSessionIdentityProbeChannel(
+                host=_LISTENER_BIND_HOST,
+                port=self._connection.tcp_port,
+            )
+            await probe_channel.async_open()
+            try:
+                timeout = deadline.bounded_timeout(discovery_timeout)
+                if timeout is None or timeout > 0:
+                    ledger = get_callback_trigger_ledger()
+                    owner = f"onboarding_broadcast_identity:{uuid.uuid4().hex}"
+                    lease_timeout = deadline.bounded_timeout(
+                        discovery_timeout + DEFAULT_SILENT_IDENTITY_WAIT_SECONDS
                     )
-                except Exception as exc:
-                    logger.debug("Broadcast discovery expansion failed target=%s error=%s", target.ip, exc)
-                    replies = ()
-            else:
-                replies = ()
+                    try:
+                        async with ledger.causality_lease(
+                            owner,
+                            timeout=max(
+                                0.1,
+                                lease_timeout
+                                if lease_timeout is not None
+                                else discovery_timeout
+                                + DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
+                            ),
+                        ):
+                            baseline = frozenset(
+                                observation.session_id
+                                for observation in probe_channel.snapshot_session_observations()
+                            )
+                            replies = await async_send_callback_trigger_replies(
+                                bind_ip=self._connection.server_ip,
+                                advertised_server_ip=self._connection.effective_advertised_server_ip,
+                                advertised_server_port=self._connection.effective_advertised_tcp_port,
+                                target_ip=target.ip,
+                                udp_port=self._connection.udp_port,
+                                timeout=timeout or discovery_timeout,
+                                source="onboarding_broadcast_scan",
+                            )
+                            unique_reply_ips = {
+                                reply.reply_from.split(":", 1)[0]
+                                for reply in replies
+                                if reply.reply_from
+                            }
+                            # One route response + one post-baseline session is
+                            # the only unambiguous association. Multiple devices
+                            # remain fail-closed and continue through the existing
+                            # target-specific path without any peer-IP tiebreak.
+                            if len(unique_reply_ips) == 1 and probe_channel.available:
+                                remaining = deadline.remaining_seconds()
+                                wait_seconds = DEFAULT_SILENT_IDENTITY_WAIT_SECONDS
+                                if remaining is not None:
+                                    wait_seconds = min(wait_seconds, max(0.0, remaining))
+                                if wait_seconds > 0:
+                                    resolution = await async_resolve_silent_session_identity(
+                                        probe_channel,
+                                        wire_intent=AutomaticFramedIdentityIntent(),
+                                        baseline=baseline,
+                                        deadline=asyncio.get_running_loop().time()
+                                        + wait_seconds,
+                                    )
+                    except CallbackCausalityBusyError:
+                        # Another callback-producing operation owns the window;
+                        # this scan sends nothing and may be retried normally.
+                        replies = ()
+                    except Exception as exc:
+                        logger.debug(
+                            "Broadcast discovery expansion failed target=%s error=%s",
+                            target.ip,
+                            exc,
+                        )
+                        replies = ()
+            finally:
+                await probe_channel.async_close()
 
             reply_ips = tuple(
                 reply.reply_from.split(":", 1)[0]
@@ -1869,7 +1987,17 @@ class OnboardingDetector:
                 if reply_ip in known_ips:
                     continue
                 known_ips.add(reply_ip)
-                expanded.append(DiscoveryTarget(ip=reply_ip, source=target.source))
+                if len(set(reply_ips)) == 1 and resolution.identified:
+                    expanded.append(
+                        DiscoveryTarget(
+                            ip=reply_ip,
+                            source=target.source,
+                            collector_pn=resolution.collector_pn,
+                            observed_session=resolution,
+                        )
+                    )
+                else:
+                    expanded.append(DiscoveryTarget(ip=reply_ip, source=target.source))
 
         return tuple(expanded)
 
