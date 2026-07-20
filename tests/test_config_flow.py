@@ -11917,24 +11917,38 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_handoff_flag_stays_false_when_nothing_was_prepared(self) -> None:
         # Item 5: the registry reports "no claim under this owner" (False). The
-        # flow must NOT record a handoff it never made: _release_verification_claim
+        # seam must NOT record a handoff it never made: _release_verification_claim
         # deliberately stops releasing once _callback_ownership_handed_off is set,
         # so a lying flag would suppress this flow's own cleanup and strand the
         # owner. No abort either -- entry setup re-claims and fails closed there.
+        # The flow-owned claim decision now lives behind the seam's prepare_terminal.
+        from custom_components.eybond_local.connection.recovery.terminal import (
+            RecoveryTerminalInput,
+        )
+
         flow = self._make_flow()
         registry = self._install_registry(flow, [])
         flow._verification_registry = registry
         flow._verification_claim_owner = "callback_verification:vanished"
 
-        self.assertIsNone(flow._prepare_ownership_handoff(self.FULL_PN))
+        decision = flow._callback_continuation.prepare_terminal(
+            self.FULL_PN, RecoveryTerminalInput.none()
+        )
 
+        self.assertFalse(decision.owns)
+        self.assertEqual(decision.abort_reason, "")
         self.assertFalse(flow._callback_ownership_handed_off)
         self.assertEqual(flow._verification_claim_owner, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     async def test_handoff_refusal_aborts_and_releases_own_claim(self) -> None:
         # Item 5 (other half): a REFUSED handoff (ValueError) must abort without
-        # creating an entry and must release this flow's own claim.
+        # creating an entry and must release this flow's own claim -- now decided
+        # by the seam's prepare_terminal (a typed abort_reason, not a result).
+        from custom_components.eybond_local.connection.recovery.terminal import (
+            RecoveryTerminalInput,
+        )
+
         flow = self._make_flow()
         sessions = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, sessions)
@@ -11944,10 +11958,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._verification_claim_owner = "callback_verification:mine"
 
         # The claim stands for A; handing off B is refused by the registry.
-        aborted = flow._prepare_ownership_handoff(self.OTHER_FULL_PN)
+        decision = flow._callback_continuation.prepare_terminal(
+            self.OTHER_FULL_PN, RecoveryTerminalInput.none()
+        )
 
-        self.assertEqual(aborted["type"], "abort")
-        self.assertEqual(aborted["reason"], "already_configured")
+        self.assertEqual(decision.abort_reason, "already_configured")
+        self.assertFalse(decision.owns)
         self.assertFalse(flow._callback_ownership_handed_off)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")

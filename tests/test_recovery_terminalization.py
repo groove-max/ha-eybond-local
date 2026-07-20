@@ -576,18 +576,29 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
         )
 
     def test_flow_terminal_coordinator_never_looks_owners_up_by_pn(self) -> None:
-        import inspect
-
-        for name in ("tests", ""):  # keep import cheap: single module read
-            pass
         config_flow = (self._PACKAGE / "config_flow.py").read_text(encoding="utf-8")
         # The coordinator region: from the coordinator def to the next method.
         start = config_flow.index("def _create_entry_with_handoff")
         end = config_flow.index("def ", start + 10)
         region = config_flow[start:end]
+        # Never resolve an owner by PN, anywhere in the terminal path.
         self.assertNotIn("owner_for_pn", region)
-        self.assertIn("verify_prepared_handoff", region)
+        # The INBOUND admission claim is prepared through the transaction helper;
+        # the CALLBACK CONTINUATION owner is decided/committed/rolled back ENTIRELY
+        # through the seam -- the coordinator inspects no _verification_* field.
         self.assertIn("_prepare_ownership_handoff", region)
+        self.assertIn("prepare_terminal", region)
+        self.assertIn("commit_terminal", region)
+        self.assertIn("rollback_terminal", region)
+        # The prepared-owner acceptance (verify_prepared_handoff /
+        # prepared_handoff_identity, NEVER a PN lookup) lives in the seam's
+        # flow-backed terminal ownership, not in the coordinator.
+        adapter_start = config_flow.index("class _LegacyCallbackContinuation")
+        adapter_end = config_flow.index("class EybondLocalConfigFlow")
+        adapter = config_flow[adapter_start:adapter_end]
+        self.assertNotIn("owner_for_pn", adapter)
+        self.assertIn("verify_prepared_handoff", adapter)
+        self.assertIn("prepared_handoff_identity", adapter)
 
     def test_no_identity_outcome_to_contract_conversion_exists(self) -> None:
         # The only constructors accepting outcomes are the two classmethods,
