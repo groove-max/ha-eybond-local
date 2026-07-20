@@ -260,6 +260,7 @@ _install_homeassistant_stubs()
 
 
 import custom_components.eybond_local.config_flow as config_flow_module
+import custom_components.eybond_local.connection.admission_transaction as admission_transaction_module
 import custom_components.eybond_local.support.cloud_control_discovery as cloud_control_discovery_module
 from custom_components.eybond_local.config_flow import (
     BLE_ACTION_APPLY,
@@ -9210,7 +9211,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         progress = await flow.async_step_verify_connection_progress()
         self.assertEqual(progress["type"], "progress")
-        await flow._verification_task
+        await flow._admission_task
         done = await flow.async_step_verify_connection_progress()
         self.assertEqual(done["type"], "progress_done")
         self.assertEqual(done["next_step_id"], "verify_connection_result")
@@ -9226,7 +9227,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step_id"], "verify_connection")
         # The typed admission request now carries the observed session; discovery
         # is just one source adapter building a CollectorAdmissionRequest.
-        request = flow._admission_request
+        request = flow._admission_transaction.request
         self.assertIsInstance(request, CollectorAdmissionRequest)
         self.assertEqual(request.origin, "integration_discovery")
         self.assertEqual(
@@ -9250,7 +9251,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(legacy["type"], "form")
         self.assertEqual(legacy["step_id"], "manual")
-        self.assertIsNone(legacy_flow._admission_request)
+        self.assertIsNone(legacy_flow._admission_transaction)
         self.assertEqual(legacy_flow._verification_expected_pn, self.OTHER_FULL_PN)
         self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         self.assertEqual(legacy_flow._verified_connection_strategy, "")
@@ -9263,7 +9264,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Source A: integration discovery.
         disc_flow = self._make_flow()
         disc = await disc_flow.async_step_integration_discovery(self._discovery_info())
-        disc_request = disc_flow._admission_request
+        disc_request = disc_flow._admission_transaction.request
 
         # Source B: a passive scan inventory result carrying the typed session.
         observed = ObservedCollectorSession(
@@ -9294,7 +9295,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             )
         }
         scan = await scan_flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
-        scan_request = scan_flow._admission_request
+        scan_request = scan_flow._admission_transaction.request
 
         # SAME request TYPE, SAME entrypoint (the consent step); origin differs
         # only as a diagnostic label and never steers the algorithm.
@@ -9347,7 +9348,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             )
             result = await flow._async_admit_selected_scan_result()
             self.assertIsNone(result, msg=f"admission started for {bogus!r}")
-            self.assertIsNone(flow._admission_request)
+            self.assertIsNone(flow._admission_transaction)
 
     async def test_stale_passive_scan_session_requires_restart_verification(self) -> None:
         """Deleting an entry must not turn its old callback into inbound proof."""
@@ -9395,7 +9396,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected["step_id"], "verify_connection")
         # The passive adapter admits the exact typed session through the ONE
         # entrypoint -- session authority comes from observed_session, not details.
-        request = flow._admission_request
+        request = flow._admission_transaction.request
         self.assertIsInstance(request, CollectorAdmissionRequest)
         self.assertEqual(request.origin, "passive_scan")
         self.assertEqual(request.observed_session, observed)
@@ -9426,7 +9427,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             callback_causality_lease_wait=0.5,
         )
         with patch.object(
-            config_flow_module, "ObservedSessionRestartChannel", _FakeChannel
+            admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel
         ), patch.object(
             config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", policy
         ):
@@ -9447,6 +9448,18 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 peer_hint=self.PEER_IP,
             ),
             origin=origin,
+        )
+
+    def _admission_transaction(self, origin: str, flow):
+        from custom_components.eybond_local.connection.admission_transaction import (
+            CollectorAdmissionTransaction,
+        )
+
+        return CollectorAdmissionTransaction(
+            self._admission_request(origin),
+            registry_provider=flow._callback_session_registry,
+            listener_host="0.0.0.0",
+            policy_provider=lambda: config_flow_module._ONBOARDING_TIMEOUT_POLICY,
         )
 
     def _verified_inbound_terminal(self):
@@ -9517,7 +9530,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         This is the source-neutral hole the corrective closes."""
 
         flow = self._make_flow()
-        flow._admission_request = self._admission_request("integration_discovery")
+        flow._admission_transaction = self._admission_transaction("integration_discovery", flow)
         # Integration discovery's selected result carries no observed_session.
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=False
@@ -9539,7 +9552,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         the entry is created (the guard steps aside for a real proof)."""
 
         flow = self._make_flow()
-        flow._admission_request = self._admission_request("integration_discovery")
+        flow._admission_transaction = self._admission_transaction("integration_discovery", flow)
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=False
         )
@@ -9560,7 +9573,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         """Passive scan preserves the same fail-closed result (unchanged)."""
 
         flow = self._make_flow()
-        flow._admission_request = self._admission_request("passive_scan")
+        flow._admission_transaction = self._admission_transaction("passive_scan", flow)
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=True
         )
@@ -9585,13 +9598,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow = self._make_flow()
         await flow.async_step_integration_discovery(self._discovery_info())
-        self.assertIsInstance(flow._admission_request, CollectorAdmissionRequest)
+        self.assertIsInstance(flow._admission_transaction, admission_transaction_module.CollectorAdmissionTransaction)
+        self.assertIsInstance(flow._admission_transaction.request, CollectorAdmissionRequest)
 
         result = await flow.async_step_verify_connection_manual_callback()
         self.assertEqual(result["step_id"], "manual")
         self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
         # Cleared: the terminal guard cannot fire for the manual callback entry.
-        self.assertIsNone(flow._admission_request)
+        self.assertIsNone(flow._admission_transaction)
         self.assertFalse(
             flow._fresh_observed_session_entry_is_unverified({}, {})
         )
@@ -9650,26 +9664,27 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector_identity_source="framed_heartbeat",
             )
         )
-        self.assertEqual(flow._verification_expected_pn, self.SHORT_PN)
+        self.assertEqual(flow._admission_transaction.expected_pn, self.SHORT_PN)
 
         # First verification FAILS but the typed outcome carries the strong FULL
         # PN (the promote hook read it). Enrichment adopts it.
         async def _first_run() -> None:
-            flow._verification_result = InboundRecoveryOutcome(
+            flow._admission_transaction._outcome = InboundRecoveryOutcome(
                 failure_reason="inbound_reconnect_timeout",
                 collector_pn=self.FULL_PN,
             )
+            flow._admission_transaction._adopt_enriched_pn_from_outcome()
 
         with patch.object(
-            flow, "_async_run_strategy_verification", side_effect=_first_run
+            flow._admission_transaction, "async_run", side_effect=_first_run
         ):
             failed = await self._drive_verification(flow)
         self.assertEqual(failed["step_id"], "verify_connection_failed")
         # Enrichment moved the CURRENT expected identity to the full PN; the
         # immutable observation still records the original short PN.
-        self.assertEqual(flow._verification_expected_pn, self.FULL_PN)
+        self.assertEqual(flow._admission_transaction.expected_pn, self.FULL_PN)
         self.assertEqual(
-            flow._admission_request.observed_session.collector_pn, self.SHORT_PN
+            flow._admission_transaction.request.observed_session.collector_pn, self.SHORT_PN
         )
 
         # The collector rebooted: S1 is gone, a replacement full-PN S2 dialed in,
@@ -9686,7 +9701,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         captured: dict = {}
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "ObservedSessionRestartChannel",
             self._capturing_restart_channel(captured),
         ), patch.object(
@@ -9719,7 +9734,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector_identity_source="",
             )
         )
-        self.assertEqual(flow._admission_request.observed_session.identity_source, "")
+        self.assertEqual(flow._admission_transaction.request.observed_session.identity_source, "")
         # Poison the discovery context with a strong source. If the run read it,
         # require_exact would flip to False and reconcile onto the full-PN session.
         flow.context["eybond_discovery"]["collector_identity_source"] = "at_dtupn"
@@ -9742,7 +9757,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         captured: dict = {}
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "ObservedSessionRestartChannel",
             self._capturing_restart_channel(captured),
         ), patch.object(
@@ -9767,12 +9782,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         await flow.async_step_integration_discovery(self._discovery_info())
 
         async def _fake_run() -> None:
-            flow._verification_result = InboundRecoveryOutcome(
+            flow._admission_transaction._outcome = InboundRecoveryOutcome(
                 failure_reason="restart_not_supported",
                 collector_pn=self.FULL_PN,
             )
+            flow._admission_transaction._adopt_enriched_pn_from_outcome()
 
-        with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
+        with patch.object(flow._admission_transaction, "async_run", side_effect=_fake_run):
             result = await self._drive_verification(flow)
 
         self.assertEqual(result["type"], "menu")
@@ -9812,7 +9828,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # No strategy was guessed and no entry was created.
         self.assertEqual(flow._verified_connection_strategy, "")
         # The inbound verification context was cleared on the handoff.
-        self.assertIsNone(flow._admission_request)
+        self.assertIsNone(flow._admission_transaction)
 
     # Batch 7 -- the failure screen explains the exact reason in the user's
     # language (ru/uk), never the raw code, for every inbound failure code.
@@ -9832,9 +9848,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 flow = self._make_flow()
                 flow.context = {"language": language}
                 await flow.async_step_integration_discovery(self._discovery_info())
-                flow._verification_result = InboundRecoveryOutcome(
+                flow._admission_transaction._outcome = InboundRecoveryOutcome(
                     failure_reason=code, collector_pn=self.FULL_PN
                 )
+                flow._admission_transaction._adopt_enriched_pn_from_outcome()
                 await flow._async_ensure_translation_bundle()
                 result = await flow.async_step_verify_connection_failed()
                 explanation = result["description_placeholders"]["failure_explanation"]
@@ -9862,12 +9879,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         async def _fake_run() -> None:
             # Inbound autonomous reconnect was NOT proven; the failure path
             # already released any strategy-verification claim.
-            flow._verification_result = InboundRecoveryOutcome(
+            flow._admission_transaction._outcome = InboundRecoveryOutcome(
                 failure_reason="inbound_reconnect_timeout",
                 collector_pn=self.FULL_PN,
             )
+            flow._admission_transaction._adopt_enriched_pn_from_outcome()
 
-        with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
+        with patch.object(flow._admission_transaction, "async_run", side_effect=_fake_run):
             failed = await self._drive_verification(flow)
         self.assertEqual(failed["step_id"], "verify_connection_failed")
         # No inbound owner survives into the callback attempt.
@@ -9878,7 +9896,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manual["step_id"], "manual")
         self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
         self.assertEqual(flow._manual_defaults.get("collector_ip"), self.PEER_IP)
-        # The expected strong PN from discovery is preserved for the matcher.
+        # The expected strong PN was handed across into the legacy manual state.
         self.assertEqual(flow._verification_expected_pn, self.FULL_PN)
 
         # Submitting the manual form runs the EXISTING callback identity path;
@@ -9911,12 +9929,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         await flow.async_step_integration_discovery(self._discovery_info())
 
         async def _fake_run() -> None:
-            flow._verification_result = InboundRecoveryOutcome(
+            flow._admission_transaction._outcome = InboundRecoveryOutcome(
                 failure_reason="restart_not_confirmed",
                 collector_pn=self.FULL_PN,
             )
+            flow._admission_transaction._adopt_enriched_pn_from_outcome()
 
-        with patch.object(flow, "_async_run_strategy_verification", side_effect=_fake_run):
+        with patch.object(flow._admission_transaction, "async_run", side_effect=_fake_run):
             failed = await self._drive_verification(flow)
         self.assertEqual(failed["step_id"], "verify_connection_failed")
 
@@ -9926,7 +9945,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Nothing is owned, held or prepared for the PN.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(flow._verification_claim_owner, "")
-        self.assertIsNone(flow._admission_request)
+        self.assertIsNone(flow._admission_transaction)
 
     async def test_cancel_during_progress_cleans_up_via_async_remove(self) -> None:
         import asyncio
@@ -9946,12 +9965,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.sleep(60)
 
-        with patch.object(flow, "_async_run_strategy_verification", side_effect=_hang):
+        with patch.object(flow._admission_transaction, "async_run", side_effect=_hang):
             await flow.async_step_verify_connection({})
             progress = await flow.async_step_verify_connection_progress()
             self.assertEqual(progress["type"], "progress")
             await asyncio.wait_for(started.wait(), timeout=5.0)
-            task = flow._verification_task
+            task = flow._admission_task
 
             flow.async_remove()  # frontend closed the flow mid-progress
 
@@ -9993,7 +10012,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 self.closed += 1
 
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel):
             result = await self._drive_verification(flow)
 
         # Success continues the normal passive-candidate routing.
@@ -10074,16 +10093,16 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 return None
 
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel):
             await self._drive_verification(flow)
 
         self.assertEqual(claimed_session_ids, [self.NEW_SESSION])
-        self.assertEqual(flow._verification_old_session_id, self.NEW_SESSION)
+        self.assertEqual(flow._admission_transaction.old_session_id, self.NEW_SESSION)
         # Item 2: a successful inbound proof HOLDS the claim for handoff.
         self.assertTrue(
             registry.owner_for_pn(self.FULL_PN).startswith("strategy_verification:")
         )
-        self.assertTrue(flow._verification_result.inbound_verified)
+        self.assertTrue(flow._admission_transaction.outcome.inbound_verified)
 
     # 2. Zero UDP callback triggers are sent while inbound verification runs.
     async def test_inbound_verification_sends_zero_udp_triggers(self) -> None:
@@ -10110,14 +10129,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         probe = AsyncMock(side_effect=AssertionError("UDP trigger sent during inbound verification"))
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel), patch.object(
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel), patch.object(
             config_flow_module, "async_send_callback_trigger", probe
         ):
             await flow.async_step_verify_connection({})
-            await flow._verification_task
+            await flow._admission_task
 
         probe.assert_not_called()
-        result = flow._verification_result
+        result = flow._admission_transaction.outcome
         assert result is not None
         self.assertTrue(result.inbound_verified)
         self.assertIsNotNone(result.proof)
@@ -10167,9 +10186,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 return None
 
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel):
             await flow.async_step_verify_connection({})
-            await flow._verification_task
+            await flow._admission_task
 
         self.assertEqual(
             blocked,
@@ -10179,7 +10198,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             get_callback_trigger_ledger().snapshot_generation(),
             generation_before,
         )
-        result = flow._verification_result
+        result = flow._admission_transaction.outcome
         assert result is not None
         self.assertTrue(result.inbound_verified)
 
@@ -10207,10 +10226,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 return None
 
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FailChannel):
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FailChannel):
             result = await self._drive_verification(flow)
 
-        verification = flow._verification_result
+        verification = flow._admission_transaction.outcome
         assert verification is not None
         self.assertEqual(verification.failure_reason, sv.FAILURE_SESSION_CLAIMED)
         # No inbound classification; the same flow offers retry or manual setup.
@@ -10254,11 +10273,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return real_release(registry_self, owner)
 
         with patch.object(
-            config_flow_module, "ObservedSessionRestartChannel", _HangingChannel
+            admission_transaction_module, "ObservedSessionRestartChannel", _HangingChannel
         ), patch.object(CallbackSessionRegistry, "release", _tracking_release):
             progress = await flow.async_step_verify_connection_progress()
             self.assertEqual(progress["type"], "progress")
-            task = flow._verification_task
+            task = flow._admission_task
             await asyncio.wait_for(restart_started.wait(), timeout=5)
             # The claim is held while the verification is in flight (promotion
             # to the full PN already happened before the restart).
@@ -10486,7 +10505,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 return None
 
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel):
             await self._drive_verification(flow)
 
         # Every flow model adopted the enriched FULL PN.
@@ -10557,18 +10576,18 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.sleep(30)
 
-        with patch.object(flow, "_async_run_strategy_verification", side_effect=_hang):
+        with patch.object(flow._admission_transaction, "async_run", side_effect=_hang):
             progress = await flow.async_step_verify_connection_progress()
             self.assertEqual(progress["type"], "progress")
-            task = flow._verification_task
+            task = flow._admission_task
             await started.wait()
 
         flow.async_remove()
         with suppress(asyncio.CancelledError):
             await task
         self.assertTrue(task.cancelled())
-        self.assertIsNone(flow._verification_task)
-        self.assertIsNone(flow._admission_request)
+        self.assertIsNone(flow._admission_task)
+        self.assertIsNone(flow._admission_transaction)
 
     # ---- ownership handoff: config flow -> entry (items 1, 2, 3, 7, 9) ----
 
@@ -11480,7 +11499,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 return None
 
-        with patch.object(config_flow_module, "ObservedSessionRestartChannel", _FakeChannel):
+        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel):
             await self._drive_verification(flow)
 
         # Success HELD the claim (item 2), under a unique per-attempt owner.
@@ -11502,7 +11521,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
         # Confirm committed the handoff; flow cleanup must not release it.
-        self.assertTrue(flow._callback_ownership_handed_off)
+        self.assertTrue(flow._admission_transaction.handed_off)
         flow.async_remove()
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner)
 

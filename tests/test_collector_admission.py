@@ -285,13 +285,17 @@ class CollectorAdmissionArchitectureGuards(unittest.TestCase):
         self.assertNotIn("_strategy_verification_context = {", self.module_source)
 
     def test_exactly_one_admission_entrypoint_owns_the_transaction(self) -> None:
-        # Only the ONE entrypoint mints the in-flight admission request; every
+        # Only the ONE entrypoint mints the in-flight admission TRANSACTION; every
         # other write clears it. That is what makes it the single verifier gate.
         self.assertIn("_async_begin_collector_admission", self.method_names)
-        sets_request = self.module_source.count("self._admission_request = request")
-        self.assertEqual(sets_request, 1, "more than one admission entrypoint sets the request")
+        mints = self.module_source.count(
+            "self._admission_transaction = CollectorAdmissionTransaction("
+        )
+        self.assertEqual(mints, 1, "more than one admission entrypoint mints the transaction")
         entry = self._method_source("_async_begin_collector_admission")
-        self.assertIn("self._admission_request = request", entry)
+        self.assertIn(
+            "self._admission_transaction = CollectorAdmissionTransaction(", entry
+        )
 
     def test_both_source_adapters_use_the_one_entrypoint(self) -> None:
         discovery = self._method_source("async_step_integration_discovery")
@@ -327,16 +331,16 @@ class CollectorAdmissionArchitectureGuards(unittest.TestCase):
         self,
     ) -> None:
         # SOURCE-NEUTRAL: the terminal guard keys on the typed in-flight
-        # CollectorAdmissionRequest (set by BOTH adapters through the ONE
+        # CollectorAdmissionTransaction (set by BOTH adapters through the ONE
         # entrypoint), NOT on the selected-result projection -- integration
         # discovery's selected result carries no observed_session, so keying on
         # it would silently miss the discovery source.
         ids = self._code_identifiers(
             self._method_source("_fresh_observed_session_entry_is_unverified")
         )
-        # Keyed on the typed in-flight request + the real recovery proof ...
-        self.assertIn("_admission_request", ids)
-        self.assertIn("CollectorAdmissionRequest", ids)
+        # Keyed on the typed in-flight transaction + the real recovery proof ...
+        self.assertIn("_admission_transaction", ids)
+        self.assertIn("CollectorAdmissionTransaction", ids)
         self.assertIn("inbound_verified", ids)
         # ... never on the selected-result projection, origin, or kind markers.
         for banned in (
@@ -366,26 +370,38 @@ class CollectorAdmissionArchitectureGuards(unittest.TestCase):
         }
 
     def test_run_verification_never_reads_discovery_identity_source(self) -> None:
-        # blocker 2: session identity authority after the admission entrypoint
-        # comes ONLY from the typed admission request + typed verifier outcomes.
-        # The run must NOT sniff the eybond_discovery context for a wire identity
-        # / require_exact / session ownership decision.
-        source = self._method_source("_async_run_strategy_verification")
-        literals = self._string_literals(source)
-        self.assertNotIn(
-            "collector_identity_source",
-            literals,
-            msg="run-verification must not read collector_identity_source",
+        # blocker 2 (now Batch 2B): the admission run lives in the NEUTRAL
+        # transaction. Identity authority comes ONLY from the typed observation +
+        # typed verifier outcomes -- it structurally cannot sniff the flow's
+        # eybond_discovery context for a wire identity / require_exact / ownership.
+        import ast
+
+        txn_source = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "connection"
+            / "admission_transaction.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(txn_source)
+        run = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "async_run"
         )
-        self.assertNotIn(
-            "eybond_discovery",
-            literals,
-            msg="run-verification must not read the eybond_discovery context",
-        )
-        # It DOES take identity from the typed request + the enriched expected PN.
-        ids = self._code_identifiers(source)
-        self.assertIn("_admission_request", ids)
-        self.assertIn("_verification_expected_pn", ids)
+        literals = {
+            node.value
+            for node in ast.walk(run)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        self.assertNotIn("collector_identity_source", literals)
+        self.assertNotIn("eybond_discovery", literals)
+        # It DOES take identity from the typed observation + the enriched
+        # expected PN.
+        attrs = {n.attr for n in ast.walk(run) if isinstance(n, ast.Attribute)}
+        self.assertIn("identity_source", attrs)
+        self.assertIn("_expected_pn", attrs)
 
 
 class AdmissionDependencyGraphGuards(unittest.TestCase):

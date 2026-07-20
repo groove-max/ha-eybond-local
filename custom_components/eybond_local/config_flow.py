@@ -216,9 +216,7 @@ from .onboarding.presentation import (
     scan_result_status_code,
 )
 from .drivers.registry import poll_policy_for_driver_key
-from .connection.callback_ledger import get_callback_trigger_ledger
 from .connection.session_registry import (
-    identity_source_is_strong,
     pn_is_same_identity,
 )
 from .connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
@@ -229,6 +227,11 @@ from .onboarding.callback_identity import (
     OnboardingWireProbeIntent,
     async_run_callback_identity_transaction,
 )
+from .connection.admission_transaction import (
+    CollectorAdmissionTransaction,
+    HANDOFF_ALREADY_CONFIGURED,
+    HANDOFF_NOT_PREPARED,
+)
 from .connection.recovery.terminal import (
     RecoveryTerminalInput,
     merge_recovery_contract,
@@ -237,10 +240,6 @@ from .connection.recovery.terminal import (
 from .connection.recovery.verification import (
     CallbackRecoveryRoute,
     EVIDENCE_USER_CONFIRMED_SESSION,
-    FAILURE_SESSION_CLAIMED,
-    InboundRecoveryOutcome,
-    InboundRecoveryVerifier,
-    ObservedSessionRestartChannel,
     async_run_callback_recovery_transaction,
 )
 from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
@@ -1707,20 +1706,24 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._detection_summary_context = "auto"
         self._confirm_poll_interval_pending_input: dict[str, Any] = {}
         self._confirm_poll_interval_pending_step_id = "confirm"
-        # The ONE typed admission transaction in flight, or ``None``. It carries
-        # the immutable ``ObservedCollectorSession`` every source adapter builds;
-        # the peer hint inside it is ONLY an editable form hint, never
-        # identity/ownership. This replaces the former loose
-        # ``_strategy_verification_context`` dict so session authority is typed.
-        self._admission_request: CollectorAdmissionRequest | None = None
-        self._verification_next_step = "detection_summary"
-        self._verification_task: asyncio.Task | None = None
-        self._verification_result: InboundRecoveryOutcome | None = None
+        # The ONE neutral admission transaction in flight, or ``None``. It OWNS
+        # the observed-session -> restart -> reconnect -> InboundRecoveryProof
+        # lifecycle (request, working PN + enrichment, session resolution,
+        # registry claim, restart channel, silent probe, verifier, outcome,
+        # retry, cleanup, terminal handoff). The flow keeps only this reference,
+        # the HA progress task, the UI continuation and result display.
+        self._admission_transaction: CollectorAdmissionTransaction | None = None
+        self._admission_next_step = "detection_summary"
+        self._admission_task: asyncio.Task | None = None
         # The typed recovery evidence carried from a successful verification to
         # the terminal entry-create path. ONLY the terminal boundary
         # (connection.recovery.terminal) turns it into the entry's
         # RecoveryContract; it is never persisted anywhere else.
         self._recovery_terminal = RecoveryTerminalInput.none()
+        # LEGACY manual/reconfigure callback state (NOT admission): the admission
+        # transaction never reads or writes these. They carry the expected PN /
+        # session context for the manual callback identity+recovery path and the
+        # reconfigure repair path only.
         self._verification_expected_pn = ""
         self._verification_old_session_id = ""
         # Reconfigure of an existing PN-less entry has no prior identity to match:
@@ -1746,10 +1749,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._repair_entry_id = ""
         self._verified_connection_strategy = ""
         self._verified_strategy_evidence = ""
-        # Temporary registry claim held for the duration of the verification.
-        # The claim makes the CallbackSessionRegistry the single owner of the
-        # session being verified (passive discovery stops republishing it) and
-        # is ALWAYS released: run-task finally, cancel, abort, async_remove.
+        # LEGACY manual/reconfigure + callback-recovery terminal claim (NOT
+        # admission): the admission transaction owns its OWN registry claim
+        # internally and never touches these. They hold the flow-owned claim for
+        # the manual known-IP / reconfigure / adopted callback-recovery terminal
+        # only, released via ``_release_verification_claim``.
         self._verification_claim_owner = ""
         self._verification_registry: Any = None
         self._manual_verified_full_pn = ""
@@ -1802,32 +1806,34 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     def async_remove(self) -> None:
         """Flow finished or was aborted: release any verification resources.
 
-        Cancelling the progress task makes ``_async_run_strategy_verification``
-        close the claimed restart channel and release the registry claim, so no
-        temporary claim or background wait survives a cancelled/completed flow.
-        The direct release below also covers removal before/after the task runs.
+        Cancelling the admission progress task makes the transaction's own
+        ``async_run`` finally close the restart channel/silent probe and release
+        its registry claim, so no temporary claim or background wait survives a
+        cancelled/completed flow. The direct transaction ``release`` below covers
+        removal before/after the task runs (a no-op once the claim was handed off
+        to entry setup, so a successful create keeps its owner).
         """
 
-        task = self._verification_task
-        self._verification_task = None
+        task = self._admission_task
+        self._admission_task = None
+        transaction = self._admission_transaction
+        self._admission_transaction = None
         if task is not None and not task.done():
             # The claim is released by the task's ``finally`` AFTER the restart
-            # channel is closed -- never release it early here, or another
-            # owner could take the identity while our socket is still open.
+            # channel is closed -- never release it early here, or another owner
+            # could take the identity while our socket is still open.
             task.cancel()
-        else:
-            self._release_verification_claim()
+        elif transaction is not None:
+            transaction.release()
         recovery_task = self._manual_recovery_task
         self._manual_recovery_task = None
         if recovery_task is not None and not recovery_task.done():
             # The recovery wrapper's own finally releases ITS claim; the flow
             # only cancels the producer task here.
             recovery_task.cancel()
-        # A completed-but-unadopted recovery outcome still owns a prepared
-        # handoff: release exactly that owner (a no-op once adopted -- the
-        # flow refs and the handed_off flag govern it from then on).
+        # Legacy manual/reconfigure claim + unadopted callback recovery outcome.
+        self._release_verification_claim()
         self._release_unadopted_recovery_outcome()
-        self._admission_request = None
 
     @staticmethod
     @callback
@@ -2050,15 +2056,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if type(request) is not CollectorAdmissionRequest:
             # Trust boundary: a duck-typed request cannot authorize admission.
             raise TypeError("collector_admission_request_required")
-        observed = request.observed_session
-        self._admission_request = request
-        self._verification_next_step = (
+        # The neutral transaction owns the request, working PN, session
+        # resolution, claim, channel, probe, verifier, outcome and handoff. The
+        # flow injects only the registry lookup, the listener host and the
+        # (patchable) timeout policy -- never reads the transaction's registry or
+        # owner directly.
+        self._admission_transaction = CollectorAdmissionTransaction(
+            request,
+            registry_provider=self._callback_session_registry,
+            listener_host=_PASSIVE_LISTENER_HOST,
+            policy_provider=lambda: _ONBOARDING_TIMEOUT_POLICY,
+        )
+        self._admission_next_step = (
             "driver_choice"
             if self._selected_result_needs_driver_choice()
             else "detection_summary"
         )
-        self._verification_expected_pn = observed.collector_pn
-        self._verification_old_session_id = observed.session_id
         return await self.async_step_verify_connection()
 
     async def _async_admit_selected_scan_result(
@@ -2093,7 +2106,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     # ---- steps: connection-strategy verification (passive discovery) ----
 
     async def _async_continue_after_verification(self) -> ConfigFlowResult:
-        if self._verification_next_step == "driver_choice":
+        if self._admission_next_step == "driver_choice":
             return await self.async_step_driver_choice()
         return await self.async_step_detection_summary()
 
@@ -2104,8 +2117,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Consent step: verifying restarts the collector and interrupts the link."""
 
-        request = self._admission_request
-        if request is None:
+        transaction = self._admission_transaction
+        if transaction is None:
             return await self._async_continue_after_verification()
         if user_input is not None:
             return await self.async_step_verify_connection_progress()
@@ -2115,8 +2128,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 # The expected PN follows any weak->strong enrichment; the peer
                 # is only an editable route hint, never identity.
-                "collector_pn": str(self._verification_expected_pn or ""),
-                "peer_ip": str(request.observed_session.peer_hint or ""),
+                "collector_pn": str(transaction.expected_pn or ""),
+                "peer_ip": str(transaction.peer_hint or ""),
             },
         )
 
@@ -2127,19 +2140,22 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """Run the restart/reconnect verification as a bounded progress task."""
 
         del user_input
-        task = self._verification_task
-        if task is None:
-            task = self.hass.async_create_task(self._async_run_strategy_verification())
-            self._verification_task = task
-        if task.done():
-            self._verification_task = None
+        transaction = self._admission_transaction
+        task = self._admission_task
+        if task is None and transaction is not None:
+            task = self.hass.async_create_task(transaction.async_run())
+            self._admission_task = task
+        if task is None or task.done():
+            self._admission_task = None
             return self.async_show_progress_done(next_step_id="verify_connection_result")
         return self.async_show_progress(
             step_id="verify_connection_progress",
             progress_action="verify_connection",
             progress_task=task,
             description_placeholders={
-                "collector_pn": str(self._verification_expected_pn or ""),
+                "collector_pn": str(
+                    transaction.expected_pn if transaction is not None else ""
+                ),
             },
         )
 
@@ -2150,12 +2166,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """Route on the verification outcome; never guess a strategy."""
 
         del user_input
-        result = self._verification_result
-        enriched_pn = str(getattr(result, "collector_pn", "") or "").strip()
-        abort = await self._async_adopt_enriched_collector_pn(enriched_pn)
+        transaction = self._admission_transaction
+        if transaction is None:
+            return await self._async_continue_after_verification()
+        # The transaction already adopted any weak->strong enriched FULL PN into
+        # its working identity; the flow only PROPAGATES that PN through its own
+        # models (unique_id, candidates, title) and aborts on a late collision.
+        # ``previous`` is the ORIGINAL observation PN the candidates still carry.
+        abort = await self._async_propagate_enriched_pn(
+            transaction.expected_pn,
+            previous=transaction.request.observed_session.collector_pn,
+        )
         if abort is not None:
             return abort
-        if result is not None and result.inbound_verified:
+        if transaction.verified:
             # The strategy is the INTENT of this passive-discovery inbound flow;
             # the verifier proved RECOVERY, not strategy. No legacy
             # reboot_reconnect evidence is written anymore -- the typed proof
@@ -2163,19 +2187,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
             self._verified_strategy_evidence = ""
             # Typed, fail-closed: only a REAL verified InboundRecoveryOutcome
-            # can become terminal recovery evidence (identity outcomes and
-            # ducks are TypeErrors inside the constructor).
-            self._recovery_terminal = RecoveryTerminalInput.from_inbound_outcome(
-                result
-            )
-            # NOTE: the admission request is deliberately NOT cleared here. It is
-            # the source-neutral marker the entry terminal uses to know this entry
-            # is an admitted observed collector session; the terminal's fail-closed
-            # guard needs it to survive from a SUCCESSFUL verification all the way
-            # to entry creation (integration discovery's selected result carries no
-            # observed_session, so a selected-result projection would miss it).
-            # It IS cleared on the explicit manual-callback bridge, cancel, and
-            # async_remove.
+            # can become terminal recovery evidence.
+            self._recovery_terminal = transaction.terminal_input
+            # NOTE: the admission transaction is deliberately NOT cleared here. It
+            # is the source-neutral marker the entry terminal uses to know this
+            # entry is an admitted observed collector session AND it holds the
+            # successful claim until the terminal handoff. It IS cleared on the
+            # explicit manual-callback bridge, cancel, and async_remove.
             return await self._async_continue_after_verification()
         # Inbound is NOT confirmed. Do not auto-classify as callback_on_demand:
         # continue this same flow on the existing manual step, whose one-shot
@@ -2184,7 +2202,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # editable hint (it may be a router/NAT address, not the collector).
         logger.info(
             "Passive discovery inbound verification not confirmed (%s); offering retry or manual callback",
-            getattr(result, "failure_reason", "") or "verification_unavailable",
+            transaction.failure_reason or "verification_unavailable",
         )
         return await self.async_step_verify_connection_failed()
 
@@ -2205,9 +2223,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """
 
         del user_input
-        failure_reason = str(
-            getattr(self._verification_result, "failure_reason", "") or ""
-        )
+        transaction = self._admission_transaction
+        failure_reason = transaction.failure_reason if transaction is not None else ""
         return self.async_show_menu(
             step_id="verify_connection_failed",
             menu_options=[
@@ -2216,7 +2233,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "verify_connection_cancel",
             ],
             description_placeholders={
-                "collector_pn": self._verification_expected_pn,
+                "collector_pn": (
+                    transaction.expected_pn if transaction is not None else ""
+                ),
                 "failure_explanation": self._recovery_failure_explanation(
                     failure_reason
                 ),
@@ -2227,12 +2246,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Retry the behavioral check from its consent step in the same flow."""
+        """Retry the behavioral check from its consent step in the same flow.
+
+        The transaction fully releases its old failed claim and clears the
+        outcome, KEEPING the weak->strong enriched full PN so the retry resolves
+        the replacement full-PN session.
+        """
 
         del user_input
-        self._verification_result = None
+        transaction = self._admission_transaction
+        if transaction is not None:
+            transaction.reset_for_retry()
         self._recovery_terminal = RecoveryTerminalInput.none()
-        self._verification_task = None
+        self._admission_task = None
         return await self.async_step_verify_connection()
 
     async def async_step_verify_connection_manual_callback(
@@ -2252,8 +2278,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """
 
         del user_input
-        self._admission_request = None
-        self._verification_result = None
+        # Close the admission transaction FIRST: its owner must be released (and
+        # its channels closed) before the manual callback path starts, so no
+        # admission claim survives into the new attempt.
+        transaction = self._admission_transaction
+        self._admission_transaction = None
+        self._admission_task = None
+        if transaction is not None:
+            # The one allowed hand-across into the legacy manual state: the
+            # expected FULL PN, the resolved session context, and the editable
+            # peer hint -- nothing else, and only after ownership is closed.
+            self._verification_expected_pn = transaction.expected_pn
+            self._verification_old_session_id = transaction.old_session_id
+            await transaction.async_close()
         self._recovery_terminal = RecoveryTerminalInput.none()
         # Only a form DEFAULT; the manual step still requires the user to
         # submit, and its own callback identity/recovery path proves it.
@@ -2272,31 +2309,46 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """
 
         del user_input
-        self._release_verification_claim()
+        transaction = self._admission_transaction
+        self._admission_transaction = None
+        self._admission_task = None
+        if transaction is not None:
+            # Close channels then release the admission owner (idempotent).
+            await transaction.async_close()
         self._release_unadopted_recovery_outcome()
-        self._admission_request = None
         return self.async_abort(reason="discovery_cancelled")
 
     async def _async_adopt_enriched_collector_pn(self, full_pn: str):
-        """Propagate a weak->strong enriched FULL PN through every flow model.
+        """Adopt a weak->strong enriched FULL PN into the LEGACY manual/reconfigure
+        expected PN, then propagate it through the flow models.
 
-        One helper so the entry cannot end up with diverging identities: the
-        verification context, the expected PN, the flow unique_id, the selected
-        onboarding candidate (whose CollectorInfo feeds CONF_COLLECTOR_PN and
-        the entry title), every matching autodetect candidate, and the dialog
-        title placeholders all adopt the same full PN. Returns an abort result
-        when the full PN turns out to be already configured, else ``None``.
-        Never starts a second flow.
+        Used only by the manual callback / driver-choice paths (the admission
+        transaction owns its OWN working PN). Returns an abort result when the
+        full PN is already configured, else ``None``.
         """
 
         enriched = str(full_pn or "").strip()
         if not enriched or enriched == self._verification_expected_pn:
             return None
         previous = self._verification_expected_pn
-        # ``_verification_expected_pn`` is the authoritative enriched identity the
-        # verifier and forms read; the immutable admission request stays a record
-        # of the ORIGINAL observation and is intentionally not rewritten.
         self._verification_expected_pn = enriched
+        return await self._async_propagate_enriched_pn(enriched, previous=previous)
+
+    async def _async_propagate_enriched_pn(self, enriched: str, *, previous: str):
+        """Propagate one enriched FULL PN through the flow's OWN models.
+
+        The flow unique_id, the selected onboarding candidate (whose CollectorInfo
+        feeds CONF_COLLECTOR_PN and the entry title), every matching autodetect
+        candidate, and the dialog title placeholders adopt ``enriched``. Candidates
+        that already carry a DIFFERENT collector's PN (``!= previous``) are left
+        untouched. Returns an ``already_configured`` abort when the full PN is now
+        configured, else ``None``. Never starts a second flow.
+        """
+
+        enriched = str(enriched or "").strip()
+        previous = str(previous or "").strip()
+        if not enriched or enriched == previous:
+            return None
         discovery_context = self.context.get("eybond_discovery")
         if isinstance(discovery_context, dict):
             discovery_context[CONF_COLLECTOR_PN] = enriched
@@ -2307,210 +2359,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             collector_info = getattr(
                 getattr(candidate, "collector", None), "collector", None
             )
+            if collector_info is None:
+                continue
             candidate_pn = str(
                 getattr(collector_info, "collector_pn", "") or ""
             ).strip()
-            if collector_info is None:
-                continue
             if candidate_pn and previous and candidate_pn != previous:
                 continue
             collector_info.collector_pn = enriched
         self.context["title_placeholders"] = {"name": f"Collector PN {enriched}"}
         await self.async_set_unique_id(f"collector:{enriched}")
         return self._abort_if_unique_id_configured()
-
-    async def _async_run_strategy_verification(self) -> None:
-        """Progress-task body: claim the session in the registry, then verify.
-
-        The temporary registry claim is created BEFORE the restart and held for
-        the whole verification (including the reconnect wait), so passive
-        discovery cannot republish the session and no other entry/flow can claim
-        the same durable identity meanwhile. Released in ``finally`` on every
-        path (success, failure, cancel).
-        """
-
-        request = self._admission_request
-        observed = request.observed_session if request is not None else None
-        # The CURRENT expected identity, not the stale historical observation:
-        # ``_verification_expected_pn`` is the observation PN on the first attempt
-        # and the typed weak->strong enriched FULL PN after a verification enriched
-        # it. Reading ``observed.collector_pn`` here would make a retry re-resolve
-        # by the original SHORT PN and claim the old session instead of the
-        # replacement full-PN one. The observation stays an immutable record.
-        collector_pn = str(self._verification_expected_pn or "").strip()
-        if not collector_pn and observed is not None:
-            collector_pn = observed.collector_pn
-        session_id = observed.session_id if observed is not None else ""
-        port = observed.listener_port if observed is not None else DEFAULT_TCP_PORT
-
-        registry = self._callback_session_registry()
-        owner = f"strategy_verification:{uuid.uuid4().hex}"
-        try:
-            if registry is not None:
-                # A config flow may remain open across a collector reconnect or
-                # OTA update.  Its discovery-time session id is transient and
-                # may already be closed.  Re-resolve the CURRENT socket from the
-                # registry immediately before claiming it.  ``require_exact``
-                # follows the observation's identity STRENGTH: a weak identity may
-                # only follow an EXACT PN -- which, after enrichment, is the exact
-                # FULL PN, so a replacement full-PN session is found while foreign
-                # and merely same-prefix sessions are excluded; strong AT/FC2
-                # evidence may use the registry's centralized short/full
-                # reconciliation. Session identity authority comes ONLY from the
-                # typed admission request -- never the eybond_discovery context
-                # (which stays display/title/dedup only).
-                identity_source = observed.identity_source if observed is not None else ""
-                current_session = registry.current_session_for_pn(
-                    collector_pn,
-                    require_exact=not identity_source_is_strong(identity_source),
-                )
-                if current_session is not None:
-                    session_id = current_session.session_id
-                    self._verification_old_session_id = session_id
-                # TRANSIENT claim strictly by session_id: a weak/short PN is
-                # never copied into durable ownership and other same-prefix
-                # sessions stay unowned. Promotion to the exact full PN happens
-                # only after the registry certifies strong identity (the
-                # verifier's promote hook, before baseline/restart).
-                registry.claim_session(owner, session_id=session_id)
-                self._verification_registry = registry
-                self._verification_claim_owner = owner
-        except ValueError as exc:
-            # The session/identity is already owned by a config entry or another
-            # verification: never hijack it.
-            logger.info(
-                "Strategy verification: session for %s already claimed: %s",
-                collector_pn,
-                exc,
-            )
-            self._verification_result = InboundRecoveryOutcome(
-                failure_reason=FAILURE_SESSION_CLAIMED,
-                collector_pn=collector_pn,
-            )
-            return
-
-        def _claimed_session_id() -> str:
-            # The registry-owned claim is the ONLY source for the socket the
-            # restart transport may take. Empty -> the channel raises a typed
-            # session_unavailable; no fallback to the initially observed id and
-            # no PN/IP-based socket selection.
-            if registry is None:
-                return ""
-            try:
-                return str(registry.claimed_session_id(owner) or "").strip()
-            except Exception:
-                return ""
-
-        def _promote_claim(full_pn: str) -> None:
-            if registry is not None:
-                registry.promote_claim_to_full_pn(owner, full_pn)
-
-        def _retarget_claim(new_session_id: str) -> bool:
-            # Idempotent move of the registry claim onto the NEW socket. Success
-            # of the verification requires the claim to end up here, so the
-            # ownership handoff prepared at entry creation carries the session
-            # the collector actually opened after its reboot.
-            if registry is None:
-                return True
-            try:
-                if registry.claimed_session_id(owner) == new_session_id:
-                    return True
-                return bool(
-                    registry.retarget_claim_to_reconnected_session(
-                        owner, new_session_id
-                    )
-                )
-            except ValueError:
-                return False
-
-        def _session_handle_for_claim():
-            # SESSION-ID-pinned: the transient claim may not be promoted to a
-            # durable PN yet, and the management operations must land on the
-            # exact socket the claim holds -- never a same-PN sibling.
-            if registry is None:
-                return None
-            return registry.session_handle_for_claimed_session(owner)
-
-        channel = ObservedSessionRestartChannel(
-            host=_PASSIVE_LISTENER_HOST,
-            port=port,
-            collector_pn=collector_pn,
-            session_id=session_id,
-            session_id_provider=_claimed_session_id if registry is not None else None,
-            handle_provider=_session_handle_for_claim if registry is not None else None,
-        )
-
-        async def _probe_reconnected_identity(new_session_id: str) -> str:
-            # The verifier already retargeted the claim onto this candidate
-            # (exactly once per socket). The restart channel was closed after
-            # the old socket became terminal; its dynamic registry provider now
-            # resolves exactly the new socket, and the negotiated-wire identity
-            # read strengthens that session's identity without PN/IP guessing.
-            del new_session_id
-            return await channel.async_probe_identity()
-
-        def _aware_clock() -> str:
-            from datetime import datetime, timezone
-
-            return datetime.now(timezone.utc).isoformat()
-
-        # The verifier OWNS its causal window: it takes the exclusive callback
-        # causality lease before the baseline and holds the trigger inhibitor
-        # for the whole verification -- this flow cannot forget to wrap it.
-        from .collector.silent_session_probe import (
-            SilentSessionIdentityProbeChannel,
-        )
-
-        silent_probe = SilentSessionIdentityProbeChannel(
-            host=_PASSIVE_LISTENER_HOST, port=port
-        )
-        await silent_probe.async_open()
-        verifier = InboundRecoveryVerifier(
-            collector_pn=collector_pn,
-            session_id=session_id,
-            restart_channel=channel,
-            sessions_source=self._verification_sessions_source,
-            silent_session_probe=silent_probe,
-            clock=_aware_clock,
-            policy=_ONBOARDING_TIMEOUT_POLICY,
-            callback_trigger_generation=(
-                get_callback_trigger_ledger().snapshot_generation
-            ),
-            promote_claim=_promote_claim if registry is not None else None,
-            retarget_claim=_retarget_claim if registry is not None else None,
-            probe_reconnected_identity=(
-                _probe_reconnected_identity if registry is not None else None
-            ),
-        )
-        try:
-            self._verification_result = await verifier.async_verify()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Passive discovery strategy verification failed")
-            self._verification_result = InboundRecoveryOutcome(
-                failure_reason="verification_error",
-                collector_pn=collector_pn,
-            )
-        finally:
-            # Ordering matters: fully close the restart channel (and the socket
-            # it claimed) BEFORE deciding on the claim, so no other owner can grab
-            # the identity while our socket is still open.
-            with suppress(Exception):
-                await silent_probe.async_close()
-            with suppress(Exception):
-                await channel.async_close()
-            result = self._verification_result
-            if result is not None and getattr(result, "inbound_verified", False):
-                # SUCCESS: keep the strong full-PN claim held by this flow (the
-                # socket is now closed but the durable identity stays owned). It
-                # is committed at entry creation via prepare_handoff and completed
-                # by setup, so the runtime owns the session before it starts. It
-                # is released only if the flow is cancelled/aborted before create.
-                pass
-            else:
-                # Timeout / mismatch / cancel / error: free the claim as before.
-                self._release_verification_claim()
 
     def _callback_session_registry(self):
         from .passive_discovery import get_callback_session_registry
@@ -2519,43 +2378,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return get_callback_session_registry(self.hass)
         except Exception:
             return None
-
-    def _verification_sessions_source(self) -> tuple[dict[str, Any], ...]:
-        """Public registry view of live callback sessions (no listener internals).
-
-        ``has_strong_identity`` is the registry's centralized strong/weak
-        verdict; the verifier never re-derives it from identity sources or PN
-        length.
-        """
-
-        registry = self._callback_session_registry()
-        if registry is None:
-            return ()
-        try:
-            # Per-socket view: verification must tell one collector's OLD socket
-            # apart from its NEW one; the coalesced discovery view cannot.
-            sessions = registry.observed_sessions_per_socket()
-        except Exception:
-            logger.debug("Callback session registry unavailable", exc_info=True)
-            return ()
-        return tuple(
-            {
-                "session_id": str(getattr(session, "session_id", "") or ""),
-                "collector_pn": str(getattr(session, "collector_pn", "") or ""),
-                "state": str(getattr(session, "state", "") or ""),
-                "has_strong_identity": bool(
-                    getattr(session, "has_strong_identity", False)
-                ),
-                # The registry-certified identity source and the raw listener
-                # observation: the verifier builds the typed proof from these
-                # (strong-source gate + negotiated live wire, informative).
-                "collector_identity_source": str(
-                    getattr(session, "identity_source", "") or ""
-                ),
-                "raw": dict(getattr(session, "raw", None) or {}),
-            }
-            for session in sessions
-        )
 
     def _claim_manual_callback_session(
         self,
@@ -5031,14 +4853,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         unverified.
 
         SOURCE-NEUTRAL defense-in-depth, keyed ONLY on the TYPED in-flight
-        ``self._admission_request`` -- the single carrier BOTH source adapters set
-        through the ONE entrypoint. It is deliberately not keyed on
+        ``self._admission_transaction`` -- the single carrier BOTH source adapters
+        set through the ONE entrypoint. It is deliberately not keyed on
         ``self._selected_result.observed_session`` (integration discovery's
         selected result carries none, so that projection would silently miss the
         discovery source), nor on ``connection_mode`` / a ``detection`` reason /
         origin / collector kind / cloud family / hostname / peer IP / model. Other
         explicit/manual and virtual bridge terminals (which run without an
-        admission request) retain their existing semantics.
+        admission transaction) retain their existing semantics.
 
         An admitted observed session may only become a fresh external inbound
         entry when it carries a REAL verified ``InboundRecoveryProof``
@@ -5047,7 +4869,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         behavioral proof that also satisfies it.
         """
 
-        if not isinstance(self._admission_request, CollectorAdmissionRequest):
+        if not isinstance(self._admission_transaction, CollectorAdmissionTransaction):
             return False
 
         if resolve_connection_strategy(data, options) != CONNECTION_STRATEGY_INBOUND:
@@ -5308,7 +5130,26 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         set (so the claim survives between ``async_create_entry`` and setup), so
         setting it for a handoff that never happened would suppress this flow's
         own cleanup and strand an owner in the registry.
+
+        The OBSERVED-SESSION admission claim lives inside the transaction: the
+        flow delegates prepare/commit to it (never reads its registry/owner) and
+        maps the transaction's typed refusal onto the same aborts. The legacy
+        manual/reconfigure/adopted-callback-recovery claim below uses the flow's
+        own ``_verification_*`` owner unchanged.
         """
+
+        transaction = self._admission_transaction
+        if transaction is not None and transaction.holds_claim:
+            refusal = transaction.prepare_handoff(collector_pn)
+            if refusal == HANDOFF_ALREADY_CONFIGURED:
+                return self.async_abort(reason="already_configured")
+            if refusal == HANDOFF_NOT_PREPARED:
+                if claim_required:
+                    return self.async_abort(
+                        reason="recovery_ownership_unavailable"
+                    )
+                return None
+            return None
 
         registry = self._verification_registry
         owner = self._verification_claim_owner
@@ -5413,6 +5254,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         re-raised by the caller.
         """
 
+        transaction = self._admission_transaction
+        if transaction is not None and transaction.handed_off:
+            transaction.rollback_handoff()
+            return
         if not self._callback_ownership_handed_off:
             return
         self._callback_ownership_handed_off = False
@@ -5488,14 +5333,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             # handoff now survives flow cleanup until entry setup completes it.
             self._callback_ownership_handed_off = True
             return result
-        if recovery.has_proof and (
-            self._verification_registry is None
-            or not self._verification_claim_owner
-        ):
+        transaction = self._admission_transaction
+        flow_owns_claim = (
+            transaction is not None and transaction.holds_claim
+        ) or bool(self._verification_registry is not None and self._verification_claim_owner)
+        if recovery.has_proof and not flow_owns_claim:
             # A proof-bearing inbound terminal REQUIRES this flow's own
-            # verification claim: a recovery proof without ownership of the
-            # proven session must never create an entry (and the staged
-            # contract dies with the flow -- nothing is persisted).
+            # verification claim (either the admission transaction's held claim
+            # or the legacy manual/reconfigure owner): a recovery proof without
+            # ownership of the proven session must never create an entry (and the
+            # staged contract dies with the flow -- nothing is persisted).
             logger.info(
                 "Inbound recovery terminal for %s has no flow-owned claim; refusing",
                 collector_pn,
