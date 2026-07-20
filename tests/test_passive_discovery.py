@@ -432,6 +432,75 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
 
+    async def test_interactive_snapshot_includes_retired_live_session(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-8899-retired",
+            "peer_ip": "203.0.113.17",
+            "collector_pn": "V001107SYN282291016",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        discovery._listeners[8899] = _FakeListener((session,))
+        discovery._registry.claim(
+            "entry-v0011",
+            collector_pn="V001107SYN282291016",
+        )
+        discovery.retire_entry_sessions("entry-v0011")
+        discovery._registry.release("entry-v0011")
+
+        await discovery._async_poll_once()
+        observations = discovery.snapshot_unclaimed_collector_sessions()
+
+        # Passive publication stays retired, while an explicit interactive scan
+        # sees the same live, unclaimed exact session from the shared inventory.
+        self.assertEqual(hass.config_entries.flow.flows, [])
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].collector_pn, "V001107SYN282291016")
+        self.assertEqual(observations[0].session_id, "listener-8899-retired")
+        self.assertEqual(observations[0].listener_port, 8899)
+
+    async def test_retired_socket_survives_coalesced_winner_change(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        retired = {
+            "session_id": "listener-8899-retired",
+            "peer_ip": "203.0.113.17",
+            "collector_pn": "V001107SYN2822",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        listener = _FakeListener((retired,))
+        discovery._listeners[8899] = listener
+        discovery._registry.claim(
+            "entry-v0011",
+            collector_pn="V001107SYN2822",
+        )
+        discovery.retire_entry_sessions("entry-v0011")
+        discovery._registry.release("entry-v0011")
+
+        # A temporary same-PN socket becomes the coalesced registry winner. It is
+        # owned by an active scan, while the retired physical socket remains raw.
+        replacement = {
+            **retired,
+            "session_id": "listener-8899-scan-overlap",
+            "collector_pn": "V001107SYN282291016",
+        }
+        listener._sessions = (retired, replacement)
+        discovery._probe_suppressed_sessions.add(
+            "8899:listener-8899-scan-overlap"
+        )
+        await discovery._async_poll_once()
+
+        # When the overlap disappears, the original exact socket must still be
+        # retired; pruning through the old coalesced view lost this marker.
+        listener._sessions = (retired,)
+        await discovery._async_poll_once()
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
     async def test_user_refresh_republishes_retired_live_session_without_reconnect(self) -> None:
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)

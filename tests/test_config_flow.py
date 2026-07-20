@@ -341,6 +341,7 @@ from custom_components.eybond_local.const import (
     CONF_PROXY_ENABLED,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
+    DOMAIN,
     CONF_DRIVER_HINT,
     CONF_SMARTESS_COLLECTOR_VERSION,
     CONF_SMARTESS_DEVICE_ADDRESS,
@@ -1032,6 +1033,26 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["title"], "EyeBond Local — Discovery")
         self.assertEqual(result["data"], {"entry_role": "listener"})
         self.assertEqual(flow._test_unique_id, "eybond_local:listener")
+
+    async def test_listener_menu_option_refreshes_existing_background_discovery(self) -> None:
+        flow = self._make_flow()
+        service = types.SimpleNamespace(
+            async_show_discovered_devices_again=AsyncMock()
+        )
+        flow._abort_if_unique_id_configured = lambda: {
+            "type": "abort",
+            "reason": "already_configured",
+        }
+
+        with patch(
+            "custom_components.eybond_local.passive_discovery.get_passive_callback_discovery",
+            return_value=service,
+        ):
+            result = await flow.async_step_listener()
+
+        service.async_show_discovered_devices_again.assert_awaited_once_with()
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "background_discovery_refreshed")
 
     async def test_listener_import_uses_same_unique_bootstrap_entry(self) -> None:
         flow = self._make_flow()
@@ -4306,6 +4327,58 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = next(iter(flow._autodetect_results.values()))
         self.assertEqual(result.connection_mode, "callback_listener")
         self.assertEqual(result.collector.collector.collector_pn, "V000405SYN94677058")
+
+    async def test_do_scan_uses_shared_registry_candidate_hidden_from_background(self) -> None:
+        from custom_components.eybond_local.passive_discovery import (
+            PassiveCallbackDiscovery,
+        )
+
+        flow = self._make_flow()
+        discovery = PassiveCallbackDiscovery(flow.hass)
+        session = {
+            "session_id": "listener-18899-retired-v0011",
+            "peer_ip": "203.0.113.17",
+            "collector_pn": "V001107SYN282291016",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+
+        class _Listener:
+            def discovered_collector_sessions(self):
+                return (session,)
+
+        discovery._listeners[18899] = _Listener()
+        flow.hass.data[DOMAIN] = {"passive_callback_discovery": discovery}
+        discovery.registry.claim(
+            "removed-v0011",
+            collector_pn="V001107SYN282291016",
+        )
+        discovery.retire_entry_sessions("removed-v0011")
+        discovery.registry.release("removed-v0011")
+
+        class _FakeDetector:
+            async def async_passive_detect(self, **_kwargs):
+                # The scan's selected listener is 8899; this session lives on a
+                # different domain listener and is visible only through the
+                # shared candidate source.
+                return ()
+
+            async def async_auto_detect(self, **_kwargs):
+                raise AssertionError("shared live candidate must skip active UDP scan")
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(len(flow._autodetect_results), 1)
+        result = next(iter(flow._autodetect_results.values()))
+        self.assertEqual(result.collector.collector.collector_pn, "V001107SYN282291016")
+        self.assertIs(type(result.observed_session), ObservedCollectorSession)
+        self.assertEqual(result.observed_session.session_id, session["session_id"])
+        self.assertEqual(result.observed_session.listener_port, 18899)
 
     async def test_do_scan_passive_shortcut_never_starts_periodic_progress_updater(self) -> None:
         flow = self._make_flow()

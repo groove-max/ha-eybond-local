@@ -21,7 +21,7 @@
         "menu_options": {
           "auto": "Yes, the collector is already on my network",
           "bluetooth_setup": "No, connect the collector to Wi-Fi using Bluetooth first",
-          "listener": "Enable background discovery without adding a collector"
+          "listener": "Enable or refresh background discovery without adding a collector"
         }
       },
       "auto": {
@@ -350,7 +350,8 @@
       "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair.",
       "recovery_contract_conflict": "The verified recovery proof could not be stored: the entry already carries a recovery record for a different collector or one that cannot be read. Remove or repair that entry, then try again.",
       "recovery_ownership_unavailable": "The verified recovery session is no longer held for this collector. Run the verification again.",
-      "discovery_cancelled": "Discovery was cancelled. The collector can be added again later."
+      "discovery_cancelled": "Discovery was cancelled. The collector can be added again later.",
+      "background_discovery_refreshed": "Background discovery was already enabled. Its temporary history was cleared and currently connected collectors were checked again."
     }
   },
   "options": {

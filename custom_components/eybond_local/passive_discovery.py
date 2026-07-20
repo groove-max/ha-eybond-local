@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
+from .connection.admission import ObservedCollectorSession
 from .connection.session_registry import (
     CallbackSessionRegistry,
     identity_source_is_strong,
@@ -121,6 +122,12 @@ class PassiveCallbackDiscovery:
         # PN and peer IP are deliberately not used as causal evidence.
         self._active_probe_scopes: dict[str, set[str]] = {}
         self._probe_suppressed_sessions: set[str] = set()
+        # A currently-open socket owned by an entry is not a new discovery edge
+        # merely because that entry is unloaded or removed. Keep this lifecycle
+        # reason separate from active-probe attribution: scans may come and go,
+        # but the exact retired socket stays hidden until it physically closes or
+        # the user explicitly asks to show connected collectors again.
+        self._retired_entry_sessions: set[str] = set()
         # The single ownership + short/full PN reconciliation authority. Passive
         # discovery reads coalesced, unclaimed candidates from it; the listener
         # inventory is only its raw source.
@@ -204,7 +211,57 @@ class PassiveCallbackDiscovery:
                 continue
             key = _session_inventory_key(candidate.raw)
             if key:
-                self._probe_suppressed_sessions.add(key)
+                self._retired_entry_sessions.add(key)
+
+    def snapshot_unclaimed_collector_sessions(
+        self,
+    ) -> tuple[ObservedCollectorSession, ...]:
+        """Return the shared live candidate inventory for interactive discovery.
+
+        This snapshot deliberately does not apply passive-publication history
+        (``_notified`` / probe suppression / retired-entry suppression). Those
+        sets answer whether Home Assistant should publish a background discovery
+        card, not whether a user-started search may show a currently live,
+        unclaimed collector. Ownership and discoverability still come from the
+        domain registry, so configured, closed, conflicting, and unsafe sessions
+        do not become interactive candidates.
+        """
+
+        observations: list[ObservedCollectorSession] = []
+        for candidate in self._registry.list_unclaimed_sessions():
+            session = dict(candidate.raw)
+            try:
+                collector_pn = str(session.get("collector_pn") or "").strip()
+                session_id = _session_id(session)
+                peer_ip = str(session.get("peer_ip") or "").strip()
+                listener_port = int(session.get("listener_port") or 0)
+                if (
+                    not collector_pn
+                    or not session_id
+                    or not peer_ip
+                    or listener_port <= 0
+                ):
+                    continue
+                observations.append(
+                    ObservedCollectorSession(
+                        collector_pn=collector_pn,
+                        identity_source=_session_identity_source(session),
+                        session_id=session_id,
+                        listener_port=listener_port,
+                        protocol_shape=str(session.get("protocol_shape") or "")
+                        .strip()
+                        .lower(),
+                        peer_hint=peer_ip,
+                    )
+                )
+            except (TypeError, ValueError):
+                logger.debug(
+                    "Ignoring malformed interactive discovery session port=%s session=%s",
+                    session.get("listener_port"),
+                    session.get("session_id"),
+                    exc_info=True,
+                )
+        return tuple(observations)
 
     async def async_show_discovered_devices_again(
         self,
@@ -225,7 +282,7 @@ class PassiveCallbackDiscovery:
             collector_pn = str(session.get("collector_pn") or "").strip()
             port = int(session.get("listener_port") or 0)
             if (
-                _session_inventory_key(session) in self._probe_suppressed_sessions
+                self._session_is_suppressed(session)
                 or (
                     collector_pn
                     and self._already_notified(port, collector_pn, session=session)
@@ -235,6 +292,7 @@ class PassiveCallbackDiscovery:
 
         self._notified.clear()
         self._probe_suppressed_sessions.clear()
+        self._retired_entry_sessions.clear()
         await self._async_poll_once()
         return PassiveDiscoveryRefreshResult(
             connected_unclaimed_count=len(unclaimed),
@@ -248,19 +306,30 @@ class PassiveCallbackDiscovery:
             if (key := _session_inventory_key(session))
         }
 
-    def _capture_active_probe_sessions(self, observed: object) -> None:
-        """Suppress only sockets accepted after an active scan began."""
+    def _capture_active_probe_sessions(self, _observed: object) -> None:
+        """Maintain exact-socket suppression from the raw listener inventory."""
 
-        current = {
-            key
-            for candidate in tuple(observed or ())
-            if (key := _session_inventory_key(candidate.raw))
-        }
+        # Never prune exact socket markers through the registry's coalesced view:
+        # when two same-PN sockets overlap, the winning projection may change even
+        # though the retired physical socket is still open. The raw per-socket
+        # listener inventory is the lifecycle authority for these markers.
+        current = self._observed_session_keys()
         if self._active_probe_scopes:
             for baseline in self._active_probe_scopes.values():
                 self._probe_suppressed_sessions.update(current - baseline)
         # A later TCP connection is a new edge and must remain discoverable.
         self._probe_suppressed_sessions.intersection_update(current)
+        self._retired_entry_sessions.intersection_update(current)
+
+    def _session_is_suppressed(self, session: Mapping[str, object]) -> bool:
+        key = _session_inventory_key(session)
+        return bool(
+            key
+            and (
+                key in self._probe_suppressed_sessions
+                or key in self._retired_entry_sessions
+            )
+        )
 
     async def async_start(self) -> None:
         """Start passive discovery on known collector callback ports."""
@@ -490,7 +559,7 @@ class PassiveCallbackDiscovery:
         # excludes registry-claimed identities.
         for candidate in self._registry.list_unclaimed_sessions():
             session = dict(candidate.raw)
-            if _session_inventory_key(session) in self._probe_suppressed_sessions:
+            if self._session_is_suppressed(session):
                 logger.debug(
                     "Suppressing passive discovery for already-handled session port=%s session=%s pn=%s",
                     session.get("listener_port"),

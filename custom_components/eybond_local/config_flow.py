@@ -2762,12 +2762,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             description_placeholders=self._collector_network_placeholders(),
         )
 
-    async def _async_create_listener_entry(self) -> ConfigFlowResult:
+    async def _async_create_listener_entry(
+        self,
+        *,
+        refreshed_existing_reason: str = "",
+    ) -> ConfigFlowResult:
         """Create the integration-level passive-discovery bootstrap entry."""
 
         await self.async_set_unique_id(f"{DOMAIN}:listener")
         abort = self._abort_if_unique_id_configured()
         if abort is not None:
+            if refreshed_existing_reason:
+                return self.async_abort(reason=refreshed_existing_reason)
             return abort
         return self.async_create_entry(
             title="EyeBond Local — Discovery",
@@ -2781,7 +2787,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         """Enable persistent passive discovery without a collector entry."""
 
         del user_input
-        return await self._async_create_listener_entry()
+        # This is an explicit user request to make currently connected,
+        # unconfigured collectors visible. The domain service is already owned by
+        # integration async_setup, so refresh its edge-triggered publication state
+        # before creating (or discovering that we already have) the bootstrap
+        # entry. Import-created listener entries deliberately do not do this.
+        from .passive_discovery import get_passive_callback_discovery
+
+        discovery = get_passive_callback_discovery(self.hass)
+        refreshed = False
+        if discovery is not None:
+            await discovery.async_show_discovered_devices_again()
+            refreshed = True
+        return await self._async_create_listener_entry(
+            refreshed_existing_reason=(
+                "background_discovery_refreshed" if refreshed else ""
+            )
+        )
 
     async def async_step_import(
         self,
@@ -3116,9 +3138,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             ),
             driver_hint=DRIVER_HINT_AUTO,
         )
-        passive_results = await self._async_passive_scan_results(
+        shared_passive_results = self._shared_registry_scan_results()
+        listener_passive_results = await self._async_passive_scan_results(
             detector,
             discovery_targets=discovery_targets,
+        )
+        passive_results = self._collapse_scan_results(
+            (*shared_passive_results, *listener_passive_results)
         )
         if any(
             self._is_addable_scan_result(result)
@@ -3242,6 +3268,62 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             for result in results
             if self._is_visible_scan_result(result)
         )
+
+    def _shared_registry_scan_results(self) -> list[OnboardingResult]:
+        """Project the domain's shared callback inventory into scan candidates.
+
+        Interactive search and background discovery must observe the same live
+        sessions. The domain snapshot intentionally ignores background
+        publication history, so a user-started search can show an open session
+        retired after entry removal without also creating a spontaneous discovery
+        card. Admission still verifies the exact typed session before persisting a
+        connection strategy.
+        """
+
+        from .passive_discovery import get_passive_callback_discovery
+
+        discovery = get_passive_callback_discovery(self.hass)
+        snapshot = getattr(discovery, "snapshot_unclaimed_collector_sessions", None)
+        if not callable(snapshot):
+            return []
+        try:
+            observations = tuple(snapshot())
+        except Exception as exc:
+            logger.debug("Shared callback candidate snapshot failed: %s", exc)
+            return []
+
+        target_ip = str(
+            self._auto_config.get(CONF_SERVER_IP, self._local_ip) or self._local_ip
+        ).strip()
+        results: list[OnboardingResult] = []
+        for observed in observations:
+            if type(observed) is not ObservedCollectorSession:
+                continue
+            session_protocol = collector_session_protocol_from_inventory_state(
+                state="",
+                protocol_shape=observed.protocol_shape,
+            )
+            results.append(
+                OnboardingResult(
+                    connection_type=CONNECTION_TYPE_EYBOND,
+                    connection_mode="callback_listener",
+                    collector=CollectorCandidate(
+                        target_ip=target_ip,
+                        source="callback_listener",
+                        ip=observed.peer_hint,
+                        session_protocol=session_protocol,
+                        connected=True,
+                        collector=CollectorInfo(
+                            remote_ip=observed.peer_hint,
+                            collector_pn=observed.collector_pn,
+                        ),
+                    ),
+                    next_action="manual_driver_selection",
+                    last_error="collector_detected_without_driver",
+                    observed_session=observed,
+                )
+            )
+        return self._collapse_scan_results(results)
 
     # ---- step: scan_results ----
 
