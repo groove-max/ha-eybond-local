@@ -73,7 +73,13 @@ from .silent_scan_probe import (
     DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
     SilentIdentityResolution,
 )
-from ..models import CollectorCandidate, CollectorInfo, OnboardingResult, TargetDetectionEvidence
+from ..connection.admission import ObservedCollectorSession
+from ..models import (
+    CollectorCandidate,
+    CollectorInfo,
+    OnboardingResult,
+    TargetDetectionEvidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -541,6 +547,7 @@ class OnboardingDetector:
                 results=(),
                 depth=depth,
                 passive_only=True,
+                listener_port=self._connection.tcp_port,
             )
         except Exception as exc:
             logger.debug(
@@ -782,6 +789,7 @@ class OnboardingDetector:
                         discovery_targets=targets,
                         results=aggregated,
                         depth=depth,
+                        listener_port=self._connection.tcp_port,
                     )
                 )
 
@@ -824,6 +832,7 @@ class OnboardingDetector:
                     discovery_targets=targets,
                     results=aggregated,
                     depth=depth,
+                    listener_port=self._connection.tcp_port,
                 )
             )
             deduped = self._dedupe_results(aggregated)
@@ -2232,6 +2241,7 @@ class OnboardingDetector:
         results: Sequence[OnboardingResult],
         depth: str = DETECTION_DEPTH_FAST,
         passive_only: bool = False,
+        listener_port: int = 0,
     ) -> tuple[OnboardingResult, ...]:
         if listener is None:
             return ()
@@ -2294,6 +2304,27 @@ class OnboardingDetector:
                 protocol_shape=protocol_shape,
             )
             source = "callback_listener" if passive_only else source_target.source
+            session_id = str(session.get("session_id") or "").strip()
+            identity_source = str(
+                session.get("collector_identity_source") or ""
+            ).strip()
+            # Project the EXACT physical session into a typed, immutable carrier.
+            # This -- not the free-form details dict -- is what the config-flow
+            # admission boundary trusts to restart/verify THIS session before a
+            # passive callback candidate may become an inbound entry (PN/peer-IP
+            # re-selection is not an equivalent proof).
+            observed_session = (
+                ObservedCollectorSession(
+                    collector_pn=collector_pn,
+                    identity_source=identity_source,
+                    session_id=session_id,
+                    listener_port=int(listener_port),
+                    protocol_shape=protocol_shape,
+                    peer_hint=peer_ip,
+                )
+                if session_id and int(listener_port) > 0
+                else None
+            )
             materialized.append(
                 _with_detection_evidence(
                     OnboardingResult(
@@ -2313,20 +2344,17 @@ class OnboardingDetector:
                         connection_mode=source,
                         next_action="manual_driver_selection",
                         last_error="collector_detected_without_driver",
+                        observed_session=observed_session,
                     ),
                     depth=depth,
                     status="collector_only",
                     reason="callback_session_inventory",
                     details={
-                        # Keep the exact observed socket attached to the
-                        # in-memory onboarding result.  The config flow must
-                        # restart/verify THIS session before a passive callback
-                        # candidate may become an inbound entry; PN/peer-IP
-                        # re-selection is not an equivalent proof.
-                        "session_id": str(session.get("session_id") or "").strip(),
-                        "collector_identity_source": str(
-                            session.get("collector_identity_source") or ""
-                        ).strip(),
+                        # Diagnostics only -- retained for support bundles. The
+                        # config flow must NOT read session authority from here;
+                        # it uses the typed ``observed_session`` above.
+                        "session_id": session_id,
+                        "collector_identity_source": identity_source,
                         "session_state": state,
                         "collector_session_protocol": collector_session_protocol,
                         "collector_session_protocol_shape": protocol_shape,

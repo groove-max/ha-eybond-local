@@ -352,6 +352,10 @@ from custom_components.eybond_local.metadata.local_metadata import (
 )
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema
+from custom_components.eybond_local.connection.admission import (
+    CollectorAdmissionRequest,
+    ObservedCollectorSession,
+)
 from custom_components.eybond_local.models import (
     CollectorCandidate,
     CollectorInfo,
@@ -9220,15 +9224,21 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "verify_connection")
+        # The typed admission request now carries the observed session; discovery
+        # is just one source adapter building a CollectorAdmissionRequest.
+        request = flow._admission_request
+        self.assertIsInstance(request, CollectorAdmissionRequest)
+        self.assertEqual(request.origin, "integration_discovery")
         self.assertEqual(
-            flow._strategy_verification_context,
-            {
-                "collector_pn": self.FULL_PN,
-                "session_id": self.OLD_SESSION,
-                "port": 18899,
-                "peer_ip": self.PEER_IP,
-                "identity_source": "",
-            },
+            request.observed_session,
+            ObservedCollectorSession(
+                collector_pn=self.FULL_PN,
+                identity_source="",
+                session_id=self.OLD_SESSION,
+                listener_port=18899,
+                protocol_shape="",
+                peer_hint=self.PEER_IP,
+            ),
         )
         # Payloads without a session id can never become inbound: reboot
         # verification is impossible, so the SAME flow continues on the manual
@@ -9240,10 +9250,104 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(legacy["type"], "form")
         self.assertEqual(legacy["step_id"], "manual")
-        self.assertIsNone(legacy_flow._strategy_verification_context)
+        self.assertIsNone(legacy_flow._admission_request)
         self.assertEqual(legacy_flow._verification_expected_pn, self.OTHER_FULL_PN)
         self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         self.assertEqual(legacy_flow._verified_connection_strategy, "")
+
+    async def test_discovery_and_passive_share_one_admission_entrypoint(self) -> None:
+        """Both source adapters build the SAME typed request type and enter the ONE
+        admission entrypoint (the consent step) -- differing only by a diagnostic
+        origin. This is the unified boundary the batch introduces."""
+
+        # Source A: integration discovery.
+        disc_flow = self._make_flow()
+        disc = await disc_flow.async_step_integration_discovery(self._discovery_info())
+        disc_request = disc_flow._admission_request
+
+        # Source B: a passive scan inventory result carrying the typed session.
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
+        scan_flow = self._make_flow()
+        scan_flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.255",
+                    source="callback_listener",
+                    ip=self.PEER_IP,
+                    connected=True,
+                    collector=CollectorInfo(collector_pn=self.FULL_PN),
+                ),
+                connection_mode="callback_listener",
+                observed_session=observed,
+                detection=TargetDetectionEvidence(
+                    depth="fast",
+                    status="collector_only",
+                    reason="callback_session_inventory",
+                ),
+            )
+        }
+        scan = await scan_flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
+        scan_request = scan_flow._admission_request
+
+        # SAME request TYPE, SAME entrypoint (the consent step); origin differs
+        # only as a diagnostic label and never steers the algorithm.
+        self.assertEqual(disc["step_id"], "verify_connection")
+        self.assertEqual(scan["step_id"], "verify_connection")
+        self.assertIs(type(disc_request), CollectorAdmissionRequest)
+        self.assertIs(type(scan_request), CollectorAdmissionRequest)
+        self.assertEqual(disc_request.origin, "integration_discovery")
+        self.assertEqual(scan_request.origin, "passive_scan")
+        # The same durable collector identity travels on both typed carriers.
+        self.assertEqual(disc_request.observed_session.collector_pn, self.FULL_PN)
+        self.assertEqual(scan_request.observed_session, observed)
+
+    async def test_passive_adapter_fails_closed_on_duck_or_subclass_observation(
+        self,
+    ) -> None:
+        """A duck / subclass / non-typed ``observed_session`` must fail CLOSED in
+        the passive adapter: it starts NO admission and mints NO request, rather
+        than reaching the strict CollectorAdmissionRequest constructor and raising
+        an unhandled TypeError (a 500) into the flow."""
+
+        class _SneakyObservation(ObservedCollectorSession):
+            pass
+
+        duck = types.SimpleNamespace(
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+        )
+        subclass = _SneakyObservation(
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+        )
+
+        for bogus in (duck, subclass, "not-an-observation", None):
+            flow = self._make_flow()
+            flow._selected_result = OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.255",
+                    source="callback_listener",
+                    ip=self.PEER_IP,
+                    connected=True,
+                    collector=CollectorInfo(collector_pn=self.FULL_PN),
+                ),
+                connection_mode="callback_listener",
+                observed_session=bogus,  # type: ignore[arg-type]
+            )
+            result = await flow._async_admit_selected_scan_result()
+            self.assertIsNone(result, msg=f"admission started for {bogus!r}")
+            self.assertIsNone(flow._admission_request)
 
     async def test_stale_passive_scan_session_requires_restart_verification(self) -> None:
         """Deleting an entry must not turn its old callback into inbound proof."""
@@ -9253,6 +9357,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
         flow._autodetect_results = {
             "0": OnboardingResult(
                 collector=CollectorCandidate(
@@ -9265,6 +9377,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 connection_mode="callback_listener",
                 next_action="manual_driver_selection",
+                observed_session=observed,
                 detection=TargetDetectionEvidence(
                     depth="fast",
                     status="collector_only",
@@ -9280,16 +9393,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         selected = await flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
         self.assertEqual(selected["type"], "form")
         self.assertEqual(selected["step_id"], "verify_connection")
-        self.assertEqual(
-            flow._strategy_verification_context,
-            {
-                "collector_pn": self.FULL_PN,
-                "session_id": self.OLD_SESSION,
-                "port": 8899,
-                "peer_ip": self.PEER_IP,
-                "identity_source": "at_dtupn",
-            },
-        )
+        # The passive adapter admits the exact typed session through the ONE
+        # entrypoint -- session authority comes from observed_session, not details.
+        request = flow._admission_request
+        self.assertIsInstance(request, CollectorAdmissionRequest)
+        self.assertEqual(request.origin, "passive_scan")
+        self.assertEqual(request.observed_session, observed)
 
         restarts: list[str] = []
 
@@ -9328,11 +9437,58 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._verified_connection_strategy, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
-    async def test_auto_terminal_refuses_legacy_inferred_external_inbound(self) -> None:
-        """Fresh auto entries never use callback_listener as inbound authority."""
+    def _admission_request(self, origin: str) -> "CollectorAdmissionRequest":
+        return CollectorAdmissionRequest(
+            observed_session=ObservedCollectorSession(
+                collector_pn=self.FULL_PN,
+                identity_source="at_dtupn",
+                session_id=self.OLD_SESSION,
+                listener_port=8899,
+                peer_hint=self.PEER_IP,
+            ),
+            origin=origin,
+        )
 
-        flow = self._make_flow()
-        flow._selected_result = OnboardingResult(
+    def _verified_inbound_terminal(self):
+        from custom_components.eybond_local.connection.recovery_contract import (
+            InboundRecoveryProof,
+        )
+        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+            RecoveryTerminalInput,
+        )
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            STATE_INBOUND_VERIFIED,
+            InboundRecoveryOutcome,
+        )
+
+        proof = InboundRecoveryProof(
+            method="reboot_reconnect_no_trigger",
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            verified_at="2026-07-20T00:00:00+00:00",
+            session_protocol="eybond_framed",
+        )
+        outcome = InboundRecoveryOutcome(
+            status=STATE_INBOUND_VERIFIED,
+            collector_pn=self.FULL_PN,
+            new_session_id=self.NEW_SESSION,
+            proof=proof,
+        )
+        return RecoveryTerminalInput.from_inbound_outcome(outcome)
+
+    def _callback_listener_selected_result(self, *, with_observed_session: bool):
+        observed = (
+            ObservedCollectorSession(
+                collector_pn=self.FULL_PN,
+                identity_source="at_dtupn",
+                session_id=self.OLD_SESSION,
+                listener_port=8899,
+                peer_hint=self.PEER_IP,
+            )
+            if with_observed_session
+            else None
+        )
+        return OnboardingResult(
             collector=CollectorCandidate(
                 target_ip="192.168.1.255",
                 source="callback_listener",
@@ -9342,11 +9498,29 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
             connection_mode="callback_listener",
             next_action="manual_driver_selection",
+            observed_session=observed,
             detection=TargetDetectionEvidence(
                 depth="fast",
                 status="collector_only",
                 reason="callback_session_inventory",
             ),
+        )
+
+    # Terminal matrix -- the fail-closed guard is SOURCE-NEUTRAL: it keys on the
+    # typed in-flight CollectorAdmissionRequest, so it protects BOTH integration
+    # discovery (whose selected result carries no observed_session) and passive
+    # scan identically, and never inspects origin.
+
+    async def test_A_terminal_refuses_discovery_admission_without_proof(self) -> None:
+        """Integration discovery: admission request set, selected result has NO
+        observed_session, inbound/external, no proof -> recovery_ownership_unavailable.
+        This is the source-neutral hole the corrective closes."""
+
+        flow = self._make_flow()
+        flow._admission_request = self._admission_request("integration_discovery")
+        # Integration discovery's selected result carries no observed_session.
+        flow._selected_result = self._callback_listener_selected_result(
+            with_observed_session=False
         )
         flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
 
@@ -9359,6 +9533,228 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "abort")
         self.assertEqual(result["reason"], "recovery_ownership_unavailable")
+
+    async def test_B_terminal_allows_discovery_admission_with_verified_proof(self) -> None:
+        """Same integration-discovery path WITH a valid InboundRecoveryProof ->
+        the entry is created (the guard steps aside for a real proof)."""
+
+        flow = self._make_flow()
+        flow._admission_request = self._admission_request("integration_discovery")
+        flow._selected_result = self._callback_listener_selected_result(
+            with_observed_session=False
+        )
+        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
+        flow._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
+        flow._recovery_terminal = self._verified_inbound_terminal()
+
+        sentinel = {"type": "create_entry", "created": True}
+        with patch.object(
+            flow, "_create_entry_with_handoff", return_value=sentinel
+        ):
+            result = await flow._async_create_entry_from_result()
+
+        # Reached creation -- the guard did NOT abort with recovery_ownership_unavailable.
+        self.assertIs(result, sentinel)
+
+    async def test_C_terminal_refuses_passive_admission_without_proof(self) -> None:
+        """Passive scan preserves the same fail-closed result (unchanged)."""
+
+        flow = self._make_flow()
+        flow._admission_request = self._admission_request("passive_scan")
+        flow._selected_result = self._callback_listener_selected_result(
+            with_observed_session=True
+        )
+        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
+
+        with patch.object(
+            flow,
+            "_create_entry_with_handoff",
+            side_effect=AssertionError("unverified inbound reached create terminal"),
+        ):
+            result = await flow._async_create_entry_from_result()
+
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "recovery_ownership_unavailable")
+
+    async def test_D_manual_callback_bridge_clears_admission_and_disarms_guard(
+        self,
+    ) -> None:
+        """The explicit manual-callback bridge clears the admission request, so the
+        terminal guard is inert for the manual callback entry and the existing
+        manual callback lifecycle is unchanged."""
+
+        flow = self._make_flow()
+        await flow.async_step_integration_discovery(self._discovery_info())
+        self.assertIsInstance(flow._admission_request, CollectorAdmissionRequest)
+
+        result = await flow.async_step_verify_connection_manual_callback()
+        self.assertEqual(result["step_id"], "manual")
+        self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
+        # Cleared: the terminal guard cannot fire for the manual callback entry.
+        self.assertIsNone(flow._admission_request)
+        self.assertFalse(
+            flow._fresh_observed_session_entry_is_unverified({}, {})
+        )
+
+    # ---- blocker 1: weak->strong enrichment must retarget a retry onto the
+    # ---- replacement full-PN session, not the stale observation.
+
+    SHORT_PN = "V001020SYN6234"  # 14-char heartbeat prefix of FULL_PN
+
+    def _fast_restart_policy(self):
+        from dataclasses import replace
+
+        return replace(
+            config_flow_module._ONBOARDING_TIMEOUT_POLICY,
+            inbound_restart_disconnect_timeout=0.05,
+            inbound_reconnect_timeout=0.05,
+            inbound_strong_identity_timeout=0.05,
+            callback_causality_lease_wait=0.5,
+        )
+
+    @staticmethod
+    def _capturing_restart_channel(captured: dict):
+        class _FakeChannel:
+            def __init__(self, **kwargs) -> None:
+                captured.update(kwargs)
+
+            async def async_send_restart(self) -> None:
+                captured["restarted"] = True
+
+            def is_connected(self) -> bool:
+                return False
+
+            async def async_probe_identity(self) -> str:
+                return ""
+
+            async def async_close(self) -> None:
+                return None
+
+        return _FakeChannel
+
+    async def test_weak_retry_retargets_replacement_full_pn_session(self) -> None:
+        """weak S1 -> typed full-PN enrichment -> failure screen -> replacement
+        full-PN S2 -> retry claims/restarts S2. The stale S1 and a foreign
+        full-PN session are never used. Load-bearing for blocker 1: without the
+        enriched-PN fix the retry would re-resolve by the SHORT PN onto S1."""
+
+        from custom_components.eybond_local.onboarding.strategy_verification import (
+            InboundRecoveryOutcome,
+        )
+
+        flow = self._make_flow()
+        # Discovery observes only a WEAK short heartbeat PN on session S1.
+        await flow.async_step_integration_discovery(
+            self._discovery_info(
+                collector_pn=self.SHORT_PN,
+                collector_identity_source="framed_heartbeat",
+            )
+        )
+        self.assertEqual(flow._verification_expected_pn, self.SHORT_PN)
+
+        # First verification FAILS but the typed outcome carries the strong FULL
+        # PN (the promote hook read it). Enrichment adopts it.
+        async def _first_run() -> None:
+            flow._verification_result = InboundRecoveryOutcome(
+                failure_reason="inbound_reconnect_timeout",
+                collector_pn=self.FULL_PN,
+            )
+
+        with patch.object(
+            flow, "_async_run_strategy_verification", side_effect=_first_run
+        ):
+            failed = await self._drive_verification(flow)
+        self.assertEqual(failed["step_id"], "verify_connection_failed")
+        # Enrichment moved the CURRENT expected identity to the full PN; the
+        # immutable observation still records the original short PN.
+        self.assertEqual(flow._verification_expected_pn, self.FULL_PN)
+        self.assertEqual(
+            flow._admission_request.observed_session.collector_pn, self.SHORT_PN
+        )
+
+        # The collector rebooted: S1 is gone, a replacement full-PN S2 dialed in,
+        # plus an unrelated FOREIGN full-PN session shares the listener.
+        inventory = [
+            self._inventory_session(
+                self.NEW_SESSION, self.FULL_PN, state="routed_framed"
+            ),
+            self._inventory_session(
+                "listener-18899-9", self.OTHER_FULL_PN, state="routed_framed"
+            ),
+        ]
+        registry = self._install_registry(flow, inventory)
+
+        captured: dict = {}
+        with patch.object(
+            config_flow_module,
+            "ObservedSessionRestartChannel",
+            self._capturing_restart_channel(captured),
+        ), patch.object(
+            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", self._fast_restart_policy()
+        ):
+            await flow.async_step_verify_connection_retry()
+            await self._drive_verification(flow)
+
+        # The retry resolved, claimed and restarted the REPLACEMENT full-PN S2 --
+        # via the enriched full PN, never the stale short PN / S1 / the foreign one.
+        self.assertTrue(captured.get("restarted"))
+        self.assertEqual(captured.get("collector_pn"), self.FULL_PN)
+        self.assertEqual(captured.get("session_id"), self.NEW_SESSION)
+        self.assertNotEqual(captured.get("session_id"), self.OLD_SESSION)
+
+    async def test_weak_verification_ignores_poisoned_discovery_identity_source(
+        self,
+    ) -> None:
+        """blocker 2: the observation is weak; the eybond_discovery context is
+        deliberately poisoned with a STRONG source. Verification must still use the
+        WEAK exact-PN rule (from the typed observation only) and NOT reconcile onto
+        a prefix-matched full-PN session."""
+
+        flow = self._make_flow()
+        # The observation carries an EMPTY (unknown-weak) identity source -- exactly
+        # the case the removed fallback used to fill from the discovery context.
+        await flow.async_step_integration_discovery(
+            self._discovery_info(
+                collector_pn=self.SHORT_PN,
+                collector_identity_source="",
+            )
+        )
+        self.assertEqual(flow._admission_request.observed_session.identity_source, "")
+        # Poison the discovery context with a strong source. If the run read it,
+        # require_exact would flip to False and reconcile onto the full-PN session.
+        flow.context["eybond_discovery"]["collector_identity_source"] = "at_dtupn"
+
+        inventory = [
+            # S1: the exact weak short-PN session (the only correct target).
+            self._inventory_session(
+                self.OLD_SESSION,
+                self.SHORT_PN,
+                state="routed_framed",
+                identity_source="framed_heartbeat",
+            ),
+            # A longer full-PN session the SHORT PN is a prefix of -- must NOT be
+            # chosen under weak rules.
+            self._inventory_session(
+                self.NEW_SESSION, self.FULL_PN, state="routed_framed"
+            ),
+        ]
+        self._install_registry(flow, inventory)
+
+        captured: dict = {}
+        with patch.object(
+            config_flow_module,
+            "ObservedSessionRestartChannel",
+            self._capturing_restart_channel(captured),
+        ), patch.object(
+            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", self._fast_restart_policy()
+        ):
+            await self._drive_verification(flow)
+
+        # Weak exact-PN rule held: the exact short-PN S1 was targeted, NOT the
+        # prefix-matched full session.
+        self.assertEqual(captured.get("collector_pn"), self.SHORT_PN)
+        self.assertEqual(captured.get("session_id"), self.OLD_SESSION)
+        self.assertNotEqual(captured.get("session_id"), self.NEW_SESSION)
 
     # Verification failure stays retryable in THIS discovery flow. Manual setup
     # remains an explicit choice and keeps the peer IP as an editable hint.
@@ -9416,7 +9812,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # No strategy was guessed and no entry was created.
         self.assertEqual(flow._verified_connection_strategy, "")
         # The inbound verification context was cleared on the handoff.
-        self.assertIsNone(flow._strategy_verification_context)
+        self.assertIsNone(flow._admission_request)
 
     # Batch 7 -- the failure screen explains the exact reason in the user's
     # language (ru/uk), never the raw code, for every inbound failure code.
@@ -9530,7 +9926,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Nothing is owned, held or prepared for the PN.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(flow._verification_claim_owner, "")
-        self.assertIsNone(flow._strategy_verification_context)
+        self.assertIsNone(flow._admission_request)
 
     async def test_cancel_during_progress_cleans_up_via_async_remove(self) -> None:
         import asyncio
@@ -10172,7 +10568,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertTrue(task.cancelled())
         self.assertIsNone(flow._verification_task)
-        self.assertIsNone(flow._strategy_verification_context)
+        self.assertIsNone(flow._admission_request)
 
     # ---- ownership handoff: config flow -> entry (items 1, 2, 3, 7, 9) ----
 

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .link_models import EybondLinkRoute
+
+if TYPE_CHECKING:
+    from .connection.admission import ObservedCollectorSession
 
 
 def key_to_title(key: str) -> str:
@@ -597,6 +600,11 @@ class OnboardingResult:
     next_action: str = ""
     last_error: str | None = None
     detection: TargetDetectionEvidence | None = None
+    # The typed physical callback session this result was projected from, or
+    # ``None`` for results that are not an observed callback session. This is the
+    # config-flow admission trust boundary -- session authority no longer travels
+    # through the free-form ``detection.details`` dict.
+    observed_session: ObservedCollectorSession | None = None
 
     @property
     def confidence(self) -> str:
