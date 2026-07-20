@@ -1035,14 +1035,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._test_unique_id, "eybond_local:listener")
 
     async def test_listener_menu_option_refreshes_existing_background_discovery(self) -> None:
-        flow = self._make_flow()
+        entry = _FakeEntry("listener", server_ip="", tcp_port=0)
+        entry.data = {"entry_role": "listener"}
+        entry.unique_id = "eybond_local:listener"
+        flow = self._make_flow(entries=[entry])
         service = types.SimpleNamespace(
             async_show_discovered_devices_again=AsyncMock()
         )
-        flow._abort_if_unique_id_configured = lambda: {
-            "type": "abort",
-            "reason": "already_configured",
-        }
+        flow._abort_if_unique_id_configured = Mock(
+            side_effect=AssertionError("existing listener must be handled before HA abort")
+        )
 
         with patch(
             "custom_components.eybond_local.passive_discovery.get_passive_callback_discovery",
@@ -1051,6 +1053,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_listener()
 
         service.async_show_discovered_devices_again.assert_awaited_once_with()
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "background_discovery_refreshed")
+        flow._abort_if_unique_id_configured.assert_not_called()
+
+    async def test_listener_menu_recognizes_listener_unique_id_without_role(self) -> None:
+        entry = _FakeEntry("listener", server_ip="", tcp_port=0)
+        entry.unique_id = "eybond_local:listener"
+        flow = self._make_flow(entries=[entry])
+
+        result = await flow.async_step_listener()
+
         self.assertEqual(result["type"], "abort")
         self.assertEqual(result["reason"], "background_discovery_refreshed")
 
@@ -1115,7 +1128,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["step_id"], "rediscover_devices_done")
         self.assertEqual(
             completed["description_placeholders"],
-            {"connected_count": "3", "released_count": "2"},
+            {"connected_count": "3"},
         )
         closed = await options_flow.async_step_rediscover_devices_done({})
         self.assertEqual(closed["type"], "create_entry")
@@ -4290,7 +4303,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events, ["begin", "detect", "end"])
         self.assertEqual(passive.scope_id, passive.end_scope_id)
 
-    async def test_do_scan_uses_addable_passive_callback_without_active_udp_probe(self) -> None:
+    async def test_do_scan_keeps_active_probe_when_addable_passive_callback_exists(self) -> None:
         flow = self._make_flow()
         passive_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -4322,7 +4335,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await flow._async_do_scan()
 
-        self.assertFalse(detector.auto_called)
+        self.assertTrue(detector.auto_called)
         self.assertEqual(len(flow._autodetect_results), 1)
         result = next(iter(flow._autodetect_results.values()))
         self.assertEqual(result.connection_mode, "callback_listener")
@@ -4357,6 +4370,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         discovery.retire_entry_sessions("removed-v0011")
         discovery.registry.release("removed-v0011")
 
+        active_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="broadcast",
+                ip="192.168.1.55",
+                connected=True,
+                collector=CollectorInfo(collector_pn="E50000253884199645"),
+            ),
+            connection_mode="broadcast",
+            next_action="manual_driver_selection",
+        )
+
         class _FakeDetector:
             async def async_passive_detect(self, **_kwargs):
                 # The scan's selected listener is 8899; this session lives on a
@@ -4365,7 +4390,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
             async def async_auto_detect(self, **_kwargs):
-                raise AssertionError("shared live candidate must skip active UDP scan")
+                return (active_result,)
 
         with patch(
             "custom_components.eybond_local.config_flow.create_onboarding_manager",
@@ -4373,14 +4398,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await flow._async_do_scan()
 
-        self.assertEqual(len(flow._autodetect_results), 1)
-        result = next(iter(flow._autodetect_results.values()))
+        self.assertEqual(len(flow._autodetect_results), 2)
+        result = next(
+            candidate
+            for candidate in flow._autodetect_results.values()
+            if candidate.observed_session is not None
+        )
         self.assertEqual(result.collector.collector.collector_pn, "V001107SYN282291016")
         self.assertIs(type(result.observed_session), ObservedCollectorSession)
         self.assertEqual(result.observed_session.session_id, session["session_id"])
         self.assertEqual(result.observed_session.listener_port, 18899)
 
-    async def test_do_scan_passive_shortcut_never_starts_periodic_progress_updater(self) -> None:
+    async def test_do_scan_with_passive_seed_runs_progress_updater(self) -> None:
         flow = self._make_flow()
         passive_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -4399,21 +4428,21 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return (passive_result,)
 
             async def async_auto_detect(self, **kwargs):
-                raise AssertionError("passive shortcut must not run active detection")
+                return ()
 
-        def _reject_background_task(coro):
-            coro.close()
-            raise AssertionError("passive shortcut must not start a periodic updater")
+        progress_loop = AsyncMock(return_value=None)
 
         with patch(
             "custom_components.eybond_local.config_flow.create_onboarding_manager",
             return_value=_FakeDetector(),
-        ), patch(
-            "custom_components.eybond_local.config_flow.asyncio.create_task",
-            side_effect=_reject_background_task,
+        ), patch.object(
+            flow,
+            "_async_update_scan_progress_loop",
+            new=progress_loop,
         ):
             await flow._async_do_scan()
 
+        progress_loop.assert_called_once_with()
         self.assertEqual(len(flow._autodetect_results), 1)
         self.assertEqual(flow._scan_progress_stage, "finalizing")
 

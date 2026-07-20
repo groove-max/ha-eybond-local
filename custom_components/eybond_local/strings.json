@@ -21,7 +21,7 @@
         "menu_options": {
           "auto": "Yes, the collector is already on my network",
           "bluetooth_setup": "No, connect the collector to Wi-Fi using Bluetooth first",
-          "listener": "Enable or refresh background discovery without adding a collector"
+          "listener": "Enable background discovery"
         }
       },
       "auto": {
@@ -233,15 +233,15 @@
         }
       },
       "verify_connection": {
-        "title": "Check how the collector connects",
-        "description": "Collector {collector_pn} connected from {peer_ip}. Before adding it, Home Assistant needs to check whether this connection is permanent or only temporary (for example, left over from an earlier reconnect request). The check restarts the collector and briefly interrupts its connection - monitoring and the vendor app may be unavailable for a few minutes. Press Submit to restart the collector and start the check."
+        "title": "Verify collector connection",
+        "description": "Collector **{collector_pn}** was found at {peer_ip}. Home Assistant will restart it and verify that it reconnects on its own. The connection may be interrupted for up to three minutes."
       },
       "verify_connection_failed": {
-        "title": "Automatic connection check did not succeed",
-        "description": "Collector **{collector_pn}**: {failure_explanation}\n\nThe collector was not added. Choose what to do next.",
+        "title": "Collector was not added",
+        "description": "{failure_explanation}",
         "menu_options": {
-          "verify_connection_retry": "Retry the automatic reconnection check",
-          "verify_connection_manual_callback": "Configure a callback connection by hand",
+          "verify_connection_retry": "Try again",
+          "verify_connection_manual_callback": "Configure the connection manually",
           "verify_connection_cancel": "Cancel"
         }
       },
@@ -314,7 +314,7 @@
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond collectors…",
       "shadow_learning": "{control_discovery_hint}",
-      "verify_connection": "Confirming collector {collector_pn} identity, then restarting it and waiting for it to reconnect on its own. This can take up to three minutes on older collectors.",
+      "verify_connection": "Restarting collector {collector_pn} and waiting for it to reconnect. This may take up to three minutes.",
       "manual_recovery_verify": "Verifying the recovery route for collector {collector_pn}: restarting it, waiting for its own reconnection, then (only if needed) sending one addressed callback request. This can take a couple of minutes."
     },
     "error": {
@@ -350,8 +350,8 @@
       "reconfigure_not_required": "This entry already has a confirmed collector identity; there is nothing to repair.",
       "recovery_contract_conflict": "The verified recovery proof could not be stored: the entry already carries a recovery record for a different collector or one that cannot be read. Remove or repair that entry, then try again.",
       "recovery_ownership_unavailable": "The verified recovery session is no longer held for this collector. Run the verification again.",
-      "discovery_cancelled": "Discovery was cancelled. The collector can be added again later.",
-      "background_discovery_refreshed": "Background discovery was already enabled. Its temporary history was cleared and currently connected collectors were checked again."
+      "discovery_cancelled": "Collector setup was cancelled.",
+      "background_discovery_refreshed": "Background discovery is already enabled. Connected collectors were checked again."
     }
   },
   "options": {
@@ -385,24 +385,24 @@
     "step": {
       "listener": {
         "title": "Background discovery",
-        "description": "This service entry keeps EyeBond callback listeners active even when no collectors are configured. Remove the entry to disable background discovery.",
+        "description": "Shows connected collectors that have not been added yet. Remove this entry to disable background discovery.",
         "menu_options": {
-          "rediscover_devices": "Show discovered devices again"
+          "rediscover_devices": "Check connected collectors again"
         }
       },
       "rediscover_devices": {
-        "title": "Show discovered devices again",
-        "description": "EyeBond Local remembers a live collector after offering it once, so a cancelled or removed device does not immediately reappear. Clear only this temporary history and check currently connected collectors again. Configured devices, active setup flows, and connections are not removed or interrupted.",
+        "title": "Check connected collectors again",
+        "description": "Previously hidden collectors will be eligible for discovery again. Existing devices and connections are not affected.",
         "data": {
-          "confirm_rediscover_devices": "Clear the temporary discovery history and check connected collectors now"
+          "confirm_rediscover_devices": "Check connected collectors now"
         },
         "data_description": {
-          "confirm_rediscover_devices": "Eligible collectors will reappear in Home Assistant discovery without restarting Home Assistant or the collector."
+          "confirm_rediscover_devices": "Available collectors will appear in Home Assistant discovery."
         }
       },
       "rediscover_devices_done": {
-        "title": "Discovery refreshed",
-        "description": "The temporary discovery history was cleared. EyeBond Local checked {connected_count} currently connected, unconfigured collector(s); {released_count} had been hidden by the current session filter. Eligible devices should now appear in Home Assistant discovery."
+        "title": "Discovery updated",
+        "description": "Connected collectors available to add: {connected_count}."
       },
       "init": {
         "title": "EyeBond Local Options",

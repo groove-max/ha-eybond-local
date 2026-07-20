@@ -70,6 +70,29 @@ async def test_unknown_step_is_not_silently_accepted(hass: HomeAssistant) -> Non
         )
 
 
+async def test_existing_background_discovery_has_specific_abort(
+    hass: HomeAssistant,
+) -> None:
+    """The real HA unique-id guard must not replace the listener UX message."""
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="EyeBond Local — Discovery",
+        unique_id=f"{DOMAIN}:listener",
+        version=3,
+        data={CONF_ENTRY_ROLE: ENTRY_ROLE_LISTENER},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "listener"},
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "background_discovery_refreshed"
+
+
 @pytest.fixture
 def collector_entry(hass: HomeAssistant) -> MockConfigEntry:
     """A real, fully-formed collector entry with a synthetic durable identity."""

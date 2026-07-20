@@ -2762,18 +2762,23 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             description_placeholders=self._collector_network_placeholders(),
         )
 
-    async def _async_create_listener_entry(
-        self,
-        *,
-        refreshed_existing_reason: str = "",
-    ) -> ConfigFlowResult:
+    def _listener_entry_exists(self) -> bool:
+        """Return whether background discovery already has its bootstrap entry."""
+
+        listener_unique_id = f"{DOMAIN}:listener"
+        return any(
+            str((getattr(entry, "data", {}) or {}).get(CONF_ENTRY_ROLE) or "")
+            == ENTRY_ROLE_LISTENER
+            or str(getattr(entry, "unique_id", "") or "") == listener_unique_id
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+        )
+
+    async def _async_create_listener_entry(self) -> ConfigFlowResult:
         """Create the integration-level passive-discovery bootstrap entry."""
 
         await self.async_set_unique_id(f"{DOMAIN}:listener")
         abort = self._abort_if_unique_id_configured()
         if abort is not None:
-            if refreshed_existing_reason:
-                return self.async_abort(reason=refreshed_existing_reason)
             return abort
         return self.async_create_entry(
             title="EyeBond Local — Discovery",
@@ -2795,15 +2800,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         from .passive_discovery import get_passive_callback_discovery
 
         discovery = get_passive_callback_discovery(self.hass)
-        refreshed = False
         if discovery is not None:
             await discovery.async_show_discovered_devices_again()
-            refreshed = True
-        return await self._async_create_listener_entry(
-            refreshed_existing_reason=(
-                "background_discovery_refreshed" if refreshed else ""
-            )
-        )
+        # In real Home Assistant ``_abort_if_unique_id_configured`` raises the
+        # generic ``already_configured`` abort instead of returning it. Resolve
+        # the explicit listener action before that framework boundary so the user
+        # gets an honest discovery-specific result. The unique-id check in the
+        # create helper remains the race guard for concurrent flows.
+        if self._listener_entry_exists():
+            return self.async_abort(reason="background_discovery_refreshed")
+        return await self._async_create_listener_entry()
 
     async def async_step_import(
         self,
@@ -3146,18 +3152,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         passive_results = self._collapse_scan_results(
             (*shared_passive_results, *listener_passive_results)
         )
-        if any(
-            self._is_addable_scan_result(result)
-            and self._existing_entry_for_result(result) is None
-            for result in passive_results
-        ):
-            self._scan_progress_stage = "finalizing"
-            self._autodetect_results = {
-                str(index): result
-                for index, result in enumerate(self._sort_scan_results(passive_results))
-            }
-            self.async_update_progress(1.0)
-            return
 
         skip_probe_ips = self._configured_collector_probe_skip_ips()
         # Passive discovery shares this scan's callback listener. Mark sockets
@@ -9143,7 +9137,6 @@ class ListenerOptionsFlow(OptionsFlow):
     def __init__(self, config_entry) -> None:
         self._config_entry = config_entry
         self._rediscovery_connected_count = 0
-        self._rediscovery_released_count = 0
 
     async def async_step_init(
         self,
@@ -9183,9 +9176,6 @@ class ListenerOptionsFlow(OptionsFlow):
                     self._rediscovery_connected_count = (
                         result.connected_unclaimed_count
                     )
-                    self._rediscovery_released_count = (
-                        result.suppressed_candidate_count
-                    )
                     return await self.async_step_rediscover_devices_done()
 
         return self.async_show_form(
@@ -9214,7 +9204,6 @@ class ListenerOptionsFlow(OptionsFlow):
             data_schema=vol.Schema({}),
             description_placeholders={
                 "connected_count": str(self._rediscovery_connected_count),
-                "released_count": str(self._rediscovery_released_count),
             },
         )
 
