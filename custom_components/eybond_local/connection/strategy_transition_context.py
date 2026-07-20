@@ -85,6 +85,34 @@ def _advertisable_host(value: object) -> str | None:
     return host
 
 
+def normalized_advertised_host(value: object) -> str | None:
+    """Public: an exact, normalized, non-wildcard advertised host, or ``None``."""
+
+    return _advertisable_host(value)
+
+
+def parse_advertised_port(value: object) -> int | None:
+    """Safely parse a submitted advertised port; ``None`` when unusable.
+
+    Accepts an exact ``int`` (never ``bool``), an integer-valued ``float`` (as a
+    NumberSelector may yield), or a normalized decimal ``str``. Range
+    ``1..65535``. NEVER raises -- a malformed value returns ``None`` so the caller
+    can surface a form error instead of a 500.
+    """
+
+    if type(value) is bool:
+        return None
+    if type(value) is int:
+        port = value
+    elif type(value) is float and value.is_integer():
+        port = int(value)
+    elif type(value) is str and value == value.strip() and value.isdigit():
+        port = int(value)
+    else:
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
 @dataclass(frozen=True, slots=True)
 class TransitionEndpointCandidate:
     """A resolved default advertised-HA-endpoint suggestion for the form.
@@ -345,6 +373,65 @@ def resolve_default_ha_endpoint(
     return TransitionEndpointCandidate.none()
 
 
+def earned_advertised_route(
+    *,
+    committed_strategy: object,
+    terminal: object,
+    attempted_host: object,
+    attempted_port: object,
+) -> tuple[str, int, str]:
+    """The EARNED advertised route to persist on a verified strategy commit.
+
+    Returns ``(host, port, refusal)``, fully fail-closed with EXACT types:
+
+    * ``committed_strategy is None`` is a true non-strategy merge -> ``("", 0, "")``
+      (nothing persisted); an exact ``inbound``/``callback_on_demand`` is a
+      strategy commit; ANY other value (duck / non-string / unknown string) is a
+      ``transition_committed_strategy_invalid`` refusal, never a harmless merge;
+    * the attempted route must be an advertisable (exact, normalized,
+      non-wildcard) host and a real ``int`` port ``1..65535`` -- anything else is
+      ``transition_advertised_route_invalid`` (never a coerced ``str``/``int`` and
+      never an empty "success");
+    * ``terminal`` must be the exact ``RecoveryTerminalInput`` and carry the
+      matching typed proof: a callback commit requires a ``CallbackRecoveryProof``
+      whose ``advertised_ha_endpoint`` EXACTLY equals the attempted ``host:port``
+      (absent -> ``transition_callback_route_unproven``, differing ->
+      ``transition_callback_route_mismatch``); an inbound commit requires an
+      ``InboundRecoveryProof`` (absent -> ``transition_inbound_route_unproven``).
+
+    Neutral: no peer IP / L2 / hostname / cloud-family input, no coercion.
+    """
+
+    from .recovery.terminal import RecoveryTerminalInput
+    from .recovery_contract import CallbackRecoveryProof, InboundRecoveryProof
+
+    # ``None`` is the only true non-strategy merge (nothing to persist). An exact
+    # ``inbound``/``callback_on_demand`` is a strategy commit; ANY other value
+    # (duck / non-string / unknown string) is a typed refusal -- it must never be
+    # treated as a harmless merge that lets a bogus strategy commit with no route.
+    if committed_strategy is None:
+        return "", 0, ""
+    if type(committed_strategy) is not str or committed_strategy not in (
+        CONNECTION_STRATEGY_INBOUND,
+        CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+    ):
+        return "", 0, "transition_committed_strategy_invalid"
+    host = _advertisable_host(attempted_host)
+    if host is None or not _valid_port(attempted_port):
+        return "", 0, "transition_advertised_route_invalid"
+    if type(terminal) is not RecoveryTerminalInput:
+        return "", 0, "transition_terminal_proof_required"
+    if committed_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+        if type(terminal.callback_proof) is not CallbackRecoveryProof:
+            return "", 0, "transition_callback_route_unproven"
+        if terminal.callback_proof.advertised_ha_endpoint != f"{host}:{attempted_port}":
+            return "", 0, "transition_callback_route_mismatch"
+        return host, attempted_port, ""
+    if type(terminal.inbound_proof) is not InboundRecoveryProof:
+        return "", 0, "transition_inbound_route_unproven"
+    return host, attempted_port, ""
+
+
 __all__ = [
     "CLOUD_PROVENANCE_NONE",
     "CLOUD_PROVENANCE_OBSERVED_CURRENT",
@@ -357,5 +444,8 @@ __all__ = [
     "PROVENANCE_NONE",
     "StrategyTransitionContext",
     "TransitionEndpointCandidate",
+    "earned_advertised_route",
+    "normalized_advertised_host",
+    "parse_advertised_port",
     "resolve_default_ha_endpoint",
 ]

@@ -65,6 +65,13 @@ from .connection.connection_policy import (
     resolve_connection_strategy,
 )
 from .connection.models import build_connection_spec, build_connection_spec_from_values
+from .connection.strategy_transition_context import (
+    PROVENANCE_EXPLICIT_ADVERTISED,
+    TransitionEndpointCandidate,
+    normalized_advertised_host,
+    parse_advertised_port,
+    resolve_default_ha_endpoint,
+)
 from .connection.ui import ConnectionFormField
 from .const import (
     CONF_PENDING_ADDRESS_HINT,
@@ -802,6 +809,11 @@ class _TranslationBundleMixin:
 _PORT_SELECTOR = NumberSelector(
     NumberSelectorConfig(min=1, max=65535, mode=NumberSelectorMode.BOX)
 )
+
+# When NO port default is known, a NumberSelector renders its minimum (1) as a
+# chosen value -- misleading. An empty text field is the honest form mechanism;
+# the submit handler parses/validates it to a real port.
+_PORT_EMPTY_TEXT_SELECTOR = TextSelector(TextSelectorConfig())
 
 _DISCOVERY_INTERVAL_SELECTOR = NumberSelector(
     NumberSelectorConfig(
@@ -9883,31 +9895,104 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
 
     def _transition_prefill(self) -> dict[str, Any]:
-        """Prefill ONLY previously-confirmed ADVERTISED values (NAT-honest).
+        """Resolve the default advertised endpoint via the CP1a typed resolver.
 
-        Behind NAT the advertised endpoint may look nothing like this host.
-        When no advertised host/port was ever confirmed, the fields stay
-        EMPTY and explicitly require input — the local ``server_ip`` /
-        ``tcp_port`` are bind configuration and are never presented as if
-        they were the externally-advertised endpoint.
+        The prefill is an editable SUGGESTION only (its provenance is shown in
+        placeholders, never stored as recovery evidence). It is derived through
+        ``resolve_default_ha_endpoint`` from strictly-separated sources:
+
+        * explicit advertised route -- the WHOLE record from ONE source:
+          ``entry.data`` when any advertised key is present there, else
+          ``entry.options`` as a legacy fallback, else strictly absent. A field
+          is never taken from data and its pair from options; a partial/malformed
+          record fails closed (no fall-through);
+        * the advertised endpoint of the entry's VALIDATED, PN-bound callback
+          proof (read only via ``RecoveryContract.from_entry_data``);
+        * no confirmed-HA-endpoint role authority exists yet -> ``None``;
+        * the effective runtime route (``server_ip:tcp_port``) as an editable
+          local hint, which the resolver only offers for a callback entry.
         """
+
+        from .connection.recovery_contract import RECOVERY_CONTRACT_KEY, RecoveryContract
 
         data = self._config_entry.data
         options = self._config_entry.options
-        host = str(
-            options.get(CONF_ADVERTISED_SERVER_IP)
-            or data.get(CONF_ADVERTISED_SERVER_IP)
-            or ""
-        ).strip()
-        port = int(
-            options.get(CONF_ADVERTISED_TCP_PORT)
-            or data.get(CONF_ADVERTISED_TCP_PORT)
-            or 0
+        if CONF_ADVERTISED_SERVER_IP in data or CONF_ADVERTISED_TCP_PORT in data:
+            explicit_host = data.get(CONF_ADVERTISED_SERVER_IP, "")
+            explicit_port = data.get(CONF_ADVERTISED_TCP_PORT, 0)
+        elif CONF_ADVERTISED_SERVER_IP in options or CONF_ADVERTISED_TCP_PORT in options:
+            explicit_host = options.get(CONF_ADVERTISED_SERVER_IP, "")
+            explicit_port = options.get(CONF_ADVERTISED_TCP_PORT, 0)
+        else:
+            explicit_host, explicit_port = "", 0
+
+        # The callback proof comes ONLY from a valid RecoveryContract whose PN is
+        # this entry's own collector PN -- an EXACT normalized string (a duck /
+        # non-string / padded / empty entry PN alongside a present contract is
+        # never trusted). A foreign-PN contract, an untrusted entry PN, or a
+        # present-but-unparseable contract record never yields a route AND fails
+        # closed: absent a valid HIGHER-priority explicit route, it forbids every
+        # lower-priority source (including a future confirmed HA endpoint), not
+        # only the local runtime hint.
+        raw_entry_pn = data.get(CONF_COLLECTOR_PN)
+        entry_pn = (
+            raw_entry_pn
+            if type(raw_entry_pn) is str
+            and raw_entry_pn != ""
+            and raw_entry_pn == raw_entry_pn.strip()
+            else None
         )
+        contract = RecoveryContract.from_entry_data(dict(data))
+        proof_endpoint = ""
+        contract_fail_closed = False
+        if contract is not None:
+            if entry_pn is not None and pn_is_same_identity(
+                entry_pn, contract.collector_pn
+            ):
+                if contract.callback_proof is not None:
+                    proof_endpoint = contract.callback_proof.advertised_ha_endpoint
+            else:
+                contract_fail_closed = True
+        elif RECOVERY_CONTRACT_KEY in data:
+            contract_fail_closed = True
+
+        # Effective runtime hint uses the REAL options-over-data runtime config,
+        # passed raw (the resolver validates types -- no int()/bool coercion here).
+        server_ip = (
+            options[CONF_SERVER_IP] if CONF_SERVER_IP in options
+            else data.get(CONF_SERVER_IP, "")
+        )
+        tcp_port = (
+            options[CONF_TCP_PORT] if CONF_TCP_PORT in options
+            else data.get(CONF_TCP_PORT)
+        )
+
+        candidate = resolve_default_ha_endpoint(
+            explicit_advertised_host=explicit_host,
+            explicit_advertised_port=explicit_port,
+            callback_proof_endpoint=proof_endpoint,
+            confirmed_ha_endpoint=None,
+            current_strategy=resolve_connection_strategy(data, options),
+            server_ip=server_ip,
+            tcp_port=tcp_port,
+        )
+        # A fail-closed contract permits ONLY a valid higher-priority explicit
+        # route; every other resolved source (callback proof, a future confirmed
+        # HA endpoint, or the local runtime hint) is refused.
+        if (
+            contract_fail_closed
+            and candidate.provenance != PROVENANCE_EXPLICIT_ADVERTISED
+        ):
+            candidate = TransitionEndpointCandidate.none()
         collector_ip = str(
             options.get(CONF_COLLECTOR_IP) or data.get(CONF_COLLECTOR_IP) or ""
         ).strip()
-        return {"host": host, "port": port, "collector_ip": collector_ip}
+        return {
+            "host": candidate.host,
+            "port": candidate.port,
+            "provenance": candidate.provenance,
+            "collector_ip": collector_ip,
+        }
 
     @_with_translation_bundle
     async def async_step_strategy_transition(
@@ -9932,12 +10017,21 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         if user_input is not None:
             flat = _flatten_sections(user_input)
-            host = str(flat.get(CONF_ADVERTISED_SERVER_IP) or "").strip()
-            port = int(flat.get(CONF_ADVERTISED_TCP_PORT) or 0)
+            # No coercion: the RAW submitted value reaches the validator, so a
+            # non-string / wildcard / padded host cannot be str()-normalized into
+            # a valid one. Empty -> required; anything else invalid ->
+            # invalid_selection. The port field may be a NumberSelector value OR
+            # (when no default was known) a free text field -- a malformed value
+            # is a form error, never a 500.
+            raw_host = flat.get(CONF_ADVERTISED_SERVER_IP)
+            host = normalized_advertised_host(raw_host)
+            port = parse_advertised_port(flat.get(CONF_ADVERTISED_TCP_PORT))
             collector_ip = str(flat.get(CONF_COLLECTOR_IP) or "").strip()
-            if not host:
+            if raw_host is None or raw_host == "":
                 errors[CONF_ADVERTISED_SERVER_IP] = "required"
-            if port <= 0 or port > 65535:
+            elif host is None:
+                errors[CONF_ADVERTISED_SERVER_IP] = "invalid_selection"
+            if port is None:
                 errors[CONF_ADVERTISED_TCP_PORT] = "invalid_selection"
             if not to_inbound and not collector_ip:
                 errors[CONF_COLLECTOR_IP] = "callback_target_required"
@@ -9961,7 +10055,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 vol.Required(CONF_ADVERTISED_TCP_PORT, default=prefill["port"])
             ] = _PORT_SELECTOR
         else:
-            schema_fields[vol.Required(CONF_ADVERTISED_TCP_PORT)] = _PORT_SELECTOR
+            # No known port: an empty text field (never the NumberSelector
+            # minimum 1 presented as a chosen default).
+            schema_fields[
+                vol.Required(CONF_ADVERTISED_TCP_PORT)
+            ] = _PORT_EMPTY_TEXT_SELECTOR
         if not to_inbound:
             schema_fields[
                 vol.Required(CONF_COLLECTOR_IP, default=prefill["collector_ip"])
@@ -10012,9 +10110,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 endpoint = coordinator.format_home_assistant_callback_endpoint(
                     host, port
                 )
+                # Also pass the RAW advertised host/port: the authority persists
+                # them as the confirmed advertised route ONLY after the inbound
+                # reconnect is verified (never a second config-flow write).
                 result = await coordinator.async_run_connection_strategy_transition(
                     target_strategy=target,
                     inbound_endpoint=endpoint,
+                    advertised_host=host,
+                    advertised_port=port,
                     option_payload=dict(self._transition_options_payload),
                 )
             else:
@@ -10044,10 +10147,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         del user_input
         self._transition_task = None
         if not self._transition_error and self._transition_result is not None:
-            # Success: the authority already committed data+options and
-            # scheduled the single reload. The terminal create_entry writes
-            # the SAME options HA now holds -> no second reload.
-            payload = dict(self._transition_options_payload)
+            # Success: the authority already committed the FULL data+options
+            # (strategy, RecoveryContract, endpoint policy, compatibility axes,
+            # the earned advertised route, and the dropped stale route shadow) and
+            # scheduled the single reload. The options-flow terminal create_entry
+            # REPLACES options, so it must write the SAME complete options HA now
+            # holds -- NOT the staged poll/control subset (which would drop the
+            # original endpoint, control settings and every other option and
+            # trigger a second semantic reload).
+            payload = dict(self._config_entry.options)
             self._transition_target_strategy = ""
             self._transition_options_payload = {}
             self._transition_result = None

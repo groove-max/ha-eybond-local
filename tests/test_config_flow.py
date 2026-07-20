@@ -13376,8 +13376,52 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("advertised_server_ip", missing["errors"])
         self.assertIn("collector_ip", missing["errors"])
 
-    async def test_success_passes_verbatim_addresses_and_staged_options(self) -> None:
+    async def test_form_rejects_malformed_host_and_port_without_exception(self) -> None:
+        # No coercion: a non-string / wildcard / padded host and a non-numeric
+        # port are FORM ERRORS -- never a 500, never a started transition.
+        flow, _calls = self._make_flow()
+        for bad_host in (object(), "0.0.0.0", " 203.0.113.9 ", 12345):
+            result = await flow.async_step_strategy_transition(
+                {
+                    "advertised_server_ip": bad_host,
+                    "advertised_tcp_port": 8899,
+                    "collector_ip": "203.0.113.10",
+                }
+            )
+            self.assertEqual(result["type"], "form")
+            self.assertEqual(
+                result["errors"].get("advertised_server_ip"),
+                "invalid_selection",
+                msg=f"host {bad_host!r}",
+            )
+            self.assertIsNone(flow._transition_task)
+        # A non-numeric port is a form error too (the free text field is safe).
+        result = await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "203.0.113.9",
+                "advertised_tcp_port": "abc",
+                "collector_ip": "203.0.113.10",
+            }
+        )
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"].get("advertised_tcp_port"), "invalid_selection")
+        # An empty host is 'required', not 'invalid_selection'.
+        result = await flow.async_step_strategy_transition(
+            {"advertised_server_ip": "", "advertised_tcp_port": 8899, "collector_ip": "x"}
+        )
+        self.assertEqual(result["errors"].get("advertised_server_ip"), "required")
+
+    async def test_success_returns_full_committed_options_and_verbatim_addresses(
+        self,
+    ) -> None:
         flow, calls = self._make_flow()
+        # The COMPLETE options the authority already committed (unrelated keys
+        # included), which HA now holds post-commit.
+        flow._config_entry.options = {
+            "poll_mode": "auto",
+            "control_mode": "manual",
+            "collector_original_server_endpoint": "dtu_ess.eybond.com,18899,TCP",
+        }
         submitted = await flow.async_step_strategy_transition(
             {
                 # A PUBLIC NAT address: travels verbatim, never localized.
@@ -13392,13 +13436,24 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["type"], "progress_done")
         result = await flow.async_step_strategy_transition_result()
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"], {"poll_mode": "auto"})
+        # §5/§H: the terminal writes the COMPLETE stored options (not the staged
+        # poll/control subset) -- unrelated options are preserved and there is no
+        # second semantic reload.
+        self.assertEqual(
+            result["data"],
+            {
+                "poll_mode": "auto",
+                "control_mode": "manual",
+                "collector_original_server_endpoint": "dtu_ess.eybond.com,18899,TCP",
+            },
+        )
         self.assertEqual(len(calls), 1)
         call = calls[0]
         self.assertEqual(call["target_strategy"], "callback_on_demand")
         self.assertEqual(call["callback_target_ip"], "203.0.113.10")
         self.assertEqual(call["advertised_host"], "198.51.100.20")
         self.assertEqual(call["advertised_port"], 19000)
+        # The authority still receives ONLY the staged orthogonal options payload.
         self.assertEqual(call["option_payload"], {"poll_mode": "auto"})
         # The options flow itself persisted NOTHING (the authority commits).
         self.assertEqual(flow.hass.config_entries.updates, [])
@@ -13534,3 +13589,197 @@ class OptionsTransitionNatPrefillTests(unittest.IsolatedAsyncioTestCase):
         prefill = flow._transition_prefill()
         self.assertEqual(prefill["host"], "public.example")
         self.assertEqual(prefill["port"], 18899)
+
+
+class OptionsTransitionResolverPrefillTests(unittest.IsolatedAsyncioTestCase):
+    """Batch 1 CP1b: the resolver-backed transition prefill (A/B/C/G)."""
+
+    FULL_PN = "V001020SYN62344022"
+    TS = "2026-07-16T10:00:00+00:00"
+
+    def _flow(self, data, options=None):
+        entry = type("_Entry", (), {})()
+        entry.data = data
+        entry.options = options or {}
+        entry.entry_id = "entry-1"
+        entry.runtime_data = None
+        flow = EybondLocalOptionsFlow(entry)
+        flow.hass = _FakeHass()
+        flow.context = {}
+        flow._transition_target_strategy = "inbound"
+        return flow
+
+    def _callback_contract_data(self, advertised):
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+            RECOVERY_CONTRACT_KEY,
+            RecoveryContract,
+        )
+
+        proof = CallbackRecoveryProof(
+            method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            verified_at=self.TS,
+            trigger_target="203.0.113.10:58899",
+            advertised_ha_endpoint=advertised,
+            listener_port=18899,
+        )
+        contract = RecoveryContract.empty_for_pn(
+            self.FULL_PN, identity_source="fc2_parameter_2", updated_at=self.TS
+        ).with_callback_proof(proof, updated_at=self.TS)
+        return {RECOVERY_CONTRACT_KEY: contract.to_record(), "collector_pn": self.FULL_PN}
+
+    async def test_A_e500_effective_runtime_route(self) -> None:
+        flow = self._flow(
+            {
+                "connection_type": "eybond",
+                "server_ip": "192.168.1.50",
+                "tcp_port": 8899,
+                "collector_ip": "192.168.1.55",
+                "connection_strategy": "callback_on_demand",
+            }
+        )
+        p = flow._transition_prefill()
+        self.assertEqual((p["host"], p["port"]), ("192.168.1.50", 8899))
+        self.assertEqual(p["provenance"], "effective_runtime_route")
+
+    async def test_B_nat_callback_proof_precedence(self) -> None:
+        data = {
+            "connection_type": "eybond",
+            "server_ip": "10.0.0.2",
+            "tcp_port": 8899,
+            "collector_ip": "203.0.113.10",
+            "connection_strategy": "callback_on_demand",
+        }
+        data.update(self._callback_contract_data("195.191.72.37:18899"))
+        p = self._flow(data)._transition_prefill()
+        self.assertEqual((p["host"], p["port"]), ("195.191.72.37", 18899))
+        self.assertEqual(p["provenance"], "callback_proof")
+
+    async def test_B_foreign_pn_contract_yields_no_route(self) -> None:
+        # A VALID callback contract, but for a DIFFERENT collector PN than the
+        # entry -> never a route, and (no valid explicit) fails closed rather than
+        # falling to the local runtime hint.
+        data = {
+            "connection_type": "eybond",
+            "server_ip": "10.0.0.2",
+            "tcp_port": 8899,
+            "collector_ip": "203.0.113.10",
+            "connection_strategy": "callback_on_demand",
+        }
+        data.update(self._callback_contract_data("195.191.72.37:18899"))
+        data["collector_pn"] = "V000405SYN94677058"  # entry PN != contract PN
+        p = self._flow(data)._transition_prefill()
+        self.assertEqual(p["provenance"], "none")
+
+    async def test_B_untrusted_entry_pn_with_contract_fails_closed(self) -> None:
+        # A valid contract is present, but the entry's own PN is untrusted
+        # (empty) -> the contract is not this entry's -> no route, fail closed.
+        data = {
+            "connection_type": "eybond",
+            "server_ip": "10.0.0.2",
+            "tcp_port": 8899,
+            "collector_ip": "203.0.113.10",
+            "connection_strategy": "callback_on_demand",
+        }
+        data.update(self._callback_contract_data("195.191.72.37:18899"))
+        data["collector_pn"] = ""  # untrusted / empty entry PN
+        p = self._flow(data)._transition_prefill()
+        self.assertEqual(p["provenance"], "none")
+
+    async def test_C_explicit_wins_even_with_foreign_contract(self) -> None:
+        # A fail-closed (foreign) contract still yields to a valid HIGHER-priority
+        # explicit route -- the only permitted exception.
+        data = {
+            "connection_type": "eybond",
+            "server_ip": "10.0.0.2",
+            "tcp_port": 8899,
+            "advertised_server_ip": "203.0.113.9",
+            "advertised_tcp_port": 7000,
+            "connection_strategy": "callback_on_demand",
+        }
+        data.update(self._callback_contract_data("195.191.72.37:18899"))
+        data["collector_pn"] = "V000405SYN94677058"  # foreign contract
+        p = self._flow(data)._transition_prefill()
+        self.assertEqual((p["host"], p["provenance"]), ("203.0.113.9", "explicit_advertised"))
+
+    async def test_B_malformed_present_contract_fails_closed(self) -> None:
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RECOVERY_CONTRACT_KEY,
+        )
+
+        data = {
+            "connection_type": "eybond",
+            "server_ip": "10.0.0.2",
+            "tcp_port": 8899,
+            "collector_ip": "203.0.113.10",
+            "connection_strategy": "callback_on_demand",
+            "collector_pn": self.FULL_PN,
+            RECOVERY_CONTRACT_KEY: {"schema_version": 999, "garbage": True},
+        }
+        p = self._flow(data)._transition_prefill()
+        self.assertEqual(p["provenance"], "none")
+
+    async def test_C_explicit_data_beats_proof(self) -> None:
+        data = {
+            "connection_type": "eybond",
+            "server_ip": "10.0.0.2",
+            "tcp_port": 8899,
+            "advertised_server_ip": "203.0.113.9",
+            "advertised_tcp_port": 7000,
+            "connection_strategy": "callback_on_demand",
+        }
+        data.update(self._callback_contract_data("195.191.72.37:18899"))
+        p = self._flow(data)._transition_prefill()
+        self.assertEqual(
+            (p["host"], p["port"], p["provenance"]),
+            ("203.0.113.9", 7000, "explicit_advertised"),
+        )
+
+    async def test_C_partial_data_never_borrows_from_options(self) -> None:
+        # data carries only the host; options has a full pair. The WHOLE explicit
+        # record comes from data (a key is present there) -> partial -> fail-closed;
+        # options never completes data.
+        p = self._flow(
+            {
+                "connection_type": "eybond",
+                "server_ip": "10.0.0.2",
+                "tcp_port": 8899,
+                "advertised_server_ip": "203.0.113.9",
+                "connection_strategy": "callback_on_demand",
+            },
+            options={"advertised_server_ip": "198.51.100.7", "advertised_tcp_port": 6000},
+        )._transition_prefill()
+        self.assertEqual(p["provenance"], "none")
+
+    async def test_C_legacy_options_used_when_data_absent(self) -> None:
+        p = self._flow(
+            {
+                "connection_type": "eybond",
+                "server_ip": "10.0.0.2",
+                "tcp_port": 8899,
+                "connection_strategy": "callback_on_demand",
+            },
+            options={"advertised_server_ip": "198.51.100.7", "advertised_tcp_port": 6000},
+        )._transition_prefill()
+        self.assertEqual(
+            (p["host"], p["port"], p["provenance"]),
+            ("198.51.100.7", 6000, "explicit_advertised"),
+        )
+
+    async def test_G_reopen_uses_canonical_data_no_synthetic_port(self) -> None:
+        # After a successful commit the route lives in canonical data.
+        p = self._flow(
+            {
+                "connection_type": "eybond",
+                "server_ip": "10.0.0.2",
+                "tcp_port": 8899,
+                "advertised_server_ip": "195.191.72.37",
+                "advertised_tcp_port": 18899,
+                "connection_strategy": "callback_on_demand",
+            }
+        )._transition_prefill()
+        self.assertEqual((p["host"], p["port"]), ("195.191.72.37", 18899))
+        self.assertNotEqual(p["port"], 1)

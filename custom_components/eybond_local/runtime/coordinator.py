@@ -5546,6 +5546,70 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             cloud_family=self.collector_cloud_family,
         )
 
+    def _apply_transition_commit(
+        self,
+        updates: dict[str, Any],
+        terminal: Any,
+        option_updates: Any,
+        *,
+        advertised_host: str,
+        advertised_port: int,
+    ) -> str:
+        """Apply ONE verified strategy-transition commit (the facade's commit).
+
+        Persists the strategy, the EARNED advertised route (Batch 1 CP1b) and the
+        RecoveryContract in a SINGLE ``async_update_entry`` and schedules exactly
+        ONE reload. The route is persisted ONLY on a true strategy commit, from
+        the PROVEN route -- callback: the callback proof's advertised endpoint,
+        which MUST equal this attempt's advertised route (mismatch/absent => typed
+        refusal, no write); inbound: the confirmed HA endpoint the verified
+        reconnect used. ``entry.data`` becomes the SINGLE canonical owner: stale
+        ``options`` shadow copies are dropped in this same commit. A route or
+        contract refusal aborts BEFORE any write.
+        """
+
+        from ..connection.recovery.terminal import merge_recovery_contract
+        from ..connection.strategy_transition_context import earned_advertised_route
+
+        data = dict(self.config_entry.data)
+        data.update(updates)
+        # Only a TRUE strategy commit clears the recovery state: an
+        # ``inbound_recovered_after_restore`` merge (no strategy in ``updates``)
+        # leaves the state, because a single autonomous reconnect on an already-
+        # external endpoint does not prove a durable inbound future.
+        if CONF_CONNECTION_STRATEGY in updates:
+            data.pop(CONF_STRATEGY_TRANSITION_STATE, None)
+        route_host, route_port, route_refusal = earned_advertised_route(
+            committed_strategy=updates.get(CONF_CONNECTION_STRATEGY),
+            terminal=terminal,
+            attempted_host=advertised_host,
+            attempted_port=advertised_port,
+        )
+        if route_refusal:
+            return route_refusal
+        if route_host:
+            data[CONF_ADVERTISED_SERVER_IP] = route_host
+            data[CONF_ADVERTISED_TCP_PORT] = route_port
+        refusal = merge_recovery_contract(data, terminal)
+        if refusal:
+            return refusal
+        options = None
+        # Pass options even with an empty option_payload when stale advertised
+        # keys must be dropped, so they can never survive the commit and re-mask
+        # the new canonical data route.
+        if option_updates or route_host:
+            options = dict(self.config_entry.options)
+            if option_updates:
+                options.update(option_updates)
+            if route_host:
+                options.pop(CONF_ADVERTISED_SERVER_IP, None)
+                options.pop(CONF_ADVERTISED_TCP_PORT, None)
+        self._async_update_entry_without_reload(data=data, options=options)
+        # Exactly ONE reload, and only after the whole terminal state (axes +
+        # contract) is consistent.
+        self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+        return ""
+
     async def async_run_connection_strategy_transition(
         self,
         *,
@@ -5580,7 +5644,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             async_run_strategy_transition,
             trusted_transition_wire,
         )
-        from ..connection.recovery.terminal import merge_recovery_contract
         from ..connection.recovery.verification import CallbackRecoveryRoute
         from ..passive_discovery import get_callback_session_registry
 
@@ -5794,27 +5857,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             async def _commit(
                 updates: dict[str, Any], terminal, option_updates
             ) -> str:
-                data = dict(self.config_entry.data)
-                data.update(updates)
-                # Only a TRUE strategy commit clears the recovery state: an
-                # ``inbound_recovered_after_restore`` merge (no strategy in
-                # ``updates``) leaves the state, because a single autonomous
-                # reconnect on an already-external endpoint does not prove a
-                # durable inbound future.
-                if CONF_CONNECTION_STRATEGY in updates:
-                    data.pop(CONF_STRATEGY_TRANSITION_STATE, None)
-                refusal = merge_recovery_contract(data, terminal)
-                if refusal:
-                    return refusal
-                options = None
-                if option_updates:
-                    options = dict(self.config_entry.options)
-                    options.update(option_updates)
-                self._async_update_entry_without_reload(data=data, options=options)
-                # Exactly ONE reload, and only after the whole terminal state
-                # (axes + contract) is consistent.
-                self.hass.config_entries.async_schedule_reload(entry_id)
-                return ""
+                # The whole commit body lives in a testable method so the DI
+                # boundary (route persistence + options cleanup + one update / one
+                # reload) can be exercised on a real coordinator without the
+                # facade preamble.
+                return self._apply_transition_commit(
+                    updates,
+                    terminal,
+                    option_updates,
+                    advertised_host=advertised_host,
+                    advertised_port=advertised_port,
+                )
 
             silent_probe = SilentSessionIdentityProbeChannel(
                 host=str(getattr(spec, "server_ip", "") or "0.0.0.0"),

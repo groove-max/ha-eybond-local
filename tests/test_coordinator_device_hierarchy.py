@@ -767,6 +767,195 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 sys.modules[name] = original
         super().tearDownClass()
 
+    # ---- Batch 1 CP1b: the REAL transition-facade _commit (DI boundary) ----
+    PN = "V001020SYN62344022"
+    TS = "2026-07-16T10:00:00+00:00"
+
+    def _callback_terminal(self, advertised, *, pn=None):
+        from custom_components.eybond_local.connection.recovery.terminal import (
+            RecoveryTerminalInput,
+        )
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+        )
+
+        pn = pn or self.PN
+        return RecoveryTerminalInput(
+            collector_pn=pn,
+            callback_proof=CallbackRecoveryProof(
+                method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                collector_pn=pn,
+                identity_source="fc2_parameter_2",
+                verified_at=self.TS,
+                trigger_target="203.0.113.10:58899",
+                advertised_ha_endpoint=advertised,
+                listener_port=18899,
+            ),
+        )
+
+    def _inbound_terminal(self, *, pn=None):
+        from custom_components.eybond_local.connection.recovery.terminal import (
+            RecoveryTerminalInput,
+        )
+        from custom_components.eybond_local.connection.recovery_contract import (
+            INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+            InboundRecoveryProof,
+        )
+
+        pn = pn or self.PN
+        return RecoveryTerminalInput(
+            collector_pn=pn,
+            inbound_proof=InboundRecoveryProof(
+                method=INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+                collector_pn=pn,
+                identity_source="fc2_parameter_2",
+                verified_at=self.TS,
+                session_protocol="eybond_framed",
+            ),
+        )
+
+    def _commit_coordinator(self, *, options):
+        """A bare real coordinator wired for ``_apply_transition_commit``."""
+
+        entry = types.SimpleNamespace(
+            data={
+                "connection_type": "eybond",
+                "collector_pn": self.PN,
+                "connection_strategy": "callback_on_demand",
+                "collector_ip": "203.0.113.10",
+            },
+            options=dict(options),
+            entry_id="entry-cp1b",
+            update_listeners=[],
+        )
+        updates: list[dict] = []
+        reloads: list[str] = []
+
+        def _upd(config_entry, **kw):
+            updates.append(dict(kw))
+            if kw.get("data") is not None:
+                config_entry.data = dict(kw["data"])
+            if "options" in kw and kw["options"] is not None:
+                config_entry.options = dict(kw["options"])
+            return True
+
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_update_entry=_upd,
+                async_schedule_reload=lambda eid: reloads.append(eid),
+            ),
+            data={},
+        )
+        c = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        c.config_entry = entry
+        c.hass = hass
+        return c, entry, updates, reloads
+
+    def test_di_inbound_commit_persists_route_strategy_contract_one_update(self) -> None:
+        c, entry, updates, reloads = self._commit_coordinator(
+            options={"advertised_server_ip": "stale", "advertised_tcp_port": 1, "control_mode": "manual"},
+        )
+        refusal = c._apply_transition_commit(
+            {"connection_strategy": "inbound"},
+            self._inbound_terminal(),
+            {},
+            advertised_host="192.168.1.50",
+            advertised_port=8899,
+        )
+        self.assertEqual(refusal, "")
+        # route + strategy + contract land in the ONE data update.
+        self.assertEqual(entry.data["advertised_server_ip"], "192.168.1.50")
+        self.assertEqual(entry.data["advertised_tcp_port"], 8899)
+        self.assertEqual(entry.data["connection_strategy"], "inbound")
+        self.assertIn("recovery_contract", entry.data)
+        # stale options route dropped; unrelated option preserved.
+        self.assertNotIn("advertised_server_ip", entry.options)
+        self.assertNotIn("advertised_tcp_port", entry.options)
+        self.assertEqual(entry.options["control_mode"], "manual")
+        # exactly one update + one reload.
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(reloads, ["entry-cp1b"])
+
+    def test_di_callback_commit_persists_route_from_proof(self) -> None:
+        c, entry, updates, reloads = self._commit_coordinator(
+            options={"advertised_server_ip": "stale", "advertised_tcp_port": 1},
+        )
+        refusal = c._apply_transition_commit(
+            {"connection_strategy": "callback_on_demand"},
+            self._callback_terminal("195.191.72.37:18899"),
+            {},
+            advertised_host="195.191.72.37",
+            advertised_port=18899,
+        )
+        self.assertEqual(refusal, "")
+        # persisted route == the callback proof's advertised endpoint.
+        self.assertEqual(entry.data["advertised_server_ip"], "195.191.72.37")
+        self.assertEqual(entry.data["advertised_tcp_port"], 18899)
+        self.assertNotIn("advertised_server_ip", entry.options)
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(len(reloads), 1)
+
+    def test_di_callback_proof_mismatch_commits_nothing(self) -> None:
+        c, entry, updates, reloads = self._commit_coordinator(options={})
+        refusal = c._apply_transition_commit(
+            {"connection_strategy": "callback_on_demand"},
+            self._callback_terminal("1.2.3.4:9000"),  # proof != attempted
+            {},
+            advertised_host="195.191.72.37",
+            advertised_port=18899,
+        )
+        self.assertEqual(refusal, "transition_callback_route_mismatch")
+        # NOTHING committed: no route, no strategy change, no update, no reload.
+        self.assertNotIn("advertised_server_ip", entry.data)
+        self.assertEqual(entry.data["connection_strategy"], "callback_on_demand")
+        self.assertEqual(updates, [])
+        self.assertEqual(reloads, [])
+
+    def test_di_inbound_missing_proof_commits_nothing(self) -> None:
+        c, entry, updates, reloads = self._commit_coordinator(options={})
+        refusal = c._apply_transition_commit(
+            {"connection_strategy": "inbound"},
+            self._callback_terminal("192.168.1.50:8899"),  # wrong proof type
+            {},
+            advertised_host="192.168.1.50",
+            advertised_port=8899,
+        )
+        self.assertEqual(refusal, "transition_inbound_route_unproven")
+        self.assertEqual(updates, [])
+        self.assertEqual(reloads, [])
+
+    def test_di_non_strategy_merge_persists_no_route(self) -> None:
+        # An inbound_recovered_after_restore merge (no strategy in updates) earns
+        # no advertised route, even with a valid inbound proof.
+        c, entry, updates, reloads = self._commit_coordinator(options={})
+        refusal = c._apply_transition_commit(
+            {},  # no connection_strategy committed
+            self._inbound_terminal(),
+            {},
+            advertised_host="192.168.1.50",
+            advertised_port=8899,
+        )
+        self.assertEqual(refusal, "")
+        self.assertNotIn("advertised_server_ip", entry.data)
+
+    def test_di_invalid_committed_strategy_commits_nothing(self) -> None:
+        # A bogus committed strategy is refused BEFORE any write -- it is never a
+        # harmless merge that could persist "connection_strategy=bogus".
+        c, entry, updates, reloads = self._commit_coordinator(options={})
+        refusal = c._apply_transition_commit(
+            {"connection_strategy": "bogus"},
+            self._inbound_terminal(),
+            {},
+            advertised_host="192.168.1.50",
+            advertised_port=8899,
+        )
+        self.assertEqual(refusal, "transition_committed_strategy_invalid")
+        self.assertEqual(updates, [])
+        self.assertEqual(reloads, [])
+        # entry is unchanged -- the bogus strategy never reached the entry.
+        self.assertEqual(entry.data["connection_strategy"], "callback_on_demand")
+
     def test_proxy_capture_notification_id_uses_bundle_stem(self) -> None:
         notification_id = self.coordinator_module._proxy_capture_notification_id(
             "entry-1",
