@@ -94,32 +94,13 @@ from custom_components.eybond_local.collector.capabilities import (  # noqa: E40
 class _CoordinatorStub:
     def __init__(self) -> None:
         self.config_entry = types.SimpleNamespace(entry_id="entry-1")
-        self.data = types.SimpleNamespace(
-            connected=True,
-            values={
-                "collector_server_endpoint": "47.91.67.66,18899,TCP",
-                "collector_operation_endpoint_sync_status": "aligned",
-            },
-        )
-        self.collector_operation_mode = "smartess_cloud_home_assistant"
+        self.data = types.SimpleNamespace(connected=True, values={})
         self.control_mode = "auto"
         self.controls_enabled = True
         self.controls_reason = "autodetected_high_confidence"
         self.controls_summary = "Controls are enabled automatically."
-        self.collector_callback_target_endpoint = "192.168.1.50,18899,TCP"
-        self.collector_server_endpoint_rollback_target = "47.91.67.66,18899,TCP"
-        self.proxy_capture_upstream_endpoint = "47.91.67.66,18899,TCP"
         self.collector_capabilities = collector_capability_profile()
         self.calls: list[tuple[str, str]] = []
-        self.management_actions = {
-            "read_endpoint_state": True,
-            "write_endpoint": True,
-            "apply_changes": True,
-            "reboot": True,
-        }
-
-    def collector_management_action_available(self, action: str) -> bool:
-        return bool(self.management_actions.get(action, False))
 
     def collector_device_info(self):
         return {"scope": "collector"}
@@ -127,40 +108,44 @@ class _CoordinatorStub:
     def inverter_device_info(self):
         return {"scope": "inverter"}
 
-    def collector_operation_mode_change_reason(self, *, target_mode: str = "") -> str | None:
-        return None
-
-    async def async_set_collector_operation_mode(self, option: str) -> None:
-        self.calls.append(("collector_operation_mode", option))
-        self.collector_operation_mode = option
-
     async def async_set_control_mode(self, option: str) -> None:
         self.calls.append(("control_mode", option))
         self.control_mode = option
 
 
-class RuntimeSelectTests(unittest.TestCase):
-    def test_runtime_select_keys_are_exposed_and_default_enabled(self) -> None:
-        self.assertEqual(
+class RuntimeSelectInventoryTests(unittest.TestCase):
+    """CP2A Test A: the writable collector operation-mode select is gone."""
+
+    def test_collector_operation_mode_is_not_a_runtime_select_key(self) -> None:
+        # The connection-strategy transition is the only user authority for the
+        # connection method; the operation mode is a read-only projection, never
+        # a writable runtime select.
+        for keys in (
             runtime_select_keys_for_runtime(),
-            ("collector_operation_mode",),
-        )
-        self.assertEqual(
             default_enabled_runtime_select_keys_for_runtime(),
-            ("collector_operation_mode",),
-        )
-
-    def test_runtime_select_keys_can_be_limited_to_collector_only_mode(self) -> None:
-        self.assertEqual(
             runtime_select_keys_for_runtime(has_inverter_identity=False),
-            ("collector_operation_mode",),
-        )
-        self.assertEqual(
             default_enabled_runtime_select_keys_for_runtime(has_inverter_identity=False),
-            ("collector_operation_mode",),
+        ):
+            self.assertNotIn("collector_operation_mode", keys)
+
+    def test_runtime_setup_creates_no_writable_operation_mode_select(self) -> None:
+        async def _run() -> list[object]:
+            coordinator = _CoordinatorStub()
+            entry = types.SimpleNamespace(data={}, options={}, runtime_data=coordinator)
+            entities: list[object] = []
+            await async_setup_entry(None, entry, entities.extend)
+            return entities
+
+        entities = asyncio.run(_run())
+        self.assertFalse(
+            any(
+                isinstance(entity, EybondRuntimeSettingSelect)
+                and entity._spec.key == "collector_operation_mode"
+                for entity in entities
+            )
         )
 
-    def test_setup_skips_collector_operation_mode_select_for_local_bridge(self) -> None:
+    def test_setup_for_local_bridge_creates_no_operation_mode_select(self) -> None:
         async def _run() -> list[object]:
             coordinator = _CoordinatorStub()
             coordinator.collector_capabilities = collector_capability_profile(
@@ -172,12 +157,10 @@ class RuntimeSelectTests(unittest.TestCase):
                 runtime_data=coordinator,
             )
             entities: list[object] = []
-
             await async_setup_entry(None, entry, entities.extend)
             return entities
 
         entities = asyncio.run(_run())
-
         self.assertFalse(
             any(
                 isinstance(entity, EybondRuntimeSettingSelect)
@@ -186,144 +169,73 @@ class RuntimeSelectTests(unittest.TestCase):
             )
         )
 
-    def test_collector_operation_mode_select_routes_to_collector_device(self) -> None:
-        coordinator = _CoordinatorStub()
-        entity = EybondRuntimeSettingSelect(
+    def test_select_module_has_no_writable_mode_path(self) -> None:
+        # Static guard: the select platform holds no writable operation-mode
+        # surface — no spec, no setter call, no change-reason availability gate.
+        import custom_components.eybond_local.select as select_module
+
+        source = Path(select_module.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("async_set_collector_operation_mode", source)
+        self.assertNotIn('key="collector_operation_mode"', source)
+        self.assertNotIn("collector_operation_mode_change_reason", source)
+
+
+class RuntimeSettingSelectGenericPathTests(unittest.TestCase):
+    """The runtime-setting select class survives as generic scaffolding.
+
+    CP2A removed only the operation-mode-specific branches; these tests pin the
+    remaining generic control-mode path so that removal did not break it.
+    """
+
+    def _control_mode_entity(self, coordinator) -> EybondRuntimeSettingSelect:
+        return EybondRuntimeSettingSelect(
             coordinator,
             _RuntimeSelectSpec(
-                key="collector_operation_mode",
-                translation_key="collector_operation_mode",
-                name="Collector Operation Mode",
-                options=(
-                    "smartess_cloud_home_assistant",
-                    "home_assistant_only",
-                ),
-                device_scope="collector",
+                key="control_mode",
+                translation_key="control_mode",
+                name="Control Mode",
+                options=("auto", "read_only", "full"),
+                device_scope="integration",
             ),
         )
 
-        self.assertEqual(entity.device_info, {"scope": "collector"})
-        self.assertEqual(entity.current_option, "smartess_cloud_home_assistant")
+    def test_control_mode_select_reads_integration_scope(self) -> None:
+        coordinator = _CoordinatorStub()
+        entity = self._control_mode_entity(coordinator)
+        self.assertEqual(entity.device_info, {"scope": "inverter"})
+        self.assertEqual(entity.current_option, "auto")
         self.assertTrue(entity.available)
         self.assertEqual(
             entity.extra_state_attributes,
             {
-                "setting_scope": "collector",
+                "setting_scope": "integration",
                 "write_enabled": True,
-                "availability_reason": "Ready",
-                "current_callback_endpoint": "47.91.67.66,18899,TCP",
-                "target_callback_endpoint": "192.168.1.50,18899,TCP",
-                "rollback_callback_endpoint": "47.91.67.66,18899,TCP",
-                "upstream_callback_endpoint": "47.91.67.66,18899,TCP",
-                "callback_sync_status": "aligned",
-                "mode_change_effect": "ha_only_enforces_home_assistant_callback; smartess_cloud_home_assistant_restores_upstream_callback_when_available",
+                "controls_enabled": True,
+                "control_policy_reason": "autodetected_high_confidence",
+                "control_policy_summary": "Controls are enabled automatically.",
             },
         )
 
-    def test_collector_operation_mode_select_is_unavailable_during_proxy_transition(self) -> None:
+    def test_control_mode_select_routes_write_to_coordinator(self) -> None:
         coordinator = _CoordinatorStub()
-        coordinator.collector_operation_mode_change_reason = lambda *, target_mode="": (
-            "collector_operation_mode_proxy_transition_active"
-        )
+        entity = self._control_mode_entity(coordinator)
+        asyncio.run(entity.async_select_option("read_only"))
+        self.assertEqual(coordinator.calls, [("control_mode", "read_only")])
+
+    def test_unknown_runtime_select_key_raises(self) -> None:
+        coordinator = _CoordinatorStub()
         entity = EybondRuntimeSettingSelect(
             coordinator,
             _RuntimeSelectSpec(
-                key="collector_operation_mode",
-                translation_key="collector_operation_mode",
-                name="Collector Operation Mode",
-                options=(
-                    "smartess_cloud_home_assistant",
-                    "home_assistant_only",
-                ),
-                device_scope="collector",
+                key="not_a_setting",
+                translation_key="not_a_setting",
+                name="Not A Setting",
+                options=("a", "b"),
+                device_scope="integration",
             ),
         )
-
-        self.assertFalse(entity.available)
-        self.assertEqual(entity.current_option, "smartess_cloud_home_assistant")
-        self.assertEqual(
-            entity.extra_state_attributes["availability_reason"],
-            "Proxy capture is changing the collector callback. Wait for the transition to finish.",
-        )
-        self.assertFalse(entity.extra_state_attributes["write_enabled"])
-
-    def test_collector_operation_mode_select_is_unavailable_while_mode_change_applies(self) -> None:
-        coordinator = _CoordinatorStub()
-        coordinator.collector_operation_mode_change_reason = lambda *, target_mode="": (
-            "collector_operation_mode_apply_pending"
-        )
-        entity = EybondRuntimeSettingSelect(
-            coordinator,
-            _RuntimeSelectSpec(
-                key="collector_operation_mode",
-                translation_key="collector_operation_mode",
-                name="Collector Operation Mode",
-                options=(
-                    "smartess_cloud_home_assistant",
-                    "home_assistant_only",
-                ),
-                device_scope="collector",
-            ),
-        )
-
-        self.assertFalse(entity.available)
-        self.assertEqual(entity.current_option, "smartess_cloud_home_assistant")
-        self.assertEqual(
-            entity.extra_state_attributes["availability_reason"],
-            "Collector is applying the new operation mode. Wait for the collector to restart and reconnect.",
-        )
-        self.assertFalse(entity.extra_state_attributes["write_enabled"])
-
-    def test_collector_operation_mode_select_reports_missing_upstream_endpoint(self) -> None:
-        coordinator = _CoordinatorStub()
-        coordinator.collector_operation_mode_change_reason = lambda *, target_mode="": (
-            "collector_operation_mode_rollback_endpoint_unavailable"
-        )
-        entity = EybondRuntimeSettingSelect(
-            coordinator,
-            _RuntimeSelectSpec(
-                key="collector_operation_mode",
-                translation_key="collector_operation_mode",
-                name="Collector Operation Mode",
-                options=(
-                    "smartess_cloud_home_assistant",
-                    "home_assistant_only",
-                ),
-                device_scope="collector",
-            ),
-        )
-
-        self.assertFalse(entity.available)
-        self.assertEqual(entity.current_option, "smartess_cloud_home_assistant")
-        self.assertEqual(
-            entity.extra_state_attributes["availability_reason"],
-            "No upstream callback endpoint is available yet.",
-        )
-        self.assertFalse(entity.extra_state_attributes["write_enabled"])
-
-
-class CollectorOperationModeCapabilityGatingTests(unittest.TestCase):
-    def _entity(self, coordinator) -> EybondRuntimeSettingSelect:
-        return EybondRuntimeSettingSelect(
-            coordinator,
-            _RuntimeSelectSpec(
-                key="collector_operation_mode",
-                translation_key="collector_operation_mode",
-                name="Collector Operation Mode",
-                options=("smartess_cloud_home_assistant", "home_assistant_only"),
-                device_scope="collector",
-            ),
-        )
-
-    def test_unavailable_when_write_endpoint_capability_absent(self) -> None:
-        # An operation-mode change writes the endpoint, so it needs write_endpoint.
-        coordinator = _CoordinatorStub()
-        coordinator.management_actions["write_endpoint"] = False
-        self.assertFalse(self._entity(coordinator).available)
-
-    def test_available_when_write_endpoint_capability_present(self) -> None:
-        coordinator = _CoordinatorStub()
-        self.assertTrue(self._entity(coordinator).available)
+        with self.assertRaises(ValueError):
+            asyncio.run(entity.async_select_option("a"))
 
 
 if __name__ == "__main__":

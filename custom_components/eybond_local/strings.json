@@ -378,6 +378,7 @@
       "passive_discovery_unavailable": "Background discovery is not running. Reload the integration and try again.",
       "invalid_selection": "The selected option is no longer available.",
       "callback_target_required": "An address is required to ask the collector to connect.",
+      "connection_strategy_risk_unconfirmed": "You must confirm you understand the risks before switching the connection method.",
       "identity_not_confirmed": "That collector's identity could not be confirmed. Try again.",
       "callback_identity_ambiguous": "More than one collector answered. Make sure only the collector you are adding can reach Home Assistant, then try again.",
       "callback_trigger_interference": "Another connection request ran at the same time, so the answer could not be attributed. Try again."
@@ -452,14 +453,12 @@
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
           "connection_strategy": "How the collector connects",
-          "collector_operation_mode": "Collector operation mode",
           "control_mode": "Control mode"
         },
         "data_description": {
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
           "connection_strategy": "\"Collector connects to Home Assistant on its own\" if the collector already points at Home Assistant — no callback is sent. \"Ask the collector to connect when needed\" sends the collector one connection request per attempt; use this for a collector that normally talks to its cloud.",
-          "collector_operation_mode": "Legacy compatibility setting kept for migration. The connection strategy above is the primary choice.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
         },
         "sections": {
@@ -637,11 +636,15 @@
       },
       "strategy_transition": {
         "title": "Confirm the connection switch",
-        "description": "Switching to **{target_strategy}** must be verified with a controlled collector restart before it is saved.\n\nCheck the addresses below. Behind NAT/port-forwarding enter the public host and port the collector can really reach — they are used exactly as written.",
+        "description": "Switching to **{target_strategy}** must be verified with a controlled collector restart before it is saved.\n\n⚠️ {connection_strategy_risk}\n\nCheck the addresses below. Behind NAT/port-forwarding enter the public host and port the collector can really reach — they are used exactly as written.",
         "data": {
           "advertised_server_ip": "Home Assistant host the collector connects to",
           "advertised_tcp_port": "Port the collector connects to",
-          "collector_ip": "Collector address (for the callback request)"
+          "collector_ip": "Collector address (for the callback request)",
+          "confirm_connection_strategy_risk": "I understand the risks and want to switch the connection method"
+        },
+        "data_description": {
+          "confirm_connection_strategy_risk": "Required. The switch will not start until this box is checked."
         }
       },
       "strategy_transition_failed": {
@@ -673,13 +676,6 @@
   },
   "entity": {
     "select": {
-      "collector_operation_mode": {
-        "name": "Collector operation mode",
-        "state": {
-          "smartess_cloud_home_assistant": "Cloud + HA",
-          "home_assistant_only": "Home Assistant only"
-        }
-      },
       "control_mode": {
         "name": "Control mode",
         "state": {

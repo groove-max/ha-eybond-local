@@ -129,6 +129,7 @@ from ..const import (
 from ..connection.models import build_connection_spec
 from ..connection.connection_policy import (
     collector_identity_binding_required,
+    entry_declares_connection_strategy,
     may_auto_manage_endpoint,
     may_run_steady_reverse_discovery,
     resolve_connection_strategy,
@@ -2104,15 +2105,38 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     @property
     def collector_operation_mode(self) -> str:
-        """Return the persisted collector callback ownership mode."""
+        """Return the collector callback ownership mode.
+
+        CP2A: this is a READ-ONLY PROJECTION, no longer a standalone writable
+        authority. The single source of truth is the canonical connection
+        strategy:
+
+        - ``inbound``            -> ``home_assistant_only``
+        - ``callback_on_demand`` -> ``smartess_cloud_home_assistant``
+
+        A collector that can only be Home-Assistant-owned (``ha_only_required``)
+        always projects HA-only. For an entry that declares a canonical strategy
+        the persisted operation mode is IGNORED, so a stale ``options``/``data``
+        copy left over from an older save can never diverge from the transport
+        the runtime actually uses. Only legacy entries that predate the explicit
+        strategy axis fall back to the persisted-mode read (existing migration
+        compatibility).
+        """
 
         if self.collector_capabilities.ha_only_required:
             return COLLECTOR_OPERATION_HA_ONLY
 
+        data = self.config_entry.data
+        options = self.config_entry.options
+        if entry_declares_connection_strategy(data, options):
+            if self.connection_strategy == CONNECTION_STRATEGY_INBOUND:
+                return COLLECTOR_OPERATION_HA_ONLY
+            return COLLECTOR_OPERATION_SMARTESS_AND_HA
+
         mode = str(
-            self.config_entry.options.get(
+            options.get(
                 CONF_COLLECTOR_OPERATION_MODE,
-                self.config_entry.data.get(
+                data.get(
                     CONF_COLLECTOR_OPERATION_MODE,
                     DEFAULT_COLLECTOR_OPERATION_MODE,
                 ),
@@ -2173,8 +2197,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self.config_entry.options,
         )
 
-    def _sync_forced_collector_operation_mode(self) -> None:
-        """Persist forced HA-only mode once runtime proves the collector requires it."""
+    def _sync_collector_capability_profile(self) -> None:
+        """Persist runtime-proven collector profile metadata.
+
+        ``collector_operation_mode`` is deliberately not written here.  The
+        HA-only requirement is already represented by ``collector_capabilities``
+        and the public mode is a read-only projection of that capability plus
+        the canonical connection strategy.
+        """
 
         capabilities = self.collector_capabilities
         if not capabilities.ha_only_required:
@@ -2183,12 +2213,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         data = dict(self.config_entry.data)
         options = dict(self.config_entry.options)
         changed = False
-        if data.get(CONF_COLLECTOR_OPERATION_MODE) != COLLECTOR_OPERATION_HA_ONLY:
-            data[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
-            changed = True
-        if options.get(CONF_COLLECTOR_OPERATION_MODE) != COLLECTOR_OPERATION_HA_ONLY:
-            options[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
-            changed = True
         if capabilities.virtual_bridge:
             hardware_version = str(
                 self.data.values.get("collector_hardware_version")
@@ -2971,9 +2995,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         never silently writes, restores, or auto-heals the endpoint -- it only
         surfaces the endpoint as diagnostic state. Only ``integration_managed``
         (the integration previously wrote the endpoint through an explicit user
-        action) may reconcile it automatically. Explicit user actions
-        (``async_set_collector_operation_mode`` / bind / rollback services) are
-        separate and are not gated here.
+        action) may reconcile it automatically. Explicit user actions (the
+        verified connection-strategy transition and the low-level bind/rollback
+        services) are separate and are not gated here.
 
         An active shadow-learning route temporarily OWNS the collector endpoint
         (it is the live-wire safety boundary of the scan), so the per-poll
@@ -3735,7 +3759,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # Keep self.data aligned with the fresh snapshot before helpers that
         # inspect coordinator state instead of the local snapshot argument.
         self.data = snapshot
-        self._sync_forced_collector_operation_mode()
+        self._sync_collector_capability_profile()
         self._configure_reverse_discovery_mode()
         await self._async_warm_effective_metadata_cache()
         collector_cloud_family = self.collector_cloud_family
@@ -5490,40 +5514,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self.config_entry.data.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE),
         )
 
-    def collector_operation_mode_change_reason(self, *, target_mode: str = "") -> str | None:
-        """Return why the collector operation mode cannot be changed right now."""
-
-        overview = self.proxy_capture_overview
-        overview_status = str(getattr(overview, "status", "") or "").strip()
-        if overview_status in {"starting", "stopping", "restoring"}:
-            return "collector_operation_mode_proxy_transition_active"
-        if overview_status == "running":
-            return "collector_operation_mode_proxy_session_active"
-        mode_apply_lock_code = self.collector_operation_mode_apply_lock_code()
-        if mode_apply_lock_code is not None:
-            return mode_apply_lock_code
-        if (
-            self.collector_capabilities.ha_only_required
-            and str(target_mode or "").strip() == COLLECTOR_OPERATION_SMARTESS_AND_HA
-        ):
-            return "collector_operation_mode_target_unavailable"
-        if not self.data.connected:
-            return "collector_operation_mode_collector_not_connected"
-
-        normalized_target_mode = str(target_mode or "").strip()
-        if normalized_target_mode == COLLECTOR_OPERATION_SMARTESS_AND_HA:
-            current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
-            if (
-                (
-                    not current_endpoint
-                    or self._endpoint_looks_like_local_collector_callback(current_endpoint)
-                )
-                and not self.proxy_capture_upstream_endpoint
-            ):
-                return "collector_operation_mode_rollback_endpoint_unavailable"
-
-        return None
-
     def format_home_assistant_callback_endpoint(self, host: str, port: int) -> str:
         """Format ONE user-confirmed host/port as this entry's callback endpoint.
 
@@ -5618,15 +5608,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         callback_target_ip: str = "",
         advertised_host: str = "",
         advertised_port: int = 0,
-        legacy_operation_mode: str = "",
         option_payload: dict[str, Any] | None = None,
     ):
         """THE verified strategy-transition facade entry point (Batch 8).
 
-        Every high-level "switch how the collector connects" action — the
-        options-flow selector, the legacy operation-mode select — funnels
-        here. This method only ASSEMBLES the runtime-bound dependencies; the
-        order, the proof requirements and the axis-write policy live in
+        Every high-level "switch how the collector connects" action funnels
+        here. Since CP2A the sole user entry point is the options-flow strategy
+        transition (with mandatory risk consent); the writable operation-mode
+        select was removed. This method only ASSEMBLES the runtime-bound
+        dependencies; the order, the proof requirements and the axis-write
+        policy live in
         ``connection.strategy_transition.async_run_strategy_transition``.
 
         Addresses are caller-confirmed input: ``inbound_endpoint`` is the
@@ -5901,7 +5892,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 persist_pending=_persist_pending,
                 persist_confirmed=_persist_confirmed,
                 recovery_state=recovery_state,
-                legacy_operation_mode=legacy_operation_mode,
                 option_payload=option_payload,
                 silent_session_probe=silent_probe,
             )
@@ -5909,76 +5899,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             STRATEGY_TRANSITION_LEASES.release(entry_id)
             if silent_probe is not None:
                 await silent_probe.async_close()
-
-    async def async_set_collector_operation_mode(self, mode: str) -> str:
-        """Legacy operation-mode select: a FACADE over the transition authority.
-
-        Cloud+HA / HA-only is exactly the inbound / callback_on_demand
-        transition with the entry's previously-confirmed endpoints. The select
-        no longer writes any architecture axis itself: the target strategy is
-        persisted only after the authority's full verified success, and a
-        failed verification raises the typed reason without touching the
-        axes. The legacy mode value itself travels as the success commit's
-        extra payload so it can never diverge from the canonical strategy.
-        """
-
-        normalized_mode = str(mode or "").strip()
-        if normalized_mode not in COLLECTOR_OPERATION_MODES:
-            raise ValueError("collector_operation_mode_invalid")
-        if normalized_mode == self.collector_operation_mode:
-            return normalized_mode
-
-        change_reason = self.collector_operation_mode_change_reason(
-            target_mode=normalized_mode
-        )
-        if change_reason is not None:
-            raise RuntimeError(change_reason)
-
-        # NAT-strict for BOTH directions: the advertised HA host/port the
-        # collector is told must be EXPLICIT confirmed configuration
-        # (advertised_server_ip/advertised_tcp_port). A local interface address
-        # / local listener port is never silently promoted to the externally
-        # advertised endpoint — without the confirmed values the switch refuses
-        # typed. The local bind host/port stay separate (the runtime's own
-        # listener), never mixed with the advertised endpoint.
-        advertised_host = str(
-            self.config_entry.options.get(CONF_ADVERTISED_SERVER_IP)
-            or self.config_entry.data.get(CONF_ADVERTISED_SERVER_IP)
-            or ""
-        ).strip()
-        advertised_port = int(
-            self.config_entry.options.get(CONF_ADVERTISED_TCP_PORT)
-            or self.config_entry.data.get(CONF_ADVERTISED_TCP_PORT)
-            or 0
-        )
-
-        if normalized_mode == COLLECTOR_OPERATION_HA_ONLY:
-            if not advertised_host or not advertised_port:
-                raise RuntimeError("transition_endpoint_required")
-            await self._async_remember_collector_server_endpoint(self.data)
-            inbound_endpoint = self.format_home_assistant_callback_endpoint(
-                advertised_host, advertised_port
-            )
-            result = await self.async_run_connection_strategy_transition(
-                target_strategy=CONNECTION_STRATEGY_INBOUND,
-                inbound_endpoint=inbound_endpoint,
-                legacy_operation_mode=normalized_mode,
-            )
-        else:
-            result = await self.async_run_connection_strategy_transition(
-                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-                advertised_host=advertised_host,
-                advertised_port=advertised_port,
-                legacy_operation_mode=normalized_mode,
-            )
-        if not result.success:
-            raise RuntimeError(
-                str(result.failure_reason or "transition_failed")
-            )
-
-        self._configure_reverse_discovery_mode()
-        await self.async_request_refresh()
-        return normalized_mode
 
     async def async_set_control_mode(self, mode: str) -> str:
         """Persist one integration control policy mode and reload the entry."""

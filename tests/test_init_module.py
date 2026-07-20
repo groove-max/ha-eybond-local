@@ -117,8 +117,11 @@ from custom_components.eybond_local.models import (
 
 def _runtime_entity_key_module_stubs() -> dict[str, types.ModuleType]:
     select_module = types.ModuleType("custom_components.eybond_local.select")
+    # CP2A: the writable collector operation-mode select was removed, so the
+    # runtime-select inventory is empty. The stub mirrors that so the
+    # default-enabled set no longer contains a select unique_id.
     select_module.default_enabled_runtime_select_keys_for_runtime = (
-        lambda *, has_inverter_identity=True: ("collector_operation_mode",)
+        lambda *, has_inverter_identity=True: ()
     )
     text_module = types.ModuleType("custom_components.eybond_local.text")
     text_module.default_enabled_collector_text_keys_for_runtime = lambda: ()
@@ -282,8 +285,11 @@ class InitModuleTests(unittest.TestCase):
         self.assertIn("entry123_max_ac_charge_current", unique_ids)
         self.assertIn("entry123_collector_signal_strength", unique_ids)
         self.assertIn("entry123_collector_signal_quality", unique_ids)
+        # The read-only operation-mode SENSOR projection stays default-enabled.
         self.assertIn("entry123_collector_operation_mode", unique_ids)
-        self.assertIn("entry123_select_collector_operation_mode", unique_ids)
+        # CP2A: the writable operation-mode SELECT was removed from the runtime
+        # inventory, so it is no longer a default-enabled entity.
+        self.assertNotIn("entry123_select_collector_operation_mode", unique_ids)
         self.assertIn("entry123_collector_onboarding_status", unique_ids)
         self.assertIn("entry123_collector_serial_baudrate", unique_ids)
         self.assertIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
@@ -1353,15 +1359,30 @@ class InitModuleTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_remove_legacy_runtime_select_entities_removes_control_mode_select(self) -> None:
+    def test_remove_legacy_runtime_select_entities_removes_legacy_and_mode_selects(self) -> None:
+        # CP2A: the removal targets BOTH the legacy control-mode select and the
+        # now-removed writable collector operation-mode select, by their exact
+        # integration-owned unique_ids, and touches nothing else. This runs
+        # regardless of the gated obsolete-entity cleanup, so the already
+        # registered writable-mode select cannot linger.
         async def _run() -> None:
             legacy_control_mode_entry = types.SimpleNamespace(
                 unique_id="entry123_select_control_mode",
                 entity_id="select.smg_6200_control_mode",
             )
-            runtime_select_entry = types.SimpleNamespace(
+            operation_mode_select_entry = types.SimpleNamespace(
                 unique_id="entry123_select_collector_operation_mode",
                 entity_id="select.collector_pn_e50000200000000001_collector_operation_mode",
+            )
+            operation_mode_sensor_entry = types.SimpleNamespace(
+                # The read-only sensor projection shares the base key but a
+                # DIFFERENT unique_id (no "_select_"): it must be left alone.
+                unique_id="entry123_collector_operation_mode",
+                entity_id="sensor.collector_pn_e50000200000000001_collector_operation_mode",
+            )
+            unrelated_entry = types.SimpleNamespace(
+                unique_id="entry123_select_output_source_priority",
+                entity_id="select.smg_6200_output_source_priority",
             )
 
             class _Registry:
@@ -1379,12 +1400,33 @@ class InitModuleTests(unittest.TestCase):
                 patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
                 patch(
                     "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
-                    return_value=[legacy_control_mode_entry, runtime_select_entry],
+                    return_value=[
+                        legacy_control_mode_entry,
+                        operation_mode_select_entry,
+                        operation_mode_sensor_entry,
+                        unrelated_entry,
+                    ],
                 ),
             ):
                 await _async_remove_legacy_runtime_select_entities(hass, entry)
 
-            self.assertEqual(registry.removed, ["select.smg_6200_control_mode"])
+            self.assertEqual(
+                sorted(registry.removed),
+                sorted(
+                    [
+                        "select.smg_6200_control_mode",
+                        "select.collector_pn_e50000200000000001_collector_operation_mode",
+                    ]
+                ),
+            )
+            # The read-only sensor projection and unrelated selects survive.
+            self.assertNotIn(
+                "sensor.collector_pn_e50000200000000001_collector_operation_mode",
+                registry.removed,
+            )
+            self.assertNotIn(
+                "select.smg_6200_output_source_priority", registry.removed
+            )
 
         asyncio.run(_run())
 
@@ -1832,7 +1874,6 @@ class SetupOwnershipOrderingTests(unittest.TestCase):
                 patch("custom_components.eybond_local._prime_metadata_caches"),
                 patch("custom_components.eybond_local.services.async_setup_services", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_self_heal_server_ip", new=AsyncMock()),
-                patch("custom_components.eybond_local._async_self_heal_collector_operation_mode", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_self_heal_collector_cloud_family", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_self_heal_valuecloud_driver_hint", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_self_heal_entry_title", new=AsyncMock()),

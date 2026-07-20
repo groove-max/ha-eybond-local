@@ -673,6 +673,71 @@ class CanonicalConnectionStrategyOwnerTests(unittest.TestCase):
             C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
 
+    def test_entry_declares_connection_strategy_truth_table(self) -> None:
+        # CP2A: the operation-mode projection asks whether an entry carries an
+        # EXPLICIT canonical strategy. This helper never falls back to
+        # derivation, so a stale legacy operation mode can never masquerade as a
+        # declared strategy.
+        self.assertTrue(
+            cp.entry_declares_connection_strategy(
+                {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND}, {}
+            )
+        )
+        # Declared only in options (pre-migration fallback) still counts.
+        self.assertTrue(
+            cp.entry_declares_connection_strategy(
+                {}, {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
+            )
+        )
+        # No strategy anywhere -> a legacy entry, not a declaration.
+        self.assertFalse(cp.entry_declares_connection_strategy({}, {}))
+        # An invalid strategy value is NOT a declaration (no derivation fallback).
+        self.assertFalse(
+            cp.entry_declares_connection_strategy(
+                {C.CONF_CONNECTION_STRATEGY: "nonsense"}, {}
+            )
+        )
+        # A legacy operation mode alone is NOT a declared strategy.
+        self.assertFalse(
+            cp.entry_declares_connection_strategy(
+                {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY}, {}
+            )
+        )
+
+    def test_entry_declares_strategy_is_strict_and_data_fail_closed(self) -> None:
+        class StrategyDuck:
+            def __str__(self) -> str:
+                return C.CONNECTION_STRATEGY_INBOUND
+
+        class StrategyString(str):
+            pass
+
+        for value in (
+            StrategyDuck(),
+            StrategyString(C.CONNECTION_STRATEGY_INBOUND),
+            f" {C.CONNECTION_STRATEGY_INBOUND}",
+            f"{C.CONNECTION_STRATEGY_INBOUND} ",
+            "unknown",
+            1,
+        ):
+            self.assertFalse(
+                cp.entry_declares_connection_strategy(
+                    {C.CONF_CONNECTION_STRATEGY: value}, {}
+                ),
+                msg=repr(value),
+            )
+
+        # A present malformed canonical field blocks a stale options fallback.
+        self.assertFalse(
+            cp.entry_declares_connection_strategy(
+                {C.CONF_CONNECTION_STRATEGY: "unknown"},
+                {
+                    C.CONF_CONNECTION_STRATEGY:
+                    C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                },
+            )
+        )
+
     def test_legacy_resolver_reproduces_old_options_first_semantics(self) -> None:
         # Migration input: the value the entry ACTUALLY behaved with pre-upgrade.
         data = {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}

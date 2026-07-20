@@ -544,15 +544,65 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
                 return "\n".join(lines[node.lineno - 1 : node.end_lineno])
         raise AssertionError(f"method not found: {method_name}")
 
-    def test_coordinator_has_no_strategy_write_and_facades_call_authority(self) -> None:
+    def test_coordinator_has_no_strategy_write_and_no_writable_mode_setter(self) -> None:
         source = _read(_CC / "runtime" / "coordinator.py")
         self.assertEqual(self._strategy_key_writes(source), 0)
-        # The legacy operation-mode select is a FACADE: its implementation
-        # must route through the one transition entry point.
-        mode_source = self._method_source(
-            source, "async_set_collector_operation_mode"
+        # CP2A: the writable collector operation-mode setter was removed. The
+        # only user way to change the connection method is the options-flow
+        # strategy transition (with mandatory risk consent). No coordinator
+        # method may survive as a second writable operation-mode authority.
+        with self.assertRaises(AssertionError):
+            self._method_source(source, "async_set_collector_operation_mode")
+
+    def test_operation_mode_has_no_production_writer(self) -> None:
+        """CP2A: the legacy mode is input/projection only, never newly written."""
+
+        def _mode_writes(source: str) -> int:
+            tree = ast.parse(source)
+
+            def _is_mode_key(node: ast.AST) -> bool:
+                # Persisted entry writers use the canonical constant. Literal
+                # runtime-value keys are the intentional read-only projection
+                # published into snapshots/diagnostics and are checked below.
+                return (
+                    isinstance(node, ast.Name)
+                    and node.id == "CONF_COLLECTOR_OPERATION_MODE"
+                )
+
+            count = 0
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Assign, ast.AugAssign)):
+                    targets = (
+                        node.targets if isinstance(node, ast.Assign) else [node.target]
+                    )
+                    count += sum(
+                        isinstance(target, ast.Subscript)
+                        and _is_mode_key(target.slice)
+                        for target in targets
+                    )
+                elif isinstance(node, ast.Dict):
+                    count += sum(
+                        key is not None and _is_mode_key(key) for key in node.keys
+                    )
+            return count
+
+        offenders = {
+            str(path.relative_to(_CC)): writes
+            for path in sorted(_CC.rglob("*.py"))
+            if (writes := _mode_writes(_read(path)))
+        }
+        self.assertEqual(offenders, {})
+
+        init_source = _read(_CC / "__init__.py")
+        coordinator_source = _read(_CC / "runtime" / "coordinator.py")
+        self.assertNotIn("_async_self_heal_collector_operation_mode", init_source)
+        self.assertNotIn("_sync_forced_collector_operation_mode", coordinator_source)
+        self.assertNotIn("collector_operation_mode_change_reason", coordinator_source)
+        self.assertEqual(
+            coordinator_source.count('"collector_operation_mode"'),
+            3,
+            "only the three read-only runtime/snapshot projections may remain",
         )
-        self.assertIn("async_run_connection_strategy_transition", mode_source)
 
     def test_full_control_endpoint_edit_never_touches_axes(self) -> None:
         # G: a raw endpoint edit is a low-level write, never a strategy switch

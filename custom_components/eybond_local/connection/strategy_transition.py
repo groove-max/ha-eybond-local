@@ -125,9 +125,10 @@ DEGRADED_CALLBACK_RESTORE_UNPROVEN = "callback_restore_unproven"
 # topology field (bind/server IP, TCP/UDP ports, collector target, advertised
 # host/port, discovery route) — is refused. Topology cannot be staged and
 # proven against the old runtime spec in the same step; the facade must save
-# connection settings separately first. ``collector_operation_mode`` is added
-# by the authority itself from the strictly-validated ``legacy_operation_mode``
-# enum, never from the caller's payload.
+# connection settings separately first. ``collector_operation_mode`` is NOT on
+# the allowlist and the authority never writes it: CP2A made the operation mode
+# a read-only projection of the canonical strategy the commit already persists,
+# so no legacy mode shadow is written into data or options here.
 _ALLOWED_OPTION_KEYS = frozenset(
     {
         CONF_POLL_MODE,
@@ -369,8 +370,7 @@ async def async_run_strategy_transition(
     # and fully validated (exact type, this durable PN, this exact route,
     # callback target, pending phase) before any endpoint write / reboot / UDP.
     recovery_state: StrategyTransitionRecoveryState | None = None,
-    # --- typed facade payload (the ONLY compatibility pass-through) --------
-    legacy_operation_mode: str = "",
+    # --- typed facade payload ---------------------------------------------
     option_payload: Any = None,
     # --- shared -----------------------------------------------------------
     silent_session_probe: Any = None,
@@ -383,11 +383,13 @@ async def async_run_strategy_transition(
     must merge the RecoveryContract and persist data+options atomically with
     exactly one reload, returning ``""`` or a typed refusal.
 
-    Payload trust boundary: the ONLY axis-adjacent value a facade may pass is
-    ``legacy_operation_mode`` (the legacy select's compatibility mirror).
+    Payload trust boundary: a facade passes NO axis-adjacent value. The legacy
+    ``collector_operation_mode`` mirror was removed in CP2A — the mode is now a
+    read-only projection of the canonical strategy the commit persists.
     ``option_payload`` (the runtime form's staged options) is screened against
-    ``_FORBIDDEN_PAYLOAD_KEYS`` — the canonical strategy, endpoint policy,
-    provenance, identity and contract can never be smuggled past the proof.
+    the ``_ALLOWED_OPTION_KEYS`` allowlist — the canonical strategy, endpoint
+    policy, provenance, identity, contract AND the operation mode can never be
+    smuggled past the proof.
 
     NAT split: ``inbound_endpoint`` / the route's advertised host+port are
     what the COLLECTOR is told (opaque, verbatim); ``local_listener_port`` is
@@ -425,11 +427,11 @@ async def async_run_strategy_transition(
             failure_reason=TRANSITION_PAYLOAD_FORBIDDEN,
         )
     options_updates: dict[str, Any] = dict(option_payload or {})
+    # CP2A: no legacy operation-mode mirror is written into the data axes or the
+    # options. The operation mode is a read-only projection of the canonical
+    # strategy this commit persists, so ``axis_extra`` stays empty (kept as a
+    # generic extension point for any future strictly-validated axis value).
     axis_extra: dict[str, Any] = {}
-    mode = str(legacy_operation_mode or "").strip()
-    if mode:
-        axis_extra["collector_operation_mode"] = mode
-        options_updates["collector_operation_mode"] = mode
 
     session_id = str(claimed_session_id() or "").strip()
     if not session_id:

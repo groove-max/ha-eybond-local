@@ -2290,79 +2290,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator.collector_callback_target_endpoint, "192.168.1.50")
         self.assertEqual(listener_ports, [502])
 
-    def test_ha_only_mode_delegates_host_only_endpoint_to_authority(self) -> None:
-        # Batch 8: the legacy select is a FACADE. For a host-only external
-        # endpoint template the computed HA target keeps the host-only shape,
-        # and the facade passes it VERBATIM to the one transition authority
-        # (which owns listener preparation, the single write/restart and the
-        # reconnect proof).
-        async def _run() -> None:
-            from custom_components.eybond_local.connection.strategy_transition import (
-                StrategyTransitionResult,
-            )
-
-            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
-            coordinator._connection_spec = types.SimpleNamespace(
-                effective_advertised_server_ip="192.168.1.50",
-                effective_advertised_tcp_port=8899,
-            )
-            coordinator._runtime = types.SimpleNamespace(
-                effective_advertised_server_ip="192.168.1.50",
-                collector_server_endpoint_rollback_target="ess.eybond.com",
-                set_reverse_discovery_enabled=lambda *_: None,
-            )
-            coordinator._remembered_collector_server_endpoint = ""
-            coordinator.config_entry = types.SimpleNamespace(
-                entry_id="entry-1",
-                data={
-                    "collector_kind": "factory_eybond",
-                    "connection_strategy": "callback_on_demand",
-                    # Blocker 9: HA-only needs the EXPLICIT advertised endpoint.
-                    "advertised_server_ip": "192.168.1.50",
-                    "advertised_tcp_port": 8899,
-                },
-                options={},
-            )
-            coordinator.hass = types.SimpleNamespace(
-                config_entries=types.SimpleNamespace(async_update_entry=lambda *a, **k: None)
-            )
-            coordinator.data = self.RuntimeSnapshot(
-                connected=True,
-                values={"collector_server_endpoint": "ess.eybond.com"},
-            )
-            coordinator._tooling_values = {}
-            coordinator.collector_operation_mode_change_reason = lambda *, target_mode="": None
-
-            refresh_calls: list[bool] = []
-
-            async def _request_refresh() -> None:
-                refresh_calls.append(True)
-
-            coordinator.async_request_refresh = _request_refresh
-
-            transitions: list[dict[str, object]] = []
-
-            async def _fake_transition(**kwargs):
-                transitions.append(kwargs)
-                return StrategyTransitionResult(
-                    success=True, target_strategy=kwargs["target_strategy"]
-                )
-
-            coordinator.async_run_connection_strategy_transition = _fake_transition
-
-            await coordinator.async_set_collector_operation_mode("home_assistant_only")
-
-            self.assertEqual(len(transitions), 1)
-            self.assertEqual(transitions[0]["target_strategy"], "inbound")
-            # Host-only template -> host-only HA target, passed verbatim.
-            self.assertEqual(transitions[0]["inbound_endpoint"], "192.168.1.50")
-            self.assertEqual(
-                transitions[0]["legacy_operation_mode"], "home_assistant_only"
-            )
-            self.assertEqual(refresh_calls, [True])
-
-        asyncio.run(_run())
-
     def test_legacy_mode_lock_clears_after_reconnect_without_endpoint_readback(self) -> None:
         async def _run() -> None:
             listener_ports: list[int] = []
@@ -2750,7 +2677,62 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
         self.assertTrue(coordinator.collector_home_assistant_primary)
 
-    def test_runtime_bridge_syncs_persisted_operation_mode_to_ha_only(self) -> None:
+    def test_operation_mode_projects_inbound_ignoring_stale_cloud_mode(self) -> None:
+        # CP2A Test B: an entry that declares the canonical INBOUND strategy
+        # projects home_assistant_only, IGNORING a stale cloud operation mode
+        # left in both data and options by an older save.
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_kind": "factory_eybond",
+                "connection_strategy": "inbound",
+                "collector_operation_mode": "smartess_cloud_home_assistant",
+            },
+            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
+        # Precondition: a factory collector never forces HA-only by capability,
+        # so the projection is driven purely by the canonical strategy.
+        self.assertFalse(coordinator.collector_capabilities.ha_only_required)
+        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        self.assertTrue(coordinator.collector_home_assistant_primary)
+
+    def test_operation_mode_projects_callback_ignoring_stale_ha_only_mode(self) -> None:
+        # CP2A Test B: an entry that declares the canonical CALLBACK strategy
+        # projects smartess_cloud_home_assistant, IGNORING a stale HA-only mode.
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_kind": "factory_eybond",
+                "connection_strategy": "callback_on_demand",
+                "collector_operation_mode": "home_assistant_only",
+            },
+            options={"collector_operation_mode": "home_assistant_only"},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
+        self.assertFalse(coordinator.collector_capabilities.ha_only_required)
+        self.assertEqual(
+            coordinator.collector_operation_mode, "smartess_cloud_home_assistant"
+        )
+        self.assertFalse(coordinator.collector_home_assistant_primary)
+
+    def test_operation_mode_legacy_read_without_canonical_strategy(self) -> None:
+        # CP2A Test B: an OLD entry that declares NO canonical strategy keeps the
+        # legacy persisted-mode read (migration compatibility preserved).
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_kind": "factory_eybond",
+                "collector_operation_mode": "home_assistant_only",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
+        self.assertFalse(coordinator.collector_capabilities.ha_only_required)
+        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        self.assertTrue(coordinator.collector_home_assistant_primary)
+
+    def test_runtime_bridge_syncs_profile_without_persisting_operation_mode(self) -> None:
         updates: list[dict[str, object]] = []
 
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -2764,15 +2746,22 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._async_update_entry_without_reload = lambda **kwargs: updates.append(kwargs)
 
-        coordinator._sync_forced_collector_operation_mode()
+        coordinator._sync_collector_capability_profile()
 
         self.assertEqual(len(updates), 1)
         data = updates[0]["data"]
         options = updates[0]["options"]
-        self.assertEqual(data["collector_operation_mode"], "home_assistant_only")
-        self.assertEqual(options["collector_operation_mode"], "home_assistant_only")
+        self.assertEqual(
+            data["collector_operation_mode"], "smartess_cloud_home_assistant"
+        )
+        self.assertEqual(
+            options["collector_operation_mode"], "smartess_cloud_home_assistant"
+        )
         self.assertTrue(data["collector_virtual_bridge"])
         self.assertTrue(options["collector_virtual_bridge"])
+        # HA-only is a runtime projection of the capability, not a persisted
+        # mode mutation.
+        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
 
     def test_runtime_bridge_sync_requests_reload_after_platform_setup(self) -> None:
         updates: list[dict[str, object]] = []
@@ -2798,7 +2787,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator._entity_platform_reload_requested = False
         coordinator._async_update_entry_without_reload = lambda **kwargs: updates.append(kwargs)
 
-        coordinator._sync_forced_collector_operation_mode()
+        coordinator._sync_collector_capability_profile()
 
         self.assertEqual(len(updates), 1)
         self.assertEqual(reloads, ["scheduled"])
@@ -6157,7 +6146,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._async_restore_collector_original_endpoint_from_registry = AsyncMock()
             coordinator._async_remember_collector_server_endpoint = AsyncMock()
             coordinator._async_remember_runtime_identity = AsyncMock()
-            coordinator._sync_forced_collector_operation_mode = lambda: None
+            coordinator._sync_collector_capability_profile = lambda: None
             coordinator._configure_reverse_discovery_mode = lambda: None
             coordinator._async_warm_effective_metadata_cache = AsyncMock()
             coordinator._async_reconcile_collector_operation_mode_endpoint = AsyncMock()
@@ -6315,189 +6304,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(values["integration_build_git_commit"], "abcdef0")
         self.assertEqual(values["integration_build_commit_date"], "2026-06-23")
         self.assertEqual(values["integration_build_built_at"], "20260623T194735Z")
-
-    def test_async_set_collector_operation_mode_is_a_transition_facade(self) -> None:
-        # Batch 8: the select routes BOTH directions through the one verified
-        # transition authority — it never writes endpoint/strategy/policy
-        # itself, and a failed transition raises the typed reason.
-        async def _run() -> None:
-            from custom_components.eybond_local.connection.strategy_transition import (
-                StrategyTransitionResult,
-            )
-
-            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
-            coordinator.config_entry = types.SimpleNamespace(
-                entry_id="entry-1",
-                data={
-                    "collector_kind": "factory_eybond",
-                    "connection_strategy": "callback_on_demand",
-                    "advertised_server_ip": "192.168.1.50",
-                    "advertised_tcp_port": 18899,
-                },
-                options={},
-            )
-            coordinator.data = self.RuntimeSnapshot(
-                connected=True,
-                values={"collector_server_endpoint": "47.91.67.66,18899,TCP"},
-            )
-            coordinator._connection_spec = types.SimpleNamespace(
-                effective_advertised_server_ip="192.168.1.50",
-                effective_advertised_tcp_port=18899,
-            )
-            coordinator._runtime = types.SimpleNamespace(
-                effective_advertised_server_ip="192.168.1.50",
-                collector_server_endpoint_rollback_target="47.91.67.66,18899,TCP",
-                set_reverse_discovery_enabled=lambda *_: None,
-            )
-            coordinator._remembered_collector_server_endpoint = ""
-            coordinator._tooling_values = {}
-            coordinator.collector_operation_mode_change_reason = lambda *, target_mode="": None
-            coordinator.hass = types.SimpleNamespace(
-                config_entries=types.SimpleNamespace(async_update_entry=lambda *a, **k: None)
-            )
-
-            async def _request_refresh() -> None:
-                return None
-
-            coordinator.async_request_refresh = _request_refresh
-
-            transitions: list[dict[str, object]] = []
-            results: list[StrategyTransitionResult] = [
-                StrategyTransitionResult(success=True, target_strategy="inbound"),
-                StrategyTransitionResult(
-                    success=True, target_strategy="callback_on_demand"
-                ),
-                StrategyTransitionResult(
-                    success=False,
-                    target_strategy="inbound",
-                    failure_reason="inbound_reconnect_timeout",
-                ),
-            ]
-
-            async def _fake_transition(**kwargs):
-                transitions.append(kwargs)
-                return results[len(transitions) - 1]
-
-            coordinator.async_run_connection_strategy_transition = _fake_transition
-
-            await coordinator.async_set_collector_operation_mode("home_assistant_only")
-            self.assertEqual(transitions[0]["target_strategy"], "inbound")
-            self.assertEqual(
-                transitions[0]["inbound_endpoint"], "192.168.1.50,18899,TCP"
-            )
-            self.assertEqual(
-                transitions[0]["legacy_operation_mode"], "home_assistant_only"
-            )
-
-            # The REAL authority persists the mode in its success commit; the
-            # fake does not, so mirror that persisted state by hand.
-            coordinator.config_entry.data["connection_strategy"] = "inbound"
-            coordinator.config_entry.options = {
-                "collector_operation_mode": "home_assistant_only"
-            }
-            await coordinator.async_set_collector_operation_mode(
-                "smartess_cloud_home_assistant"
-            )
-            self.assertEqual(
-                transitions[1]["target_strategy"], "callback_on_demand"
-            )
-            self.assertEqual(
-                transitions[1]["legacy_operation_mode"],
-                "smartess_cloud_home_assistant",
-            )
-            # NAT-strict: the callback direction forwards the EXPLICIT
-            # advertised_* config verbatim (never the local server_ip / tcp
-            # port). The authority proves the route against exactly these.
-            self.assertEqual(transitions[1]["advertised_host"], "192.168.1.50")
-            self.assertEqual(transitions[1]["advertised_port"], 18899)
-
-            # A failed verification raises the typed reason; nothing commits.
-            coordinator.config_entry.data["connection_strategy"] = "callback_on_demand"
-            coordinator.config_entry.options = {
-                "collector_operation_mode": "smartess_cloud_home_assistant"
-            }
-            with self.assertRaises(RuntimeError) as ctx:
-                await coordinator.async_set_collector_operation_mode(
-                    "home_assistant_only"
-                )
-            self.assertEqual(str(ctx.exception), "inbound_reconnect_timeout")
-
-        import asyncio
-
-        asyncio.run(_run())
-
-    def test_ha_only_switch_same_endpoint_still_verifies_through_authority(self) -> None:
-        # The live endpoint already equals the HA target: the facade still
-        # runs the SAME authority (which decides "no write, plain reboot, and
-        # leave endpoint_control_policy alone" — pinned by the authority's own
-        # unit tests). The facade itself never touches the axes.
-        async def _run() -> None:
-            from custom_components.eybond_local.connection.strategy_transition import (
-                StrategyTransitionResult,
-            )
-
-            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
-            coordinator.config_entry = types.SimpleNamespace(
-                entry_id="entry-1",
-                data={
-                    "collector_kind": "factory_eybond",
-                    "connection_strategy": "callback_on_demand",
-                    "advertised_server_ip": "192.168.1.50",
-                    "advertised_tcp_port": 18899,
-                },
-                options={},
-            )
-            coordinator.data = self.RuntimeSnapshot(
-                connected=True,
-                values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
-            )
-            coordinator._connection_spec = types.SimpleNamespace(
-                effective_advertised_server_ip="192.168.1.50",
-                effective_advertised_tcp_port=18899,
-            )
-            coordinator._runtime = types.SimpleNamespace(
-                effective_advertised_server_ip="192.168.1.50",
-                collector_server_endpoint_rollback_target="47.91.67.66,18899,TCP",
-                set_reverse_discovery_enabled=lambda *_: None,
-            )
-            coordinator._remembered_collector_server_endpoint = ""
-            coordinator._tooling_values = {}
-            coordinator.collector_operation_mode_change_reason = lambda *, target_mode="": None
-            coordinator.hass = types.SimpleNamespace(
-                config_entries=types.SimpleNamespace(async_update_entry=lambda *a, **k: None)
-            )
-
-            async def _request_refresh() -> None:
-                return None
-
-            coordinator.async_request_refresh = _request_refresh
-
-            transitions: list[dict[str, object]] = []
-
-            async def _fake_transition(**kwargs):
-                transitions.append(kwargs)
-                return StrategyTransitionResult(
-                    success=True, target_strategy=kwargs["target_strategy"]
-                )
-
-            coordinator.async_run_connection_strategy_transition = _fake_transition
-
-            await coordinator.async_set_collector_operation_mode("home_assistant_only")
-
-            self.assertEqual(len(transitions), 1)
-            self.assertEqual(
-                transitions[0]["inbound_endpoint"], "192.168.1.50,18899,TCP"
-            )
-            # The facade wrote NOTHING itself.
-            self.assertNotIn(
-                "endpoint_control_policy", coordinator.config_entry.data
-            )
-            self.assertEqual(
-                coordinator.config_entry.data["connection_strategy"],
-                "callback_on_demand",
-            )
-
-        asyncio.run(_run())
 
     def test_bind_apply_persists_inbound_integration_managed(self) -> None:
         # Item 2: a successful bind write makes the entry inbound +
@@ -6725,32 +6531,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertEqual(data.get("endpoint_written_value"), "192.168.1.50,18899,TCP")
 
         asyncio.run(_run())
-
-    def test_bridge_rejects_smartess_operation_mode_target(self) -> None:
-        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
-        coordinator.config_entry = types.SimpleNamespace(
-            data={
-                "collector_operation_mode": "home_assistant_only",
-                "collector_virtual_bridge": True,
-            },
-            options={"collector_operation_mode": "home_assistant_only"},
-        )
-        coordinator.data = self.RuntimeSnapshot(
-            connected=True,
-            values={"collector_server_endpoint": "192.168.1.50,8899,TCP"},
-        )
-
-        with patch.object(
-            self.coordinator_module.EybondLocalCoordinator,
-            "proxy_capture_overview",
-            new_callable=PropertyMock,
-            return_value=types.SimpleNamespace(status="ready"),
-        ):
-            reason = coordinator.collector_operation_mode_change_reason(
-                target_mode="smartess_cloud_home_assistant"
-            )
-
-        self.assertEqual(reason, "collector_operation_mode_target_unavailable")
 
     def test_raw_collector_endpoint_stage_publishes_pending_override(self) -> None:
         async def _run() -> None:

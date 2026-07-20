@@ -272,14 +272,11 @@ from custom_components.eybond_local.config_flow import (
     COLLECTOR_WIFI_ACTION_REFRESH,
     COLLECTOR_NETWORK_ALREADY_CONNECTED,
     COLLECTOR_NETWORK_NEEDS_BLUETOOTH,
-    COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONF_BLE_ACTION,
     CONF_COLLECTOR_UART_ACTION,
     CONF_COLLECTOR_UART_BAUDRATE,
     CONF_COLLECTOR_WIFI_ACTION,
     CONF_COLLECTOR_NETWORK_STATUS,
-    CONF_COLLECTOR_OPERATION_MODE,
     CONF_CONFIRM_COLLECTOR_UART_APPLY,
     CONF_CONFIRM_COLLECTOR_WIFI_APPLY,
     CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE,
@@ -332,11 +329,14 @@ from custom_components.eybond_local.collector.smartess_local import (
     SET_TARGET_SSID,
 )
 from custom_components.eybond_local.const import (
+    COLLECTOR_OPERATION_HA_ONLY,
+    COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+    CONF_COLLECTOR_OPERATION_MODE,
     CONF_CONNECTION_STRATEGY,
     CONF_PROXY_ENABLED,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
@@ -3136,13 +3136,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["connection_mode"], "callback_listener")
         self.assertNotIn("collector_ip", result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE],
-            COLLECTOR_OPERATION_HA_ONLY,
-        )
-        self.assertEqual(
-            result["options"][CONF_COLLECTOR_OPERATION_MODE],
-            COLLECTOR_OPERATION_HA_ONLY,
+            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
         bind.assert_not_awaited()
 
@@ -3941,7 +3938,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         assert flow._selected_result.collector.collector is not None
         self.assertTrue(flow._selected_result.collector.collector.collector_virtual_bridge)
 
-    async def test_confirm_step_persists_ha_only_for_collector_only_bridge(self) -> None:
+    async def test_confirm_step_persists_strategy_not_mode_for_collector_only_bridge(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._collector_only_bridge_result()
         flow._collector_endpoint_bind_applied = True
@@ -3950,13 +3947,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["connection_mode"], "callback_listener")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE],
-            COLLECTOR_OPERATION_HA_ONLY,
-        )
-        self.assertEqual(
-            result["options"][CONF_COLLECTOR_OPERATION_MODE],
-            COLLECTOR_OPERATION_HA_ONLY,
+            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
         self.assertTrue(result["data"]["collector_virtual_bridge"])
 
@@ -3994,9 +3988,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_confirm({"poll_mode": "auto"})
 
         self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE],
-            COLLECTOR_OPERATION_HA_ONLY,
+            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
         bind.assert_not_awaited()
 
@@ -4051,8 +4046,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE], COLLECTOR_OPERATION_HA_ONLY
+            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
         # The reboot/apply write must NOT run after a refused endpoint write.
         applied_parameters = [
@@ -4097,8 +4094,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE], COLLECTOR_OPERATION_HA_ONLY
+            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
         self.assertEqual(
             [call.args[0] for call in session.set_collector.await_args_list],
@@ -4136,9 +4135,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_COLLECTOR_OPERATION_MODE],
-            COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            result["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
         session.set_collector.assert_not_awaited()
 
@@ -4376,7 +4377,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="broadcast",
                 ip="192.168.1.55",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E50000253884199645"),
+                collector=CollectorInfo(collector_pn="E50000200000009777"),
             ),
             connection_mode="broadcast",
             next_action="manual_driver_selection",
@@ -6874,7 +6875,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(CONF_CONNECTION_STRATEGY, plain["data"])
         self.assertNotIn(CONF_CONNECTION_STRATEGY, unchanged._config_entry.options)
         self.assertFalse(plain["data"][CONF_PROXY_ENABLED])
-        self.assertIn(CONF_COLLECTOR_OPERATION_MODE, plain["data"])
+        # CP2A: the runtime options commit no longer writes a collector operation
+        # mode shadow into the options. The mode is a read-only projection of the
+        # canonical connection strategy.
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, plain["data"])
         updates = unchanged.hass.config_entries.updates
         self.assertEqual(len(updates), 1)
         self.assertIn("data", updates[0])
@@ -13359,6 +13363,104 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["type"], "progress_done")
         return await flow.async_step_strategy_transition_result()
 
+    # -- CP2A Test C: mandatory risk consent truth table -------------------
+    async def test_consent_true_proceeds_to_transition(self) -> None:
+        # The exact bool True is consent -> the transition runs.
+        flow, calls = self._make_flow()
+        submitted = await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+                "confirm_connection_strategy_risk": True,
+            }
+        )
+        self.assertEqual(submitted["type"], "progress")
+        await flow._transition_task
+        self.assertEqual(len(calls), 1)
+
+    async def test_consent_non_true_values_block_with_zero_side_effects(self) -> None:
+        # Only the exact bool True is consent. A missing value, False, a truthy
+        # int (1), the string "true", or an arbitrary object is a FORM ERROR
+        # with ZERO side effects: no transition call, no transition task, no
+        # config-entry writes (and therefore no endpoint write / reboot / UDP).
+        _MISSING = object()
+        for consent, label in (
+            (_MISSING, "missing"),
+            (False, "False"),
+            (1, "int-1"),
+            ("true", "string-true"),
+            (object(), "object"),
+        ):
+            flow, calls = self._make_flow()
+            user_input = {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+            }
+            if consent is not _MISSING:
+                user_input["confirm_connection_strategy_risk"] = consent
+            result = await flow.async_step_strategy_transition(user_input)
+            with self.subTest(consent=label):
+                self.assertEqual(result["type"], "form")
+                self.assertEqual(
+                    result["errors"].get("confirm_connection_strategy_risk"),
+                    "connection_strategy_risk_unconfirmed",
+                )
+                self.assertIsNone(flow._transition_task)
+                self.assertEqual(calls, [])
+                self.assertEqual(flow.hass.config_entries.updates, [])
+                self.assertIsNone(
+                    getattr(flow, "_transition_confirmed_input", None)
+                )
+
+    async def test_consent_checkbox_is_never_persisted_or_forwarded(self) -> None:
+        # The checkbox is user intent only: it never lands in the committed
+        # data/options and is never forwarded to the transition authority.
+        flow, calls = self._make_flow()
+        flow._config_entry.options = {"poll_mode": "auto", "control_mode": "manual"}
+        submitted = await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+                "confirm_connection_strategy_risk": True,
+            }
+        )
+        self.assertEqual(submitted["type"], "progress")
+        await flow._transition_task
+        result = await flow.async_step_strategy_transition_result()
+        self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn("confirm_connection_strategy_risk", result["data"])
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn(
+            "confirm_connection_strategy_risk",
+            calls[0].get("option_payload", {}) or {},
+        )
+
+    async def test_consent_form_shows_direction_specific_risk_text(self) -> None:
+        # Inbound and callback show DIFFERENT risk text under one strict
+        # contract, and each mentions its direction-specific danger.
+        inbound_flow, _ = self._make_flow()
+        inbound_flow._transition_target_strategy = "inbound"
+        inbound_form = await inbound_flow.async_step_strategy_transition()
+        inbound_note = inbound_form["description_placeholders"]["connection_strategy_risk"]
+
+        callback_flow, _ = self._make_flow()
+        callback_flow._transition_target_strategy = "callback_on_demand"
+        callback_form = await callback_flow.async_step_strategy_transition()
+        callback_note = callback_form["description_placeholders"]["connection_strategy_risk"]
+
+        self.assertNotEqual(inbound_note, callback_note)
+        # Inbound warns about pointing the collector at HA / cloud reachability.
+        self.assertIn("SmartESS", inbound_note)
+        # Callback is honest about the current boundary: only a previously
+        # saved endpoint can be restored, and an unknown target is refused
+        # instead of guessed (catalog/manual selection belongs to CP2B).
+        self.assertIn("previously saved", callback_note)
+        self.assertIn("refused", callback_note)
+        self.assertIn("instead of guessing", callback_note)
+
     async def test_confirm_form_requires_explicit_addresses(self) -> None:
         flow, _calls = self._make_flow()
         form = await flow.async_step_strategy_transition()
@@ -13428,6 +13530,7 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
                 "advertised_server_ip": "198.51.100.20",
                 "advertised_tcp_port": 19000,
                 "collector_ip": "203.0.113.10",
+                "confirm_connection_strategy_risk": True,
             }
         )
         self.assertEqual(submitted["type"], "progress")
@@ -13462,7 +13565,11 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         flow, calls = self._make_flow()
         flow._transition_target_strategy = "inbound"
         submitted = await flow.async_step_strategy_transition(
-            {"advertised_server_ip": "198.51.100.20", "advertised_tcp_port": 19000}
+            {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "confirm_connection_strategy_risk": True,
+            }
         )
         self.assertEqual(submitted["type"], "progress")
         await flow._transition_task
@@ -13489,6 +13596,7 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
                 "advertised_server_ip": "198.51.100.20",
                 "advertised_tcp_port": 19000,
                 "collector_ip": "203.0.113.10",
+                "confirm_connection_strategy_risk": True,
             }
         )
         await flow._transition_task

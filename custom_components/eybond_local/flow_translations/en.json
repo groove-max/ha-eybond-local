@@ -190,6 +190,8 @@
       "connection_strategy_inbound": "Collector connects to Home Assistant on its own",
       "connection_strategy_callback_on_demand": "Ask the collector to connect when needed",
       "connection_strategy_bridge_note": "This is a local bridge — it connects to Home Assistant on its own, so there is nothing to choose here.",
+      "connection_strategy_risk_inbound": "This points the collector's callback endpoint at Home Assistant. Its cloud (SmartESS) may stop receiving data, and the Home Assistant host and port you enter must be genuinely reachable from the collector, including through any NAT or port-forwarding. If they are not, the collector can end up unable to reach either side.",
+      "connection_strategy_risk_callback": "This stops keeping a permanent Home Assistant connection open. Home Assistant will ask the collector to connect only when it needs data. If the integration previously changed the collector endpoint, it can restore only a previously saved and valid cloud endpoint. When no such endpoint is known, the safe switch is refused instead of guessing one; catalog/manual selection will be added in the next step.",
       "collector_endpoint_original_hint": "This looks like the original cloud endpoint. Write it down before continuing; the integration will remember it, but keeping your own copy is safer.",
       "collector_endpoint_custom_hint": "This endpoint does not look like the stock cloud address. Make sure you know how to restore it before continuing.",
       "collector_endpoint_unknown_hint": "The current collector callback endpoint could not be read yet.",

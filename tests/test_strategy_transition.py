@@ -882,6 +882,9 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
             "endpoint_written_at",
             "collector_pn",
             "recovery_contract",
+            # CP2A: the legacy operation-mode mirror is no longer an allowed
+            # payload key -- it can never be smuggled into the success commit.
+            "collector_operation_mode",
         ):
             h = _Harness(current_strategy="callback_on_demand")
             result = await h.run(
@@ -898,28 +901,28 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIsNone(h.committed)
 
-    async def test_legacy_operation_mode_is_the_only_axis_payload(self) -> None:
+    async def test_transition_writes_no_operation_mode_shadow(self) -> None:
+        # CP2A: the transition authority writes NO collector_operation_mode
+        # mirror into the data axes or the options. The mode is a read-only
+        # projection of the canonical strategy this commit persists, so a legacy
+        # mode shadow can never diverge from the transport actually in use. The
+        # allowlisted runtime option (poll_mode) still flows through untouched.
         h = _Harness(current_strategy="callback_on_demand")
         result = await h.run(
             target="inbound",
             inbound_endpoint="192.168.1.50:18899",
             endpoint_needs_write=False,
             reboot=h.reboot,
-            legacy_operation_mode="home_assistant_only",
             option_payload={"poll_mode": "auto"},
         )
         self.assertTrue(result.success, result.failure_reason)
         assert h.committed is not None
-        self.assertEqual(
-            h.committed.get("collector_operation_mode"), "home_assistant_only"
-        )
-        # The target strategy is still the AUTHORITY's decision.
+        # The target strategy is the AUTHORITY's decision, persisted to data.
         self.assertEqual(h.committed["connection_strategy"], "inbound")
+        # No operation-mode shadow in either store.
+        self.assertNotIn("collector_operation_mode", h.committed)
+        self.assertNotIn("collector_operation_mode", h.committed_options)
         self.assertEqual(h.committed_options.get("poll_mode"), "auto")
-        self.assertEqual(
-            h.committed_options.get("collector_operation_mode"),
-            "home_assistant_only",
-        )
 
     # -- 6. commit refusal must surface in inbound_recovered ---------------
     async def test_inbound_recovered_commit_refusal_is_terminal_failure(self) -> None:

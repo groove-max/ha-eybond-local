@@ -36,7 +36,6 @@ from .collector.signal import is_legacy_disabled_signal_entity_key
 from .collector.transport import CollectorListenerBindError
 from .device_scoped_overlay import filter_learned_read_measurements_for_activation
 from .const import (
-    COLLECTOR_OPERATION_MODES,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_OPERATION_MODE,
@@ -55,7 +54,6 @@ from .const import (
     CONF_SERVER_IP,
     CONNECTION_TYPE_EYBOND,
     CONTROL_MODE_FULL,
-    DEFAULT_COLLECTOR_OPERATION_MODE,
     DOMAIN,
     DRIVER_HINT_AUTO,
     ENTRY_ROLE_LISTENER,
@@ -82,9 +80,11 @@ _FLOAT_PRECISION_DEVICE_CLASSES = {
     "temperature",
     "voltage",
 }
-_DEFAULT_ENABLED_RUNTIME_SELECT_KEYS = (
-    CONF_COLLECTOR_OPERATION_MODE,
-)
+# CP2A: the writable collector operation-mode select was removed, so the
+# driver-agnostic default-enabled runtime-select inventory is empty. The
+# operation mode is now a read-only projection of the canonical connection
+# strategy, never a default-enabled writable select.
+_DEFAULT_ENABLED_RUNTIME_SELECT_KEYS: tuple[str, ...] = ()
 _TRANSIENT_LISTENER_BIND_ERRNOS = {
     errno.EADDRNOTAVAIL,
     errno.ENETUNREACH,
@@ -460,44 +460,6 @@ async def _async_self_heal_server_ip(hass: HomeAssistant, entry: ConfigEntry) ->
         entry.entry_id,
     )
     hass.config_entries.async_update_entry(
-        entry,
-        data=data,
-        options=options,
-    )
-
-
-async def _async_self_heal_collector_operation_mode(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-) -> None:
-    """Persist a valid collector callback ownership mode on older entries."""
-
-    raw_mode = str(
-        entry.options.get(
-            CONF_COLLECTOR_OPERATION_MODE,
-            entry.data.get(CONF_COLLECTOR_OPERATION_MODE, DEFAULT_COLLECTOR_OPERATION_MODE),
-        )
-        or DEFAULT_COLLECTOR_OPERATION_MODE
-    ).strip()
-    mode = raw_mode if raw_mode in COLLECTOR_OPERATION_MODES else DEFAULT_COLLECTOR_OPERATION_MODE
-
-    data = dict(entry.data)
-    options = dict(entry.options)
-    changed = False
-    if data.get(CONF_COLLECTOR_OPERATION_MODE) != mode:
-        data[CONF_COLLECTOR_OPERATION_MODE] = mode
-        changed = True
-    if options.get(CONF_COLLECTOR_OPERATION_MODE) != mode:
-        options[CONF_COLLECTOR_OPERATION_MODE] = mode
-        changed = True
-    if not changed:
-        return
-
-    update_entry = getattr(hass.config_entries, "async_update_entry", None)
-    if update_entry is None:
-        return
-
-    update_entry(
         entry,
         data=data,
         options=options,
@@ -1049,6 +1011,12 @@ async def _async_remove_legacy_runtime_select_entities(
     registry = er.async_get(hass)
     legacy_unique_ids = {
         _entity_unique_id(entry.entry_id, "select", CONF_CONTROL_MODE),
+        # CP2A: the writable collector operation-mode select was removed. The
+        # connection strategy is now the single user authority for the transport
+        # method; the mode is a read-only projection of it. Remove the already
+        # registered entity by its integration-owned unique_id regardless of the
+        # gated obsolete-entity cleanup, touching no other entity.
+        _entity_unique_id(entry.entry_id, "select", CONF_COLLECTOR_OPERATION_MODE),
     }
 
     for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
@@ -1648,7 +1616,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_setup_services(hass)
         async_register_support_package_download_view(hass)
         await _async_self_heal_server_ip(hass, entry)
-        await _async_self_heal_collector_operation_mode(hass, entry)
         await _async_self_heal_collector_cloud_family(hass, entry)
         await _async_self_heal_valuecloud_driver_hint(hass, entry)
         await _async_self_heal_entry_title(hass, entry)

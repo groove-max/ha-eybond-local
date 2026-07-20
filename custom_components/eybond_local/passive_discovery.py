@@ -25,9 +25,7 @@ from .collector_endpoint import (
     LEGACY_BINARY_COLLECTOR_SERVER_PORT,
 )
 from .const import (
-    COLLECTOR_OPERATION_HA_ONLY,
     CONF_COLLECTOR_IP,
-    CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_MODE,
     CONF_CONNECTION_TYPE,
@@ -1081,12 +1079,6 @@ class PassiveCallbackDiscovery:
         if str(data.get(CONF_CONNECTION_MODE) or "").strip() != "callback_listener":
             data[CONF_CONNECTION_MODE] = "callback_listener"
             changed = True
-        if (
-            str(data.get(CONF_COLLECTOR_OPERATION_MODE) or "").strip()
-            == COLLECTOR_OPERATION_HA_ONLY
-        ):
-            data[CONF_COLLECTOR_OPERATION_MODE] = COLLECTOR_OPERATION_HA_ONLY
-
         if not changed:
             return
 

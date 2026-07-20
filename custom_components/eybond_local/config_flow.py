@@ -94,7 +94,6 @@ from .const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
-    CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_STRATEGY,
     CONF_CONNECTION_STRATEGY_EVIDENCE,
@@ -116,8 +115,6 @@ from .const import (
     CONTROL_MODE_FULL,
     CONTROL_MODE_READ_ONLY,
     COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_MODES,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONNECTION_STRATEGIES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
@@ -282,6 +279,10 @@ CONF_CONFIRM_COLLECTOR_WIFI_APPLY = "confirm_collector_wifi_apply"
 CONF_COLLECTOR_UART_ACTION = "collector_uart_action"
 CONF_COLLECTOR_UART_BAUDRATE = "collector_uart_baudrate"
 CONF_CONFIRM_COLLECTOR_UART_APPLY = "confirm_collector_uart_apply"
+# CP2A: mandatory, non-persisted risk consent for a connection-strategy
+# transition. Only the exact bool True is consent; any other value is a form
+# error and NOTHING downstream runs (no endpoint write / reboot / UDP / commit).
+CONF_CONFIRM_CONNECTION_STRATEGY_RISK = "confirm_connection_strategy_risk"
 CONF_CONFIRM_REDISCOVER_DEVICES = "confirm_rediscover_devices"
 CONF_SETUP_MODE = "setup_mode"
 CONF_BLE_ADDRESS = "ble_address"
@@ -1025,27 +1026,6 @@ def _collector_network_status_selector(
             options=[
                 SelectOptionDict(value=COLLECTOR_NETWORK_ALREADY_CONNECTED, label=already_connected_label),
                 SelectOptionDict(value=COLLECTOR_NETWORK_NEEDS_BLUETOOTH, label=needs_bluetooth_label),
-            ],
-            mode=SelectSelectorMode.DROPDOWN,
-        )
-    )
-
-
-def _collector_operation_mode_selector(
-    smartess_and_ha_label: str,
-    ha_only_label: str,
-) -> SelectSelector:
-    """Return a selector for choosing the collector callback ownership mode.
-
-    Legacy/compat only: the primary user choice is now the connection-strategy
-    selector below. This is retained for migration/debug wording.
-    """
-
-    return SelectSelector(
-        SelectSelectorConfig(
-            options=[
-                SelectOptionDict(value=COLLECTOR_OPERATION_SMARTESS_AND_HA, label=smartess_and_ha_label),
-                SelectOptionDict(value=COLLECTOR_OPERATION_HA_ONLY, label=ha_only_label),
             ],
             mode=SelectSelectorMode.DROPDOWN,
         )
@@ -5146,11 +5126,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             **connection_settings,
             CONF_CONNECTION_MODE: stored_connection_mode,
             CONF_CONTROL_MODE: DEFAULT_CONTROL_MODE,
-            CONF_COLLECTOR_OPERATION_MODE: (
-                COLLECTOR_OPERATION_HA_ONLY
-                if collector_capabilities.ha_only_required
-                else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
-            ),
             CONF_COLLECTOR_PN: collector_pn,
             CONF_DETECTION_CONFIDENCE: result.confidence,
             CONF_DETECTED_MODEL: result.match.model_name if result.match is not None else "",
@@ -5178,11 +5153,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         options = {
             CONF_POLL_INTERVAL: poll_interval,
             CONF_POLL_MODE: poll_mode,
-            CONF_COLLECTOR_OPERATION_MODE: (
-                COLLECTOR_OPERATION_HA_ONLY
-                if collector_capabilities.ha_only_required
-                else self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
-            ),
         }
         _apply_collector_profile_metadata(options, result)
         remembered_endpoint = str(self._collector_original_server_endpoint or "").strip()
@@ -5432,11 +5402,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         data.setdefault(CONF_CONTROL_MODE, default_control_mode)
         collector_capabilities = _result_collector_capabilities(result)
-        data[CONF_COLLECTOR_OPERATION_MODE] = (
-            COLLECTOR_OPERATION_HA_ONLY
-            if collector_capabilities.ha_only_required
-            else DEFAULT_COLLECTOR_OPERATION_MODE
-        )
         data[CONF_COLLECTOR_IP] = collector_ip
         data[CONF_DETECTION_CONFIDENCE] = result.confidence if result is not None else "none"
         data[CONF_CONNECTION_MODE] = connection_mode
@@ -5454,11 +5419,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         options = {
             CONF_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
             CONF_POLL_MODE: DEFAULT_POLL_MODE,
-            CONF_COLLECTOR_OPERATION_MODE: (
-                COLLECTOR_OPERATION_HA_ONLY
-                if collector_capabilities.ha_only_required
-                else DEFAULT_COLLECTOR_OPERATION_MODE
-            ),
         }
         _apply_collector_profile_metadata(options, result)
         # The user explicitly stated how this collector connects, so that value is
@@ -5941,18 +5901,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._tr(
                 "common.dynamic.collector_network_needs_bluetooth",
                 "No, connect the collector to Wi-Fi using Bluetooth first (test mode, only for collectors with Bluetooth support)",
-            ),
-        )
-
-    def _collector_operation_mode_selector(self) -> SelectSelector:
-        return _collector_operation_mode_selector(
-            self._tr(
-                "common.dynamic.collector_operation_smartess_and_ha",
-                "SmartESS cloud + Home Assistant",
-            ),
-            self._tr(
-                "common.dynamic.collector_operation_ha_only",
-                "Home Assistant only",
             ),
         )
 
@@ -9820,18 +9768,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # control that promises simultaneous HA + cloud forwarding. Temporary
         # traffic capture remains a separate, explicit diagnostics action.
         persisted_options[CONF_PROXY_ENABLED] = False
-        # Preserve the legacy operation mode as a compatibility layer (it still
-        # drives the endpoint-reconcile target). Never require it from the form.
-        legacy_operation_mode = self._config_entry.options.get(
-            CONF_COLLECTOR_OPERATION_MODE,
-            self._config_entry.data.get(
-                CONF_COLLECTOR_OPERATION_MODE,
-                DEFAULT_COLLECTOR_OPERATION_MODE,
-            ),
-        )
-        persisted_options[CONF_COLLECTOR_OPERATION_MODE] = flat_input.get(
-            CONF_COLLECTOR_OPERATION_MODE, legacy_operation_mode
-        )
+        # CP2A: the runtime options save no longer persists a collector operation
+        # mode into options. The mode is a read-only projection of the canonical
+        # connection strategy, which this same save commits to entry.data
+        # (_async_commit_runtime_options); an options copy would be a guaranteed
+        # stale shadow the projection ignores. Endpoint reconcile is driven by
+        # the strategy-derived collector_home_assistant_primary /
+        # collector_callback_listener_required, not by a persisted mode value.
         for key in (
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
@@ -10017,6 +9960,21 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         if user_input is not None:
             flat = _flatten_sections(user_input)
+            # Mandatory risk consent. STRICT identity check: only the exact bool
+            # ``True`` is consent. A missing value, ``False``, a truthy int such
+            # as ``1``, the string ``"true"`` or any other object is refused with
+            # a form error and NEVER coerced. Without consent nothing downstream
+            # runs: no ``_transition_confirmed_input`` is staged, the progress
+            # step is not entered, so ``_transition_task`` stays ``None`` and
+            # there is no endpoint write, reboot, UDP trigger, config-entry write
+            # or transition task. The consent is user intent only -- it is never
+            # persisted, and never stands in for transition proof or a
+            # RecoveryContract.
+            consent = flat.get(CONF_CONFIRM_CONNECTION_STRATEGY_RISK)
+            if consent is not True:
+                errors[CONF_CONFIRM_CONNECTION_STRATEGY_RISK] = (
+                    "connection_strategy_risk_unconfirmed"
+                )
             # No coercion: the RAW submitted value reaches the validator, so a
             # non-string / wildcard / padded host cannot be str()-normalized into
             # a valid one. Empty -> required; anything else invalid ->
@@ -10036,6 +9994,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             if not to_inbound and not collector_ip:
                 errors[CONF_COLLECTOR_IP] = "callback_target_required"
             if not errors:
+                # Consent is NOT stored here: only the endpoint inputs travel to
+                # the verified transition. The checkbox never reaches data/options.
                 self._transition_confirmed_input = {
                     "host": host,
                     "port": port,
@@ -10064,6 +10024,33 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             schema_fields[
                 vol.Required(CONF_COLLECTOR_IP, default=prefill["collector_ip"])
             ] = _IP_TEXT_SELECTOR
+        # Mandatory risk consent checkbox, always defaulting to unchecked so the
+        # user must make an explicit choice each time. Placed last, after the
+        # addresses it refers to.
+        schema_fields[
+            vol.Required(CONF_CONFIRM_CONNECTION_STRATEGY_RISK, default=False)
+        ] = BooleanSelector()
+        if to_inbound:
+            risk_note = self._tr(
+                "common.dynamic.connection_strategy_risk_inbound",
+                "This points the collector's callback endpoint at Home "
+                "Assistant. Its cloud (SmartESS) may stop receiving data, and "
+                "the Home Assistant host and port you enter must be genuinely "
+                "reachable from the collector, including through any NAT or "
+                "port-forwarding. If they are not, the collector can end up "
+                "unable to reach either side.",
+            )
+        else:
+            risk_note = self._tr(
+                "common.dynamic.connection_strategy_risk_callback",
+                "This stops keeping a permanent Home Assistant connection open. "
+                "Home Assistant will ask the collector to connect only when it "
+                "needs data. If the integration previously changed the collector "
+                "endpoint, it can restore only a previously saved and valid "
+                "cloud endpoint. When no such endpoint is known, the safe switch "
+                "is refused instead of guessing one; catalog/manual selection "
+                "will be added in the next step.",
+            )
         return self.async_show_form(
             step_id="strategy_transition",
             data_schema=vol.Schema(schema_fields),
@@ -10072,6 +10059,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "target_strategy": self._tr(
                     f"common.dynamic.connection_strategy_{target}", target
                 ),
+                "connection_strategy_risk": risk_note,
             },
         )
 

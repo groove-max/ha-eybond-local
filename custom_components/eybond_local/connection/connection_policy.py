@@ -194,6 +194,44 @@ def resolve_connection_strategy(
     return _derive_connection_strategy(data, options)
 
 
+def entry_declares_connection_strategy(
+    data: Mapping[str, Any],
+    options: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the entry carries an EXPLICIT canonical connection strategy.
+
+    True only when a valid ``CONF_CONNECTION_STRATEGY`` is present in ``data``
+    (the schema-v4 canonical owner) or, as a pre-migration fallback, in
+    ``options``. When False the entry predates the explicit strategy axis and
+    its transport must still be derived from the legacy operation-mode /
+    connection-mode heuristics (``_derive_connection_strategy``).
+
+    Callers use this to decide whether the operation mode is a READ-ONLY
+    projection of the strategy (True) or a legacy persisted value (False). It
+    never falls back to derivation, so a stale persisted operation mode can
+    never masquerade as a declared strategy.
+    """
+
+    options = options or {}
+
+    def _is_declared(value: object) -> bool:
+        return (
+            type(value) is str
+            and value == value.strip()
+            and value in CONNECTION_STRATEGIES
+        )
+
+    # A present canonical data field is authoritative even when malformed: it
+    # fails closed instead of allowing a stale options copy to masquerade as the
+    # declaration. Options are consulted only when the data field is genuinely
+    # absent (the pre-schema-v4 shape).
+    if CONF_CONNECTION_STRATEGY in data:
+        return _is_declared(data.get(CONF_CONNECTION_STRATEGY))
+    if CONF_CONNECTION_STRATEGY in options:
+        return _is_declared(options.get(CONF_CONNECTION_STRATEGY))
+    return False
+
+
 def legacy_effective_connection_strategy(
     data: Mapping[str, Any],
     options: Mapping[str, Any] | None = None,
