@@ -5,7 +5,7 @@ exactly ONE already-claimed session". Extracted from the callback identity
 transaction so the inbound recovery verifier reuses the same reader instead of
 growing a second wire switch or a second identity matcher. Users:
 
-* ``onboarding.callback_identity`` -- the identity transaction's default reader;
+* ``connection.callback_identity`` -- the identity transaction's default reader;
 * ``connection.recovery.verification`` -- the inbound recovery verifier's
   strong-identity probes (old socket before reboot, new socket after).
 

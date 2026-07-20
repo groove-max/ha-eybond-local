@@ -406,7 +406,7 @@ class RecoveryContractModelTests(unittest.TestCase):
     # --- ducks -------------------------------------------------------------------
 
     def test_identity_outcome_is_never_accepted_as_a_proof_duck(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
         )
 

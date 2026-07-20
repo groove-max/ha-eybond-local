@@ -542,7 +542,7 @@ def _fast_identity_policy():
 
 
 def _install_fast_identity_policy(testcase):
-    import custom_components.eybond_local.onboarding.callback_identity as ci
+    import custom_components.eybond_local.connection.callback_identity as ci
 
     patcher = patch.object(
         ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()
@@ -607,7 +607,7 @@ def _stub_identity_wire(
     only AFTER it, like a collector dialing in) and the on-session PN read.
     """
 
-    import custom_components.eybond_local.onboarding.callback_identity as ci
+    import custom_components.eybond_local.connection.callback_identity as ci
     from custom_components.eybond_local.connection.callback_ledger import (
         get_callback_trigger_ledger,
     )
@@ -644,7 +644,7 @@ def _capture_identity_requests(result=None):
     request construction and failure routing only.
     """
 
-    from custom_components.eybond_local.onboarding.callback_identity import (
+    from custom_components.eybond_local.connection.callback_identity import (
         CallbackIdentityOutcome,
     )
 
@@ -9100,7 +9100,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         an uncoordinated runtime sender.
         """
 
-        import custom_components.eybond_local.onboarding.callback_identity as ci
+        import custom_components.eybond_local.connection.callback_identity as ci
         from custom_components.eybond_local.connection.callback_ledger import (
             get_callback_trigger_ledger,
         )
@@ -10928,7 +10928,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     def _identity_wire_for(self, detector):
         """Drive the REAL identity transaction from a detector's declared behaviour."""
 
-        import custom_components.eybond_local.onboarding.callback_identity as ci
+        import custom_components.eybond_local.connection.callback_identity as ci
         from custom_components.eybond_local.connection.callback_ledger import (
             get_callback_trigger_ledger,
         )
@@ -12676,7 +12676,7 @@ class CollectorOnlyResultTests(unittest.TestCase):
 
     def _result(self):
         from custom_components.eybond_local.config_flow import EybondLocalConfigFlow
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
         )
 
@@ -12777,13 +12777,13 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         }
 
     async def test_silent_result_offers_bootstrap_options(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
             IDENTITY_SESSION_SILENT,
         )
 
         flow = self._make_flow()
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             SilentSessionBootstrapOffer,
         )
 
@@ -12811,7 +12811,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CONNECTED", summary)
 
     async def test_plain_timeout_offers_no_bootstrap_options(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
             IDENTITY_TIMEOUT,
         )
@@ -12830,14 +12830,14 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("manual_bootstrap_at", result["menu_options"])
 
     async def test_bootstrap_step_passes_the_typed_intent(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
             IDENTITY_SESSION_SILENT,
             OnboardingWireProbeIntent,
         )
 
         flow = self._make_flow()
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             SilentSessionBootstrapOffer,
         )
 

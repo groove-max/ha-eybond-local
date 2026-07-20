@@ -152,7 +152,7 @@ async def test_silent_callback_full_ha_lifecycle(
         ), patch.object(
             config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
         ), patch(
-            "custom_components.eybond_local.onboarding.callback_identity."
+            "custom_components.eybond_local.connection.callback_identity."
             "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
             fast_policy,
         ):

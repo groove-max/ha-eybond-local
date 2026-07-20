@@ -176,7 +176,7 @@ class AdapterSelectionAuthorityGuardTests(unittest.TestCase):
 
 
 _CALLBACK_IDENTITY = (
-    REPO_ROOT / "custom_components/eybond_local/onboarding/callback_identity.py"
+    REPO_ROOT / "custom_components/eybond_local/connection/callback_identity.py"
 )
 
 
@@ -321,7 +321,7 @@ class CallbackIdentityIsNotRecoveryProofTests(unittest.TestCase):
     def test_outcome_carries_identity_fields_only(self) -> None:
         from dataclasses import fields
 
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
         )
 

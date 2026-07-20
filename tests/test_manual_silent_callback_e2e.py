@@ -282,7 +282,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
         ), patch(
-            "custom_components.eybond_local.onboarding.callback_identity."
+            "custom_components.eybond_local.connection.callback_identity."
             "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
             fast_policy,
         ):
@@ -330,7 +330,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             callback_causality_lease_wait=3.0,
         )
         with patch(
-            "custom_components.eybond_local.onboarding.callback_identity."
+            "custom_components.eybond_local.connection.callback_identity."
             "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
             identity_policy,
         ):

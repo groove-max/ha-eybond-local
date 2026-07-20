@@ -25,7 +25,7 @@ What can NEVER become a proof here (fail-closed by construction):
 
 * a currently-live session (liveness is not recovery);
 * a certified callback identity outcome (identity is not recovery -- see
-  ``onboarding.callback_identity``);
+  ``connection.callback_identity``);
 * the legacy ``callback_trigger`` strategy evidence (historical bookkeeping);
 * the legacy ``user_confirmed_session`` evidence (a user binding, not a reboot
   proof);

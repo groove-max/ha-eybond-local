@@ -54,25 +54,25 @@ import logging
 from typing import Any, Protocol
 import uuid
 
-from ..connection.callback_ledger import (
+from .callback_ledger import (
     CallbackCausalityBusyError,
     get_callback_trigger_ledger,
 )
-from ..connection.session_handle import (
+from .session_handle import (
     WIRE_AT_TEXT,
     WIRE_FRAMED,
     negotiate_session_adapters,
 )
-from ..connection.session_registry import SESSION_STATE_CLOSED, prefer_full_pn
+from .session_registry import SESSION_STATE_CLOSED, prefer_full_pn
 from ..const import (
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
 )
-from ..connection.callback_matching import (
+from .callback_matching import (
     MATCH_TIMEOUT,
     match_callback_answer,
 )
-from .timeouts import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+from ..timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 
 logger = logging.getLogger(__name__)
 

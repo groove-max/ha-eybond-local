@@ -142,7 +142,7 @@ class TerminalInputTypingTests(unittest.TestCase):
         self.assertEqual(terminal.prepared_handoff_owner, "callback_recovery:test-owner")
 
     def test_identity_outcome_is_never_recovery_evidence(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
         )
 
@@ -604,7 +604,7 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
                 msg=f"{path.name} must not convert identity outcomes to proofs",
             ) if path.name == "callback_identity.py" else None
         identity_module = (
-            self._PACKAGE / "onboarding" / "callback_identity.py"
+            self._PACKAGE / "connection" / "callback_identity.py"
         ).read_text(encoding="utf-8")
         for banned in ("with_inbound_proof", "with_callback_proof", "write_to"):
             self.assertNotIn(banned, identity_module)

@@ -63,7 +63,7 @@ from custom_components.eybond_local.const import (
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
 )
-from custom_components.eybond_local.onboarding.callback_identity import (
+from custom_components.eybond_local.connection.callback_identity import (
     CallbackIdentityRequest,
     async_run_callback_identity_transaction,
 )
@@ -479,7 +479,7 @@ class SilentBootstrapProductionWireTests(ProductionWireHarness):
         )
 
     async def test_silent_framed_socket_bootstraps_via_explicit_fc2(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_SESSION_SILENT,
             OnboardingWireProbeIntent,
         )
@@ -542,7 +542,7 @@ class SilentBootstrapProductionWireTests(ProductionWireHarness):
         self._assert_certified_handoff_transfers_socket(second)
 
     async def test_silent_at_socket_bootstraps_via_explicit_dtupn(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_SESSION_SILENT,
             OnboardingWireProbeIntent,
         )
@@ -613,7 +613,7 @@ class SilentBootstrapProductionWireTests(ProductionWireHarness):
         # An AT collector, but the user picked FRAMED: the single framed FC=2
         # probe gets no valid answer -> typed failure, NO automatic DTUPN
         # attempt, no claim, no evidence.
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_SESSION_SILENT,
             IDENTITY_WIRE_PROBE_FAILED,
             OnboardingWireProbeIntent,

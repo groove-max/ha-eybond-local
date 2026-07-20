@@ -1668,7 +1668,7 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
         self.assertNotIn("FAILURE_IDENTITY_MISMATCH", source)
 
     def test_identity_outcome_cannot_become_a_recovery_proof(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
         )
 

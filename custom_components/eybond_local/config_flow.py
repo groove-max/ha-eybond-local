@@ -220,7 +220,7 @@ from .connection.session_registry import (
     pn_is_same_identity,
 )
 from .connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
-from .onboarding.callback_identity import (
+from .connection.callback_identity import (
     BOOTSTRAP_SOURCE_EXPLICIT_USER,
     CallbackIdentityOutcome,
     CallbackIdentityRequest,

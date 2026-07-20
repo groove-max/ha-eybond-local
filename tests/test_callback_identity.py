@@ -29,7 +29,7 @@ from custom_components.eybond_local.connection.callback_ledger import (
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
 )
-from custom_components.eybond_local.onboarding.callback_identity import (
+from custom_components.eybond_local.connection.callback_identity import (
     CallbackIdentityRequest,
     IDENTITY_CONFLICT,
     IDENTITY_MISMATCH,
@@ -294,7 +294,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         # Static proof, not just runtime: detection must not even be reachable.
         source = (
             REPO_ROOT
-            / "custom_components/eybond_local/onboarding/callback_identity.py"
+            / "custom_components/eybond_local/connection/callback_identity.py"
         ).read_text()
         code = "\n".join(
             line for line in source.splitlines() if not line.strip().startswith("#")
@@ -820,7 +820,7 @@ class CallbackTriggerSequenceSemanticsTests(unittest.IsolatedAsyncioTestCase):
 
 class CallbackIdentityBudgetPolicyTests(unittest.TestCase):
     def test_budgets_come_from_the_central_policy_not_magic_numbers(self) -> None:
-        import custom_components.eybond_local.onboarding.callback_identity as ci
+        import custom_components.eybond_local.connection.callback_identity as ci
         from custom_components.eybond_local.onboarding.timeouts import (
             DEFAULT_ONBOARDING_TIMEOUT_POLICY,
         )
@@ -1300,7 +1300,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         return outcome, registry
 
     def test_intent_constructor_is_strict(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             BOOTSTRAP_SOURCE_EXPLICIT_USER,
             OnboardingWireProbeIntent,
         )
@@ -1325,7 +1325,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
     async def test_duck_intent_is_rejected_before_any_trigger(self) -> None:
         from types import SimpleNamespace
 
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_WIRE_PROBE_FAILED,
         )
 
@@ -1348,7 +1348,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listener.identify_calls, [])
 
     async def test_silent_session_yields_typed_result_with_exact_target(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_SESSION_SILENT,
         )
 
@@ -1367,7 +1367,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn(FULL_PN), "")
 
     async def test_two_silent_sessions_stay_ambiguous(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_SESSION_SILENT,
         )
 
@@ -1393,7 +1393,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(outcome.silent_bootstrap_offer)
 
     async def test_framed_intent_probes_exactly_the_bound_session(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             OnboardingWireProbeIntent,
         )
 
@@ -1428,7 +1428,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_at_intent_probes_with_at_wire(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             OnboardingWireProbeIntent,
         )
 
@@ -1450,7 +1450,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.session_protocol, "at_text")
 
     async def test_failed_probe_is_typed_and_never_falls_back(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_WIRE_PROBE_FAILED,
             OnboardingWireProbeIntent,
         )
@@ -1472,7 +1472,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn(FULL_PN), "")
 
     async def test_probe_io_error_is_typed(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_WIRE_PROBE_FAILED,
             OnboardingWireProbeIntent,
         )
@@ -1492,7 +1492,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.result, IDENTITY_WIRE_PROBE_FAILED)
 
     async def test_gone_bound_session_is_typed_stale_and_never_rebound(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             IDENTITY_SILENT_SESSION_STALE,
             OnboardingWireProbeIntent,
         )
@@ -1524,7 +1524,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn(FULL_PN), "")
 
     async def test_probed_foreign_pn_fails_the_expected_match(self) -> None:
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             OnboardingWireProbeIntent,
         )
 

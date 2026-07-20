@@ -242,7 +242,7 @@ class PromotionTests(unittest.TestCase):
         from unittest.mock import patch
 
         from custom_components.eybond_local.onboarding import pending_attempt as pa
-        from custom_components.eybond_local.onboarding.callback_identity import (
+        from custom_components.eybond_local.connection.callback_identity import (
             CallbackIdentityOutcome,
         )
 
@@ -716,7 +716,7 @@ class PendingActiveProbeScopeTests(unittest.IsolatedAsyncioTestCase):
             "async_send_callback_trigger",
             new=_fake_trigger,
         ), patch(
-            "custom_components.eybond_local.onboarding.callback_identity."
+            "custom_components.eybond_local.connection.callback_identity."
             "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
             _fast_policy(),
         ):

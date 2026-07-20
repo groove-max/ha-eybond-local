@@ -1,7 +1,7 @@
 """One bounded callback attempt for a pending collector entry.
 
 This is now a THIN compatibility caller of the shared identity transaction
-(:mod:`onboarding.callback_identity`): it maps the pending entry's stored
+(:mod:`connection.callback_identity`): it maps the pending entry's stored
 settings onto a transaction request and maps the transaction's typed outcome
 onto the pending status values the options flow shows. It owns no part of the
 proof itself.
@@ -46,7 +46,7 @@ from ..const import (
     PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
     PENDING_ATTEMPT_TRIGGER_NOT_SENT,
 )
-from .callback_identity import (
+from ..connection.callback_identity import (
     CallbackIdentityRequest,
     IDENTITY_AMBIGUOUS,
     IDENTITY_CONFLICT,
