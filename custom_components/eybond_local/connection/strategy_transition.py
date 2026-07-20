@@ -58,14 +58,14 @@ from ..const import (
     ENDPOINT_CONTROL_EXTERNAL,
     ENDPOINT_CONTROL_INTEGRATION_MANAGED,
 )
-from ..onboarding.recovery_terminalization import RecoveryTerminalInput
-from ..onboarding.strategy_verification import (
+from .recovery.terminal import RecoveryTerminalInput
+from .recovery.verification import (
     CallbackRecoveryRoute,
     CallbackRecoveryVerifier,
     InboundRecoveryVerifier,
-    _registry_sessions_projection,
+    registry_sessions_projection,
 )
-from ..onboarding.timeouts import (
+from ..timeout_policy import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     OnboardingTimeoutPolicy,
 )
@@ -561,7 +561,7 @@ async def _async_transition_to_inbound(
         collector_pn=collector_pn,
         session_id=session_id,
         restart_channel=channel,
-        sessions_source=_registry_sessions_projection(registry),
+        sessions_source=registry_sessions_projection(registry),
         clock=clock,
         policy=policy,
         ledger=ledger,
@@ -822,7 +822,7 @@ async def _async_transition_to_callback(
         collector_pn=collector_pn,
         session_id=session_id,
         restart_channel=channel,
-        sessions_source=_registry_sessions_projection(registry),
+        sessions_source=registry_sessions_projection(registry),
         clock=clock,
         policy=policy,
         ledger=ledger,

@@ -1,4 +1,12 @@
-"""Shared onboarding timeout policy and deadline helpers."""
+"""Onboarding deadline and scan-budget helpers.
+
+The timeout POLICY type and its single default object live in the neutral
+top-level :mod:`..timeout_policy` module so the recovery execution layer and
+onboarding share ONE policy without any connection/runtime -> onboarding
+dependency. They are imported here (and thus remain importable from this module)
+purely so onboarding-side callers and this module's own default arguments keep a
+single, unchanged seam.
+"""
 
 from __future__ import annotations
 
@@ -7,77 +15,17 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Awaitable, TypeVar
 
+from ..timeout_policy import (
+    DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+    OnboardingTimeoutPolicy,
+)
+
 
 AwaitableT = TypeVar("AwaitableT")
 
 
 class OnboardingDeadlineExceeded(TimeoutError):
     """Raised when a shared onboarding deadline has no budget left."""
-
-
-@dataclass(frozen=True, slots=True)
-class OnboardingTimeoutPolicy:
-    """Central timeout policy for onboarding flow wrappers and probe phases."""
-
-    discovery_timeout: float = 1.5
-    connect_timeout: float = 5.0
-    connect_timeout_without_udp_reply: float = 0.75
-    heartbeat_timeout: float = 2.0
-    auto_attempts: int = 3
-    auto_attempt_delay: float = 0.75
-    driver_detection_attempts: int = 3
-    driver_retry_delay: float = 0.35
-    pi30_qpi_probe_timeout: float = 1.0
-    smartess_probe_timeout: float = 3.0
-    smartess_query_timeout: float = 1.5
-    runtime_enrichment_timeout: float = 4.0
-    collector_query_timeout: float = 1.0
-    driver_onboarding_read_timeout: float = 2.0
-    manual_total_timeout: float = 45.0
-    # LINK budget for one callback identity transaction: how long we wait for the
-    # collector to actually open a socket after our single trigger sequence. It
-    # is not a detection budget -- no driver work happens inside it -- which is
-    # why it is a fraction of manual_total_timeout above.
-    callback_identity_session_wait: float = 20.0
-    # How long one attempt may wait for the exclusive causality lease before
-    # giving up. The wire carries no correlation token, so attempts are
-    # serialized; this bounds the queue rather than letting a caller hang.
-    callback_causality_lease_wait: float = 30.0
-    # Inbound recovery verification budgets (the reboot/reconnect transaction).
-    # How long the observed session may take to become strongly identified
-    # after the consented read-only identity probe.
-    inbound_strong_identity_timeout: float = 30.0
-    # How long after a confirmed reboot the OLD socket may take to actually
-    # close. The collector itself must drop it; we never close it for it.
-    inbound_restart_disconnect_timeout: float = 45.0
-    # Old factory collectors can take well over a minute to boot and re-open
-    # their outbound link; bounded but generous, polled from the in-memory
-    # session inventory (no UDP loops).
-    inbound_reconnect_timeout: float = 180.0
-    # Callback recovery: after the inbound window expired and exactly ONE
-    # unicast set>server sequence went out, how long the collector may take to
-    # dial the advertised endpoint. LINK budget only -- no detection runs here.
-    callback_recovery_session_wait: float = 20.0
-    # The detector owns the manual onboarding work budget above.  A wrapper may
-    # wait this little bit longer only so the detector can materialize and
-    # return its partial result after its own deadline expires.  This is not
-    # additional probe/driver-detection time.
-    result_finalization_grace: float = 2.0
-    auto_total_timeout: float = 45.0
-    auto_scan_estimated_seconds: float = 12.5
-    deep_scan_followup_estimated_seconds: float = 75.0
-    deep_scan_batch_timeout: float = 0.35
-    deep_scan_concurrency: int = 32
-    deep_scan_timeout_buffer: float = 20.0
-    unicast_fallback_probe_timeout: float = 0.35
-    unicast_fallback_concurrency: int = 32
-    # Absolute runaway guard for one deep scan. The working deadline grows as
-    # connected collectors are admitted for identification; this is the wall
-    # it can never grow past.
-    deep_scan_hard_ceiling_seconds: float = 900.0
-
-
-DEFAULT_ONBOARDING_TIMEOUT_POLICY = OnboardingTimeoutPolicy()
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,7 +39,7 @@ from custom_components.eybond_local.connection.strategy_transition import (  # n
     TRANSITION_SESSION_UNAVAILABLE,
     async_run_strategy_transition,
 )
-from custom_components.eybond_local.onboarding.strategy_verification import (  # noqa: E402
+from custom_components.eybond_local.connection.recovery.verification import (  # noqa: E402
     CallbackRecoveryRoute,
 )
 from custom_components.eybond_local.onboarding.timeouts import (  # noqa: E402
@@ -202,7 +202,7 @@ class _Harness:
             return self.commit_refusal_override
         data = dict(self.entry_data)
         data.update(updates)
-        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+        from custom_components.eybond_local.connection.recovery.terminal import (
             merge_recovery_contract,
         )
 

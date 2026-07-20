@@ -43,7 +43,7 @@ from custom_components.eybond_local.connection.recovery_contract import (
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
 )
-from custom_components.eybond_local.onboarding.strategy_verification import (
+from custom_components.eybond_local.connection.recovery.verification import (
     InboundRecoveryVerifier,
     ObservedSessionRestartChannel,
 )

@@ -44,15 +44,15 @@ from ..const import (
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     ENDPOINT_CONTROL_EXTERNAL,
 )
-from ..onboarding.callback_matching import (
+from .callback_matching import (
     MATCH_IDENTITY_AMBIGUOUS,
     MATCH_IDENTITY_MISMATCH,
     MATCH_TRIGGER_INTERFERENCE,
     match_callback_answer,
 )
-from ..onboarding.recovery_terminalization import RecoveryTerminalInput
-from ..onboarding.strategy_verification import async_run_callback_recovery_transaction
-from ..onboarding.timeouts import (
+from .recovery.terminal import RecoveryTerminalInput
+from .recovery.verification import async_run_callback_recovery_transaction
+from ..timeout_policy import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     OnboardingTimeoutPolicy,
 )

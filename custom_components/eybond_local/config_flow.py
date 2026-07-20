@@ -229,12 +229,12 @@ from .onboarding.callback_identity import (
     OnboardingWireProbeIntent,
     async_run_callback_identity_transaction,
 )
-from .onboarding.recovery_terminalization import (
+from .connection.recovery.terminal import (
     RecoveryTerminalInput,
     merge_recovery_contract,
     verify_prepared_handoff,
 )
-from .onboarding.strategy_verification import (
+from .connection.recovery.verification import (
     CallbackRecoveryRoute,
     EVIDENCE_USER_CONFIRMED_SESSION,
     FAILURE_SESSION_CLAIMED,
@@ -243,8 +243,8 @@ from .onboarding.strategy_verification import (
     ObservedSessionRestartChannel,
     async_run_callback_recovery_transaction,
 )
+from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 from .onboarding.timeouts import (
-    DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     auto_scan_timeout_seconds as _onboarding_auto_scan_timeout_seconds,
     deep_scan_timeout_seconds as _onboarding_deep_scan_timeout_seconds,
 )
@@ -1718,7 +1718,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._verification_result: InboundRecoveryOutcome | None = None
         # The typed recovery evidence carried from a successful verification to
         # the terminal entry-create path. ONLY the terminal boundary
-        # (onboarding.recovery_terminalization) turns it into the entry's
+        # (connection.recovery.terminal) turns it into the entry's
         # RecoveryContract; it is never persisted anywhere else.
         self._recovery_terminal = RecoveryTerminalInput.none()
         self._verification_expected_pn = ""
@@ -10047,8 +10047,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             REPAIR_STATE_INVALID,
             async_run_degraded_recovery_repair,
         )
-        from .onboarding.recovery_terminalization import merge_recovery_contract
-        from .onboarding.timeouts import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+        from .connection.recovery.terminal import merge_recovery_contract
+        from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
         from .passive_discovery import (
             get_callback_session_registry,
             get_passive_callback_discovery,

@@ -30,7 +30,7 @@ from custom_components.eybond_local.connection.recovery_contract import (
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
 )
-from custom_components.eybond_local.onboarding.recovery_terminalization import (
+from custom_components.eybond_local.connection.recovery.terminal import (
     MERGE_REFUSED_ENTRY_IDENTITY,
     MERGE_REFUSED_MALFORMED_CONTRACT,
     MERGE_REFUSED_PROOF_REJECTED,
@@ -38,7 +38,7 @@ from custom_components.eybond_local.onboarding.recovery_terminalization import (
     merge_recovery_contract,
     verify_prepared_handoff,
 )
-from custom_components.eybond_local.onboarding.strategy_verification import (
+from custom_components.eybond_local.connection.recovery.verification import (
     InboundRecoveryOutcome,
     RecoveryVerificationOutcome,
     STATE_CALLBACK_VERIFIED,
@@ -503,7 +503,7 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
     """One writer, one acceptance boundary, no forbidden vocabulary."""
 
     _PACKAGE = REPO_ROOT / "custom_components" / "eybond_local"
-    _MODULE = _PACKAGE / "onboarding" / "recovery_terminalization.py"
+    _MODULE = _PACKAGE / "connection" / "recovery" / "terminal.py"
 
     @staticmethod
     def _code_names(path: Path) -> set[str]:
@@ -534,7 +534,7 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
                 writers.append(path.name)
         self.assertEqual(
             sorted(set(writers)),
-            ["recovery_contract.py", "recovery_terminalization.py"],
+            ["recovery_contract.py", "terminal.py"],
             msg="only the model and the terminal boundary may write the contract",
         )
 
@@ -547,7 +547,7 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
                 callers.append(path.name)
         self.assertEqual(
             sorted(set(callers)),
-            ["recovery_terminalization.py", "strategy_verification.py"],
+            ["terminal.py", "verification.py"],
             msg="terminal merge + verifier pre-validation only",
         )
 

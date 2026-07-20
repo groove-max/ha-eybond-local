@@ -68,7 +68,7 @@ from ..const import (
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
 )
-from .callback_matching import (
+from ..connection.callback_matching import (
     MATCH_TIMEOUT,
     match_callback_answer,
 )

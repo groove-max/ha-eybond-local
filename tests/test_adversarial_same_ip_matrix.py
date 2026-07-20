@@ -52,7 +52,7 @@ from custom_components.eybond_local.connection.strategy_transition_repair import
     BOOTSTRAP_NO_SESSION,
     async_run_callback_bootstrap_transaction,
 )
-from custom_components.eybond_local.onboarding.callback_matching import (
+from custom_components.eybond_local.connection.callback_matching import (
     MATCH_IDENTITY_AMBIGUOUS,
     MATCH_IDENTITY_MISMATCH,
     MATCH_OK,

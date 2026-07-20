@@ -142,8 +142,8 @@ async def test_scenario_a_foreign_baseline_then_target_success(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.passive_discovery import (
         get_callback_session_registry,
@@ -349,8 +349,8 @@ async def test_scenario_b_only_foreign_pn_answers_is_typed_mismatch(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.passive_discovery import (
         get_callback_session_registry,
@@ -494,8 +494,8 @@ async def test_scenario_c_two_strong_pns_one_window_is_ambiguous(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.passive_discovery import (
         get_callback_session_registry,
@@ -653,7 +653,7 @@ def test_scenario_c_ambiguity_is_socket_order_independent() -> None:
     ambiguity above: the decision function never reads socket order or peer IP, so
     the co-located reconnect order can never become identity evidence."""
 
-    from custom_components.eybond_local.onboarding.callback_matching import (
+    from custom_components.eybond_local.connection.callback_matching import (
         MATCH_IDENTITY_AMBIGUOUS,
         match_callback_answer,
     )
@@ -706,7 +706,7 @@ def test_repair_flow_decision_path_has_no_framed_only_branch() -> None:
 
     from custom_components.eybond_local import config_flow
     from custom_components.eybond_local.connection import strategy_transition_repair
-    from custom_components.eybond_local.onboarding import callback_matching
+    from custom_components.eybond_local.connection import callback_matching
 
     def _named_funcs(source, names):
         """All FunctionDef/AsyncFunctionDef nodes (incl. methods) whose name is in

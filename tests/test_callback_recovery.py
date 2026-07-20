@@ -32,7 +32,7 @@ from custom_components.eybond_local.connection.recovery_contract import (
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
 )
-from custom_components.eybond_local.onboarding.strategy_verification import (
+from custom_components.eybond_local.connection.recovery.verification import (
     CallbackRecoveryRoute,
     CallbackRecoveryVerifier,
     FAILURE_CALLBACK_INTERFERENCE,
@@ -1035,8 +1035,8 @@ class CallbackRecoveryOwnershipTests(unittest.IsolatedAsyncioTestCase):
         # The engine driven by REAL CallbackSessionRegistry hooks (exactly the
         # wrapper's wiring): success leaves a committed handoff whose identity
         # the registry itself certifies via prepared_handoff_identity.
-        from custom_components.eybond_local.onboarding.strategy_verification import (
-            _registry_sessions_projection,
+        from custom_components.eybond_local.connection.recovery.verification import (
+            registry_sessions_projection,
         )
 
         ledger = CallbackTriggerLedger()
@@ -1089,7 +1089,7 @@ class CallbackRecoveryOwnershipTests(unittest.IsolatedAsyncioTestCase):
             ledger=ledger,
             sender=sender,
             collector_pn=SHORT_PN,  # discovery knew only the prefix
-            sessions_source=_registry_sessions_projection(registry),
+            sessions_source=registry_sessions_projection(registry),
             promote_claim=lambda pn: registry.promote_claim_to_full_pn(owner, pn),
             retarget_claim=_retarget,
             prepare_handoff=_prepare,
@@ -1550,8 +1550,8 @@ class CallbackRecoveryTransactionWrapperTests(unittest.IsolatedAsyncioTestCase):
                     if session["session_id"] != OLD_SESSION
                 ]
 
-        from custom_components.eybond_local.onboarding.strategy_verification import (
-            _registry_sessions_projection,
+        from custom_components.eybond_local.connection.recovery.verification import (
+            registry_sessions_projection,
         )
 
         def _retarget(new_sid: str) -> bool:
@@ -1581,7 +1581,7 @@ class CallbackRecoveryTransactionWrapperTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             collector_pn=SHORT_PN,
-            sessions_source=_registry_sessions_projection(registry),
+            sessions_source=registry_sessions_projection(registry),
             promote_claim=lambda pn: registry.promote_claim_to_full_pn(owner, pn),
             retarget_claim=_retarget,
             prepare_handoff=_prepare,
@@ -1606,8 +1606,9 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
         REPO_ROOT
         / "custom_components"
         / "eybond_local"
-        / "onboarding"
-        / "strategy_verification.py"
+        / "connection"
+        / "recovery"
+        / "verification.py"
     )
 
     def _names(self) -> set[str]:
@@ -1691,7 +1692,7 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
     def test_no_callback_proof_writer_outside_the_contract_model(self) -> None:
         # The single-store guard lives in test_recovery_contract; here we pin
         # the batch boundary: callback proofs are persisted ONLY by the
-        # Batch-5 terminal boundary (onboarding.recovery_terminalization).
+        # terminal boundary (connection.recovery.terminal).
         # The verifier may name with_callback_proof solely for PRE-VALIDATION
         # and must never persist anything itself.
         import ast
@@ -1705,10 +1706,10 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
                 continue
             self.assertIn(
                 path.name,
-                ("strategy_verification.py", "recovery_terminalization.py"),
+                ("verification.py", "terminal.py"),
                 msg=f"unexpected callback-proof producer: {path.name}",
             )
-            if path.name != "strategy_verification.py":
+            if path.name != "verification.py":
                 continue
             tree = ast.parse(source)
             for node in ast.walk(tree):
@@ -1986,7 +1987,7 @@ class SilentReconnectProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_inbound_only_silent_diagnosis_is_surfaced(self) -> None:
         # InboundRecoveryVerifier (no callback route): a silent probe failure
         # in the autonomous window is surfaced, not collapsed to timeout.
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryVerifier,
         )
 

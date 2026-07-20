@@ -9453,10 +9453,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         from custom_components.eybond_local.connection.recovery_contract import (
             InboundRecoveryProof,
         )
-        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+        from custom_components.eybond_local.connection.recovery.terminal import (
             RecoveryTerminalInput,
         )
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             STATE_INBOUND_VERIFIED,
             InboundRecoveryOutcome,
         )
@@ -9638,7 +9638,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         full-PN session are never used. Load-bearing for blocker 1: without the
         enriched-PN fix the retry would re-resolve by the SHORT PN onto S1."""
 
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryOutcome,
         )
 
@@ -9759,7 +9759,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # Verification failure stays retryable in THIS discovery flow. Manual setup
     # remains an explicit choice and keeps the peer IP as an editable hint.
     async def test_verification_failure_falls_through_to_manual_with_peer_prefill(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryOutcome,
         )
 
@@ -9817,7 +9817,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # Batch 7 -- the failure screen explains the exact reason in the user's
     # language (ru/uk), never the raw code, for every inbound failure code.
     async def test_verification_failed_explanation_is_localized(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryOutcome,
         )
 
@@ -9850,7 +9850,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # verification; the user EXPLICITLY chooses manual callback, and the
     # existing callback path (not a new matcher) proves it.
     async def test_failed_inbound_handoff_to_explicit_manual_callback(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryOutcome,
         )
 
@@ -9901,7 +9901,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # C. Cancelling from the failure screen aborts cleanly: no claim, no task,
     # no prepared handoff -- and no entry.
     async def test_cancel_from_failure_screen_is_clean(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryOutcome,
         )
 
@@ -9965,7 +9965,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # and no unverified peer address is persisted as collector_ip.
     async def test_verification_success_stamps_inbound_external(self) -> None:
         from custom_components.eybond_local.connection import connection_policy as cp
-        from custom_components.eybond_local.onboarding import strategy_verification as sv
+        from custom_components.eybond_local.connection.recovery import verification as sv
 
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
@@ -10087,7 +10087,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     # 2. Zero UDP callback triggers are sent while inbound verification runs.
     async def test_inbound_verification_sends_zero_udp_triggers(self) -> None:
-        from custom_components.eybond_local.onboarding import strategy_verification as sv
+        from custom_components.eybond_local.connection.recovery import verification as sv
 
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
@@ -10186,7 +10186,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # A session/identity already claimed by another owner is a typed failure --
     # never hijacked -- and the flow continues on the manual callback step.
     async def test_already_claimed_session_is_not_hijacked(self) -> None:
-        from custom_components.eybond_local.onboarding import strategy_verification as sv
+        from custom_components.eybond_local.connection.recovery import verification as sv
 
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
@@ -11634,7 +11634,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
             CallbackRecoveryProof,
         )
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             RecoveryVerificationOutcome,
             STATE_CALLBACK_VERIFIED,
         )
@@ -11942,7 +11942,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
             CallbackRecoveryProof,
         )
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             RecoveryVerificationOutcome,
             STATE_CALLBACK_VERIFIED,
         )
@@ -12043,7 +12043,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_terminal_without_adoption_refuses_and_never_releases(self) -> None:
         # A direct/forged RecoveryTerminalInput carrying a REAL prepared owner
         # the flow never adopted: refused, and the foreign owner is untouched.
-        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+        from custom_components.eybond_local.connection.recovery.terminal import (
             RecoveryTerminalInput,
         )
 
@@ -12192,7 +12192,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
             InboundRecoveryProof,
         )
-        from custom_components.eybond_local.onboarding.recovery_terminalization import (
+        from custom_components.eybond_local.connection.recovery.terminal import (
             RecoveryTerminalInput,
         )
 
@@ -12368,7 +12368,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
             InboundRecoveryProof,
         )
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             RecoveryVerificationOutcome,
         )
 
@@ -12424,7 +12424,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return await flow.async_step_manual_recovery_result()
 
     async def test_inbound_recovered_requires_explicit_confirmation(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             STATE_INBOUND_RECOVERED,
         )
 
@@ -12461,7 +12461,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["data"]["collector_ip"], "")
 
     async def test_inbound_recovered_decline_releases_exact_owner(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             STATE_INBOUND_RECOVERED,
         )
 
@@ -12591,7 +12591,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     async def test_async_remove_releases_unadopted_recovery_outcome(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             STATE_INBOUND_RECOVERED,
         )
 

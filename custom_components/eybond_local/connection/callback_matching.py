@@ -41,7 +41,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..connection.session_registry import pn_is_same_identity
+from .session_registry import pn_is_same_identity
 
 # Typed outcomes (translation keys; never raw exception text).
 MATCH_OK = ""

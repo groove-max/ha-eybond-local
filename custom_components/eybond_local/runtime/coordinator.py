@@ -5580,8 +5580,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             async_run_strategy_transition,
             trusted_transition_wire,
         )
-        from ..onboarding.recovery_terminalization import merge_recovery_contract
-        from ..onboarding.strategy_verification import CallbackRecoveryRoute
+        from ..connection.recovery.terminal import merge_recovery_contract
+        from ..connection.recovery.verification import CallbackRecoveryRoute
         from ..passive_discovery import get_callback_session_registry
 
         target = str(target_strategy or "").strip()

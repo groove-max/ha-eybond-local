@@ -28,7 +28,7 @@ from custom_components.eybond_local.connection.recovery_contract import (
     INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
     RecoveryContract,
 )
-from custom_components.eybond_local.onboarding.strategy_verification import (
+from custom_components.eybond_local.connection.recovery.verification import (
     FAILURE_CAUSALITY_BUSY,
     FAILURE_DISCONNECT_NOT_OBSERVED,
     FAILURE_RECONNECT_TIMEOUT,
@@ -629,7 +629,7 @@ class InboundRecoveryVerifierTests(unittest.TestCase):
         # ownership retarget hook: the engine refuses upfront -- BEFORE the
         # lease and BEFORE the collector is rebooted -- instead of producing
         # a proof whose claim nobody moved.
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             FAILURE_OWNERSHIP_UNAVAILABLE,
         )
 
@@ -652,7 +652,7 @@ class InboundRecoveryVerifierTests(unittest.TestCase):
     # The verifier must never return a success the contract would refuse: the
     # proof is pre-validated through the strict RecoveryContract builder.
     def test_invalid_clock_yields_typed_failure_and_no_final_retarget(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             FAILURE_INBOUND_PROOF_INVALID,
         )
 
@@ -1109,8 +1109,9 @@ class VerifierArchitectureGuardTests(unittest.TestCase):
         REPO_ROOT
         / "custom_components"
         / "eybond_local"
-        / "onboarding"
-        / "strategy_verification.py"
+        / "connection"
+        / "recovery"
+        / "verification.py"
     )
 
     def _source(self) -> str:
@@ -1182,7 +1183,7 @@ class VerifierArchitectureGuardTests(unittest.TestCase):
                 )
 
     def test_verifier_returns_no_strategy_or_evidence(self) -> None:
-        from custom_components.eybond_local.onboarding.strategy_verification import (
+        from custom_components.eybond_local.connection.recovery.verification import (
             InboundRecoveryOutcome,
         )
         from dataclasses import fields

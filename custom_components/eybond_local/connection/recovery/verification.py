@@ -54,30 +54,33 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
-from ..collector.management import (
+from ...collector.management import (
     CollectorManagementUnsupportedError,
     select_collector_management_adapter,
 )
-from ..connection.callback_ledger import (
+from ..callback_ledger import (
     CallbackCausalityBusyError,
     get_callback_trigger_ledger,
 )
-from ..connection.recovery_contract import (
+from ..recovery_contract import (
     CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
     CallbackRecoveryProof,
     INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
     InboundRecoveryProof,
     RecoveryContract,
 )
-from ..connection.session_handle import negotiate_session_adapters
-from ..connection.session_registry import (
+from ..session_handle import negotiate_session_adapters
+from ..session_registry import (
     identity_source_is_strong,
     pn_is_same_identity,
 )
-from ..const import (
+from ...const import (
     CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION,
 )
-from .timeouts import DEFAULT_ONBOARDING_TIMEOUT_POLICY, OnboardingTimeoutPolicy
+from ...timeout_policy import (
+    DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+    OnboardingTimeoutPolicy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -408,7 +411,7 @@ class RecoveryVerificationOutcome:
         value a ValueError -- both are caller bugs, never data to clean up.
         """
 
-        from ..connection.session_registry import (
+        from ..session_registry import (
             PermanentOwnedSessionCertification,
         )
 
@@ -486,7 +489,7 @@ class _ProductionRecoveryTriggerSender:
         self._timeout = float(timeout)
 
     async def async_send(self, route: CallbackRecoveryRoute) -> None:
-        from ..collector.discovery import async_send_callback_trigger
+        from ...collector.discovery import async_send_callback_trigger
 
         await async_send_callback_trigger(
             bind_ip=route.bind_ip,
@@ -1492,10 +1495,15 @@ class CallbackRecoveryVerifier:
         return await self._engine.async_verify()
 
 
-def _registry_sessions_projection(
+def registry_sessions_projection(
     registry: Any,
 ) -> Callable[[], tuple[dict[str, Any], ...]]:
     """Project the registry's OWN per-socket truth into the engine's shape.
+
+    This is the ONE public typed seam for turning registry-owned session facts
+    into the recovery engine's session shape. Callers pass a
+    ``CallbackSessionRegistry``; they can NOT hand the transaction a forged
+    session mapping.
 
     The one authority: every field the engine trusts -- the strong/weak
     verdict, the certified identity source, the listener port, the raw
@@ -1638,7 +1646,7 @@ async def async_run_callback_recovery_transaction(
         session_id_provider=_claimed_session_id,
         handle_provider=lambda: registry.session_handle_for_claimed_session(owner),
     )
-    from ..collector.silent_session_probe import SilentSessionIdentityProbeChannel
+    from ...collector.silent_session_probe import SilentSessionIdentityProbeChannel
 
     silent_probe = SilentSessionIdentityProbeChannel(
         host=listener_host, port=route.listener_port
@@ -1654,7 +1662,7 @@ async def async_run_callback_recovery_transaction(
         collector_pn=collector_pn,
         session_id=session_id,
         restart_channel=channel,
-        sessions_source=_registry_sessions_projection(registry),
+        sessions_source=registry_sessions_projection(registry),
         clock=clock,
         policy=policy,
         callback_route=route,
@@ -1787,7 +1795,7 @@ class ObservedSessionRestartChannel:
         * ``observed`` False or a non-empty ``conflict`` -> error.
         """
 
-        from ..connection.session_handle import SessionHandle
+        from ..session_handle import SessionHandle
 
         provider = self._handle_provider
         if provider is None:
@@ -1808,7 +1816,7 @@ class ObservedSessionRestartChannel:
         if self._framed_transport is not None:
             return self._framed_transport
 
-        from ..collector.transport import SharedEybondTransport
+        from ...collector.transport import SharedEybondTransport
 
         # Resolve strictly BEFORE touching any socket; a missing registry claim
         # aborts here and no transport is created at all.
@@ -1835,8 +1843,8 @@ class ObservedSessionRestartChannel:
         if self._at_transport is not None:
             return self._at_transport
 
-        from ..collector.transport import SharedCollectorAtTransport
-        from ..connection.session_handle import WIRE_AT_TEXT
+        from ...collector.transport import SharedCollectorAtTransport
+        from ..session_handle import WIRE_AT_TEXT
 
         resolved_session_id = self._resolve_session_id()
         transport = SharedCollectorAtTransport(
@@ -1858,8 +1866,8 @@ class ObservedSessionRestartChannel:
     async def async_probe_identity(self) -> str:
         """Read full collector identity over the claimed session's live wire."""
 
-        from ..collector.session_identity_reader import SessionPinnedIdentityReader
-        from ..connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
+        from ...collector.session_identity_reader import SessionPinnedIdentityReader
+        from ..session_handle import WIRE_AT_TEXT, WIRE_FRAMED
 
         # The trusted live handle is the ONLY wire source: no provider, a
         # forged handle, an unobserved/conflicting one -- all fail typed here,
@@ -1882,7 +1890,7 @@ class ObservedSessionRestartChannel:
     async def async_send_restart(self) -> None:
         """Reboot through the ONE management-adapter switch (negotiated wire)."""
 
-        from ..connection.session_handle import (
+        from ..session_handle import (
             ADAPTER_COLLECTOR_AT_COMMANDS,
             ADAPTER_COLLECTOR_FRAMED_COMMANDS,
         )
@@ -1978,6 +1986,7 @@ __all__ = [
     "ObservedSessionRestartChannel",
     "RestartChannel",
     "SessionUnavailableError",
+    "registry_sessions_projection",
     "STATE_INBOUND_NOT_VERIFIED",
     "STATE_INBOUND_VERIFIED",
     "STATE_OBSERVED_SESSION",

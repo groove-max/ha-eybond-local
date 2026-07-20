@@ -372,7 +372,7 @@ class StrategyTransitionRecoveryState:
 
         if not self.route_is_complete():
             return None
-        from ..onboarding.strategy_verification import CallbackRecoveryRoute
+        from .recovery.verification import CallbackRecoveryRoute
 
         return CallbackRecoveryRoute(
             bind_ip=self.trigger_bind_host,

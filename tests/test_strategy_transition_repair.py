@@ -49,7 +49,7 @@ from custom_components.eybond_local.connection.strategy_transition import (  # n
 from custom_components.eybond_local.connection.strategy_transition_recovery import (  # noqa: E402
     StrategyTransitionRecoveryState,
 )
-from custom_components.eybond_local.onboarding.strategy_verification import (  # noqa: E402
+from custom_components.eybond_local.connection.recovery.verification import (  # noqa: E402
     RecoveryVerificationOutcome,
     STATE_CALLBACK_VERIFIED,
 )

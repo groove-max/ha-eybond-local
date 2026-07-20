@@ -28,7 +28,7 @@ from custom_components.eybond_local.connection import connection_policy as cp  #
 from custom_components.eybond_local.connection.session_registry import (  # noqa: E402
     CallbackSessionRegistry,
 )
-from custom_components.eybond_local.onboarding.callback_matching import (  # noqa: E402
+from custom_components.eybond_local.connection.callback_matching import (  # noqa: E402
     MATCH_IDENTITY_AMBIGUOUS,
     MATCH_IDENTITY_MISMATCH,
     MATCH_TIMEOUT,

@@ -42,14 +42,14 @@ from dataclasses import dataclass
 import logging
 from typing import Any, MutableMapping
 
-from ..connection.recovery_contract import (
+from ..recovery_contract import (
     CallbackRecoveryProof,
     InboundRecoveryProof,
     RECOVERY_CONTRACT_KEY,
     RecoveryContract,
 )
-from ..connection.session_registry import pn_is_same_identity, prefer_full_pn
-from ..const import CONF_COLLECTOR_PN
+from ..session_registry import pn_is_same_identity, prefer_full_pn
+from ...const import CONF_COLLECTOR_PN
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class RecoveryTerminalInput:
         coordinator prepares the handoff exactly once later.
         """
 
-        from .strategy_verification import InboundRecoveryOutcome
+        from .verification import InboundRecoveryOutcome
 
         if type(outcome) is not InboundRecoveryOutcome:
             raise TypeError("inbound_recovery_outcome_required")
@@ -156,7 +156,7 @@ class RecoveryTerminalInput:
         ownership capability.
         """
 
-        from .strategy_verification import RecoveryVerificationOutcome
+        from .verification import RecoveryVerificationOutcome
 
         if type(outcome) is not RecoveryVerificationOutcome:
             raise TypeError("recovery_verification_outcome_required")
@@ -187,10 +187,10 @@ class RecoveryTerminalInput:
         ownership-transfer capability the registry never issued.
         """
 
-        from ..connection.session_registry import (
+        from ..session_registry import (
             PermanentOwnedSessionCertification,
         )
-        from .strategy_verification import RecoveryVerificationOutcome
+        from .verification import RecoveryVerificationOutcome
 
         if type(outcome) is not RecoveryVerificationOutcome:
             raise TypeError("recovery_verification_outcome_required")

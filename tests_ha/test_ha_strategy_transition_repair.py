@@ -219,8 +219,8 @@ async def test_cold_degraded_repair_through_real_ha(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.onboarding.timeouts import (
         DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -473,8 +473,8 @@ async def test_cold_repair_cancellation_is_clean(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.onboarding.timeouts import (
         DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -765,8 +765,8 @@ async def test_activation_failure_after_proof_keeps_proof_and_offers_reload_only
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.onboarding.timeouts import (
         DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -953,8 +953,8 @@ async def test_activation_retry_failure_stays_on_activation_menu(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.onboarding.timeouts import (
         DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -1120,8 +1120,8 @@ async def test_loaded_degraded_entry_repair_through_real_ha(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.onboarding.timeouts import (
         DEFAULT_ONBOARDING_TIMEOUT_POLICY,
@@ -1694,8 +1694,8 @@ async def test_loaded_repair_cancelled_after_suspend_restores_entry(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
 
     tcp_port = _free_tcp_port()
@@ -1826,8 +1826,8 @@ async def test_loaded_repair_cancelled_during_post_commit_setup(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
 
     tcp_port = _free_tcp_port()
@@ -1928,8 +1928,8 @@ async def test_proven_but_unloaded_entry_offers_load_only_retry(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
 
     tcp_port = _free_tcp_port()
@@ -2025,8 +2025,8 @@ async def test_loaded_repair_cancelled_inside_unload_restores_entry(
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
-    from custom_components.eybond_local.onboarding import (
-        strategy_verification as sv_mod,
+    from custom_components.eybond_local.connection.recovery import (
+        verification as sv_mod,
     )
     from custom_components.eybond_local.passive_discovery import (
         get_passive_callback_discovery,
