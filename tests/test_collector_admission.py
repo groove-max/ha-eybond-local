@@ -287,15 +287,31 @@ class CollectorAdmissionArchitectureGuards(unittest.TestCase):
     def test_exactly_one_admission_entrypoint_owns_the_transaction(self) -> None:
         # Only the ONE entrypoint mints the in-flight admission TRANSACTION; every
         # other write clears it. That is what makes it the single verifier gate.
+        import textwrap
+
+        def _constructor_count(source: str) -> int:
+            tree = ast.parse(textwrap.dedent(source))
+            return sum(
+                1
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "CollectorAdmissionTransaction"
+            )
+
         self.assertIn("_async_begin_collector_admission", self.method_names)
-        mints = self.module_source.count(
-            "self._admission_transaction = CollectorAdmissionTransaction("
-        )
-        self.assertEqual(mints, 1, "more than one admission entrypoint mints the transaction")
         entry = self._method_source("_async_begin_collector_admission")
-        self.assertIn(
-            "self._admission_transaction = CollectorAdmissionTransaction(", entry
+        self.assertEqual(
+            _constructor_count(self.module_source),
+            1,
+            "more than one admission entrypoint mints the transaction",
         )
+        self.assertEqual(_constructor_count(entry), 1)
+        # The constructor result is deliberately assigned to both source-boundary
+        # roles: the admission verifier and the callback continuation must be the
+        # exact same transaction object.
+        self.assertIn("self._admission_transaction = transaction", entry)
+        self.assertIn("self._callback_continuation = transaction", entry)
 
     def test_both_source_adapters_use_the_one_entrypoint(self) -> None:
         discovery = self._method_source("async_step_integration_discovery")

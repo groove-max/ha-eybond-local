@@ -152,6 +152,38 @@ class CallbackContinuation(ABC):
     def identity_context(self) -> CallbackIdentityContext:
         """The durable expectation the NEXT identity request is built against."""
 
+    @abstractmethod
+    def identity_context_for_attempt(
+        self, declared_expected_pn: str
+    ) -> CallbackIdentityContext:
+        """Return the context for a new attempt after applying its declaration.
+
+        The legacy implementation restores its durable pre-attempt declaration;
+        a transaction-backed implementation keeps a stronger same-identity PN it
+        learned itself.  This is the one source-neutral replacement for a caller
+        writing a legacy ``_verification_expected_pn`` field.
+        """
+
+    @abstractmethod
+    def adopt_certified_pn(self, collector_pn: str) -> str:
+        """Accept this attempt's certified PN and return its previous spelling.
+
+        The caller uses the previous spelling only to project short->full
+        enrichment through its presentation models.  Identity ownership remains
+        entirely inside the implementation.
+        """
+
+    @abstractmethod
+    def adopt_passive_inbound_identity(
+        self, collector_pn: str, session_id: str
+    ) -> bool:
+        """Try to own an explicitly selected passive inbound identity.
+
+        Ordinary manual onboarding retains its historical behavior.  A
+        transaction whose controlled inbound verification already failed must
+        refuse this shortcut so a stale session cannot become a normal entry.
+        """
+
     @property
     @abstractmethod
     def certified_pn(self) -> str:

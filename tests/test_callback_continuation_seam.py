@@ -401,19 +401,17 @@ class CallbackContinuationArchitectureGuards(unittest.TestCase):
         self.assertNotIn("self._release_unadopted_recovery_outcome()", source)
         self.assertNotIn("self._adopt_callback_recovery_outcome(", source)
 
-    def test_admission_transaction_is_byte_for_byte_unchanged(self) -> None:
-        head = subprocess.run(
-            ["git", "show", "HEAD:custom_components/eybond_local/connection/admission_transaction.py"],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
+    def test_admission_transaction_is_a_callback_continuation(self) -> None:
+        # 2D.2: the transaction now IS a full CallbackContinuation (the neutral
+        # transaction-backed implementation chosen for admission-origin flows).
+        from custom_components.eybond_local.connection.admission_transaction import (
+            CollectorAdmissionTransaction,
         )
-        self.assertEqual(head.returncode, 0, msg=head.stderr[-400:])
-        self.assertEqual(
-            head.stdout,
-            ADMISSION_TXN.read_text(encoding="utf-8"),
-            msg="CollectorAdmissionTransaction must not change in 2D.1",
+
+        self.assertTrue(
+            issubclass(CollectorAdmissionTransaction, CallbackContinuation)
         )
+        self.assertEqual(CollectorAdmissionTransaction.__abstractmethods__, frozenset())
 
     def test_adapter_satisfies_the_neutral_contract(self) -> None:
         flow = _make_flow()

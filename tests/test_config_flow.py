@@ -9589,25 +9589,47 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "abort")
         self.assertEqual(result["reason"], "recovery_ownership_unavailable")
 
-    async def test_D_manual_callback_bridge_clears_admission_and_disarms_guard(
+    async def test_D_manual_callback_bridge_keeps_transaction_as_continuation(
         self,
     ) -> None:
-        """The explicit manual-callback bridge clears the admission request, so the
-        terminal guard is inert for the manual callback entry and the existing
-        manual callback lifecycle is unchanged."""
+        """2D.2: the explicit manual-callback bridge KEEPS the same admission
+        transaction as the flow's continuation -- no hand-across, no close -- and
+        transitions it from the failed inbound attempt into its callback-ready
+        lifecycle. The terminal guard stays inert for the resulting callback entry
+        because its strategy is callback_on_demand, not inbound."""
+
+        from custom_components.eybond_local.connection.recovery.verification import (
+            InboundRecoveryOutcome,
+        )
 
         flow = self._make_flow()
         await flow.async_step_integration_discovery(self._discovery_info())
-        self.assertIsInstance(flow._admission_transaction, admission_transaction_module.CollectorAdmissionTransaction)
-        self.assertIsInstance(flow._admission_transaction.request, CollectorAdmissionRequest)
+        txn = flow._admission_transaction
+        self.assertIsInstance(txn, admission_transaction_module.CollectorAdmissionTransaction)
+        # Source boundary: the transaction IS the flow's continuation.
+        self.assertIs(flow._callback_continuation, txn)
+        # Reach a FAILED inbound attempt (real async_run's post-condition).
+        txn._outcome = InboundRecoveryOutcome(
+            failure_reason="inbound_reconnect_timeout", collector_pn=self.FULL_PN
+        )
+        txn._state = "failed"
 
         result = await flow.async_step_verify_connection_manual_callback()
         self.assertEqual(result["step_id"], "manual")
         self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
-        # Cleared: the terminal guard cannot fire for the manual callback entry.
-        self.assertIsNone(flow._admission_transaction)
+        # KEPT (not cleared) and transitioned into its callback lifecycle.
+        self.assertIs(flow._admission_transaction, txn)
+        self.assertIs(flow._callback_continuation, txn)
+        self.assertEqual(txn.state, "callback_ready")
+        # NO hand-across into legacy lifecycle fields.
+        self.assertEqual(flow._verification_expected_pn, "")
+        self.assertEqual(flow._verification_old_session_id, "")
+        # The terminal guard is inert for a callback-strategy entry.
         self.assertFalse(
-            flow._fresh_observed_session_entry_is_unverified({}, {})
+            flow._fresh_observed_session_entry_is_unverified(
+                {config_flow_module.CONF_CONNECTION_STRATEGY: "callback_on_demand"},
+                {},
+            )
         )
 
     # ---- blocker 1: weak->strong enrichment must retarget a retry onto the
@@ -9787,6 +9809,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector_pn=self.FULL_PN,
             )
             flow._admission_transaction._adopt_enriched_pn_from_outcome()
+            flow._admission_transaction._state = "failed"  # real async_run's post-cond
 
         with patch.object(flow._admission_transaction, "async_run", side_effect=_fake_run):
             result = await self._drive_verification(flow)
@@ -9812,6 +9835,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(retry["type"], "form")
         self.assertEqual(retry["step_id"], "verify_connection")
 
+        # In real use the retry re-runs inbound and fails again before the menu;
+        # reflect that FAILED post-condition so the bridge is reached honestly.
+        flow._admission_transaction._outcome = InboundRecoveryOutcome(
+            failure_reason="restart_not_supported", collector_pn=self.FULL_PN
+        )
+        flow._admission_transaction._state = "failed"
+
         # The EXPLICIT callback action opens the existing manual step with
         # callback_on_demand pre-selected and the peer IP as an editable hint.
         result = await flow.async_step_verify_connection_manual_callback()
@@ -9827,8 +9857,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("router", note.lower())
         # No strategy was guessed and no entry was created.
         self.assertEqual(flow._verified_connection_strategy, "")
-        # The inbound verification context was cleared on the handoff.
-        self.assertIsNone(flow._admission_transaction)
+        # 2D.2: the SAME transaction is KEPT as the continuation (no hand-across,
+        # no close) and is now callback-ready; no legacy field received authority.
+        self.assertIsNotNone(flow._admission_transaction)
+        self.assertEqual(flow._admission_transaction.state, "callback_ready")
+        self.assertEqual(flow._verification_expected_pn, "")
+        self.assertEqual(flow._verification_old_session_id, "")
 
     # Batch 7 -- the failure screen explains the exact reason in the user's
     # language (ru/uk), never the raw code, for every inbound failure code.
@@ -9884,6 +9918,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector_pn=self.FULL_PN,
             )
             flow._admission_transaction._adopt_enriched_pn_from_outcome()
+            flow._admission_transaction._state = "failed"  # real async_run's post-cond
 
         with patch.object(flow._admission_transaction, "async_run", side_effect=_fake_run):
             failed = await self._drive_verification(flow)
@@ -9896,8 +9931,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manual["step_id"], "manual")
         self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
         self.assertEqual(flow._manual_defaults.get("collector_ip"), self.PEER_IP)
-        # The expected strong PN was handed across into the legacy manual state.
-        self.assertEqual(flow._verification_expected_pn, self.FULL_PN)
+        # 2D.2: NO hand-across -- the transaction (the continuation) carries the
+        # expected strong PN in its identity context; legacy fields stay empty.
+        self.assertEqual(flow._verification_expected_pn, "")
+        self.assertEqual(
+            flow._callback_continuation.identity_context.expected_pn, self.FULL_PN
+        )
+        self.assertEqual(flow._admission_transaction.state, "callback_ready")
 
         # Submitting the manual form runs the EXISTING callback identity path;
         # the collector answers OUR trigger with a new strong session, and the
@@ -9911,10 +9951,215 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 self._manual_input(self.PEER_IP, connection_strategy="callback_on_demand")
             )
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
-        self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
+        # 2D.2: the transaction (the continuation) holds the certified PN -- the
+        # admission-origin path writes no legacy _manual_verified_full_pn.
+        self.assertEqual(flow._callback_continuation.certified_pn, self.FULL_PN)
+        self.assertEqual(flow._manual_verified_full_pn, "")
         # A callback owner now holds the certified session (a NEW owner id).
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_verification:"))
+
+    async def test_failed_inbound_then_manual_inbound_cannot_reuse_stale_session(
+        self,
+    ) -> None:
+        """Changing intent back to inbound cannot bypass the failed restart proof."""
+
+        from custom_components.eybond_local.connection.recovery.verification import (
+            InboundRecoveryOutcome,
+        )
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+
+        async def _fake_run() -> None:
+            flow._admission_transaction._outcome = InboundRecoveryOutcome(
+                failure_reason="inbound_reconnect_timeout",
+                collector_pn=self.FULL_PN,
+            )
+            flow._admission_transaction._adopt_enriched_pn_from_outcome()
+            flow._admission_transaction._state = "failed"
+
+        with patch.object(flow._admission_transaction, "async_run", side_effect=_fake_run):
+            failed = await self._drive_verification(flow)
+        self.assertEqual(failed["step_id"], "verify_connection_failed")
+        await flow.async_step_verify_connection_manual_callback()
+
+        created = await flow.async_step_manual(
+            self._manual_input(self.PEER_IP, connection_strategy="inbound")
+        )
+
+        self.assertEqual(created["type"], "create_entry")
+        self.assertEqual(created["data"]["entry_role"], "pending_collector")
+        self.assertEqual(created["data"]["collector_pn"], "")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertNotIn("connection_strategy_evidence", created["data"])
+        self.assertEqual(flow._verification_expected_pn, "")
+        self.assertEqual(flow._manual_verified_full_pn, "")
+
+    async def test_async_remove_during_admission_identity_releases_delayed_owner(
+        self,
+    ) -> None:
+        """A removed admission flow cannot resurrect after identity returns."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+        from custom_components.eybond_local.connection.recovery.verification import (
+            InboundRecoveryOutcome,
+        )
+        import custom_components.eybond_local.connection.admission_transaction as at
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+        transaction = flow._admission_transaction
+        transaction._outcome = InboundRecoveryOutcome(
+            failure_reason="inbound_reconnect_timeout", collector_pn=self.FULL_PN
+        )
+        transaction._state = "failed"
+        await flow.async_step_verify_connection_manual_callback()
+
+        entered = asyncio.Event()
+        resume = asyncio.Event()
+        owner = "callback_verification:flow-remove"
+        new_session = self.NEW_SESSION
+
+        async def _authority(_hass, _request, **_kwargs):
+            inventory.append(self._inventory_session(new_session, self.FULL_PN))
+            registry.claim_session(owner, session_id=new_session)
+            registry.promote_claim_to_full_pn(owner, self.FULL_PN)
+            self.assertTrue(registry.prepare_handoff(owner, self.FULL_PN))
+            entered.set()
+            await resume.wait()
+            return CallbackIdentityOutcome(
+                result="",
+                collector_pn=self.FULL_PN,
+                session_id=new_session,
+                handoff_owner=owner,
+            )
+
+        with patch.object(at, "async_run_callback_identity_transaction", new=_authority):
+            task = asyncio.create_task(
+                flow.async_step_manual(
+                    self._manual_input(
+                        self.PEER_IP, connection_strategy="callback_on_demand"
+                    )
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=5.0)
+            flow.async_remove()
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5.0)
+
+        self.assertEqual(transaction.state, "closed")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_async_remove_during_admission_recovery_releases_delayed_owner(
+        self,
+    ) -> None:
+        """A removed admission flow cannot publish a late recovery capability."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+        from custom_components.eybond_local.connection.recovery.verification import (
+            RecoveryVerificationOutcome,
+            STATE_CALLBACK_VERIFIED,
+            InboundRecoveryOutcome,
+        )
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+        )
+        import custom_components.eybond_local.connection.admission_transaction as at
+
+        flow = self._make_flow()
+        inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
+        registry = self._install_registry(flow, inventory)
+        await flow.async_step_integration_discovery(self._discovery_info())
+        transaction = flow._admission_transaction
+        transaction._outcome = InboundRecoveryOutcome(
+            failure_reason="inbound_reconnect_timeout", collector_pn=self.FULL_PN
+        )
+        transaction._state = "failed"
+        await flow.async_step_verify_connection_manual_callback()
+
+        identity_owner = "callback_verification:flow-recovery-remove"
+
+        async def _identity_authority(_hass, _request, **_kwargs):
+            inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
+            registry.claim_session(identity_owner, session_id=self.NEW_SESSION)
+            registry.promote_claim_to_full_pn(identity_owner, self.FULL_PN)
+            self.assertTrue(registry.prepare_handoff(identity_owner, self.FULL_PN))
+            return CallbackIdentityOutcome(
+                result="",
+                collector_pn=self.FULL_PN,
+                session_id=self.NEW_SESSION,
+                handoff_owner=identity_owner,
+            )
+
+        with patch.object(
+            at, "async_run_callback_identity_transaction", new=_identity_authority
+        ):
+            routed = await flow.async_step_manual(
+                self._manual_input(
+                    self.PEER_IP, connection_strategy="callback_on_demand"
+                )
+            )
+        self.assertEqual(routed["step_id"], "manual_recovery_confirm")
+
+        entered = asyncio.Event()
+        resume = asyncio.Event()
+        recovery_owner = "callback_recovery:flow-remove"
+
+        async def _recovery_authority(**kwargs):
+            registry.claim_session(recovery_owner, session_id=self.NEW_SESSION)
+            registry.promote_claim_to_full_pn(recovery_owner, self.FULL_PN)
+            self.assertTrue(registry.prepare_handoff(recovery_owner, self.FULL_PN))
+            entered.set()
+            try:
+                await resume.wait()
+            except asyncio.CancelledError:
+                # Model an authority which completes its mandatory cleanup boundary
+                # before returning the capability it produced concurrently with the
+                # flow cancellation.
+                await resume.wait()
+            route = kwargs["route"]
+            return RecoveryVerificationOutcome(
+                status=STATE_CALLBACK_VERIFIED,
+                collector_pn=self.FULL_PN,
+                new_session_id=self.NEW_SESSION,
+                callback_proof=CallbackRecoveryProof(
+                    method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                    collector_pn=self.FULL_PN,
+                    identity_source="fc2_parameter_2",
+                    verified_at="2026-07-20T10:00:00+00:00",
+                    trigger_target=route.trigger_target,
+                    advertised_ha_endpoint=route.advertised_ha_endpoint,
+                    listener_port=route.listener_port,
+                ),
+                handoff_owner=recovery_owner,
+            )
+
+        with patch.object(
+            at, "async_run_callback_recovery_transaction", new=_recovery_authority
+        ):
+            progress = await flow.async_step_manual_recovery_verify()
+            self.assertEqual(progress["type"], "progress")
+            task = flow._manual_recovery_task
+            await asyncio.wait_for(entered.wait(), timeout=5.0)
+            flow.async_remove()
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5.0)
+
+        self.assertEqual(transaction.state, "closed")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+        self.assertIsNone(flow._manual_recovery_outcome)
 
     # C. Cancelling from the failure screen aborts cleanly: no claim, no task,
     # no prepared handoff -- and no entry.
@@ -10022,9 +10267,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # and no legacy evidence.
         self.assertEqual(flow._verified_connection_strategy, "inbound")
         self.assertEqual(flow._verified_strategy_evidence, "")
-        # The proof travels ONLY inside the typed terminal input; the flow
-        # holds no loose proof field the terminal could bypass.
-        terminal_input = flow._recovery_terminal
+        # 2D.2: the proof travels ONLY inside the transaction's typed terminal
+        # input (read through the continuation); no admission-origin
+        # ``_recovery_terminal`` legacy write, and no loose proof field.
+        self.assertFalse(flow._recovery_terminal.has_proof)
+        terminal_input = flow._callback_continuation.terminal_input
         proof = terminal_input.inbound_proof
         self.assertIsNotNone(proof)
         self.assertEqual(proof.collector_pn, self.FULL_PN)
@@ -10685,8 +10932,15 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("complete_handoff", setup_calls)
         self.assertIn("claim", setup_calls)  # restart / no-handoff fallback
 
+        # 2D.2: the callback-continuation claim's prepare_handoff is called by the
+        # legacy adapter's flow-owned prepare (non-admission), and the admission
+        # transaction's own prepare_handoff (admission inbound). Both are the
+        # single production callers -- no dead flow helper remains.
+        del EybondLocalConfigFlow
         prepare_src = textwrap.dedent(
-            inspect.getsource(EybondLocalConfigFlow._prepare_ownership_handoff)
+            inspect.getsource(
+                config_flow_module._LegacyCallbackContinuation._prepare_flow_owned_claim
+            )
         )
         prepare_calls = {
             node.func.attr

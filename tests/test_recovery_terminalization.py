@@ -583,16 +583,18 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
         region = config_flow[start:end]
         # Never resolve an owner by PN, anywhere in the terminal path.
         self.assertNotIn("owner_for_pn", region)
-        # The INBOUND admission claim is prepared through the transaction helper;
-        # the CALLBACK CONTINUATION owner is decided/committed/rolled back ENTIRELY
-        # through the seam -- the coordinator inspects no _verification_* field.
-        self.assertIn("_prepare_ownership_handoff", region)
+        # 2D.2: there is ONE owner authority for the active flow -- the chosen
+        # CallbackContinuation. The coordinator routes EVERY owner (inbound
+        # admission OR callback) uniformly through it and no longer branches on
+        # the admission transaction or inspects any ownership field.
         self.assertIn("prepare_terminal", region)
         self.assertIn("commit_terminal", region)
         self.assertIn("rollback_terminal", region)
+        self.assertNotIn("_admission_transaction", region)
+        self.assertNotIn("_prepare_ownership_handoff", region)
         # The prepared-owner acceptance (verify_prepared_handoff /
-        # prepared_handoff_identity, NEVER a PN lookup) lives in the seam's
-        # flow-backed terminal ownership, not in the coordinator.
+        # prepared_handoff_identity, NEVER a PN lookup) lives in the continuation
+        # implementations, not in the coordinator.
         adapter_start = config_flow.index("class _LegacyCallbackContinuation")
         adapter_end = config_flow.index("class EybondLocalConfigFlow")
         adapter = config_flow[adapter_start:adapter_end]
