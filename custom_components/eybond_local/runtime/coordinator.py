@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Mapping
 import dataclasses
 from datetime import datetime, timedelta, timezone
@@ -3072,6 +3073,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             snapshot.values["collector_operation_endpoint_sync_status"] = "cooldown"
             return
 
+        # CP2C: the automatic reconcile is best-effort. When ANOTHER endpoint
+        # operation owns the entry (a transition, proxy capture, shadow learning,
+        # a manual write or bind/rollback), SILENTLY skip the write with an honest
+        # diagnostic status and no cooldown stamp (so it retries once free) --
+        # never breaking the refresh and never a second endpoint owner.
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+            OPERATION_RECONCILE_ENDPOINT as _OP_RECONCILE,
+        )
+
+        _op = _OP_AUTHORITY.acquire(self.config_entry.entry_id, _OP_RECONCILE)
+        if not _op.acquired:
+            snapshot.values["collector_operation_endpoint_sync_status"] = (
+                "operation_busy"
+            )
+            return
         self._ha_primary_reconcile_last_signature = signature
         self._ha_primary_reconcile_last_attempt_monotonic = now
         try:
@@ -3089,6 +3106,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 exc,
             )
             return
+        finally:
+            _OP_AUTHORITY.release(self.config_entry.entry_id, _op.token)
 
         snapshot.values["collector_server_endpoint"] = str(
             result.get("readback_endpoint") or result.get("requested_endpoint") or target_endpoint
@@ -4031,6 +4050,31 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "inverter_time": time_value,
         }
 
+    @contextlib.asynccontextmanager
+    async def _collector_endpoint_operation(self, operation_kind: str):
+        """Own THE per-entry endpoint-operation authority for one transient write.
+
+        Acquired fail-closed (no wait) BEFORE the first wire/persistence side
+        effect; on a busy entry a neutral ``collector_endpoint_operation_busy`` is
+        raised BEFORE anything is written, and the active owner keeps running. The
+        token is released on EXACT match in ``finally`` (cancellation included),
+        never dropping another owner.
+        """
+
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY,
+            COLLECTOR_ENDPOINT_OPERATION_BUSY,
+        )
+
+        entry_id = self.config_entry.entry_id
+        outcome = COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.acquire(entry_id, operation_kind)
+        if not outcome.acquired:
+            raise RuntimeError(COLLECTOR_ENDPOINT_OPERATION_BUSY)
+        try:
+            yield outcome.token
+        finally:
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.release(entry_id, outcome.token)
+
     async def async_set_collector_server_endpoint(
         self,
         *,
@@ -4075,28 +4119,33 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         if not confirm_redirect:
             raise ValueError("collector_server_reconfig_requires_confirmation")
-        lock_code = self.collector_configuration_lock_code()
-        if lock_code is not None:
-            raise RuntimeError(lock_code)
-
-        normalized_endpoint = _normalize_preserved_collector_server_endpoint(endpoint)
-        await self._async_prepare_home_assistant_callback_listener(normalized_endpoint)
-        result = await self._runtime.async_set_collector_server_endpoint(
-            normalized_endpoint,
-            apply_changes=apply_changes,
+        from ..connection.collector_endpoint_operation import (
+            OPERATION_MANUAL_ENDPOINT_WRITE,
         )
-        if not apply_changes:
-            self._publish_snapshot_values(
-                collector_callback_endpoint_pending=normalized_endpoint,
-                collector_callback_endpoint_pending_apply_required=True,
+
+        async with self._collector_endpoint_operation(OPERATION_MANUAL_ENDPOINT_WRITE):
+            lock_code = self.collector_configuration_lock_code()
+            if lock_code is not None:
+                raise RuntimeError(lock_code)
+
+            normalized_endpoint = _normalize_preserved_collector_server_endpoint(endpoint)
+            await self._async_prepare_home_assistant_callback_listener(normalized_endpoint)
+            result = await self._runtime.async_set_collector_server_endpoint(
+                normalized_endpoint,
+                apply_changes=apply_changes,
             )
-            await self.async_request_refresh()
-        else:
-            self._publish_snapshot_values(
-                collector_callback_endpoint_pending=None,
-                collector_callback_endpoint_pending_apply_required=None,
-            )
-        return result
+            if not apply_changes:
+                self._publish_snapshot_values(
+                    collector_callback_endpoint_pending=normalized_endpoint,
+                    collector_callback_endpoint_pending_apply_required=True,
+                )
+                await self.async_request_refresh()
+            else:
+                self._publish_snapshot_values(
+                    collector_callback_endpoint_pending=None,
+                    collector_callback_endpoint_pending_apply_required=None,
+                )
+            return result
 
     async def async_bind_collector_to_home_assistant(
         self,
@@ -4108,54 +4157,56 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._raise_if_high_level_collector_actions_disabled()
         if not confirm_redirect:
             raise ValueError("collector_bind_home_assistant_requires_confirmation")
+        from ..connection.collector_endpoint_operation import OPERATION_ENDPOINT_BIND
 
-        target_endpoint = self.collector_callback_target_endpoint
-        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
-        if current_endpoint == target_endpoint:
-            # Already pointing at Home Assistant and no write happens: nothing
-            # was earned, so NO axis changes of any kind. Since Batch 8 the
-            # bind action records only endpoint-write FACTS; the connection
-            # strategy changes exclusively through the verified transition
-            # authority (a bind is not a reconnect proof).
+        async with self._collector_endpoint_operation(OPERATION_ENDPOINT_BIND):
+            target_endpoint = self.collector_callback_target_endpoint
+            current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
+            if current_endpoint == target_endpoint:
+                # Already pointing at Home Assistant and no write happens: nothing
+                # was earned, so NO axis changes of any kind. Since Batch 8 the
+                # bind action records only endpoint-write FACTS; the connection
+                # strategy changes exclusively through the verified transition
+                # authority (a bind is not a reconnect proof).
+                self._publish_snapshot_values(
+                    collector_callback_endpoint_pending=None,
+                    collector_callback_endpoint_pending_apply_required=None,
+                )
+                return {
+                    "status": "already_bound",
+                    "requested_endpoint": target_endpoint,
+                    "readback_endpoint": target_endpoint,
+                    "target_role": "home_assistant",
+                }
+
+            await self._async_prepare_home_assistant_callback_listener(target_endpoint)
+            result = await self._runtime.async_set_collector_server_endpoint(
+                target_endpoint,
+                apply_changes=True,
+            )
+            result["target_role"] = "home_assistant"
+            # A successful apply means the integration wrote the endpoint: it now
+            # manages it, with recorded write provenance. That is a FACT about the
+            # write — the connection strategy is deliberately NOT touched here:
+            # only the verified transition authority may change it, after a real
+            # reconnect proof.
+            written_value = str(
+                result.get("readback_endpoint")
+                or result.get("requested_endpoint")
+                or target_endpoint
+            )
+            self._persist_connection_axes(
+                {
+                    CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+                    CONF_ENDPOINT_WRITTEN_VALUE: written_value,
+                    CONF_ENDPOINT_WRITTEN_AT: datetime.now(timezone.utc).isoformat(),
+                }
+            )
             self._publish_snapshot_values(
                 collector_callback_endpoint_pending=None,
                 collector_callback_endpoint_pending_apply_required=None,
             )
-            return {
-                "status": "already_bound",
-                "requested_endpoint": target_endpoint,
-                "readback_endpoint": target_endpoint,
-                "target_role": "home_assistant",
-            }
-
-        await self._async_prepare_home_assistant_callback_listener(target_endpoint)
-        result = await self._runtime.async_set_collector_server_endpoint(
-            target_endpoint,
-            apply_changes=True,
-        )
-        result["target_role"] = "home_assistant"
-        # A successful apply means the integration wrote the endpoint: it now
-        # manages it, with recorded write provenance. That is a FACT about the
-        # write — the connection strategy is deliberately NOT touched here:
-        # only the verified transition authority may change it, after a real
-        # reconnect proof.
-        written_value = str(
-            result.get("readback_endpoint")
-            or result.get("requested_endpoint")
-            or target_endpoint
-        )
-        self._persist_connection_axes(
-            {
-                CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_INTEGRATION_MANAGED,
-                CONF_ENDPOINT_WRITTEN_VALUE: written_value,
-                CONF_ENDPOINT_WRITTEN_AT: datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        self._publish_snapshot_values(
-            collector_callback_endpoint_pending=None,
-            collector_callback_endpoint_pending_apply_required=None,
-        )
-        return result
+            return result
 
     async def async_apply_collector_changes(
         self,
@@ -4167,12 +4218,19 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._raise_if_high_level_collector_actions_disabled()
         if not confirm_restart:
             raise ValueError("collector_apply_requires_confirmation")
-        result = await self._runtime.async_apply_collector_changes()
-        self._publish_snapshot_values(
-            collector_callback_endpoint_pending=None,
-            collector_callback_endpoint_pending_apply_required=None,
+        from ..connection.collector_endpoint_operation import (
+            OPERATION_COLLECTOR_SYSTEM_ACTION,
         )
-        return result
+
+        # CP2C: a public apply is a route-affecting collector action -> typed
+        # refuse BEFORE the apply when another endpoint operation owns the entry.
+        async with self._collector_endpoint_operation(OPERATION_COLLECTOR_SYSTEM_ACTION):
+            result = await self._runtime.async_apply_collector_changes()
+            self._publish_snapshot_values(
+                collector_callback_endpoint_pending=None,
+                collector_callback_endpoint_pending_apply_required=None,
+            )
+            return result
 
     async def async_trigger_collector_rediscovery(self) -> dict[str, object]:
         """Send one explicit bootstrap discovery probe to recover collector connectivity."""
@@ -4183,16 +4241,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "collector_configuration_proxy_session_active",
         }:
             raise RuntimeError(lock_code)
+        from ..connection.collector_endpoint_operation import (
+            OPERATION_COLLECTOR_SYSTEM_ACTION,
+        )
 
-        target_endpoint = self.collector_callback_target_endpoint
-        if target_endpoint:
-            await self._async_prepare_home_assistant_callback_listener(target_endpoint)
+        # CP2C: rediscovery sends a UDP set>server trigger -> typed refuse BEFORE
+        # the UDP when another endpoint operation owns the entry.
+        async with self._collector_endpoint_operation(OPERATION_COLLECTOR_SYSTEM_ACTION):
+            target_endpoint = self.collector_callback_target_endpoint
+            if target_endpoint:
+                await self._async_prepare_home_assistant_callback_listener(target_endpoint)
 
-        result = await self._runtime.async_trigger_reverse_discovery()
-        result.setdefault("target_role", "bootstrap")
-        result["collector_callback_target_endpoint"] = target_endpoint
-        await self.async_request_refresh()
-        return result
+            result = await self._runtime.async_trigger_reverse_discovery()
+            result.setdefault("target_role", "bootstrap")
+            result["collector_callback_target_endpoint"] = target_endpoint
+            await self.async_request_refresh()
+            return result
 
     async def async_reboot_collector(
         self,
@@ -4204,7 +4268,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._raise_if_high_level_collector_actions_disabled()
         if not confirm_restart:
             raise ValueError("collector_reboot_requires_confirmation")
-        return await self._runtime.async_reboot_collector()
+        from ..connection.collector_endpoint_operation import (
+            OPERATION_COLLECTOR_SYSTEM_ACTION,
+        )
+
+        # CP2C: a public reboot is route-affecting -> typed refuse BEFORE the
+        # reboot when another endpoint operation owns the entry.
+        async with self._collector_endpoint_operation(OPERATION_COLLECTOR_SYSTEM_ACTION):
+            return await self._runtime.async_reboot_collector()
 
     async def async_rollback_collector_server_endpoint(
         self,
@@ -4217,50 +4288,52 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._raise_if_high_level_collector_actions_disabled()
         if not confirm_redirect:
             raise ValueError("collector_rollback_requires_confirmation")
+        from ..connection.collector_endpoint_operation import OPERATION_ENDPOINT_ROLLBACK
 
-        rollback_endpoint = self.collector_server_endpoint_rollback_target
-        if not rollback_endpoint:
-            raise RuntimeError("collector_rollback_endpoint_unavailable")
+        async with self._collector_endpoint_operation(OPERATION_ENDPOINT_ROLLBACK):
+            rollback_endpoint = self.collector_server_endpoint_rollback_target
+            if not rollback_endpoint:
+                raise RuntimeError("collector_rollback_endpoint_unavailable")
 
-        runtime_target = str(
-            getattr(self._runtime, "collector_server_endpoint_rollback_target", "") or ""
-        ).strip()
-        rollback_source = (
-            "session_cached_previous_endpoint"
-            if runtime_target and runtime_target == rollback_endpoint
-            else "remembered_original_endpoint"
-        )
+            runtime_target = str(
+                getattr(self._runtime, "collector_server_endpoint_rollback_target", "") or ""
+            ).strip()
+            rollback_source = (
+                "session_cached_previous_endpoint"
+                if runtime_target and runtime_target == rollback_endpoint
+                else "remembered_original_endpoint"
+            )
 
-        result = await self._runtime.async_set_collector_server_endpoint(
-            rollback_endpoint,
-            apply_changes=apply_changes,
-        )
-        result["status"] = "rollback_applied" if apply_changes else "rollback_staged"
-        result["rollback_source"] = rollback_source
-        result["rollback_endpoint"] = rollback_endpoint
-        result.setdefault("target_role", "smartess")
-        if not apply_changes:
-            # Staging must not change durable axes: nothing was written yet.
-            self._publish_snapshot_values(
-                collector_callback_endpoint_pending=rollback_endpoint,
-                collector_callback_endpoint_pending_apply_required=True,
+            result = await self._runtime.async_set_collector_server_endpoint(
+                rollback_endpoint,
+                apply_changes=apply_changes,
             )
-            await self.async_request_refresh()
-        else:
-            # A successful rollback hands endpoint control back to the external
-            # target and clears the write provenance. That is the endpoint-write
-            # FACT only — the connection strategy is deliberately NOT touched
-            # (Batch 8): a rollback is not a callback proof, and only the
-            # verified transition authority may change the strategy.
-            self._persist_connection_axes(
-                {CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_EXTERNAL},
-                clear=(CONF_ENDPOINT_WRITTEN_VALUE, CONF_ENDPOINT_WRITTEN_AT),
-            )
-            self._publish_snapshot_values(
-                collector_callback_endpoint_pending=None,
-                collector_callback_endpoint_pending_apply_required=None,
-            )
-        return result
+            result["status"] = "rollback_applied" if apply_changes else "rollback_staged"
+            result["rollback_source"] = rollback_source
+            result["rollback_endpoint"] = rollback_endpoint
+            result.setdefault("target_role", "smartess")
+            if not apply_changes:
+                # Staging must not change durable axes: nothing was written yet.
+                self._publish_snapshot_values(
+                    collector_callback_endpoint_pending=rollback_endpoint,
+                    collector_callback_endpoint_pending_apply_required=True,
+                )
+                await self.async_request_refresh()
+            else:
+                # A successful rollback hands endpoint control back to the external
+                # target and clears the write provenance. That is the endpoint-write
+                # FACT only — the connection strategy is deliberately NOT touched
+                # (Batch 8): a rollback is not a callback proof, and only the
+                # verified transition authority may change the strategy.
+                self._persist_connection_axes(
+                    {CONF_ENDPOINT_CONTROL_POLICY: ENDPOINT_CONTROL_EXTERNAL},
+                    clear=(CONF_ENDPOINT_WRITTEN_VALUE, CONF_ENDPOINT_WRITTEN_AT),
+                )
+                self._publish_snapshot_values(
+                    collector_callback_endpoint_pending=None,
+                    collector_callback_endpoint_pending_apply_required=None,
+                )
+            return result
 
     async def async_start_proxy_capture(
         self,
@@ -4301,153 +4374,207 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             cloud_family=self.collector_cloud_family,
         )
 
-        configured_duration_minutes = _coerce_proxy_capture_duration_minutes(
-            duration_minutes
-            if duration_minutes is not None
-            else self.proxy_capture_configured_duration_minutes
+        # CP2C: own the ONE per-entry endpoint-operation authority for the WHOLE
+        # active proxy mode. Acquired fail-closed here, AFTER the read-only
+        # preflight and BEFORE the first config/persistence/wire side effect. The
+        # owner ref is the persisted route owner id, so a reload/restart can adopt
+        # the same token and a later stop can release it. Held on success; the
+        # ``finally`` releases only when start did NOT hand off to the running mode.
+        _proxy_timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        route_owner_id = f"proxy_capture:{self.config_entry.entry_id}:{_proxy_timestamp}"
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+            COLLECTOR_ENDPOINT_OPERATION_BUSY as _OP_BUSY,
+            OPERATION_PROXY_CAPTURE as _OP_PROXY,
         )
-        if configured_duration_minutes != self.proxy_capture_configured_duration_minutes:
-            await self.async_set_proxy_capture_duration_minutes(configured_duration_minutes)
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        route_owner_id = f"proxy_capture:{self.config_entry.entry_id}:{timestamp}"
-        trace_path = await self.hass.async_add_executor_job(
-            lambda: build_proxy_capture_trace_path(
-                config_dir=Path(self.hass.config.config_dir),
-                entry_id=self.config_entry.entry_id,
-                collector_pn=self.smartess_collector_pn,
-                timestamp=timestamp,
-            )
+        _op_acquire = _OP_AUTHORITY.acquire(
+            self.config_entry.entry_id, _OP_PROXY, owner_ref=route_owner_id
         )
-        restore_trigger_path = build_proxy_capture_restore_trigger_path(trace_path)
+        if not _op_acquire.acquired:
+            raise RuntimeError(_OP_BUSY)
+        _op_hold = False
         try:
-            await self.hass.async_add_executor_job(restore_trigger_path.unlink)
-        except FileNotFoundError:
-            pass
-        started_at = datetime.now(timezone.utc).isoformat()
-        state = build_proxy_capture_session_state(
-            entry_id=self.config_entry.entry_id,
-            route_owner_id=route_owner_id,
-            collector_pn=self.smartess_collector_pn,
-            trace_path=str(trace_path),
-            original_endpoint=overview.current_endpoint,
-            proxy_endpoint=overview.target_endpoint,
-            restore_required=overview.redirect_required,
-            anonymized=anonymized,
-            started_at=started_at,
-            expires_at=build_proxy_capture_lease_deadline(
-                lease_seconds=configured_duration_minutes * 60,
-            ),
-            status="starting",
-        )
-        await self._async_save_proxy_capture_session_state(state)
-        self._publish_tooling_values(
-            **self._proxy_capture_overview_runtime_values(active_state=state),
-            proxy_trace_saved_result_path="",
-            proxy_trace_saved_result_download_url="",
-            proxy_trace_manifest_download_url="",
-            local_metadata_status="Starting collector proxy capture",
-        )
-
-        route_started = False
-        try:
-            await self._async_preflight_proxy_capture_network(
-                target_host=target_host,
-                target_port=target_port,
-                upstream_host=upstream_host,
-                upstream_port=upstream_port,
+            configured_duration_minutes = _coerce_proxy_capture_duration_minutes(
+                duration_minutes
+                if duration_minutes is not None
+                else self.proxy_capture_configured_duration_minutes
             )
+            if configured_duration_minutes != self.proxy_capture_configured_duration_minutes:
+                await self.async_set_proxy_capture_duration_minutes(configured_duration_minutes)
 
-            async def _async_open_proxy_trace_output(path: Path):
-                return await self.hass.async_add_executor_job(
-                    open_proxy_trace_output_file,
-                    path,
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            trace_path = await self.hass.async_add_executor_job(
+                lambda: build_proxy_capture_trace_path(
+                    config_dir=Path(self.hass.config.config_dir),
+                    entry_id=self.config_entry.entry_id,
+                    collector_pn=self.smartess_collector_pn,
+                    timestamp=timestamp,
                 )
-
-            async def _async_close_proxy_trace_output(output):
-                await self.hass.async_add_executor_job(output.close)
-
-            await self._runtime.async_start_proxy_capture_route(
-                owner_id=route_owner_id,
-                entry_id=self.config_entry.entry_id,
-                collector_ip=self._proxy_capture_collector_ip(),
-                collector_pn=self.smartess_collector_pn,
-                collector_session_protocol=self.collector_session_protocol,
-                listen_port=target_port,
-                upstream_host=upstream_host,
-                upstream_port=upstream_port,
-                output_path=trace_path,
-                masked_endpoint=self.proxy_capture_upstream_endpoint,
-                restore_trigger_path=restore_trigger_path,
-                async_open_output=_async_open_proxy_trace_output,
-                async_close_output=_async_close_proxy_trace_output,
             )
-            route_started = True
-            if overview.redirect_required:
-                await self._runtime.async_set_collector_server_endpoint(
-                    overview.target_endpoint,
-                    apply_changes=True,
-                )
-            else:
-                disconnect_current = getattr(
-                    self._runtime,
-                    "async_disconnect_collector_connections",
-                    None,
-                )
-                if disconnect_current is not None:
-                    await disconnect_current(reason="proxy_capture_start")
-            await self._async_wait_for_proxy_capture_reconnect(trace_path)
-            running_state = build_proxy_capture_session_state(
-                entry_id=state.entry_id,
-                route_owner_id=state.route_owner_id,
-                collector_pn=state.collector_pn,
-                trace_path=state.trace_path,
-                original_endpoint=state.original_endpoint,
-                proxy_endpoint=state.proxy_endpoint,
-                restore_required=state.restore_required,
-                anonymized=state.anonymized,
-                started_at=state.started_at,
-                expires_at=state.expires_at,
-                status="running",
-            )
-            await self._async_save_proxy_capture_session_state(running_state)
-        except Exception as exc:
-            error_text = str(exc or "").strip()
-            error_code = error_text.split(":", 1)[0] if error_text else type(exc).__name__
-            if overview.redirect_required and overview.current_endpoint:
-                await self._async_best_effort_restore_after_start_failure(overview.current_endpoint)
-            if route_started:
-                await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
-            await self._async_clear_proxy_capture_session_state()
+            restore_trigger_path = build_proxy_capture_restore_trigger_path(trace_path)
             try:
-                await self.async_request_refresh()
-            except Exception as exc:
-                logger.warning(
-                    "Proxy capture failure refresh failed for entry %s: %s",
-                    self.config_entry.entry_id,
-                    exc,
-                )
-            self._publish_tooling_values(
-                **self._proxy_capture_overview_runtime_values(),
-                proxy_capture_start_error=error_text,
-                proxy_capture_start_error_code=error_code,
-                proxy_capture_start_error_type=type(exc).__name__,
-                local_metadata_status="Collector proxy capture failed to start",
+                await self.hass.async_add_executor_job(restore_trigger_path.unlink)
+            except FileNotFoundError:
+                pass
+            started_at = datetime.now(timezone.utc).isoformat()
+            state = build_proxy_capture_session_state(
+                entry_id=self.config_entry.entry_id,
+                route_owner_id=route_owner_id,
+                collector_pn=self.smartess_collector_pn,
+                trace_path=str(trace_path),
+                original_endpoint=overview.current_endpoint,
+                proxy_endpoint=overview.target_endpoint,
+                restore_required=overview.redirect_required,
+                anonymized=anonymized,
+                started_at=started_at,
+                expires_at=build_proxy_capture_lease_deadline(
+                    lease_seconds=configured_duration_minutes * 60,
+                ),
+                status="starting",
             )
-            raise
+            endpoint_mutation_started = False
+            try:
+                # FIRST persistence lives INSIDE the finalized region: from here
+                # the mode may OWN the endpoint, so a cancel during/after this save
+                # is cleaned up by the shielded finalization below -- never a
+                # persisted session left with a free authority.
+                await self._async_save_proxy_capture_session_state(state)
+                # No await between the save returning and this flag, so the "owned"
+                # transition is atomic with the persistence.
+                _op_hold = True
+                self._publish_tooling_values(
+                    **self._proxy_capture_overview_runtime_values(active_state=state),
+                    proxy_trace_saved_result_path="",
+                    proxy_trace_saved_result_download_url="",
+                    proxy_trace_manifest_download_url="",
+                    local_metadata_status="Starting collector proxy capture",
+                )
+                await self._async_preflight_proxy_capture_network(
+                    target_host=target_host,
+                    target_port=target_port,
+                    upstream_host=upstream_host,
+                    upstream_port=upstream_port,
+                )
 
-        await self.async_request_refresh()
-        self._publish_tooling_values(
-            **self._proxy_capture_overview_runtime_values(active_state=running_state),
-            local_metadata_status="Collector proxy capture running",
-        )
-        return {
-            "status": "running",
-            "trace_path": str(trace_path),
-            "redirect_required": overview.redirect_required,
-            "masked_endpoint": overview.masked_endpoint,
-            "duration_minutes": configured_duration_minutes,
-        }
+                async def _async_open_proxy_trace_output(path: Path):
+                    return await self.hass.async_add_executor_job(
+                        open_proxy_trace_output_file,
+                        path,
+                    )
+
+                async def _async_close_proxy_trace_output(output):
+                    await self.hass.async_add_executor_job(output.close)
+
+                await self._runtime.async_start_proxy_capture_route(
+                    owner_id=route_owner_id,
+                    entry_id=self.config_entry.entry_id,
+                    collector_ip=self._proxy_capture_collector_ip(),
+                    collector_pn=self.smartess_collector_pn,
+                    collector_session_protocol=self.collector_session_protocol,
+                    listen_port=target_port,
+                    upstream_host=upstream_host,
+                    upstream_port=upstream_port,
+                    output_path=trace_path,
+                    masked_endpoint=self.proxy_capture_upstream_endpoint,
+                    restore_trigger_path=restore_trigger_path,
+                    async_open_output=_async_open_proxy_trace_output,
+                    async_close_output=_async_close_proxy_trace_output,
+                )
+                if overview.redirect_required:
+                    # From this exact point the wire call may have changed the
+                    # collector even if cancellation/error prevents a result.
+                    # Earlier failures only need route/state cleanup; writing the
+                    # old endpoint before this boundary would be an unnecessary
+                    # and potentially disruptive collector mutation.
+                    endpoint_mutation_started = True
+                    await self._runtime.async_set_collector_server_endpoint(
+                        overview.target_endpoint,
+                        apply_changes=True,
+                    )
+                else:
+                    disconnect_current = getattr(
+                        self._runtime,
+                        "async_disconnect_collector_connections",
+                        None,
+                    )
+                    if disconnect_current is not None:
+                        await disconnect_current(reason="proxy_capture_start")
+                await self._async_wait_for_proxy_capture_reconnect(trace_path)
+                running_state = build_proxy_capture_session_state(
+                    entry_id=state.entry_id,
+                    route_owner_id=state.route_owner_id,
+                    collector_pn=state.collector_pn,
+                    trace_path=state.trace_path,
+                    original_endpoint=state.original_endpoint,
+                    proxy_endpoint=state.proxy_endpoint,
+                    restore_required=state.restore_required,
+                    anonymized=state.anonymized,
+                    started_at=state.started_at,
+                    expires_at=state.expires_at,
+                    status="running",
+                )
+                await self._async_save_proxy_capture_session_state(running_state)
+            except BaseException as exc:
+                # MANDATORY cancellation-safe cleanup (catches CancelledError too).
+                # ONE shielded finalization boundary runs to completion even under
+                # REPEATED cancellation: restore the endpoint, stop the route by
+                # exact owner id, then clear+release (confirmed) OR persist a
+                # recoverable state and hold the token.
+                error_text = str(exc or "").strip()
+                error_code = error_text.split(":", 1)[0] if error_text else type(exc).__name__
+                _finalized, _pending_cancel = await self._run_finalization_shielded(
+                    lambda: self._finalize_proxy_capture_start_cleanup(
+                        state=state,
+                        overview=overview,
+                        endpoint_mutation_started=endpoint_mutation_started,
+                        entry_id=self.config_entry.entry_id,
+                        token=_op_acquire.token,
+                    )
+                )
+                # The finalization now owns the token decision (released OR held),
+                # so the outer finally must never release it again. The original
+                # ``exc`` (including a CancelledError) is re-raised below, so an
+                # extra cancel absorbed during finalization needs no separate
+                # re-raise here.
+                _op_hold = True
+                try:
+                    await self.async_request_refresh()
+                except Exception as refresh_exc:
+                    logger.warning(
+                        "Proxy capture failure refresh failed for entry %s: %s",
+                        self.config_entry.entry_id,
+                        refresh_exc,
+                    )
+                self._publish_tooling_values(
+                    **self._proxy_capture_overview_runtime_values(),
+                    proxy_capture_start_error=error_text,
+                    proxy_capture_start_error_code=error_code,
+                    proxy_capture_start_error_type=type(exc).__name__,
+                    local_metadata_status="Collector proxy capture failed to start",
+                )
+                # Re-raise the ORIGINAL (including CancelledError) only AFTER the
+                # mandatory finalization above.
+                raise
+
+            await self.async_request_refresh()
+            self._publish_tooling_values(
+                **self._proxy_capture_overview_runtime_values(active_state=running_state),
+                local_metadata_status="Collector proxy capture running",
+            )
+            # Already held since the first session persistence.
+            return {
+                "status": "running",
+                "trace_path": str(trace_path),
+                "redirect_required": overview.redirect_required,
+                "masked_endpoint": overview.masked_endpoint,
+                "duration_minutes": configured_duration_minutes,
+            }
+        finally:
+            if not _op_hold:
+                _OP_AUTHORITY.release(
+                    self.config_entry.entry_id, _op_acquire.token
+                )
 
     async def async_stop_proxy_capture(
         self,
@@ -4461,6 +4588,27 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         state = await self._async_active_proxy_capture_state(require_process=False)
         if state is None:
             raise RuntimeError("proxy_capture_not_running")
+
+        # CP2C: stop is a CONTINUATION of the same ownership. Adopt the lease from
+        # the persisted route owner id (re-acquiring it if a reload/restart lost
+        # the in-memory token), so the restore runs under owned control. The lease
+        # is released ONLY after the session state is cleared -- a stop that fails
+        # before that keeps honest ownership for a retry, never silently dropping.
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+            COLLECTOR_ENDPOINT_OPERATION_BUSY as _OP_BUSY,
+            OPERATION_PROXY_CAPTURE as _OP_PROXY,
+        )
+
+        _op_token = _OP_AUTHORITY.adopt(
+            self.config_entry.entry_id, _OP_PROXY, state.route_owner_id
+        )
+        # Ownership must be proven BEFORE the first state/wire mutation. adopt
+        # returns None only when a FOREIGN operation owns the entry or the
+        # persisted route owner id is empty/invalid -> refuse fail-closed with
+        # zero state writes, route stop, restore or endpoint writes.
+        if _op_token is None:
+            raise RuntimeError(_OP_BUSY)
 
         config_dir = Path(self.hass.config.config_dir)
         stopping_state = build_proxy_capture_session_state(
@@ -4559,7 +4707,42 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # opened the frontend.  Turning this into an absolute URL here would
         # force LAN/WireGuard users through the configured external endpoint.
         download_url = relative_download_url
-        await self._async_clear_proxy_capture_session_state()
+        if restore_confirmed:
+            # Restore CONFIRMED: the mode no longer owns the endpoint -> clear the
+            # session AND release the exact token as ONE cancellation-safe critical
+            # step. Shielded, so a cancel can never split them into the forbidden
+            # "record cleared + authority still held" pair.
+            async def _clear_and_release() -> None:
+                await self._async_clear_proxy_capture_session_state()
+                if _op_token is not None:
+                    _OP_AUTHORITY.release(self.config_entry.entry_id, _op_token)
+
+            _cleared, _pending_cancel = await self._run_finalization_shielded(
+                _clear_and_release
+            )
+            if _pending_cancel is not None:
+                # The atomic clear+release already completed (record absent AND
+                # authority free); now propagate the caller's cancellation.
+                raise _pending_cancel
+        else:
+            # Restore NOT confirmed: keep a recoverable restoring state and HOLD
+            # the token (never restore-unconfirmed + free authority). A retry stop
+            # adopts the SAME token and repeats the cleanup; release happens only
+            # after a confirmed restore.
+            restoring_state = build_proxy_capture_session_state(
+                entry_id=state.entry_id,
+                route_owner_id=state.route_owner_id,
+                collector_pn=state.collector_pn,
+                trace_path=state.trace_path,
+                original_endpoint=state.original_endpoint,
+                proxy_endpoint=state.proxy_endpoint,
+                restore_required=state.restore_required,
+                anonymized=state.anonymized,
+                started_at=state.started_at,
+                expires_at=state.expires_at,
+                status="restoring",
+            )
+            await self._async_save_proxy_capture_session_state(restoring_state)
         if request_refresh:
             await self.async_request_refresh()
         final_proxy_values = self._proxy_capture_overview_runtime_values(current_endpoint=current_endpoint)
@@ -4695,163 +4878,87 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             or f"shadow_learning:{self.config_entry.entry_id}:{timestamp}"
         )
 
-        preflight = build_shadow_learning_preflight(seed)
-        if not preflight.can_start:
-            raise RuntimeError("shadow_learning_preflight_blocked:" + ",".join(preflight.blockers))
-
-        callback_endpoint = self.collector_callback_target_endpoint
-        upstream_endpoint = self.proxy_capture_upstream_endpoint
-        if not upstream_endpoint:
-            raise RuntimeError("shadow_learning_upstream_endpoint_unavailable")
-
-        _callback_host, callback_port, _callback_protocol = _resolve_collector_server_endpoint(
-            callback_endpoint,
-            cloud_family=self.collector_cloud_family,
-        )
-        upstream_host, upstream_port, _upstream_protocol = _resolve_collector_server_endpoint(
-            upstream_endpoint,
-            cloud_family=self.collector_cloud_family,
-        )
-        await self._async_preflight_proxy_capture_network(
-            target_host=self._effective_callback_server_host,
-            target_port=callback_port,
-            upstream_host=upstream_host,
-            upstream_port=upstream_port,
+        # CP2C: own the ONE per-entry endpoint-operation authority for the WHOLE
+        # active shadow-learning mode (it redirects the collector's main endpoint
+        # to the local proxy). Acquired fail-closed here, BEFORE the first
+        # persistence/wire side effect; the owner ref is the persisted route owner
+        # id so a reload/restart can adopt the same token. Held on success.
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+            COLLECTOR_ENDPOINT_OPERATION_BUSY as _OP_BUSY,
+            OPERATION_SHADOW_LEARNING as _OP_SHADOW,
         )
 
-        restore_endpoint, restore_required = self._shadow_learning_main_redirect(callback_endpoint)
-        started_at = shadow_learning_session_timestamp()
-        expires_at = build_shadow_learning_lease_deadline(
-            lease_seconds=self.proxy_capture_configured_duration_minutes * 60,
+        _op_acquire = _OP_AUTHORITY.acquire(
+            self.config_entry.entry_id, _OP_SHADOW, owner_ref=route_owner_id
         )
-        state = build_shadow_learning_session_state(
-            entry_id=self.config_entry.entry_id,
-            route_owner_id=route_owner_id,
-            collector_pn=self.smartess_collector_pn,
-            trace_path=str(trace_path),
-            original_endpoint=restore_endpoint,
-            proxy_endpoint=callback_endpoint,
-            upstream_endpoint=upstream_endpoint,
-            restore_required=restore_required,
-            started_at=started_at,
-            expires_at=expires_at,
-            updated_at=started_at,
-            status="preflight",
-        )
-        await self._async_save_shadow_learning_session_state(state)
-        self._publish_tooling_values(
-            shadow_learning_session_status="preflight",
-            shadow_learning_session_ready=False,
-            shadow_learning_trace_path=str(trace_path),
-            shadow_learning_proxy_endpoint=callback_endpoint,
-            shadow_learning_upstream_endpoint=upstream_endpoint,
-            local_metadata_status="Starting shadow-learning route",
-        )
-
-        route_started = False
+        if not _op_acquire.acquired:
+            raise RuntimeError(_OP_BUSY)
+        _op_hold = False
         try:
-            starting_state = build_shadow_learning_session_state(
-                entry_id=state.entry_id,
-                route_owner_id=state.route_owner_id,
-                collector_pn=state.collector_pn,
-                trace_path=state.trace_path,
-                original_endpoint=state.original_endpoint,
-                proxy_endpoint=state.proxy_endpoint,
-                upstream_endpoint=state.upstream_endpoint,
-                restore_required=state.restore_required,
-                started_at=state.started_at,
-                expires_at=state.expires_at,
-                updated_at=shadow_learning_session_timestamp(),
-                restore_attempt_count=state.restore_attempt_count,
-                last_restore_attempt_at=state.last_restore_attempt_at,
-                last_restore_error=state.last_restore_error,
-                status="starting",
+
+            preflight = build_shadow_learning_preflight(seed)
+            if not preflight.can_start:
+                raise RuntimeError("shadow_learning_preflight_blocked:" + ",".join(preflight.blockers))
+
+            callback_endpoint = self.collector_callback_target_endpoint
+            upstream_endpoint = self.proxy_capture_upstream_endpoint
+            if not upstream_endpoint:
+                raise RuntimeError("shadow_learning_upstream_endpoint_unavailable")
+
+            _callback_host, callback_port, _callback_protocol = _resolve_collector_server_endpoint(
+                callback_endpoint,
+                cloud_family=self.collector_cloud_family,
             )
-            await self._async_save_shadow_learning_session_state(starting_state)
-            await self._runtime.async_start_shadow_learning_route(
-                owner_id=state.route_owner_id,
-                entry_id=state.entry_id,
-                collector_ip=self._proxy_capture_collector_ip(),
-                collector_pn=self.smartess_collector_pn,
-                collector_session_protocol=self.collector_session_protocol,
-                listen_port=callback_port,
+            upstream_host, upstream_port, _upstream_protocol = _resolve_collector_server_endpoint(
+                upstream_endpoint,
+                cloud_family=self.collector_cloud_family,
+            )
+            await self._async_preflight_proxy_capture_network(
+                target_host=self._effective_callback_server_host,
+                target_port=callback_port,
                 upstream_host=upstream_host,
                 upstream_port=upstream_port,
-                output_path=trace_path,
-                seed=seed,
             )
-            route_started = True
 
-            min_ready_sequence = 0
-            if restore_required:
-                min_ready_sequence = int(
-                    self._shadow_learning_route_status().get(
-                        "collector_connection_sequence"
-                    )
-                    or 0
-                )
-                redirect_result = await self._runtime.async_set_collector_server_endpoint(
-                    callback_endpoint,
-                    apply_changes=True,
-                )
-                readback_endpoint = str(
-                    redirect_result.get("readback_endpoint") or ""
-                ).strip()
-                if not readback_endpoint or not _collector_server_endpoints_equal(
-                    readback_endpoint,
-                    callback_endpoint,
-                    cloud_family=self.collector_cloud_family,
-                ):
-                    raise RuntimeError(
-                        "shadow_learning_endpoint_redirect_not_confirmed"
-                    )
-            else:
-                disconnect_current = getattr(
-                    self._runtime,
-                    "async_disconnect_collector_connections",
-                    None,
-                )
-                if disconnect_current is not None:
-                    await disconnect_current(reason="shadow_learning_start")
-
-            await self._async_wait_for_shadow_learning_ready(
-                trace_path=trace_path,
-                timeout_seconds=75.0,
-                min_collector_connection_sequence=min_ready_sequence,
+            restore_endpoint, restore_required = self._shadow_learning_main_redirect(callback_endpoint)
+            started_at = shadow_learning_session_timestamp()
+            expires_at = build_shadow_learning_lease_deadline(
+                lease_seconds=self.proxy_capture_configured_duration_minutes * 60,
             )
-            ready_state = build_shadow_learning_session_state(
-                entry_id=state.entry_id,
-                route_owner_id=state.route_owner_id,
-                collector_pn=state.collector_pn,
-                trace_path=state.trace_path,
-                original_endpoint=state.original_endpoint,
-                proxy_endpoint=state.proxy_endpoint,
-                upstream_endpoint=state.upstream_endpoint,
-                restore_required=state.restore_required,
-                started_at=state.started_at,
-                expires_at=state.expires_at,
-                updated_at=shadow_learning_session_timestamp(),
-                restore_attempt_count=state.restore_attempt_count,
-                last_restore_attempt_at=state.last_restore_attempt_at,
-                last_restore_error=state.last_restore_error,
-                status="ready",
+            state = build_shadow_learning_session_state(
+                entry_id=self.config_entry.entry_id,
+                route_owner_id=route_owner_id,
+                collector_pn=self.smartess_collector_pn,
+                trace_path=str(trace_path),
+                original_endpoint=restore_endpoint,
+                proxy_endpoint=callback_endpoint,
+                upstream_endpoint=upstream_endpoint,
+                restore_required=restore_required,
+                started_at=started_at,
+                expires_at=expires_at,
+                updated_at=started_at,
+                status="preflight",
             )
-            await self._async_save_shadow_learning_session_state(ready_state)
-        except Exception as exc:
-            restore_confirmed = True
-            restore_error = ""
-            if restore_required and restore_endpoint:
-                restore_confirmed, restore_error = await self._async_best_effort_restore_after_start_failure(
-                    restore_endpoint
+            endpoint_mutation_started = False
+            try:
+                # FIRST persistence lives INSIDE the finalized region: from here
+                # the mode may OWN the endpoint, so a cancel during/after this save
+                # is cleaned up by the shielded finalization below -- never a
+                # persisted session left with a free authority.
+                await self._async_save_shadow_learning_session_state(state)
+                # No await between the save returning and this flag, so the "owned"
+                # transition is atomic with the persistence.
+                _op_hold = True
+                self._publish_tooling_values(
+                    shadow_learning_session_status="preflight",
+                    shadow_learning_session_ready=False,
+                    shadow_learning_trace_path=str(trace_path),
+                    shadow_learning_proxy_endpoint=callback_endpoint,
+                    shadow_learning_upstream_endpoint=upstream_endpoint,
+                    local_metadata_status="Starting shadow-learning route",
                 )
-            if route_started:
-                await self._runtime.async_stop_shadow_learning_route(
-                    owner_id=state.route_owner_id,
-                )
-            if restore_confirmed:
-                await self._async_clear_shadow_learning_session_state()
-            else:
-                failed_state = build_shadow_learning_session_state(
+                starting_state = build_shadow_learning_session_state(
                     entry_id=state.entry_id,
                     route_owner_id=state.route_owner_id,
                     collector_pn=state.collector_pn,
@@ -4863,45 +4970,147 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                     started_at=state.started_at,
                     expires_at=state.expires_at,
                     updated_at=shadow_learning_session_timestamp(),
-                    restore_attempt_count=state.restore_attempt_count + 1,
-                    last_restore_attempt_at=shadow_learning_session_timestamp(),
-                    last_restore_error=restore_error or str(exc),
-                    status="restore_failed",
+                    restore_attempt_count=state.restore_attempt_count,
+                    last_restore_attempt_at=state.last_restore_attempt_at,
+                    last_restore_error=state.last_restore_error,
+                    status="starting",
                 )
-                await self._async_save_shadow_learning_session_state(failed_state)
-            try:
-                await self.async_request_refresh()
-            except Exception as exc:
-                logger.warning(
-                    "Shadow-learning failure refresh failed for entry %s: %s",
-                    self.config_entry.entry_id,
-                    exc,
+                await self._async_save_shadow_learning_session_state(starting_state)
+                await self._runtime.async_start_shadow_learning_route(
+                    owner_id=state.route_owner_id,
+                    entry_id=state.entry_id,
+                    collector_ip=self._proxy_capture_collector_ip(),
+                    collector_pn=self.smartess_collector_pn,
+                    collector_session_protocol=self.collector_session_protocol,
+                    listen_port=callback_port,
+                    upstream_host=upstream_host,
+                    upstream_port=upstream_port,
+                    output_path=trace_path,
+                    seed=seed,
                 )
-            self._publish_tooling_values(
-                shadow_learning_session_status=("failed" if restore_confirmed else "restore_failed"),
-                shadow_learning_session_ready=False,
-                local_metadata_status="Shadow-learning route failed to start",
-            )
-            raise
 
-        await self.async_request_refresh()
-        self._publish_tooling_values(
-            shadow_learning_session_status="ready",
-            shadow_learning_session_ready=True,
-            shadow_learning_trace_path=str(trace_path),
-            shadow_learning_proxy_endpoint=callback_endpoint,
-            shadow_learning_upstream_endpoint=upstream_endpoint,
-            local_metadata_status="Shadow-learning route ready",
-        )
-        return {
-            "status": "ready",
-            "session_id": state.route_owner_id,
-            "trace_path": str(trace_path),
-            "collector_callback_endpoint": callback_endpoint,
-            "upstream_endpoint": upstream_endpoint,
-            "write_response_mode": seed.write_response_mode,
-            "restore_required": restore_required,
-        }
+                min_ready_sequence = 0
+                if restore_required:
+                    min_ready_sequence = int(
+                        self._shadow_learning_route_status().get(
+                            "collector_connection_sequence"
+                        )
+                        or 0
+                    )
+                    # Once this await starts, the endpoint may have changed even
+                    # when no result is returned. Before it starts, cleanup must
+                    # not issue a speculative restore write.
+                    endpoint_mutation_started = True
+                    redirect_result = await self._runtime.async_set_collector_server_endpoint(
+                        callback_endpoint,
+                        apply_changes=True,
+                    )
+                    readback_endpoint = str(
+                        redirect_result.get("readback_endpoint") or ""
+                    ).strip()
+                    if not readback_endpoint or not _collector_server_endpoints_equal(
+                        readback_endpoint,
+                        callback_endpoint,
+                        cloud_family=self.collector_cloud_family,
+                    ):
+                        raise RuntimeError(
+                            "shadow_learning_endpoint_redirect_not_confirmed"
+                        )
+                else:
+                    disconnect_current = getattr(
+                        self._runtime,
+                        "async_disconnect_collector_connections",
+                        None,
+                    )
+                    if disconnect_current is not None:
+                        await disconnect_current(reason="shadow_learning_start")
+
+                await self._async_wait_for_shadow_learning_ready(
+                    trace_path=trace_path,
+                    timeout_seconds=75.0,
+                    min_collector_connection_sequence=min_ready_sequence,
+                )
+                ready_state = build_shadow_learning_session_state(
+                    entry_id=state.entry_id,
+                    route_owner_id=state.route_owner_id,
+                    collector_pn=state.collector_pn,
+                    trace_path=state.trace_path,
+                    original_endpoint=state.original_endpoint,
+                    proxy_endpoint=state.proxy_endpoint,
+                    upstream_endpoint=state.upstream_endpoint,
+                    restore_required=state.restore_required,
+                    started_at=state.started_at,
+                    expires_at=state.expires_at,
+                    updated_at=shadow_learning_session_timestamp(),
+                    restore_attempt_count=state.restore_attempt_count,
+                    last_restore_attempt_at=state.last_restore_attempt_at,
+                    last_restore_error=state.last_restore_error,
+                    status="ready",
+                )
+                await self._async_save_shadow_learning_session_state(ready_state)
+            except BaseException as exc:
+                # MANDATORY cancellation-safe cleanup (catches CancelledError too).
+                # ONE shielded finalization boundary runs to completion even under
+                # REPEATED cancellation: restore the endpoint, stop the route by
+                # exact owner id, then clear+release (confirmed) OR persist a
+                # recoverable restore_failed state and hold the token.
+                released, _pending_cancel = await self._run_finalization_shielded(
+                    lambda: self._finalize_shadow_learning_start_cleanup(
+                        state=state,
+                        restore_endpoint=restore_endpoint,
+                        restore_required=restore_required,
+                        endpoint_mutation_started=endpoint_mutation_started,
+                        entry_id=self.config_entry.entry_id,
+                        token=_op_acquire.token,
+                        error=str(exc),
+                    )
+                )
+                # The finalization now owns the token decision (released OR held),
+                # so the outer finally must never release it again. The original
+                # ``exc`` is re-raised below, so an extra cancel absorbed during
+                # finalization needs no separate re-raise here.
+                _op_hold = True
+                try:
+                    await self.async_request_refresh()
+                except Exception as refresh_exc:
+                    logger.warning(
+                        "Shadow-learning failure refresh failed for entry %s: %s",
+                        self.config_entry.entry_id,
+                        refresh_exc,
+                    )
+                self._publish_tooling_values(
+                    shadow_learning_session_status=("failed" if released else "restore_failed"),
+                    shadow_learning_session_ready=False,
+                    local_metadata_status="Shadow-learning route failed to start",
+                )
+                # Re-raise the ORIGINAL (including CancelledError) only AFTER the
+                # mandatory finalization above.
+                raise
+
+            await self.async_request_refresh()
+            self._publish_tooling_values(
+                shadow_learning_session_status="ready",
+                shadow_learning_session_ready=True,
+                shadow_learning_trace_path=str(trace_path),
+                shadow_learning_proxy_endpoint=callback_endpoint,
+                shadow_learning_upstream_endpoint=upstream_endpoint,
+                local_metadata_status="Shadow-learning route ready",
+            )
+            # Already held since the first session persistence.
+            return {
+                "status": "ready",
+                "session_id": state.route_owner_id,
+                "trace_path": str(trace_path),
+                "collector_callback_endpoint": callback_endpoint,
+                "upstream_endpoint": upstream_endpoint,
+                "write_response_mode": seed.write_response_mode,
+                "restore_required": restore_required,
+            }
+        finally:
+            if not _op_hold:
+                _OP_AUTHORITY.release(
+                    self.config_entry.entry_id, _op_acquire.token
+                )
 
     def publish_shadow_learning_artifacts(
         self,
@@ -4967,6 +5176,26 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return {"status": "not_running"}
 
         route_owner_id = str(getattr(state, "route_owner_id", "") or "")
+        # CP2C: stop continues the same ownership. Adopt the lease from the
+        # persisted route owner id (re-acquiring after a reload/restart) so the
+        # restore runs under owned control; it is released ONLY when the session
+        # is finalized/cleared. A failed restore keeps the degraded session AND
+        # its ownership for a retry -- never silently dropped.
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+            COLLECTOR_ENDPOINT_OPERATION_BUSY as _OP_BUSY,
+            OPERATION_SHADOW_LEARNING as _OP_SHADOW,
+        )
+
+        _op_token = _OP_AUTHORITY.adopt(
+            self.config_entry.entry_id, _OP_SHADOW, route_owner_id
+        )
+        # With a live session, ownership must be proven BEFORE the first mutation:
+        # adopt returns None only for a FOREIGN owner or an invalid persisted owner
+        # id -> refuse fail-closed, zero mutation. (An orphan process without a
+        # session has no owner id and is cleaned up without a lease.)
+        if state is not None and _op_token is None:
+            raise RuntimeError(_OP_BUSY)
         if state is not None:
             stopping_state = build_shadow_learning_session_state(
                 entry_id=state.entry_id,
@@ -5015,7 +5244,21 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 self._notify_proxy_capture_restore_unconfirmed()
 
         if restore_confirmed or clear_failed_restore or state is None or not state.restore_required:
-            await self._async_clear_shadow_learning_session_state()
+            # Mode finalized: clear the session AND release the exact token as ONE
+            # cancellation-safe critical step (never "record cleared + authority
+            # still held").
+            async def _clear_and_release() -> None:
+                await self._async_clear_shadow_learning_session_state()
+                if _op_token is not None:
+                    _OP_AUTHORITY.release(self.config_entry.entry_id, _op_token)
+
+            _cleared, _pending_cancel = await self._run_finalization_shielded(
+                _clear_and_release
+            )
+            if _pending_cancel is not None:
+                # The atomic clear+release already completed (record absent AND
+                # authority free); now propagate the caller's cancellation.
+                raise _pending_cancel
         else:
             failed_state = build_shadow_learning_session_state(
                 entry_id=state.entry_id,
@@ -5976,10 +6219,28 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         # and the transition all release the lease on any exception or
         # cancellation. A second concurrent call is typed-refused.
         if not STRATEGY_TRANSITION_LEASES.acquire(entry_id):
+            # Busy: another endpoint operation owns this entry. A concurrent
+            # strategy transition/repair keeps the historical
+            # ``transition_already_running`` reason; any OTHER owner (proxy
+            # capture, shadow learning, a manual write, bind/rollback) surfaces
+            # the neutral typed busy reason with the active operation kind.
+            from ..connection.collector_endpoint_operation import (
+                COLLECTOR_ENDPOINT_OPERATION_AUTHORITY,
+                COLLECTOR_ENDPOINT_OPERATION_BUSY,
+                OPERATION_STRATEGY_REPAIR,
+                OPERATION_STRATEGY_TRANSITION,
+            )
+
+            active = COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.active_operation(entry_id)
+            reason = (
+                TRANSITION_ALREADY_RUNNING
+                if active in ("", OPERATION_STRATEGY_TRANSITION, OPERATION_STRATEGY_REPAIR)
+                else COLLECTOR_ENDPOINT_OPERATION_BUSY
+            )
             return StrategyTransitionResult(
                 success=False,
                 target_strategy=target,
-                failure_reason=TRANSITION_ALREADY_RUNNING,
+                failure_reason=reason,
             )
         silent_probe = None
         try:
@@ -6864,9 +7125,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 request_refresh=False,
             )
         except Exception as exc:
+            # CP2C: a failed recovery must NOT unconditionally clear the session.
+            # The recoverable state stays and the authority stays owned by this
+            # route owner (the stop already re-adopted it / holds it), so another
+            # endpoint operation gets busy and a later recovery/stop can finish the
+            # restore. Clearing here would strand the endpoint with a free
+            # authority.
             logger.warning("Proxy capture recovery failed for entry %s: %s", self.config_entry.entry_id, exc)
             self._notify_proxy_capture_restore_unconfirmed()
-            await self._async_clear_proxy_capture_session_state()
 
     async def _async_recover_shadow_learning_state(self) -> None:
         """Best-effort restore collector callback state after interrupted shadow learning."""
@@ -7050,6 +7316,174 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             logger.warning("Proxy capture start rollback failed for entry %s: %s", self.config_entry.entry_id, exc)
             self._notify_proxy_capture_restore_unconfirmed()
             return False, str(exc)
+
+    async def _run_finalization_shielded(self, factory):
+        """Run a finalization coroutine to completion even under REPEATED cancellation.
+
+        The mandatory endpoint-ownership cleanup of an interrupted long-lived
+        start/stop MUST NOT be interrupted half-way -- a cancel landing between
+        "route stopped / endpoint restored" and "state cleared + token released"
+        would strand the collector. This creates ONE task and awaits it through
+        ``asyncio.shield`` in a loop, so a cancel of the caller (even more than
+        once) cannot break the cleanup mid-way; it always runs to the end. It is
+        NOT fire-and-forget: the task is always awaited here.
+
+        Returns ``(result, pending_cancel)`` where ``pending_cancel`` is the
+        absorbed ``CancelledError`` (or ``None``). The caller MUST re-raise it once
+        its own state/token invariant is finalized, so the original cancellation
+        still propagates.
+        """
+
+        task = asyncio.ensure_future(factory())
+        pending_cancel: BaseException | None = None
+        while True:
+            try:
+                return await asyncio.shield(task), pending_cancel
+            except asyncio.CancelledError as cancel_exc:
+                # Absorb the caller's cancel (even repeated) but remember it so the
+                # caller can re-raise once the cleanup has fully finished.
+                pending_cancel = cancel_exc
+                if task.done():
+                    # The cleanup itself finished; its result/exception stands.
+                    return task.result(), pending_cancel
+                # A (repeated) cancel arrived mid-cleanup -> keep awaiting it.
+                continue
+
+    async def _finalize_proxy_capture_start_cleanup(
+        self,
+        *,
+        state,
+        overview,
+        endpoint_mutation_started: bool,
+        entry_id: str,
+        token,
+    ) -> bool:
+        """The ONE mandatory cleanup for an interrupted proxy-capture start.
+
+        Runs (always, idempotently) inside a shielded boundary: restore the
+        endpoint if a redirect may have been applied, stop the route by the EXACT
+        owner id even when the route-start await never returned, then EITHER clear
+        the session and release the exact token (confirmed restore) OR persist a
+        recoverable ``restoring`` state and keep the token. Returns True when it
+        released the token, False when it kept ownership. Never leaves a persisted
+        session with a free authority, nor a cleared session with a held token.
+        """
+
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+        )
+
+        restored = not (overview.redirect_required and endpoint_mutation_started)
+        if overview.redirect_required and endpoint_mutation_started:
+            if overview.current_endpoint:
+                restored, _restore_error = (
+                    await self._async_best_effort_restore_after_start_failure(
+                        overview.current_endpoint
+                    )
+                )
+            else:
+                restored = False
+        # Blocker 1: a route-start await that was cancelled before returning may
+        # still have created the route, so stop it by the EXACT owner id
+        # unconditionally (idempotent when no such route exists).
+        try:
+            await self._async_stop_proxy_capture_process(owner_id=state.route_owner_id)
+        except Exception as exc:  # best-effort: a missing route must not abort cleanup
+            logger.warning(
+                "Proxy capture start cleanup route-stop failed for entry %s: %s",
+                entry_id,
+                exc,
+            )
+        if restored:
+            # Confirmed back to the original endpoint: clear the session AND
+            # release the exact token as ONE critical step (this whole coroutine
+            # runs shielded, so the pair cannot be split by a cancel).
+            await self._async_clear_proxy_capture_session_state()
+            _OP_AUTHORITY.release(entry_id, token)
+            return True
+        restoring_state = build_proxy_capture_session_state(
+            entry_id=state.entry_id,
+            route_owner_id=state.route_owner_id,
+            collector_pn=state.collector_pn,
+            trace_path=state.trace_path,
+            original_endpoint=state.original_endpoint,
+            proxy_endpoint=state.proxy_endpoint,
+            restore_required=state.restore_required,
+            anonymized=state.anonymized,
+            started_at=state.started_at,
+            expires_at=state.expires_at,
+            status="restoring",
+        )
+        await self._async_save_proxy_capture_session_state(restoring_state)
+        return False
+
+    async def _finalize_shadow_learning_start_cleanup(
+        self,
+        *,
+        state,
+        restore_endpoint: str,
+        restore_required: bool,
+        endpoint_mutation_started: bool,
+        entry_id: str,
+        token,
+        error: str,
+    ) -> bool:
+        """The ONE mandatory cleanup for an interrupted shadow-learning start.
+
+        Mirror of :meth:`_finalize_proxy_capture_start_cleanup`: restore the
+        endpoint if needed, stop the route by exact owner id unconditionally, then
+        clear+release (confirmed) or persist a recoverable ``restore_failed`` state
+        and keep the token. Returns True when it released the token.
+        """
+
+        from ..connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
+        )
+
+        restore_confirmed = not (restore_required and endpoint_mutation_started)
+        restore_error = ""
+        if restore_required and endpoint_mutation_started:
+            if restore_endpoint:
+                restore_confirmed, restore_error = (
+                    await self._async_best_effort_restore_after_start_failure(
+                        restore_endpoint
+                    )
+                )
+            else:
+                restore_error = "restore_endpoint_unavailable"
+        try:
+            await self._runtime.async_stop_shadow_learning_route(
+                owner_id=state.route_owner_id,
+            )
+        except Exception as exc:  # best-effort: a missing route must not abort cleanup
+            logger.warning(
+                "Shadow-learning start cleanup route-stop failed for entry %s: %s",
+                entry_id,
+                exc,
+            )
+        if restore_confirmed:
+            await self._async_clear_shadow_learning_session_state()
+            _OP_AUTHORITY.release(entry_id, token)
+            return True
+        failed_state = build_shadow_learning_session_state(
+            entry_id=state.entry_id,
+            route_owner_id=state.route_owner_id,
+            collector_pn=state.collector_pn,
+            trace_path=state.trace_path,
+            original_endpoint=state.original_endpoint,
+            proxy_endpoint=state.proxy_endpoint,
+            upstream_endpoint=state.upstream_endpoint,
+            restore_required=state.restore_required,
+            started_at=state.started_at,
+            expires_at=state.expires_at,
+            updated_at=shadow_learning_session_timestamp(),
+            restore_attempt_count=state.restore_attempt_count + 1,
+            last_restore_attempt_at=shadow_learning_session_timestamp(),
+            last_restore_error=restore_error or error,
+            status="restore_failed",
+        )
+        await self._async_save_shadow_learning_session_state(failed_state)
+        return False
 
     async def _async_reconcile_proxy_capture_session(
         self,

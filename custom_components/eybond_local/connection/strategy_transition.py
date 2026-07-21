@@ -59,6 +59,7 @@ from ..const import (
     ENDPOINT_CONTROL_EXTERNAL,
     ENDPOINT_CONTROL_INTEGRATION_MANAGED,
 )
+from .collector_endpoint_operation import OPERATION_STRATEGY_REPAIR
 from .recovery.terminal import RecoveryTerminalInput
 from .recovery.verification import (
     CallbackRecoveryRoute,
@@ -156,33 +157,68 @@ _ALLOWED_OPTION_KEYS = frozenset(
 
 
 class StrategyTransitionLease:
-    """Per-entry exclusive transition lease — synchronous, cancellation-safe.
+    """Per-entry exclusive transition lease — a compat facade over the ONE authority.
 
-    ``acquire`` is a plain synchronous check-and-set, so between two awaits it
-    is atomic under the event loop: callers MUST acquire before their first
-    await/side effect. ``release`` is idempotent and safe from ``finally``
-    even after cancellation, so a held-but-unowned lease cannot exist.
-    Different entries never contend (per-entry keys, no global lock).
+    CP2C: the single per-entry endpoint-operation owner is now
+    ``CollectorEndpointOperationAuthority``. This facade keeps the boolean
+    ``acquire``/``release`` shape the transition and degraded-repair callers use
+    while delegating to that authority under the ``strategy_transition`` operation
+    kind, so a transition/repair mutually excludes proxy capture, shadow learning,
+    a manual Full Control endpoint write and bind/rollback -- all through ONE
+    authority. ``acquire`` stays a synchronous check-and-set (atomic between
+    awaits); ``release`` is exact-token and idempotent-safe from ``finally``.
     """
 
-    def __init__(self) -> None:
-        self._held: set[str] = set()
+    def __init__(self, authority: Any = None, *, operation_kind: str | None = None) -> None:
+        from .collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY,
+            OPERATION_STRATEGY_TRANSITION,
+        )
+
+        self._authority = (
+            authority
+            if authority is not None
+            else COLLECTOR_ENDPOINT_OPERATION_AUTHORITY
+        )
+        # The operation kind this facade owns. A transition and a degraded repair
+        # own the SAME authority under DIFFERENT kinds, so active-operation
+        # diagnostics honestly distinguishes them while still mutually excluding.
+        self._operation_kind = (
+            operation_kind
+            if operation_kind is not None
+            else OPERATION_STRATEGY_TRANSITION
+        )
+        self._tokens: dict[str, Any] = {}
 
     def acquire(self, entry_id: str) -> bool:
-        key = str(entry_id or "").strip()
-        if not key or key in self._held:
+        # entry_id must be an exact, normalized non-empty string (no coercion):
+        # a padded / duck / empty id can never take the lease.
+        if type(entry_id) is not str or not entry_id or entry_id != entry_id.strip():
             return False
-        self._held.add(key)
+        outcome = self._authority.acquire(entry_id, self._operation_kind)
+        if not outcome.acquired:
+            return False
+        self._tokens[entry_id] = outcome.token
         return True
 
     def release(self, entry_id: str) -> None:
-        self._held.discard(str(entry_id or "").strip())
+        if type(entry_id) is not str:
+            return
+        token = self._tokens.pop(entry_id, None)
+        if token is not None:
+            self._authority.release(entry_id, token)
 
 
-# THE one production per-entry transition lease. Module-level so a config-entry
-# reload cannot orphan a lease held by a stale coordinator instance, and so the
-# production facade and the tests exercise the SAME implementation.
+# THE one production per-entry transition lease facade. Module-level so a
+# config-entry reload cannot orphan a lease held by a stale coordinator instance,
+# and so the production facade and the tests exercise the SAME authority.
 STRATEGY_TRANSITION_LEASES = StrategyTransitionLease()
+# The degraded-repair path owns the SAME authority under the ``strategy_repair``
+# kind (distinct from a live transition for honest diagnostics; still mutually
+# exclusive because both contend for the one per-entry authority).
+STRATEGY_REPAIR_LEASES = StrategyTransitionLease(
+    operation_kind=OPERATION_STRATEGY_REPAIR
+)
 
 
 def trusted_transition_wire(registry: Any, entry_id: str, session_id: str) -> str:

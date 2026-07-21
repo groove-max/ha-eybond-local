@@ -58,7 +58,7 @@ from ..timeout_policy import (
 )
 from .callback_ledger import CallbackCausalityBusyError
 from .session_registry import pn_is_same_identity
-from .strategy_transition import STRATEGY_TRANSITION_LEASES, TRANSITION_ALREADY_RUNNING
+from .strategy_transition import STRATEGY_REPAIR_LEASES, TRANSITION_ALREADY_RUNNING
 from .strategy_transition_recovery import StrategyTransitionRecoveryState
 
 logger = logging.getLogger(__name__)
@@ -417,7 +417,7 @@ async def async_run_degraded_recovery_repair(
     if policy is None:
         policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
     if strategy_leases is None:
-        strategy_leases = STRATEGY_TRANSITION_LEASES
+        strategy_leases = STRATEGY_REPAIR_LEASES
     if type(state) is not StrategyTransitionRecoveryState:
         return DegradedRepairResult(success=False, failure_reason=REPAIR_STATE_INVALID)
     route = state.callback_route()

@@ -1106,5 +1106,211 @@ class CloudRollbackSelectionAuthorityGuardTests(unittest.TestCase):
         self.assertNotIn("async_set_collector_operation_mode", select_source)
 
 
+class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
+    """CP2C: exactly ONE endpoint-operation authority; every writer owns it."""
+
+    _AUTHORITY = _CC / "connection" / "collector_endpoint_operation.py"
+    _STRATEGY = _CC / "connection" / "strategy_transition.py"
+
+    @staticmethod
+    def _method_source(module_source: str, method_name: str) -> str:
+        tree = ast.parse(module_source)
+        lines = module_source.splitlines()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name == method_name
+            ):
+                return "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        raise AssertionError(f"method not found: {method_name}")
+
+    def test_exactly_one_authority_type_and_singleton(self) -> None:
+        src = _read(self._AUTHORITY)
+        self.assertEqual(src.count("class CollectorEndpointOperationAuthority"), 1)
+        # The module-level singleton is instantiated exactly once.
+        self.assertEqual(src.count("CollectorEndpointOperationAuthority()"), 1)
+
+    def test_authority_is_neutral(self) -> None:
+        # The authority coordinates only: no wire, no strategy, no address facts.
+        modules = _imported_modules(_read(self._AUTHORITY))
+        for forbidden in ("config_flow", "onboarding", "runtime", "hub", "coordinator"):
+            self.assertNotIn(forbidden, modules)
+        ids = _code_identifiers(_read(self._AUTHORITY))
+        for banned in ("async_write_endpoint", "cloud_family", "peer_ip", "hostname"):
+            self.assertNotIn(banned, ids)
+
+    def test_strategy_lease_facade_delegates_to_the_one_authority(self) -> None:
+        src = _read(self._STRATEGY)
+        self.assertIn("COLLECTOR_ENDPOINT_OPERATION_AUTHORITY", src)
+        # The old standalone boolean lease set is gone (single authority now).
+        self.assertNotIn("self._held: set[str]", src)
+
+    # ---- CP2C blocker 8: the AST-enumerated writer guard ----
+    #
+    # Any raw runtime mutation of the collector endpoint/route/system flows through
+    # one of these ``self._runtime`` methods. The guard finds EVERY coordinator
+    # method that calls one (so a NEW writer cannot slip in behind a manual list)
+    # and proves each is owned -- directly, or (for a private helper) only through
+    # callers that are themselves owned.
+    _RUNTIME_WIRE_METHODS = frozenset(
+        {
+            "async_set_collector_server_endpoint",
+            "async_reboot_collector",
+            "async_trigger_reverse_discovery",
+            "async_apply_collector_changes",
+        }
+    )
+    # Owning the ONE authority == a body containing any of these call markers.
+    _OWNERSHIP_MARKERS = (
+        "_collector_endpoint_operation(",  # transient guard context manager
+        "_OP_AUTHORITY.acquire",  # long-lived start + reconcile
+        "_OP_AUTHORITY.adopt",  # long-lived stop / recovery
+        "STRATEGY_TRANSITION_LEASES.acquire",  # transition facade
+        "STRATEGY_REPAIR_LEASES.acquire",  # degraded-repair facade
+    )
+
+    @staticmethod
+    def _coordinator_class(tree: ast.AST) -> ast.ClassDef:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == "EybondLocalCoordinator":
+                return node
+        raise AssertionError("EybondLocalCoordinator class not found")
+
+    @classmethod
+    def _direct_endpoint_writers(cls, class_node: ast.ClassDef) -> set[str]:
+        """Every coordinator method whose body calls a raw ``self._runtime`` writer."""
+
+        writers: set[str] = set()
+        for method in class_node.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for call in ast.walk(method):
+                if (
+                    isinstance(call, ast.Attribute)
+                    and call.attr in cls._RUNTIME_WIRE_METHODS
+                    and isinstance(call.value, ast.Attribute)
+                    and call.value.attr == "_runtime"
+                ):
+                    writers.add(method.name)
+                    break
+        return writers
+
+    @staticmethod
+    def _self_call_graph(class_node: ast.ClassDef) -> dict[str, set[str]]:
+        """method -> set of sibling methods it calls via ``self.<name>(...)``."""
+
+        methods = {
+            m.name
+            for m in class_node.body
+            if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        graph: dict[str, set[str]] = {}
+        for method in class_node.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            callees: set[str] = set()
+            for call in ast.walk(method):
+                if (
+                    isinstance(call, ast.Attribute)
+                    and isinstance(call.value, ast.Name)
+                    and call.value.id == "self"
+                    and call.attr in methods
+                ):
+                    callees.add(call.attr)
+            graph[method.name] = callees
+        return graph
+
+    def test_every_runtime_endpoint_writer_is_owned(self) -> None:
+        # Enumerate EVERY raw runtime endpoint/route/system writer from the AST and
+        # prove each is owned by the ONE authority. A private helper is allowed to
+        # skip self-acquisition ONLY if every path that reaches it passes through a
+        # guarded owner (proven by the recursive closure below). A NEW unguarded
+        # writer -- public or private -- fails here.
+        src = _read(_COORDINATOR)
+        tree = ast.parse(src)
+        class_node = self._coordinator_class(tree)
+        writers = self._direct_endpoint_writers(class_node)
+        graph = self._self_call_graph(class_node)
+        callers: dict[str, set[str]] = {name: set() for name in graph}
+        for caller, callees in graph.items():
+            for callee in callees:
+                callers.setdefault(callee, set()).add(caller)
+
+        def self_guards(method_name: str) -> bool:
+            body = self._method_source(src, method_name)
+            return any(marker in body for marker in self._OWNERSHIP_MARKERS)
+
+        # A method is owned if it self-guards, OR it is a private helper whose
+        # EVERY caller is itself owned (and it has at least one caller -- an
+        # orphan private writer with no owned entry point is a hole).
+        _resolving: set[str] = set()
+        _cache: dict[str, bool] = {}
+
+        def is_owned(method_name: str) -> bool:
+            if method_name in _cache:
+                return _cache[method_name]
+            if self_guards(method_name):
+                _cache[method_name] = True
+                return True
+            if not method_name.startswith("_"):
+                # A PUBLIC writer must own the authority itself -- it is an API
+                # entry point and cannot borrow ownership from a caller.
+                _cache[method_name] = False
+                return False
+            if method_name in _resolving:
+                # A cycle among private helpers proves no guarded entry -> unowned.
+                return False
+            _resolving.add(method_name)
+            method_callers = callers.get(method_name, set())
+            owned = bool(method_callers) and all(
+                is_owned(c) for c in method_callers
+            )
+            _resolving.discard(method_name)
+            _cache[method_name] = owned
+            return owned
+
+        unowned = sorted(w for w in writers if not is_owned(w))
+        self.assertEqual(
+            unowned,
+            [],
+            f"unguarded collector endpoint writer(s) with no owned entry: {unowned}",
+        )
+        # Sanity: the guard actually saw the known writers (a silent empty set
+        # would make the assertion above vacuously pass).
+        self.assertIn("async_set_raw_collector_server_endpoint", writers)
+        self.assertIn("async_apply_collector_changes", writers)
+        self.assertIn("async_reboot_collector", writers)
+        self.assertIn("async_trigger_collector_rediscovery", writers)
+        self.assertIn("_async_reconcile_collector_operation_mode_endpoint", writers)
+        # The transition facade maps a busy authority to the typed reason.
+        facade = self._method_source(src, "async_run_connection_strategy_transition")
+        self.assertIn("COLLECTOR_ENDPOINT_OPERATION_BUSY", facade)
+
+    def test_no_dead_operation_kinds(self) -> None:
+        # Every declared operation kind must be exercised by production code (as
+        # its constant name), so a kind cannot be declared and then never owned --
+        # e.g. OPERATION_STRATEGY_REPAIR must be wired to the repair facade.
+        auth_src = _read(self._AUTHORITY)
+        kinds = {
+            node.targets[0].id
+            for node in ast.walk(ast.parse(auth_src))
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id.startswith("OPERATION_")
+        }
+        self.assertIn("OPERATION_STRATEGY_REPAIR", kinds)
+        production = "\n".join(
+            _read(path)
+            for path in (
+                _COORDINATOR,
+                self._STRATEGY,
+                _CC / "connection" / "strategy_transition_repair.py",
+            )
+        )
+        dead = sorted(k for k in kinds if k not in production)
+        self.assertEqual(dead, [], f"declared but never used operation kind(s): {dead}")
+
+
 if __name__ == "__main__":
     unittest.main()

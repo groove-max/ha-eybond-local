@@ -1610,6 +1610,12 @@ _RECOVERY_FAILURE_EXPLANATIONS = {
         "Another connection switch is already in progress for this "
         "collector. Wait for it to finish.",
     ),
+    "collector_endpoint_operation_busy": (
+        "common.dynamic.collector_endpoint_operation_busy",
+        "Another operation is currently changing this collector's connection "
+        "(for example proxy capture, control discovery, or an endpoint action). "
+        "Nothing was changed. Wait for it to finish, then try again.",
+    ),
     "transition_runtime_unavailable": (
         "common.dynamic.transition_fail_runtime_unavailable",
         "The collector runtime is not loaded, so the switch cannot be "

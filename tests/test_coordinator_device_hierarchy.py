@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import importlib
 import importlib.util
@@ -766,6 +767,19 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             else:
                 sys.modules[name] = original
         super().tearDownClass()
+
+    def setUp(self) -> None:
+        # CP2C: the endpoint-operation authority is a process-level singleton, so
+        # any token a prior test intentionally leaves held (e.g. a failed-restore
+        # test that must retain ownership) would otherwise leak into the next
+        # test's entry. Reset it per test to keep bare-coordinator tests isolated.
+        super().setUp()
+        from custom_components.eybond_local.connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY,
+        )
+
+        COLLECTOR_ENDPOINT_OPERATION_AUTHORITY._held.clear()
+        COLLECTOR_ENDPOINT_OPERATION_AUTHORITY._counter = 0
 
     # ---- Batch 1 CP1b: the REAL transition-facade _commit (DI boundary) ----
     PN = "V001020SYN62344022"
@@ -2386,6 +2400,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._ha_primary_reconcile_last_signature = None
             coordinator._ha_primary_reconcile_last_attempt_monotonic = 0.0
             coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-reconcile",
                 data={},
                 options={
                     # Legacy cloud-primary mode: must NOT drive the reconcile.
@@ -3316,6 +3331,133 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    # ---- CP2C: endpoint-operation authority mutual exclusion ----
+    def _full_control_coordinator(self, entry_id: str):
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id=entry_id, data={}, options={"control_mode": "full"}
+        )
+        writes: list[tuple] = []
+
+        async def _write(*args, **kwargs):
+            writes.append((args, kwargs))
+            return {"readback_endpoint": args[0] if args else ""}
+
+        coordinator._runtime = types.SimpleNamespace(
+            async_set_collector_server_endpoint=_write
+        )
+        return coordinator, writes
+
+    def test_5_6_7_manual_write_refused_with_zero_wire_when_busy(self) -> None:
+        from custom_components.eybond_local.connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as AUTH,
+            OPERATION_PROXY_CAPTURE,
+            OPERATION_SHADOW_LEARNING,
+            OPERATION_STRATEGY_TRANSITION,
+        )
+
+        async def _run() -> None:
+            for op in (
+                OPERATION_PROXY_CAPTURE,
+                OPERATION_SHADOW_LEARNING,
+                OPERATION_STRATEGY_TRANSITION,
+            ):
+                entry_id = f"cp2c-manual-{op}"
+                coordinator, writes = self._full_control_coordinator(entry_id)
+                held = AUTH.acquire(entry_id, op)
+                try:
+                    with self.assertRaises(RuntimeError) as ctx:
+                        await coordinator.async_set_raw_collector_server_endpoint(
+                            endpoint="dtu.example,18899,TCP", confirm_redirect=True
+                        )
+                    self.assertEqual(str(ctx.exception), "collector_endpoint_operation_busy")
+                    self.assertEqual(writes, [], f"{op} allowed a wire write")
+                finally:
+                    AUTH.release(entry_id, held.token)
+
+        asyncio.run(_run())
+
+    def test_7_transition_lease_is_blocked_by_a_foreign_endpoint_owner(self) -> None:
+        # The transition facade acquires via STRATEGY_TRANSITION_LEASES, which
+        # delegates to the ONE authority. While proxy/shadow (or a manual write)
+        # owns the entry, that lease cannot be acquired -> the facade returns a
+        # typed busy. (The full facade is not driven here because its
+        # passive_discovery import needs the real const module, unavailable under
+        # this stub harness; the exclusion itself is proven at the lease/authority
+        # boundary the facade uses.)
+        from custom_components.eybond_local.connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as AUTH,
+            OPERATION_PROXY_CAPTURE,
+            OPERATION_SHADOW_LEARNING,
+            OPERATION_STRATEGY_TRANSITION,
+        )
+        from custom_components.eybond_local.connection.strategy_transition import (
+            STRATEGY_TRANSITION_LEASES,
+        )
+
+        del OPERATION_STRATEGY_TRANSITION  # imported for documentation of the mapping
+        for op in (OPERATION_PROXY_CAPTURE, OPERATION_SHADOW_LEARNING):
+            entry_id = f"cp2c-transition-lease-{op}"
+            held = AUTH.acquire(entry_id, op)
+            try:
+                # A foreign endpoint owner blocks the transition lease...
+                self.assertFalse(STRATEGY_TRANSITION_LEASES.acquire(entry_id))
+                # ...and the active owner the facade reads is that foreign op, so
+                # the facade surfaces the neutral busy reason (not "already
+                # running", which is reserved for a concurrent strategy op).
+                self.assertEqual(AUTH.active_operation(entry_id), op)
+            finally:
+                AUTH.release(entry_id, held.token)
+
+    def test_3_transient_operation_releases_lease_on_error_and_cancel(self) -> None:
+        from custom_components.eybond_local.connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as AUTH,
+            OPERATION_MANUAL_ENDPOINT_WRITE,
+        )
+
+        async def _run() -> None:
+            entry_id = "cp2c-cm-lifecycle"
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+
+            # An error inside the guarded block releases the lease (finally).
+            with self.assertRaises(ValueError):
+                async with coordinator._collector_endpoint_operation(
+                    OPERATION_MANUAL_ENDPOINT_WRITE
+                ):
+                    raise ValueError("inner boom")
+            self.assertFalse(AUTH.is_held(entry_id))
+
+            # Cancellation inside the guarded block releases the lease too.
+            async def _hold() -> None:
+                async with coordinator._collector_endpoint_operation(
+                    OPERATION_MANUAL_ENDPOINT_WRITE
+                ):
+                    await asyncio.sleep(10)
+
+            task = asyncio.ensure_future(_hold())
+            await asyncio.sleep(0)
+            self.assertTrue(AUTH.is_held(entry_id))
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertFalse(AUTH.is_held(entry_id))
+
+            # Busy raise happens BEFORE the block body (zero side effects).
+            other = AUTH.acquire(entry_id, OPERATION_MANUAL_ENDPOINT_WRITE)
+            try:
+                entered = False
+                with self.assertRaises(RuntimeError):
+                    async with coordinator._collector_endpoint_operation(
+                        OPERATION_MANUAL_ENDPOINT_WRITE
+                    ):
+                        entered = True
+                self.assertFalse(entered)
+            finally:
+                AUTH.release(entry_id, other.token)
+
+        asyncio.run(_run())
+
     def test_runtime_bridge_syncs_profile_without_persisting_operation_mode(self) -> None:
         updates: list[dict[str, object]] = []
 
@@ -3501,6 +3643,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 async_trigger_reverse_discovery=_trigger_reverse_discovery,
             )
             coordinator.config_entry = types.SimpleNamespace(
+                entry_id="entry-rediscovery",
                 data={
                     "collector_ip": "192.168.1.55",
                     "collector_operation_mode": "home_assistant_only",
@@ -5389,10 +5532,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 restore_attempt_count=1,
                 last_restore_attempt_at="",
                 last_restore_error="",
+                route_owner_id="shadow_learning:entry-id:1",
             )
             coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
             coordinator._runtime = types.SimpleNamespace(
-                async_stop_shadow_learning_route=lambda: asyncio.sleep(0)
+                async_stop_shadow_learning_route=lambda **kwargs: asyncio.sleep(0)
             )
 
             async def _async_active_shadow_learning_state(*, require_process: bool = True):
@@ -5451,10 +5595,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 restore_attempt_count=0,
                 last_restore_attempt_at="",
                 last_restore_error="",
+                route_owner_id="shadow_learning:entry-id:1",
             )
             coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
             coordinator._runtime = types.SimpleNamespace(
-                async_stop_shadow_learning_route=lambda: asyncio.sleep(0)
+                async_stop_shadow_learning_route=lambda **kwargs: asyncio.sleep(0)
             )
 
             async def _async_active_shadow_learning_state(*, require_process: bool = True):
@@ -5490,6 +5635,978 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertEqual(saved_states[0].status, "restoring")
 
         import asyncio
+
+        asyncio.run(_run())
+
+    # ---- CP2C blocker 9: production-level endpoint-operation guarantees ----
+
+    def _acquire_foreign_owner(self, entry_id: str):
+        """Acquire the ONE authority for ``entry_id`` under a foreign operation."""
+        from custom_components.eybond_local.connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as AUTH,
+            OPERATION_STRATEGY_TRANSITION,
+        )
+
+        outcome = AUTH.acquire(entry_id, OPERATION_STRATEGY_TRANSITION, owner_ref="foreign:1")
+        self.assertTrue(outcome.acquired)
+        return AUTH, outcome.token
+
+    def test_public_system_actions_refuse_with_zero_wire_when_busy(self) -> None:
+        # apply / reboot / rediscovery / rollback are route-affecting full-control
+        # actions: when a FOREIGN operation owns the entry each must typed-refuse
+        # BEFORE touching the wire (no apply, reboot, UDP, or endpoint write).
+        async def _run() -> None:
+            entry_id = "entry-busy-public"
+            AUTH, token = self._acquire_foreign_owner(entry_id)
+            self.addCleanup(lambda: AUTH.release(entry_id, token))
+            wire_calls: list[str] = []
+
+            def _fail(name):
+                async def _f(*args, **kwargs):
+                    wire_calls.append(name)
+                    raise AssertionError(f"{name} must not run while busy")
+
+                return _f
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+            coordinator._raise_if_high_level_collector_actions_disabled = lambda: None
+            coordinator.collector_configuration_lock_code = lambda: "collector_configuration_ready"
+            coordinator._runtime = types.SimpleNamespace(
+                async_apply_collector_changes=_fail("apply"),
+                async_reboot_collector=_fail("reboot"),
+                async_trigger_reverse_discovery=_fail("rediscovery"),
+                async_set_collector_server_endpoint=_fail("set_endpoint"),
+            )
+
+            from custom_components.eybond_local.connection.collector_endpoint_operation import (
+                COLLECTOR_ENDPOINT_OPERATION_BUSY,
+            )
+
+            for coro in (
+                coordinator.async_apply_collector_changes(confirm_restart=True),
+                coordinator.async_reboot_collector(confirm_restart=True),
+                coordinator.async_trigger_collector_rediscovery(),
+                coordinator.async_rollback_collector_server_endpoint(confirm_redirect=True),
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    await coro
+                self.assertEqual(str(ctx.exception), COLLECTOR_ENDPOINT_OPERATION_BUSY)
+
+            self.assertEqual(wire_calls, [], "no wire action may run while the entry is busy")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_automatic_reconcile_silently_skips_write_when_entry_is_busy(self) -> None:
+        # The best-effort operation-mode reconcile must NOT break the refresh when
+        # another endpoint operation owns the entry: it records an honest
+        # operation_busy status and performs ZERO endpoint writes (no cooldown
+        # stamp either, so it retries once the owner frees the entry).
+        async def _run() -> None:
+            entry_id = "entry-busy-reconcile"
+            AUTH, token = self._acquire_foreign_owner(entry_id)
+            self.addCleanup(lambda: AUTH.release(entry_id, token))
+            endpoint_writes: list[str] = []
+
+            async def _ensure_listener(port: int) -> None:
+                return None
+
+            async def _set_endpoint(endpoint: str, *, apply_changes: bool = True):
+                endpoint_writes.append(endpoint)
+                return {"readback_endpoint": endpoint, "status": "applied"}
+
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._connection_spec = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                effective_advertised_tcp_port=8899,
+            )
+            coordinator._runtime = types.SimpleNamespace(
+                effective_advertised_server_ip="192.168.1.50",
+                collector_server_endpoint_rollback_target="203.0.113.9,18899,TCP",
+                async_ensure_callback_listener=_ensure_listener,
+                async_set_collector_server_endpoint=_set_endpoint,
+            )
+            coordinator._remembered_collector_server_endpoint = ""
+            coordinator._collector_operation_pending_target_endpoint = ""
+            coordinator._ha_primary_reconcile_last_signature = None
+            coordinator._ha_primary_reconcile_last_attempt_monotonic = 0.0
+            coordinator.config_entry = types.SimpleNamespace(
+                entry_id=entry_id,
+                data={},
+                options={
+                    "collector_operation_mode": "smartess_cloud_home_assistant",
+                    "endpoint_control_policy": "integration_managed",
+                },
+            )
+            snapshot = self.RuntimeSnapshot(
+                connected=True,
+                values={"collector_server_endpoint": "203.0.113.9,18899,TCP"},
+            )
+            coordinator.data = snapshot
+
+            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+
+            self.assertEqual(endpoint_writes, [], "busy reconcile must not write the endpoint")
+            self.assertEqual(
+                snapshot.values.get("collector_operation_endpoint_sync_status"),
+                "operation_busy",
+            )
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_stop_proxy_capture_refuses_with_zero_mutation_under_foreign_owner(self) -> None:
+        # A stop while a FOREIGN operation owns the entry (adopt cannot prove
+        # ownership) refuses BEFORE the first state/route/restore mutation.
+        async def _run() -> None:
+            entry_id = "entry-foreign-proxy-stop"
+            AUTH, token = self._acquire_foreign_owner(entry_id)
+            self.addCleanup(lambda: AUTH.release(entry_id, token))
+            saved_states: list[object] = []
+
+            state = types.SimpleNamespace(
+                entry_id=entry_id,
+                route_owner_id=f"proxy_capture:{entry_id}:ts",
+                collector_pn="E5000020000000",
+                trace_path="/tmp/proxy.jsonl",
+                original_endpoint="eu.smartess.io,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                restore_required=True,
+                anonymized=False,
+                started_at="2026-06-05T12:00:00+00:00",
+                expires_at="2026-06-05T12:20:00+00:00",
+                status="running",
+            )
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                return state
+
+            async def _async_save_proxy_capture_session_state(new_state):
+                saved_states.append(new_state)
+
+            def _guarded_restore(*args, **kwargs):
+                raise AssertionError("restore must not run under a foreign owner")
+
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator._async_save_proxy_capture_session_state = (
+                _async_save_proxy_capture_session_state
+            )
+            coordinator._async_guarded_proxy_capture_restore = _guarded_restore
+
+            from custom_components.eybond_local.connection.collector_endpoint_operation import (
+                COLLECTOR_ENDPOINT_OPERATION_BUSY,
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                await coordinator.async_stop_proxy_capture()
+            self.assertEqual(str(ctx.exception), COLLECTOR_ENDPOINT_OPERATION_BUSY)
+            self.assertEqual(saved_states, [], "no state may be written under a foreign owner")
+            # The foreign owner still holds the entry, untouched.
+            self.assertEqual(AUTH.active_operation(entry_id), "strategy_transition")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_stop_shadow_learning_refuses_with_zero_mutation_under_foreign_owner(self) -> None:
+        async def _run() -> None:
+            entry_id = "entry-foreign-shadow-stop"
+            AUTH, token = self._acquire_foreign_owner(entry_id)
+            self.addCleanup(lambda: AUTH.release(entry_id, token))
+            saved_states: list[object] = []
+            route_stops: list[object] = []
+
+            state = types.SimpleNamespace(
+                entry_id=entry_id,
+                collector_pn="E5000020000000",
+                trace_path="/tmp/shadow.jsonl",
+                original_endpoint="eu.smartess.io,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                upstream_endpoint="eu.smartess.io,18899,TCP",
+                restore_required=True,
+                started_at="2026-06-05T12:00:00+00:00",
+                expires_at="2026-06-05T12:20:00+00:00",
+                restore_attempt_count=0,
+                last_restore_attempt_at="",
+                last_restore_error="",
+                route_owner_id=f"shadow_learning:{entry_id}:1",
+            )
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+
+            async def _route_stop(**kwargs):
+                route_stops.append(kwargs)
+
+            coordinator._runtime = types.SimpleNamespace(
+                async_stop_shadow_learning_route=_route_stop
+            )
+
+            async def _async_active_shadow_learning_state(*, require_process: bool = True):
+                return state
+
+            async def _async_save_shadow_learning_session_state(new_state):
+                saved_states.append(new_state)
+
+            def _restore_must_not_run(*args, **kwargs):
+                raise AssertionError("restore must not run under a foreign owner")
+
+            coordinator._async_active_shadow_learning_state = _async_active_shadow_learning_state
+            coordinator._async_save_shadow_learning_session_state = (
+                _async_save_shadow_learning_session_state
+            )
+            coordinator._async_restore_proxy_capture_endpoint = _restore_must_not_run
+
+            from custom_components.eybond_local.connection.collector_endpoint_operation import (
+                COLLECTOR_ENDPOINT_OPERATION_BUSY,
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                await coordinator.async_stop_shadow_learning()
+            self.assertEqual(str(ctx.exception), COLLECTOR_ENDPOINT_OPERATION_BUSY)
+            self.assertEqual(saved_states, [])
+            self.assertEqual(route_stops, [])
+            self.assertEqual(AUTH.active_operation(entry_id), "strategy_transition")
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    def test_startup_recovery_failure_keeps_proxy_state_and_token(self) -> None:
+        # B4: when a recovery-stop raises, the recovery must NOT force-clear the
+        # session -- the recoverable state stays and the authority stays owned, so
+        # a later recovery/stop can finish the restore.
+        async def _run() -> None:
+            entry_id = "entry-recovery-fail"
+            from custom_components.eybond_local.connection.collector_endpoint_operation import (
+                COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as AUTH,
+                OPERATION_PROXY_CAPTURE,
+            )
+
+            # The interrupted mode still owns the entry (adopted at recovery start).
+            owner = AUTH.acquire(
+                entry_id, OPERATION_PROXY_CAPTURE, owner_ref=f"proxy_capture:{entry_id}:ts"
+            )
+            self.assertTrue(owner.acquired)
+            self.addCleanup(lambda: AUTH.release(entry_id, owner.token))
+            clear_calls: list[bool] = []
+            notify_calls: list[bool] = []
+
+            state = types.SimpleNamespace(
+                entry_id=entry_id,
+                route_owner_id=f"proxy_capture:{entry_id}:ts",
+                status="running",
+            )
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+
+            async def _async_active_proxy_capture_state(*, require_process: bool = True):
+                return state
+
+            async def _async_stop_proxy_capture(**kwargs):
+                raise RuntimeError("restore_failed")
+
+            async def _async_clear_proxy_capture_session_state():
+                clear_calls.append(True)
+
+            coordinator._async_active_proxy_capture_state = _async_active_proxy_capture_state
+            coordinator.async_stop_proxy_capture = _async_stop_proxy_capture
+            coordinator._async_clear_proxy_capture_session_state = (
+                _async_clear_proxy_capture_session_state
+            )
+            coordinator._notify_proxy_capture_restore_unconfirmed = lambda: notify_calls.append(True)
+
+            await coordinator._async_recover_proxy_capture_state()
+
+            self.assertFalse(clear_calls, "recovery failure must NOT clear the session")
+            self.assertTrue(notify_calls)
+            # The authority stays owned by the interrupted route owner.
+            self.assertEqual(AUTH.active_operation(entry_id), OPERATION_PROXY_CAPTURE)
+
+        import asyncio
+
+        asyncio.run(_run())
+
+    # ---- CP2C final: REAL-method start/stop cancellation atomicity ----
+    #
+    # These drive the production async_start_* / async_stop_* on a bare
+    # coordinator with controllable async seams (NOT a hand-rolled model of the
+    # algorithm), so they prove the shielded finalization the methods actually run.
+
+    @contextlib.contextmanager
+    def _shadow_start_env(self, rec, **seams):
+        """Bare-coordinator harness that drives the REAL async_start_shadow_learning.
+
+        ``rec`` accumulates observable effects; ``seams`` overrides any async seam
+        (save / route / redirect / wait / restore / stop_route / clear) so a test
+        can inject a cancel or a rendezvous at an exact point.
+        """
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+
+        async def d_route(**kwargs):
+            rec["route"].append(kwargs.get("owner_id"))
+
+        async def d_redirect(endpoint, *, apply_changes=True):
+            rec["redirect"].append((endpoint, apply_changes))
+            return {"readback_endpoint": endpoint}
+
+        async def d_stop_route(**kwargs):
+            rec["stop_route"].append(kwargs.get("owner_id"))
+
+        async def d_preflight(**kwargs):
+            return None
+
+        async def d_save(state):
+            rec["saved"].append(state)
+            rec["present"] = True
+
+        async def d_active_proxy(*, require_process=True):
+            return None
+
+        async def d_wait(**kwargs):
+            return None
+
+        async def d_restore(_endpoint):
+            return True, ""
+
+        async def d_clear():
+            rec["clear"].append(True)
+            rec["present"] = False
+
+        async def d_refresh():
+            rec["refresh"].append(True)
+
+        pick = lambda key, default: seams.get(key, default)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-cancel",
+            data={"collector_kind": "factory_eybond"},
+            options={"proxy_capture_duration_minutes": 10},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            connected=False,
+            values={"collector_server_endpoint": "eu.smartess.io,18899,TCP"},
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            proxy_capture_route_running=lambda: False,
+            async_start_shadow_learning_route=pick("route", d_route),
+            async_set_collector_server_endpoint=pick("redirect", d_redirect),
+            async_stop_shadow_learning_route=pick("stop_route", d_stop_route),
+        )
+        coordinator._shadow_learning_process_running = lambda: False
+        coordinator._async_preflight_proxy_capture_network = pick("preflight", d_preflight)
+        coordinator._async_active_proxy_capture_state = d_active_proxy
+        coordinator._async_save_shadow_learning_session_state = pick("save", d_save)
+        coordinator._async_wait_for_shadow_learning_ready = pick("wait", d_wait)
+        coordinator._async_best_effort_restore_after_start_failure = pick("restore", d_restore)
+        coordinator._async_clear_shadow_learning_session_state = pick("clear", d_clear)
+        coordinator.async_request_refresh = d_refresh
+        coordinator._publish_tooling_values = lambda **kwargs: rec["published"].append(dict(kwargs))
+        coordinator._proxy_capture_collector_ip = lambda: "192.168.1.55"
+
+        prop = lambda name, value: patch.object(
+            self.coordinator_module.EybondLocalCoordinator,
+            name,
+            new_callable=PropertyMock,
+            return_value=value,
+        )
+        patchers = [
+            prop("smartess_collector_pn", "E5000020000000"),
+            prop("collector_callback_target_endpoint", "192.168.1.50,18899,TCP"),
+            prop("proxy_capture_upstream_endpoint", "eu.smartess.io,18899,TCP"),
+            prop("collector_cloud_profile_key", "smartess-default"),
+            prop("collector_cloud_profile_label", "SmartESS Default"),
+            prop("collector_cloud_profile_source", "runtime"),
+            prop("collector_cloud_profile_confidence", "high"),
+            prop("effective_metadata_snapshot", {}),
+            prop(
+                "shadow_learning_effective_metadata",
+                {"register_schema_name": "modbus_smg/base.json"},
+            ),
+            prop("collector_cloud_family", "smartess"),
+            prop("_effective_callback_server_host", "192.168.1.50"),
+            patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_seed",
+                return_value=(types.SimpleNamespace(write_response_mode="exception"), []),
+            ),
+            patch.object(
+                self.coordinator_module,
+                "build_shadow_learning_preflight",
+                return_value=types.SimpleNamespace(can_start=True, blockers=[]),
+            ),
+        ]
+        with contextlib.ExitStack() as stack:
+            for patcher in patchers:
+                stack.enter_context(patcher)
+            yield coordinator
+
+    @staticmethod
+    def _fresh_rec() -> dict:
+        return {
+            "route": [],
+            "redirect": [],
+            "stop_route": [],
+            "saved": [],
+            "clear": [],
+            "refresh": [],
+            "published": [],
+            "present": False,
+        }
+
+    def _authority(self):
+        from custom_components.eybond_local.connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as AUTH,
+        )
+
+        return AUTH
+
+    def _assert_state_token_consistent(self, rec: dict, entry_id: str) -> None:
+        """The core invariant: a persisted session and a held token move together.
+
+        Forbidden pairs: (record present AND authority free) and (record absent AND
+        authority held). Either the mode owns both, or it owns neither.
+        """
+
+        held = self._authority().is_held(entry_id)
+        self.assertFalse(
+            rec["present"] and not held,
+            "persisted session left with a FREE authority",
+        )
+        self.assertFalse(
+            (not rec["present"]) and held,
+            "authority held with NO recoverable session",
+        )
+
+    def test_shadow_start_cancel_during_first_persistence_never_restores_endpoint(self) -> None:
+        # A cancel during the first persistence is still BEFORE any endpoint wire
+        # mutation. Cleanup clears the tentative record and releases ownership;
+        # issuing a speculative restore here could reboot/disconnect the collector.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+            calls = {"save": 0}
+
+            async def _save(state):
+                rec["saved"].append(state)
+                rec["present"] = True
+                calls["save"] += 1
+                if calls["save"] == 1:
+                    raise asyncio.CancelledError()
+
+            async def _restore(_endpoint):
+                raise AssertionError("endpoint restore must not run before endpoint mutation")
+
+            with self._shadow_start_env(rec, save=_save, restore=_restore) as coord:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow-cancel-persist.jsonl"),
+                        raw_capture={},
+                    )
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertTrue(rec["clear"])
+            self.assertFalse(rec["present"])
+            self.assertFalse(self._authority().is_held("entry-cancel"))
+
+        asyncio.run(_run())
+
+    def test_shadow_start_cancel_during_endpoint_write_failed_restore_is_recoverable(self) -> None:
+        # Once the endpoint-write await starts, cancellation is ambiguous: the
+        # collector may already have applied it. A failed restore therefore keeps
+        # a recoverable state and the exact authority token.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+            async def _save(state):
+                rec["saved"].append(state)
+                rec["present"] = True
+
+            async def _redirect(_endpoint, *, apply_changes=True):
+                raise asyncio.CancelledError()
+
+            async def _restore(_endpoint):
+                return False, "restore_write_timeout"
+
+            with self._shadow_start_env(
+                rec, save=_save, redirect=_redirect, restore=_restore
+            ) as coord:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow-cancel-persist2.jsonl"),
+                        raw_capture={},
+                    )
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertTrue(rec["present"])
+            self.assertFalse(rec["clear"])
+            self.assertTrue(self._authority().is_held("entry-cancel"))
+            self.assertEqual(rec["saved"][-1].status, "restore_failed")
+
+        asyncio.run(_run())
+
+    def test_shadow_start_cancel_during_route_start_stops_exact_route(self) -> None:
+        # Blocker 5: a route-start await that is cancelled AFTER creating the route
+        # (before route_started could be set) must still be stopped by its EXACT
+        # owner id in the finalization.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+
+            async def _route(**kwargs):
+                rec["route"].append(kwargs.get("owner_id"))  # the route now exists
+                raise asyncio.CancelledError()
+
+            async def _restore(_endpoint):
+                raise AssertionError("endpoint restore must not run before endpoint mutation")
+
+            with self._shadow_start_env(rec, route=_route, restore=_restore) as coord:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow-cancel-route.jsonl"),
+                        raw_capture={},
+                    )
+            owner = rec["route"][0]
+            self.assertTrue(owner and owner.startswith("shadow_learning:"))
+            self.assertEqual(
+                rec["stop_route"],
+                [owner],
+                "the exact route owner must be stopped even when route_started was never set",
+            )
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertFalse(self._authority().is_held("entry-cancel"))
+
+        asyncio.run(_run())
+
+    def test_shadow_start_two_cancels_finalization_runs_to_completion(self) -> None:
+        # Blocker 2: the first cancel enters the shielded finalization; a second
+        # cancel arrives while it is blocked; the finalization still runs to the
+        # end once the rendezvous releases; the caller then receives CancelledError
+        # and the state/token pair is consistent.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+            reached_route = asyncio.Event()
+            route_gate = asyncio.Event()
+            reached_cleanup = asyncio.Event()
+            cleanup_gate = asyncio.Event()
+
+            async def _route(**kwargs):
+                rec["route"].append(kwargs.get("owner_id"))
+                reached_route.set()
+                await route_gate.wait()  # cancel #1 lands here
+
+            async def _stop_route(**kwargs):
+                rec["stop_route"].append(kwargs.get("owner_id"))
+                reached_cleanup.set()
+                await cleanup_gate.wait()  # cancel #2 arrives while blocked here
+
+            async def _restore(_endpoint):
+                return True, ""
+
+            with self._shadow_start_env(
+                rec, route=_route, stop_route=_stop_route, restore=_restore
+            ) as coord:
+                task = asyncio.ensure_future(
+                    coord.async_start_shadow_learning(
+                        output_path=Path("/tmp/shadow-two-cancel.jsonl"),
+                        raw_capture={},
+                    )
+                )
+                await asyncio.wait_for(reached_route.wait(), 2.0)
+                task.cancel()  # #1 -> finalization begins
+                await asyncio.wait_for(reached_cleanup.wait(), 2.0)
+                task.cancel()  # #2 -> absorbed by the shield; cleanup keeps running
+                cleanup_gate.set()  # release the rendezvous -> cleanup completes
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+            self.assertEqual(rec["stop_route"], [rec["route"][0]])
+            self.assertTrue(rec["clear"])
+            self.assertFalse(rec["present"])
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertFalse(self._authority().is_held("entry-cancel"))
+
+        asyncio.run(_run())
+
+    def test_shadow_stop_atomic_clear_and_release_survives_cancel(self) -> None:
+        # Blocker 3: in a stop success path the clear+release is ONE shielded
+        # critical section. Even if clear removes the record then blocks and the
+        # task is cancelled, after the boundary the record is absent AND the
+        # authority is free (never absent + held), and the caller gets CancelledError.
+        async def _run() -> None:
+            AUTH = self._authority()
+            entry_id = "entry-stop-clear"
+            rec = self._fresh_rec()
+            rec["present"] = True
+            reached_clear = asyncio.Event()
+            clear_gate = asyncio.Event()
+
+            state = types.SimpleNamespace(
+                entry_id=entry_id,
+                collector_pn="E5000020000000",
+                trace_path="/tmp/shadow.jsonl",
+                original_endpoint="eu.smartess.io,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                upstream_endpoint="eu.smartess.io,18899,TCP",
+                restore_required=True,
+                started_at="2026-06-05T12:00:00+00:00",
+                expires_at="2026-06-05T12:20:00+00:00",
+                restore_attempt_count=0,
+                last_restore_attempt_at="",
+                last_restore_error="",
+                route_owner_id=f"shadow_learning:{entry_id}:1",
+            )
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+
+            async def _stop_route(**kwargs):
+                return None
+
+            coordinator._runtime = types.SimpleNamespace(
+                async_stop_shadow_learning_route=_stop_route
+            )
+
+            async def _active(*, require_process: bool = True):
+                return state
+
+            async def _save(new_state):
+                rec["saved"].append(new_state)
+                rec["present"] = True
+
+            async def _restore(_endpoint):
+                return "eu.smartess.io,18899,TCP"
+
+            async def _clear():
+                rec["present"] = False  # record actually removed
+                reached_clear.set()
+                await clear_gate.wait()  # blocks BEFORE returning
+                rec["clear"].append(True)
+
+            async def _refresh():
+                rec["refresh"].append(True)
+
+            coordinator._async_active_shadow_learning_state = _active
+            coordinator._async_save_shadow_learning_session_state = _save
+            coordinator._async_restore_proxy_capture_endpoint = _restore
+            coordinator._async_clear_shadow_learning_session_state = _clear
+            coordinator.async_request_refresh = _refresh
+            coordinator._publish_tooling_values = lambda **kwargs: None
+            coordinator._notify_proxy_capture_restore_unconfirmed = lambda: None
+
+            task = asyncio.ensure_future(coordinator.async_stop_shadow_learning())
+            await asyncio.wait_for(reached_clear.wait(), 2.0)
+            # The record is already gone; the authority is still held until release.
+            self.assertFalse(rec["present"])
+            task.cancel()
+            clear_gate.set()  # let the shielded clear+release finish
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+            # After the critical boundary: record absent AND authority free.
+            self.assertFalse(rec["present"])
+            self.assertFalse(AUTH.is_held(entry_id))
+            self.assertTrue(rec["clear"])
+
+        asyncio.run(_run())
+
+    def test_proxy_stop_atomic_clear_and_release_survives_cancel(self) -> None:
+        """The proxy stop has its own production branch and must be equally atomic."""
+
+        async def _run() -> None:
+            AUTH = self._authority()
+            entry_id = "entry-proxy-stop-clear"
+            rec = self._fresh_rec()
+            rec["present"] = True
+            reached_clear = asyncio.Event()
+            clear_gate = asyncio.Event()
+            tmp_dir = tempfile.mkdtemp(prefix="cp2c-proxy-stop-")
+            trace_path = Path(tmp_dir) / "proxy.jsonl"
+            state = types.SimpleNamespace(
+                entry_id=entry_id,
+                route_owner_id=f"proxy_capture:{entry_id}:1",
+                collector_pn="E5000020000000",
+                trace_path=str(trace_path),
+                original_endpoint="eu.smartess.io,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                restore_required=True,
+                anonymized=False,
+                started_at="2026-06-05T12:00:00+00:00",
+                expires_at="2026-06-05T12:20:00+00:00",
+                status="running",
+            )
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
+
+            async def _executor(func, *args):
+                return func(*args)
+
+            coordinator.hass = types.SimpleNamespace(
+                config=types.SimpleNamespace(config_dir=tmp_dir),
+                async_add_executor_job=_executor,
+            )
+
+            async def _active(*, require_process: bool = True):
+                return state
+
+            async def _save(new_state):
+                rec["saved"].append(new_state)
+                rec["present"] = True
+
+            async def _restore(**kwargs):
+                return {
+                    "restored_endpoint": state.original_endpoint,
+                    "restore_confirmed": True,
+                    "restore_mode": "direct",
+                    "restore_skipped_reason": "",
+                    "current_endpoint": state.original_endpoint,
+                }
+
+            async def _clear():
+                rec["present"] = False
+                reached_clear.set()
+                await clear_gate.wait()
+                rec["clear"].append(True)
+
+            coordinator._async_active_proxy_capture_state = _active
+            coordinator._async_save_proxy_capture_session_state = _save
+            coordinator._async_guarded_proxy_capture_restore = _restore
+            coordinator._async_clear_proxy_capture_session_state = _clear
+            coordinator._proxy_capture_result_status = lambda *a, **k: "stopped"
+            coordinator._proxy_capture_local_status = lambda *a, **k: "stopped"
+            coordinator._proxy_capture_overview_runtime_values = lambda **kwargs: {}
+            coordinator._publish_tooling_values = lambda **kwargs: None
+            coordinator.async_request_refresh = lambda: asyncio.sleep(0)
+
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator,
+                "smartess_collector_pn",
+                new_callable=PropertyMock,
+                return_value="E5000020000000",
+            ), patch.object(
+                self.coordinator_module,
+                "build_proxy_capture_session_state",
+                lambda *a, **k: types.SimpleNamespace(**k),
+            ), patch.object(
+                self.coordinator_module,
+                "summarize_proxy_capture_trace",
+                return_value={},
+            ), patch.object(
+                self.coordinator_module,
+                "export_proxy_trace_manifest",
+                return_value=Path(tmp_dir) / "manifest.json",
+            ), patch.object(
+                self.coordinator_module,
+                "export_proxy_trace_bundle",
+                return_value=Path(tmp_dir) / "bundle.zip",
+            ), patch.object(
+                self.coordinator_module,
+                "publish_proxy_trace_download_copy",
+                return_value=(Path(tmp_dir) / "bundle.zip", "/local/bundle.zip"),
+            ):
+                task = asyncio.ensure_future(coordinator.async_stop_proxy_capture())
+                await asyncio.wait_for(reached_clear.wait(), 2.0)
+                self.assertFalse(rec["present"])
+                task.cancel()
+                clear_gate.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+            self.assertFalse(rec["present"])
+            self.assertFalse(AUTH.is_held(entry_id))
+            self.assertTrue(rec["clear"])
+
+        asyncio.run(_run())
+
+    @contextlib.contextmanager
+    def _proxy_start_env(self, rec, **seams):
+        """Bare-coordinator harness that drives the REAL async_start_proxy_capture."""
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        tmp_dir = tempfile.mkdtemp(prefix="cp2c-proxy-")
+
+        async def _executor(func, *args):
+            return func(*args)
+
+        async def d_route(**kwargs):
+            rec["route"].append(kwargs.get("owner_id"))
+
+        async def d_redirect(endpoint, *, apply_changes=True):
+            rec["redirect"].append((endpoint, apply_changes))
+            return {"readback_endpoint": endpoint}
+
+        async def d_stop_process(*, owner_id="", force=False):
+            rec["stop_route"].append(owner_id)
+
+        async def d_preflight(**kwargs):
+            return None
+
+        async def d_save(state):
+            rec["saved"].append(state)
+            rec["present"] = True
+
+        async def d_active_shadow(*, require_process=True):
+            return None
+
+        async def d_wait(*args, **kwargs):
+            return None
+
+        async def d_restore(_endpoint):
+            return True, ""
+
+        async def d_clear():
+            rec["clear"].append(True)
+            rec["present"] = False
+
+        async def d_refresh():
+            rec["refresh"].append(True)
+
+        pick = lambda key, default: seams.get(key, default)
+        overview = types.SimpleNamespace(
+            can_start=True,
+            blocking_reason=None,
+            redirect_required=seams.get("redirect_required", True),
+            target_endpoint="192.168.1.50,18899,TCP",
+            current_endpoint="eu.smartess.io,18899,TCP",
+            masked_endpoint="masked.example,18899,TCP",
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-cancel", data={}, options={}
+        )
+        coordinator.hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(config_dir=tmp_dir),
+            async_add_executor_job=_executor,
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            async_start_proxy_capture_route=pick("route", d_route),
+            async_set_collector_server_endpoint=pick("redirect", d_redirect),
+        )
+        coordinator.collector_operation_mode_apply_lock_code = lambda: None
+        coordinator._async_active_shadow_learning_state = d_active_shadow
+        coordinator._shadow_learning_process_running = lambda: False
+        coordinator._proxy_capture_process_running = lambda: False
+        coordinator._async_save_proxy_capture_session_state = pick("save", d_save)
+        coordinator._async_preflight_proxy_capture_network = pick("preflight", d_preflight)
+        coordinator._proxy_capture_collector_ip = lambda: "192.168.1.55"
+        coordinator._async_wait_for_proxy_capture_reconnect = pick("wait", d_wait)
+        coordinator._async_best_effort_restore_after_start_failure = pick("restore", d_restore)
+        coordinator._async_stop_proxy_capture_process = pick("stop_route", d_stop_process)
+        coordinator._async_clear_proxy_capture_session_state = pick("clear", d_clear)
+        coordinator.async_request_refresh = d_refresh
+        coordinator._publish_tooling_values = lambda **kwargs: rec["published"].append(dict(kwargs))
+        coordinator._proxy_capture_overview_runtime_values = lambda **kwargs: {}
+
+        prop = lambda name, value: patch.object(
+            self.coordinator_module.EybondLocalCoordinator,
+            name,
+            new_callable=PropertyMock,
+            return_value=value,
+        )
+        patchers = [
+            prop("proxy_capture_overview", overview),
+            prop("smartess_collector_pn", "E5000020000000"),
+            prop("proxy_capture_upstream_endpoint", "eu.smartess.io,18899,TCP"),
+            prop("collector_cloud_family", "smartess"),
+            prop("collector_session_protocol", "TCP"),
+            prop("proxy_capture_configured_duration_minutes", 10),
+            # The stub harness returns None for these path builders; give the real
+            # method usable paths (nothing is written -- the route seam is stubbed).
+            patch.object(
+                self.coordinator_module,
+                "build_proxy_capture_trace_path",
+                lambda *a, **k: Path(tmp_dir) / "proxy-trace.jsonl",
+            ),
+            patch.object(
+                self.coordinator_module,
+                "build_proxy_capture_restore_trigger_path",
+                lambda trace_path, *a, **k: Path(str(trace_path) + ".restore"),
+            ),
+            # The stub harness returns None for the session-state builder; give the
+            # real method a namespace that carries route_owner_id/status/etc.
+            patch.object(
+                self.coordinator_module,
+                "build_proxy_capture_session_state",
+                lambda *a, **k: types.SimpleNamespace(**k),
+            ),
+        ]
+        with contextlib.ExitStack() as stack:
+            for patcher in patchers:
+                stack.enter_context(patcher)
+            yield coordinator
+
+    def test_proxy_start_cancel_during_first_persistence_never_restores_endpoint(self) -> None:
+        # Same pre-wire boundary for proxy capture: tentative persistence may be
+        # cleared, but the collector endpoint must not be rewritten.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+            calls = {"save": 0}
+
+            async def _save(state):
+                rec["saved"].append(state)
+                rec["present"] = True
+                calls["save"] += 1
+                if calls["save"] == 1:
+                    raise asyncio.CancelledError()
+
+            async def _restore(_endpoint):
+                raise AssertionError("endpoint restore must not run before endpoint mutation")
+
+            with self._proxy_start_env(rec, save=_save, restore=_restore) as coord:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord.async_start_proxy_capture(confirm_redirect=True)
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertTrue(rec["clear"])
+            self.assertFalse(self._authority().is_held("entry-cancel"))
+
+        asyncio.run(_run())
+
+    def test_proxy_start_cancel_during_endpoint_write_failed_restore_is_recoverable(self) -> None:
+        # After the endpoint-write await begins, a failed restore must retain the
+        # recoverable record and authority because the wire result is uncertain.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+            async def _save(state):
+                rec["saved"].append(state)
+                rec["present"] = True
+
+            async def _redirect(_endpoint, *, apply_changes=True):
+                raise asyncio.CancelledError()
+
+            async def _restore(_endpoint):
+                return False, "restore_write_timeout"
+
+            with self._proxy_start_env(
+                rec, save=_save, redirect=_redirect, restore=_restore
+            ) as coord:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord.async_start_proxy_capture(confirm_redirect=True)
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertTrue(rec["present"])
+            self.assertFalse(rec["clear"])
+            self.assertTrue(self._authority().is_held("entry-cancel"))
+            self.assertEqual(rec["saved"][-1].status, "restoring")
+
+        asyncio.run(_run())
+
+    def test_proxy_start_cancel_during_route_start_stops_exact_route(self) -> None:
+        # Blocker 5 for proxy: a cancelled route-start (route created, route_started
+        # never set) is still stopped by its EXACT owner id in the finalization.
+        async def _run() -> None:
+            rec = self._fresh_rec()
+
+            async def _route(**kwargs):
+                rec["route"].append(kwargs.get("owner_id"))
+                raise asyncio.CancelledError()
+
+            async def _restore(_endpoint):
+                raise AssertionError("endpoint restore must not run before endpoint mutation")
+
+            with self._proxy_start_env(rec, route=_route, restore=_restore) as coord:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord.async_start_proxy_capture(confirm_redirect=True)
+            owner = rec["route"][0]
+            self.assertTrue(owner and owner.startswith("proxy_capture:"))
+            self.assertEqual(rec["stop_route"], [owner])
+            self._assert_state_token_consistent(rec, "entry-cancel")
+            self.assertFalse(self._authority().is_held("entry-cancel"))
 
         asyncio.run(_run())
 
@@ -7132,6 +8249,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(
+                entry_id="cp2c-writer-guard",
                 data={"control_mode": "full"},
                 options={"control_mode": "full"},
             )
@@ -7178,6 +8296,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(
+                entry_id="cp2c-writer-guard",
                 data={"control_mode": "full"},
                 options={"control_mode": "full"},
             )
@@ -7226,6 +8345,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(
+                entry_id="cp2c-writer-guard",
                 data={"control_mode": "full"},
                 options={"control_mode": "full"},
             )
@@ -7279,6 +8399,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(
+                entry_id="cp2c-writer-guard",
                 data={"control_mode": "full"},
                 options={"control_mode": "full"},
             )

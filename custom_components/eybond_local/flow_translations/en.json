@@ -514,7 +514,8 @@
       "transition_fail_rollback_registry_pn_required": "This collector could not be identified well enough to durably save the chosen cloud endpoint, so nothing was written. Confirm the collector is connected and identified, then try again.",
       "transition_fail_rollback_selection_stale": "The saved endpoint candidate changed after it was shown. Nothing was changed; review the current candidate and confirm it again.",
       "transition_fail_management_unavailable": "The collector's current connection does not provide the endpoint write/apply operations required for this switch. Nothing was changed.",
-      "transition_fail_inbound_rollback_persist_failed": "The current external endpoint could not be saved before redirecting the collector to Home Assistant, so the switch was not started."
+      "transition_fail_inbound_rollback_persist_failed": "The current external endpoint could not be saved before redirecting the collector to Home Assistant, so the switch was not started.",
+      "collector_endpoint_operation_busy": "Another operation is currently changing this collector's connection (for example proxy capture, control discovery, or an endpoint action). Nothing was changed. Wait for it to finish, then try again."
     }
   }
 }
