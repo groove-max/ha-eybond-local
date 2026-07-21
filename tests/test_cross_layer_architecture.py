@@ -956,5 +956,155 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
             )
 
 
+class CloudRollbackConvergenceGuardTests(unittest.TestCase):
+    """CP2B.1: the cloud rollback context is a neutral, read-only convergence.
+
+    It reuses the existing endpoint parser, registry and durable/observed facts;
+    it introduces no second parser, no wire side effect and no new persistence.
+    """
+
+    _CONTEXT = _CC / "connection" / "strategy_transition_context.py"
+
+    @staticmethod
+    def _method_source(module_source: str, method_name: str) -> str:
+        tree = ast.parse(module_source)
+        lines = module_source.splitlines()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name == method_name
+            ):
+                return "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        raise AssertionError(f"method not found: {method_name}")
+
+    def test_context_module_stays_neutral(self) -> None:
+        # The neutral module imports nothing from config_flow / onboarding /
+        # runtime / provider or cloud catalog layers.
+        modules = _imported_modules(_read(self._CONTEXT))
+        for forbidden in (
+            "config_flow",
+            "onboarding",
+            "runtime",
+            "hub",
+            "coordinator",
+            "metadata",
+            "collector_cloud_profile_catalog_loader",
+            "cloud_family",
+        ):
+            self.assertNotIn(forbidden, modules, f"neutral module imports {forbidden}")
+
+    def test_resolver_reuses_the_single_endpoint_parser(self) -> None:
+        # No second parser/normalizer: the resolver reuses the existing
+        # provider-neutral inspect_collector_server_endpoint from the ONE parser
+        # module, and imports no cloud catalog / default-port helper.
+        source = _read(self._CONTEXT)
+        identifiers = _code_identifiers(source)
+        self.assertIn("inspect_collector_server_endpoint", identifiers)
+        for banned in (
+            "default_collector_server_port",
+            "resolve_collector_cloud_default_port",
+            "load_collector_cloud_profile_catalog",
+            "collector_cloud_family_observation_from_endpoint",
+        ):
+            self.assertNotIn(banned, identifiers, f"resolver uses cloud helper {banned}")
+
+    def test_read_only_boundary_has_no_wire_or_persistence(self) -> None:
+        # The coordinator boundary gathers facts and returns a typed context: it
+        # never writes an endpoint/reboot/UDP, never persists an entry/registry,
+        # and never mints a proof / RecoveryContract / recovery state.
+        boundary = self._method_source(
+            _read(_COORDINATOR), "collector_cloud_rollback_context"
+        )
+        for banned in (
+            "write_endpoint",
+            "apply_changes",
+            "reboot",
+            "async_send_callback_trigger",
+            "async_schedule_reload",
+            "_async_update_entry",
+            "remember_collector_original_endpoint",
+            "save_collector_registry",
+            "CONF_ENDPOINT_WRITTEN_VALUE",
+            "CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE =",
+            "RecoveryContract.empty_for_pn",
+            ".with_inbound_proof",
+            ".with_callback_proof",
+            ".write_to",
+            "StrategyTransitionRecoveryState",
+            "_default_cloud_upstream_endpoint",
+            "collector_cloud_family",
+        ):
+            self.assertNotIn(banned, boundary, f"boundary references {banned}")
+        # It DOES delegate to the neutral resolver and reuse the existing
+        # read-only registry reader.
+        self.assertIn("resolve_cloud_rollback_endpoint", boundary)
+        self.assertIn("RecoveryContract.from_entry_data", boundary)
+        self.assertIn("get_collector_registry_record", boundary)
+
+
+class CloudRollbackSelectionAuthorityGuardTests(unittest.TestCase):
+    """CP2B.2: the typed CloudRollbackSelection is the ONE restore authority."""
+
+    _CATALOG = _CC / "collector" / "cloud_rollback_catalog.py"
+
+    @staticmethod
+    def _facade_ast():
+        tree = ast.parse(_read(_COORDINATOR))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name == "async_run_connection_strategy_transition"
+            ):
+                return node
+        raise AssertionError("transition facade not found")
+
+    def test_callback_restore_endpoint_comes_only_from_typed_selection(self) -> None:
+        facade = self._facade_ast()
+        attrs = {n.attr for n in ast.walk(facade) if isinstance(n, ast.Attribute)}
+        names = {n.id for n in ast.walk(facade) if isinstance(n, ast.Name)}
+        args = {a.arg for a in ast.walk(facade) if isinstance(a, ast.arg)}
+        # No PARALLEL authority read: the rollback_target property is never read
+        # in the production transition (AST ignores the explanatory comment); it
+        # stays a read-only diagnostic surface elsewhere.
+        self.assertNotIn("collector_server_endpoint_rollback_target", attrs)
+        # The facade forwards the capability without extracting a loose
+        # endpoint; only the core authority may dereference endpoint_value.
+        self.assertNotIn("endpoint_value", attrs)
+        self.assertIn("cloud_rollback_selection", names | args)
+        transition_tree = ast.parse(
+            _read(_CC / "connection" / "strategy_transition.py")
+        )
+        callback = next(
+            node
+            for node in ast.walk(transition_tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_async_transition_to_callback"
+        )
+        callback_attrs = {
+            n.attr for n in ast.walk(callback) if isinstance(n, ast.Attribute)
+        }
+        self.assertIn("endpoint_value", callback_attrs)
+
+    def test_catalog_adapter_has_no_ui_or_runtime_dependency(self) -> None:
+        modules = _imported_modules(_read(self._CATALOG))
+        for forbidden in ("config_flow", "onboarding", "runtime", "hub", "coordinator"):
+            self.assertNotIn(forbidden, modules)
+
+    def test_selection_path_never_infers_endpoint_from_family_or_host(self) -> None:
+        ids = _code_identifiers(_read(self._CATALOG))
+        for banned in (
+            "resolve_collector_cloud_family_by_host",
+            "collector_cloud_family_observation_from_endpoint",
+            "collector_cloud_family",
+        ):
+            self.assertNotIn(banned, ids, f"selection path infers via {banned}")
+
+    def test_writable_operation_mode_select_not_reintroduced(self) -> None:
+        # CP2A stays enforced: no writable operation-mode select machinery returns.
+        select_source = _read(_CC / "select.py")
+        self.assertNotIn('key="collector_operation_mode"', select_source)
+        self.assertNotIn("async_set_collector_operation_mode", select_source)
+
+
 if __name__ == "__main__":
     unittest.main()

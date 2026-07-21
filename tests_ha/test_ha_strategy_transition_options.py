@@ -241,8 +241,13 @@ async def test_options_strategy_transition_inbound_to_callback(
                 result["flow_id"],
                 {
                     "advertised_server_ip": "127.0.0.1",
-                    "advertised_tcp_port": tcp_port,
+                    # With no previously confirmed advertised route the UI
+                    # intentionally renders an empty TextSelector, not a
+                    # NumberSelector whose synthetic minimum would look like a
+                    # real default.
+                    "advertised_tcp_port": str(tcp_port),
                     "collector_ip": "127.0.0.1",
+                    "confirm_connection_strategy_risk": True,
                 },
             )
             while result["type"] in (

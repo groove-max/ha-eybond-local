@@ -146,6 +146,7 @@ from .const import (
     DOMAIN,
     DRIVER_HINT_AUTO,
     ENDPOINT_CONTROL_EXTERNAL,
+    ENDPOINT_CONTROL_INTEGRATION_MANAGED,
     ENTRY_ROLE_LISTENER,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
@@ -1555,6 +1556,43 @@ _RECOVERY_FAILURE_EXPLANATIONS = {
         "The integration manages the collector's endpoint, but no saved "
         "previous endpoint exists to hand control back to. The switch was "
         "not started.",
+    ),
+    "transition_rollback_selection_required": (
+        "common.dynamic.transition_fail_rollback_selection_required",
+        "No cloud endpoint was chosen to hand the collector back to, so the "
+        "switch was not started. Pick the previously saved endpoint, a catalog "
+        "entry, or enter one manually.",
+    ),
+    "transition_rollback_selection_invalid": (
+        "common.dynamic.transition_fail_rollback_selection_invalid",
+        "The chosen cloud endpoint could not be validated, so nothing was "
+        "changed. Choose the endpoint again.",
+    ),
+    "transition_rollback_selection_stale": (
+        "common.dynamic.transition_fail_rollback_selection_stale",
+        "The saved endpoint candidate changed after it was shown. Nothing was "
+        "changed; review the current candidate and confirm it again.",
+    ),
+    "transition_rollback_persist_failed": (
+        "common.dynamic.transition_fail_rollback_persist_failed",
+        "The chosen cloud endpoint could not be saved, so it was NOT written to "
+        "the collector and the connection strategy was not changed. Try again.",
+    ),
+    "transition_rollback_registry_pn_required": (
+        "common.dynamic.transition_fail_rollback_registry_pn_required",
+        "This collector could not be identified well enough to durably save the "
+        "chosen cloud endpoint, so nothing was written. Confirm the collector is "
+        "connected and identified, then try again.",
+    ),
+    "transition_management_unavailable": (
+        "common.dynamic.transition_fail_management_unavailable",
+        "The collector's current connection does not provide the endpoint "
+        "write/apply operations required for this switch. Nothing was changed.",
+    ),
+    "transition_inbound_rollback_persist_failed": (
+        "common.dynamic.transition_fail_inbound_rollback_persist_failed",
+        "The current external endpoint could not be saved before redirecting "
+        "the collector to Home Assistant, so the switch was not started.",
     ),
     "transition_endpoint_write_failed": (
         "common.dynamic.transition_fail_endpoint_write_failed",
@@ -9191,6 +9229,12 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._transition_task = None
         self._transition_result = None
         self._transition_error = ""
+        # CP2B.2: the ONE typed cloud rollback selection the chooser produced for
+        # an integration-managed callback restore (the single authority passed to
+        # the coordinator; never a loose endpoint string + separate provenance).
+        self._transition_rollback_selection: Any = None
+        self._transition_rollback_candidate_snapshot: Any = None
+        self._transition_rollback_candidate_pinned = False
         # A proven+committed repair whose HA lifecycle activation did not stick
         # (async_setup returned falsy / retry / error). The proof is durable and
         # must NEVER be rolled back or re-run; only a plain setup/reload remains.
@@ -9697,6 +9741,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             # travel with the transition's success commit. Topology is never
             # carried through the transition payload.
             self._transition_target_strategy = strategy
+            self._transition_rollback_selection = None
+            self._transition_rollback_candidate_snapshot = None
+            self._transition_rollback_candidate_pinned = False
             self._transition_options_payload = {
                 key: options[key]
                 for key in (CONF_POLL_MODE, CONF_POLL_INTERVAL, CONF_CONTROL_MODE)
@@ -9937,6 +9984,85 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "collector_ip": collector_ip,
         }
 
+    async def _resolve_cloud_rollback_context(self):
+        """Return the entry's typed CloudRollbackEndpoint, or ``None``.
+
+        READ-ONLY: delegates to the coordinator's read-only boundary (which reuses
+        existing endpoint/registry facts). Never writes and never triggers a wire
+        operation. When the entry has no live coordinator the context is unknown.
+        """
+
+        coordinator = self._coordinator()
+        boundary = getattr(coordinator, "collector_cloud_rollback_context", None)
+        if not callable(boundary):
+            return None
+        try:
+            return await boundary()
+        except Exception:  # pragma: no cover - defensive read-only path
+            return None
+
+    def _connection_strategy_rollback_note(self, *, to_inbound: bool, rollback) -> str:
+        """Build the honest, read-only rollback summary shown in the transition form.
+
+        Presentation only: it never edits a field, changes the submitted payload,
+        persists the context, or stands in for a proof. The endpoint shown belongs
+        to the user's own entry.
+        """
+
+        from .connection.strategy_transition_context import (
+            CLOUD_PROVENANCE_OBSERVED_CURRENT,
+            CLOUD_PROVENANCE_ORIGINAL,
+            CLOUD_PROVENANCE_REGISTRY,
+        )
+
+        known = rollback is not None and getattr(rollback, "known", False)
+        if to_inbound:
+            if known:
+                return self._tr(
+                    "common.dynamic.connection_strategy_rollback_inbound_known",
+                    "A previously confirmed external endpoint is available and "
+                    "can be offered for confirmation if you switch back to "
+                    "cloud mode later.",
+                )
+            return self._tr(
+                "common.dynamic.connection_strategy_rollback_inbound_unknown",
+                "No original external endpoint is confirmed yet; before "
+                "returning to cloud mode you will have to choose one explicitly.",
+            )
+        if known:
+            provenance_label = {
+                CLOUD_PROVENANCE_ORIGINAL: self._tr(
+                    "common.dynamic.rollback_provenance_original",
+                    "saved original endpoint",
+                ),
+                CLOUD_PROVENANCE_REGISTRY: self._tr(
+                    "common.dynamic.rollback_provenance_registry",
+                    "collector registry",
+                ),
+                CLOUD_PROVENANCE_OBSERVED_CURRENT: self._tr(
+                    "common.dynamic.rollback_provenance_observed_current",
+                    "current endpoint",
+                ),
+            }.get(rollback.provenance, rollback.provenance)
+            template = self._tr(
+                "common.dynamic.connection_strategy_rollback_callback_known",
+                "A previously confirmed endpoint candidate is available: "
+                "{endpoint} (source: {provenance}). It will be offered for "
+                "confirmation before restoration.",
+            )
+            try:
+                return template.format(
+                    endpoint=rollback.endpoint, provenance=provenance_label
+                )
+            except (KeyError, IndexError, ValueError):
+                return template
+        return self._tr(
+            "common.dynamic.connection_strategy_rollback_callback_unknown",
+            "No previously confirmed cloud endpoint is known, so this switch "
+            "will not guess one. Before anything changes, the next step will "
+            "ask you to choose a catalog endpoint or enter one manually.",
+        )
+
     @_with_translation_bundle
     async def async_step_strategy_transition(
         self,
@@ -9954,6 +10080,14 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         target = self._transition_target_strategy
         if target not in CONNECTION_STRATEGIES:
             return await self.async_step_runtime()
+        if user_input is None:
+            # A newly opened confirmation attempt gets a newly pinned rollback
+            # read-model snapshot.  Form validation retries keep their existing
+            # snapshot, but returning here from the failure menu must not reuse
+            # a candidate from the completed attempt.
+            self._transition_rollback_selection = None
+            self._transition_rollback_candidate_snapshot = None
+            self._transition_rollback_candidate_pinned = False
         to_inbound = target == CONNECTION_STRATEGY_INBOUND
         errors: dict[str, str] = {}
         prefill = self._transition_prefill()
@@ -10001,6 +10135,16 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     "port": port,
                     "collector_ip": collector_ip,
                 }
+                self._transition_rollback_selection = None
+                self._transition_rollback_candidate_snapshot = None
+                self._transition_rollback_candidate_pinned = False
+                # CP2B.2: a callback restore that must physically hand the
+                # collector back to a cloud endpoint (integration_managed) needs
+                # the user to choose that endpoint first. If the endpoint is
+                # already external, no restore/write is needed and the chooser is
+                # skipped.
+                if self._transition_needs_cloud_rollback():
+                    return await self.async_step_strategy_transition_rollback()
                 return await self.async_step_strategy_transition_progress()
 
         schema_fields: dict[Any, Any] = {}
@@ -10048,9 +10192,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "needs data. If the integration previously changed the collector "
                 "endpoint, it can restore only a previously saved and valid "
                 "cloud endpoint. When no such endpoint is known, the safe switch "
-                "is refused instead of guessing one; catalog/manual selection "
-                "will be added in the next step.",
+                "does not guess one: before anything changes, you must choose a "
+                "catalog endpoint or enter one manually.",
             )
+        rollback_note = self._connection_strategy_rollback_note(
+            to_inbound=to_inbound,
+            rollback=await self._resolve_cloud_rollback_context(),
+        )
         return self.async_show_form(
             step_id="strategy_transition",
             data_schema=vol.Schema(schema_fields),
@@ -10060,6 +10208,157 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     f"common.dynamic.connection_strategy_{target}", target
                 ),
                 "connection_strategy_risk": risk_note,
+                "connection_strategy_rollback": rollback_note,
+            },
+        )
+
+    def _transition_needs_cloud_rollback(self) -> bool:
+        """Whether this transition must physically restore an external endpoint.
+
+        True only for a callback transition on an integration-managed entry (the
+        integration currently points the collector at Home Assistant, so handing
+        control back requires writing a cloud endpoint). An already-external entry
+        needs no restore and skips the chooser.
+        """
+
+        if self._transition_target_strategy != CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+            return False
+        from .connection.connection_policy import resolve_endpoint_control_policy
+
+        policy = resolve_endpoint_control_policy(
+            dict(self._config_entry.data), dict(self._config_entry.options)
+        )
+        return policy == ENDPOINT_CONTROL_INTEGRATION_MANAGED
+
+    @staticmethod
+    def _rollback_choice_confirmed_key() -> str:
+        return "__confirmed_candidate__"
+
+    @staticmethod
+    def _rollback_choice_manual_key() -> str:
+        return "__manual__"
+
+    @_with_translation_bundle
+    async def async_step_strategy_transition_rollback(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """CP2B.2 chooser: pick the cloud endpoint to hand the collector back to.
+
+        Builds exactly ONE typed ``CloudRollbackSelection`` (confirmed candidate,
+        catalog, or manual). This is the collector's CLOUD endpoint role -- kept
+        strictly separate from the advertised HA callback route and the collector
+        trigger target already collected. Nothing here writes the collector; the
+        selection is passed to the coordinator which persists it before any write.
+        """
+
+        from .collector.cloud_rollback_catalog import (
+            cloud_rollback_selection_from_candidate,
+            cloud_rollback_selection_from_catalog_key,
+            cloud_rollback_selection_from_manual,
+            writable_cloud_rollback_catalog_options,
+        )
+
+        if self._transition_target_strategy not in CONNECTION_STRATEGIES:
+            return await self.async_step_runtime()
+
+        from .connection.strategy_transition_context import CloudRollbackEndpoint
+
+        # Pin the exact read-model fact shown on the first render.  A submit must
+        # never silently substitute a newer endpoint that the user did not see;
+        # the execution boundary independently re-resolves it and rejects a
+        # changed candidate as stale.
+        if not self._transition_rollback_candidate_pinned:
+            resolved = await self._resolve_cloud_rollback_context()
+            self._transition_rollback_candidate_snapshot = (
+                resolved
+                if type(resolved) is CloudRollbackEndpoint and resolved.known
+                else None
+            )
+            self._transition_rollback_candidate_pinned = True
+        candidate = self._transition_rollback_candidate_snapshot
+        candidate_known = (
+            type(candidate) is CloudRollbackEndpoint and candidate.known
+        )
+        catalog_options = writable_cloud_rollback_catalog_options()
+        confirmed_key = self._rollback_choice_confirmed_key()
+        manual_key = self._rollback_choice_manual_key()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            flat = _flatten_sections(user_input)
+            choice = flat.get("rollback_choice")
+            manual_raw = flat.get("rollback_manual_endpoint")
+            selection = None
+            if choice == confirmed_key:
+                selection = (
+                    cloud_rollback_selection_from_candidate(candidate)
+                    if candidate_known
+                    else None
+                )
+                if selection is None:
+                    errors["rollback_choice"] = "rollback_choice_invalid"
+            elif choice == manual_key:
+                selection = cloud_rollback_selection_from_manual(manual_raw)
+                if selection is None:
+                    errors["rollback_manual_endpoint"] = "rollback_endpoint_invalid"
+            elif type(choice) is str and choice:
+                # A catalog key: fail-closed on an arbitrary / stale key.
+                selection = cloud_rollback_selection_from_catalog_key(choice)
+                if selection is None:
+                    errors["rollback_choice"] = "rollback_choice_invalid"
+            else:
+                errors["rollback_choice"] = "rollback_choice_required"
+            if not errors and selection is not None:
+                self._transition_rollback_selection = selection
+                return await self.async_step_strategy_transition_progress()
+
+        options: list[SelectOptionDict] = []
+        if candidate_known:
+            provenance_label = self._tr(
+                f"common.dynamic.rollback_provenance_{candidate.provenance}",
+                candidate.provenance,
+            )
+            options.append(
+                SelectOptionDict(
+                    value=confirmed_key,
+                    label=(
+                        f"{self._tr('common.dynamic.rollback_choice_confirmed', 'Use the saved endpoint')}"
+                        f": {candidate.endpoint} ({provenance_label})"
+                    ),
+                )
+            )
+        for option in catalog_options:
+            options.append(
+                SelectOptionDict(
+                    value=option.key,
+                    label=f"{option.label} ({option.provider}) — {option.endpoint}",
+                )
+            )
+        options.append(
+            SelectOptionDict(
+                value=manual_key,
+                label=self._tr(
+                    "common.dynamic.rollback_choice_manual",
+                    "Enter a cloud endpoint manually",
+                ),
+            )
+        )
+        default_choice = confirmed_key if candidate_known else manual_key
+        schema_fields: dict[Any, Any] = {
+            vol.Required("rollback_choice", default=default_choice): SelectSelector(
+                SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
+            ),
+            vol.Optional("rollback_manual_endpoint", default=""): TextSelector(
+                TextSelectorConfig()
+            ),
+        }
+        return self.async_show_form(
+            step_id="strategy_transition_rollback",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+            description_placeholders={
+                "candidate_endpoint": candidate.endpoint if candidate_known else "",
             },
         )
 
@@ -10115,6 +10414,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     advertised_host=host,
                     advertised_port=port,
                     option_payload=dict(self._transition_options_payload),
+                    # CP2B.2: the SINGLE typed authority for the cloud rollback
+                    # endpoint. None on the already-external path (no restore).
+                    cloud_rollback_selection=self._transition_rollback_selection,
                 )
         except asyncio.CancelledError:
             raise
@@ -10145,6 +10447,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             # trigger a second semantic reload).
             payload = dict(self._config_entry.options)
             self._transition_target_strategy = ""
+            self._transition_rollback_selection = None
+            self._transition_rollback_candidate_snapshot = None
+            self._transition_rollback_candidate_pinned = False
+            self._transition_rollback_candidate_snapshot = None
+            self._transition_rollback_candidate_pinned = False
             self._transition_options_payload = {}
             self._transition_result = None
             return self.async_create_entry(data=payload)
@@ -10650,6 +10957,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         del user_input
         options = dict(self._transition_options_payload)
         self._transition_target_strategy = ""
+        self._transition_rollback_selection = None
+        self._transition_rollback_candidate_snapshot = None
+        self._transition_rollback_candidate_pinned = False
+        self._transition_rollback_candidate_snapshot = None
+        self._transition_rollback_candidate_pinned = False
         self._transition_options_payload = {}
         self._transition_result = None
         self._transition_error = ""
@@ -10666,6 +10978,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
         del user_input
         self._transition_target_strategy = ""
+        self._transition_rollback_selection = None
+        self._transition_rollback_candidate_snapshot = None
+        self._transition_rollback_candidate_pinned = False
+        self._transition_rollback_candidate_snapshot = None
+        self._transition_rollback_candidate_pinned = False
         self._transition_options_payload = {}
         self._transition_result = None
         self._transition_error = ""

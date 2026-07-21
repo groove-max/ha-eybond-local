@@ -48,14 +48,21 @@ _ENDPOINT_PROVENANCE = frozenset(
     }
 )
 
-# Cloud rollback endpoint provenance.
+# Cloud rollback endpoint provenance (closed vocabulary, in resolution priority
+# order). ``explicit_user_endpoint`` is RESERVED for CP2B.2 (a user catalog /
+# manual choice): the resolver accepts it at the top of the priority order, but
+# CP2B.1 never produces it (no user choice exists yet).
+CLOUD_PROVENANCE_EXPLICIT_USER = "explicit_user_endpoint"
 CLOUD_PROVENANCE_ORIGINAL = "original_cloud_endpoint"
+CLOUD_PROVENANCE_REGISTRY = "collector_registry"
 CLOUD_PROVENANCE_OBSERVED_CURRENT = "observed_current_external_endpoint"
 CLOUD_PROVENANCE_NONE = "none"
 
 _CLOUD_PROVENANCE = frozenset(
     {
+        CLOUD_PROVENANCE_EXPLICIT_USER,
         CLOUD_PROVENANCE_ORIGINAL,
+        CLOUD_PROVENANCE_REGISTRY,
         CLOUD_PROVENANCE_OBSERVED_CURRENT,
         CLOUD_PROVENANCE_NONE,
     }
@@ -177,21 +184,15 @@ class CloudRollbackEndpoint:
             return
         if not self.endpoint:
             raise ValueError("transition_cloud_endpoint_missing")
-        # A known rollback endpoint may be WRITTEN to the collector: it must be a
-        # syntactically valid host,port[,proto] via the existing provider-neutral
-        # parser. ``require_explicit_port`` keeps cloud-family resolution out of
-        # the validation (the cloud family never participates here).
-        try:
-            parts = inspect_collector_server_endpoint(
-                self.endpoint,
-                require_explicit_port=True,
-                require_explicit_protocol=False,
-            )
-        except ValueError as exc:
-            raise ValueError("transition_cloud_endpoint_syntax_invalid") from exc
-        # A wildcard bind is never a safe rollback target to write to a collector.
-        if parts.host in _WILDCARD_HOSTS:
-            raise ValueError("transition_cloud_endpoint_wildcard")
+        # Preserve every endpoint shape the existing collector layer supports,
+        # including factory host-only values.  A direct model is normalized by
+        # construction; persisted/raw inputs are normalized by the resolver
+        # before they reach this boundary.
+        normalized = _valid_writable_cloud_endpoint(self.endpoint)
+        if normalized is None:
+            raise ValueError("transition_cloud_endpoint_syntax_invalid")
+        if normalized != self.endpoint:
+            raise ValueError("transition_cloud_endpoint_not_normalized")
 
     @classmethod
     def none(cls) -> "CloudRollbackEndpoint":
@@ -200,6 +201,121 @@ class CloudRollbackEndpoint:
     @property
     def known(self) -> bool:
         return self.provenance != CLOUD_PROVENANCE_NONE
+
+
+# ---- cloud rollback SELECTION (CP2B.2) ---------------------------------------
+# How the user chose the rollback endpoint (closed vocabulary).
+ROLLBACK_SELECTION_CONFIRMED_CANDIDATE = "confirmed_candidate"
+ROLLBACK_SELECTION_CATALOG = "catalog"
+ROLLBACK_SELECTION_MANUAL = "manual"
+
+_ROLLBACK_SELECTION_KINDS = frozenset(
+    {
+        ROLLBACK_SELECTION_CONFIRMED_CANDIDATE,
+        ROLLBACK_SELECTION_CATALOG,
+        ROLLBACK_SELECTION_MANUAL,
+    }
+)
+
+# A confirmed candidate must carry one of the CP2B.1 resolver provenances (never
+# the reserved explicit-user slot -- that belongs to catalog/manual).
+_CONFIRMED_CANDIDATE_PROVENANCES = frozenset(
+    {
+        CLOUD_PROVENANCE_ORIGINAL,
+        CLOUD_PROVENANCE_REGISTRY,
+        CLOUD_PROVENANCE_OBSERVED_CURRENT,
+    }
+)
+
+# Honest, closed persistence-source tokens (written to the original-endpoint
+# whole-record). A catalog/manual endpoint is NEVER labelled observed/factory.
+ROLLBACK_SOURCE_USER_CONFIRMED_EXISTING = "user_confirmed_existing"
+ROLLBACK_SOURCE_USER_SELECTED_CATALOG = "user_selected_catalog"
+ROLLBACK_SOURCE_USER_ENTERED_MANUAL = "user_entered_manual"
+
+_ROLLBACK_SELECTION_SOURCE = {
+    ROLLBACK_SELECTION_CONFIRMED_CANDIDATE: ROLLBACK_SOURCE_USER_CONFIRMED_EXISTING,
+    ROLLBACK_SELECTION_CATALOG: ROLLBACK_SOURCE_USER_SELECTED_CATALOG,
+    ROLLBACK_SELECTION_MANUAL: ROLLBACK_SOURCE_USER_ENTERED_MANUAL,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CloudRollbackSelection:
+    """The user's typed, immutable choice of cloud rollback endpoint (CP2B.2).
+
+    The ONE authority object for a callback restore: the config flow BUILDS it,
+    and the coordinator/transition authority exact-type validate it before the
+    first mutation. It is NOT a proof and it does NOT change ``connection_strategy``.
+
+    A confirmed candidate re-uses a CP2B.1 resolver endpoint verbatim (its
+    ``candidate_provenance`` must equal the endpoint's own provenance). A catalog
+    or manual choice is an explicit user endpoint -- it can never masquerade as an
+    observed/factory-confirmed one. Every endpoint is already validated by the
+    provider-neutral parser inside ``CloudRollbackEndpoint`` (host, host+port and
+    host+port+protocol shapes preserved; wildcard rejected).
+    """
+
+    endpoint: CloudRollbackEndpoint
+    selection_kind: str
+    candidate_provenance: str = ""
+    catalog_profile_key: str = ""
+    user_confirmed: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.endpoint) is not CloudRollbackEndpoint:
+            raise TypeError("rollback_selection_endpoint_type_required")
+        if not self.endpoint.known:
+            raise ValueError("rollback_selection_endpoint_required")
+        if (
+            type(self.selection_kind) is not str
+            or self.selection_kind not in _ROLLBACK_SELECTION_KINDS
+        ):
+            raise ValueError("rollback_selection_kind_invalid")
+        # user_confirmed must be the EXACT bool True (never 1 / "true" / duck).
+        if self.user_confirmed is not True:
+            raise ValueError("rollback_selection_unconfirmed")
+        if type(self.candidate_provenance) is not str:
+            raise TypeError("rollback_selection_candidate_provenance_type")
+        if type(self.catalog_profile_key) is not str:
+            raise TypeError("rollback_selection_catalog_key_type")
+        if self.candidate_provenance != self.candidate_provenance.strip():
+            raise ValueError("rollback_selection_candidate_provenance_not_normalized")
+        if self.catalog_profile_key != self.catalog_profile_key.strip():
+            raise ValueError("rollback_selection_catalog_key_not_normalized")
+        if self.selection_kind == ROLLBACK_SELECTION_CONFIRMED_CANDIDATE:
+            if self.candidate_provenance not in _CONFIRMED_CANDIDATE_PROVENANCES:
+                raise ValueError("rollback_selection_candidate_provenance_invalid")
+            if self.endpoint.provenance != self.candidate_provenance:
+                raise ValueError("rollback_selection_candidate_provenance_mismatch")
+            if self.catalog_profile_key:
+                raise ValueError("rollback_selection_confirmed_forbids_catalog_key")
+        elif self.selection_kind == ROLLBACK_SELECTION_CATALOG:
+            if self.endpoint.provenance != CLOUD_PROVENANCE_EXPLICIT_USER:
+                raise ValueError("rollback_selection_catalog_provenance_invalid")
+            if self.candidate_provenance:
+                raise ValueError("rollback_selection_catalog_forbids_candidate_provenance")
+            if not self.catalog_profile_key:
+                raise ValueError("rollback_selection_catalog_key_required")
+        else:  # ROLLBACK_SELECTION_MANUAL
+            if self.endpoint.provenance != CLOUD_PROVENANCE_EXPLICIT_USER:
+                raise ValueError("rollback_selection_manual_provenance_invalid")
+            if self.candidate_provenance:
+                raise ValueError("rollback_selection_manual_forbids_candidate_provenance")
+            if self.catalog_profile_key:
+                raise ValueError("rollback_selection_manual_forbids_catalog_key")
+
+    @property
+    def endpoint_value(self) -> str:
+        """The exact, shape-preserved endpoint string to write to the collector."""
+
+        return self.endpoint.endpoint
+
+    @property
+    def persistence_source(self) -> str:
+        """The honest whole-record source token for this selection kind."""
+
+        return _ROLLBACK_SELECTION_SOURCE[self.selection_kind]
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +489,217 @@ def resolve_default_ha_endpoint(
     return TransitionEndpointCandidate.none()
 
 
+def _valid_writable_cloud_endpoint(value: object) -> str | None:
+    """Return one normalized, non-wildcard collector endpoint, or ``None``.
+
+    All shapes already supported by the existing endpoint layer remain valid:
+    ``host``, ``host,port`` and ``host,port,protocol``.  The input must first be
+    an exact string; normalization then goes through the existing parser and its
+    shape-preserving renderer -- never through a second parser or ``str()``
+    coercion.
+    """
+
+    endpoint = _normalized_str(value)
+    if endpoint is None or endpoint == "":
+        return None
+    try:
+        parts = inspect_collector_server_endpoint(
+            endpoint,
+            require_explicit_port=False,
+            require_explicit_protocol=False,
+        )
+    except ValueError:
+        return None
+    if parts.host in _WILDCARD_HOSTS:
+        return None
+    return parts.render(preserve_shape=True)
+
+
+def resolve_confirmed_ha_endpoint(
+    *,
+    current_strategy: object,
+    entry_pn: object,
+    advertised_host: object,
+    advertised_port: object,
+    recovery_contract: object,
+) -> TransitionEndpointCandidate:
+    """Resolve a PN-bound, proof-backed HA endpoint without runtime fallbacks.
+
+    The persisted advertised pair is an earned fact only when it is tied to the
+    valid ``RecoveryContract`` written by the same atomic strategy commit.  For
+    callback strategy, the proof's NAT-visible ``advertised_ha_endpoint`` is the
+    authority and must agree with a persisted pair when one is present.  For
+    inbound strategy, the atomic pair is accepted only alongside an inbound
+    proof.  A local bind/server address is deliberately not an input.
+    """
+
+    from .recovery_contract import RecoveryContract
+    from .session_registry import pn_is_same_identity
+
+    if type(recovery_contract) is not RecoveryContract:
+        return TransitionEndpointCandidate.none()
+    if (
+        type(entry_pn) is not str
+        or not entry_pn
+        or entry_pn != entry_pn.strip()
+        or not pn_is_same_identity(entry_pn, recovery_contract.collector_pn)
+    ):
+        return TransitionEndpointCandidate.none()
+
+    pair_present = not (
+        type(advertised_host) is str
+        and advertised_host == ""
+        and type(advertised_port) is int
+        and type(advertised_port) is not bool
+        and advertised_port == 0
+    )
+    pair_host = _advertisable_host(advertised_host)
+    pair_valid = pair_host is not None and _valid_port(advertised_port)
+
+    if current_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+        proof = recovery_contract.callback_proof
+        if proof is None:
+            return TransitionEndpointCandidate.none()
+        parsed = _parse_present_proof_endpoint(proof.advertised_ha_endpoint)
+        if parsed is None:
+            return TransitionEndpointCandidate.none()
+        if pair_present and (not pair_valid or parsed != (pair_host, advertised_port)):
+            return TransitionEndpointCandidate.none()
+        return TransitionEndpointCandidate(
+            host=parsed[0],
+            port=parsed[1],
+            provenance=PROVENANCE_CONFIRMED_HA_ENDPOINT,
+        )
+
+    if current_strategy == CONNECTION_STRATEGY_INBOUND:
+        if recovery_contract.inbound_proof is None or not pair_valid:
+            return TransitionEndpointCandidate.none()
+        return TransitionEndpointCandidate(
+            host=pair_host,
+            port=advertised_port,
+            provenance=PROVENANCE_CONFIRMED_HA_ENDPOINT,
+        )
+
+    return TransitionEndpointCandidate.none()
+
+
+def _observed_endpoint_is_distinct_from_ha(
+    endpoint: str,
+    confirmed_ha_endpoint: TransitionEndpointCandidate,
+) -> bool:
+    """Return whether a current endpoint is provably distinct from HA.
+
+    DNS host comparison is case-insensitive; port and protocol participate in
+    equivalence.  A compact host-only value on the same host is ambiguous when
+    it does not resolve to the confirmed port, so it fails closed instead of
+    being promoted using a cloud-family guess.
+    """
+
+    try:
+        parts = inspect_collector_server_endpoint(
+            endpoint,
+            require_explicit_port=False,
+            require_explicit_protocol=False,
+        )
+    except ValueError:
+        return False
+    if parts.host.casefold() != confirmed_ha_endpoint.host.casefold():
+        return True
+    if not parts.has_explicit_port:
+        return False
+    return not (
+        parts.port == confirmed_ha_endpoint.port
+        and parts.protocol.casefold() == "tcp"
+    )
+
+
+def resolve_cloud_rollback_endpoint(
+    *,
+    explicit_user_endpoint: object,
+    durable_original_endpoint: object,
+    registry_endpoint: object,
+    registry_pn: object,
+    entry_pn: object,
+    observed_current_endpoint: object,
+    confirmed_ha_endpoint: object,
+) -> CloudRollbackEndpoint:
+    """Resolve the cloud rollback endpoint from PRE-GATHERED facts (pure/read-only).
+
+    NO I/O, NO persistence, NO proof, NO strategy authority. Every input is a
+    fact the read-only boundary already gathered through existing APIs.
+
+    Priority (higher wins), each a STRICTLY SEPARATE source:
+
+    1. ``explicit_user_endpoint`` -- a user catalog/manual choice (CP2B.2; the
+       CP2B.1 boundary always passes ``""``);
+    2. ``durable_original_endpoint`` -- the saved original cloud endpoint (read
+       as ONE whole record by the boundary, data-over-options; the boundary
+       passes ``""`` only when NO original record exists at all);
+    3. ``registry_endpoint`` -- a PN-bound collector-registry fact, accepted only
+       when ``pn_is_same_identity(entry_pn, registry_pn)`` (short/full identity);
+    4. ``observed_current_endpoint`` -- the confirmed current endpoint, a
+       rollback candidate ONLY when a proof-backed full HA endpoint is known and
+       the complete endpoint semantics are provably distinct;
+    5. ``none``.
+
+    Fail-closed at every boundary: a PRESENT-but-malformed higher-priority source
+    returns ``none`` and NEVER falls through to a lower source (so corruption is
+    never silently masked). Absence is EXACTLY the empty string ``""``.
+    """
+
+    # 1. explicit user choice (CP2B.2). Reserved: absent in CP2B.1.
+    if not (type(explicit_user_endpoint) is str and explicit_user_endpoint == ""):
+        endpoint = _valid_writable_cloud_endpoint(explicit_user_endpoint)
+        if endpoint is not None:
+            return CloudRollbackEndpoint(
+                endpoint=endpoint, provenance=CLOUD_PROVENANCE_EXPLICIT_USER
+            )
+        return CloudRollbackEndpoint.none()
+
+    # 2. durable saved original cloud endpoint (whole record).
+    if not (type(durable_original_endpoint) is str and durable_original_endpoint == ""):
+        endpoint = _valid_writable_cloud_endpoint(durable_original_endpoint)
+        if endpoint is not None:
+            return CloudRollbackEndpoint(
+                endpoint=endpoint, provenance=CLOUD_PROVENANCE_ORIGINAL
+            )
+        return CloudRollbackEndpoint.none()
+
+    # 3. PN-bound collector-registry endpoint.
+    if not (type(registry_endpoint) is str and registry_endpoint == ""):
+        endpoint = _valid_writable_cloud_endpoint(registry_endpoint)
+        # Lazy import keeps this module's top-level imports minimal; the PN
+        # identity rule is the ONE short/full reconciliation authority.
+        from .session_registry import pn_is_same_identity
+
+        if endpoint is not None and pn_is_same_identity(entry_pn, registry_pn):
+            return CloudRollbackEndpoint(
+                endpoint=endpoint, provenance=CLOUD_PROVENANCE_REGISTRY
+            )
+        return CloudRollbackEndpoint.none()
+
+    # 4. confirmed current endpoint, only if proven not to be the HA endpoint.
+    if not (type(observed_current_endpoint) is str and observed_current_endpoint == ""):
+        endpoint = _valid_writable_cloud_endpoint(observed_current_endpoint)
+        if (
+            endpoint is not None
+            and type(confirmed_ha_endpoint) is TransitionEndpointCandidate
+            and confirmed_ha_endpoint.provenance
+            == PROVENANCE_CONFIRMED_HA_ENDPOINT
+            and _observed_endpoint_is_distinct_from_ha(
+                endpoint, confirmed_ha_endpoint
+            )
+        ):
+            return CloudRollbackEndpoint(
+                endpoint=endpoint,
+                provenance=CLOUD_PROVENANCE_OBSERVED_CURRENT,
+            )
+        return CloudRollbackEndpoint.none()
+
+    # 5. none
+    return CloudRollbackEndpoint.none()
+
+
 def earned_advertised_route(
     *,
     committed_strategy: object,
@@ -433,10 +760,19 @@ def earned_advertised_route(
 
 
 __all__ = [
+    "CLOUD_PROVENANCE_EXPLICIT_USER",
     "CLOUD_PROVENANCE_NONE",
     "CLOUD_PROVENANCE_OBSERVED_CURRENT",
     "CLOUD_PROVENANCE_ORIGINAL",
+    "CLOUD_PROVENANCE_REGISTRY",
     "CloudRollbackEndpoint",
+    "CloudRollbackSelection",
+    "ROLLBACK_SELECTION_CATALOG",
+    "ROLLBACK_SELECTION_CONFIRMED_CANDIDATE",
+    "ROLLBACK_SELECTION_MANUAL",
+    "ROLLBACK_SOURCE_USER_CONFIRMED_EXISTING",
+    "ROLLBACK_SOURCE_USER_ENTERED_MANUAL",
+    "ROLLBACK_SOURCE_USER_SELECTED_CATALOG",
     "PROVENANCE_CALLBACK_PROOF",
     "PROVENANCE_CONFIRMED_HA_ENDPOINT",
     "PROVENANCE_EFFECTIVE_RUNTIME_ROUTE",
@@ -447,5 +783,7 @@ __all__ = [
     "earned_advertised_route",
     "normalized_advertised_host",
     "parse_advertised_port",
+    "resolve_cloud_rollback_endpoint",
+    "resolve_confirmed_ha_endpoint",
     "resolve_default_ha_endpoint",
 ]

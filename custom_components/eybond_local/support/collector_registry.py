@@ -19,6 +19,14 @@ from typing import Any
 _REGISTRY_FILENAME = "eybond_local.collectors"
 _PN_RE = re.compile(r"^[A-Za-z0-9_.:-]{4,128}$")
 
+_EXPLICIT_USER_REPLACEMENT_SOURCES = frozenset(
+    {
+        "user_confirmed_existing",
+        "user_selected_catalog",
+        "user_entered_manual",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CollectorRegistryRecord:
@@ -180,8 +188,15 @@ def remember_collector_original_endpoint(
     source: str = "",
     observed_at: str = "",
     last_seen_ip: str = "",
+    force: bool = False,
 ) -> CollectorRegistryRecord:
-    """Persist one original endpoint fact without replacing an existing endpoint."""
+    """Persist one original endpoint fact.
+
+    By default an already-recorded endpoint is preserved (auto-observation must
+    never clobber a durable original). ``force=True`` is accepted only for one
+    of the closed explicit-user source tokens.  A runtime observation can never
+    acquire replacement authority merely by passing a boolean flag.
+    """
 
     record = build_collector_registry_record(
         collector_pn=collector_pn,
@@ -191,9 +206,11 @@ def remember_collector_original_endpoint(
         observed_at=observed_at,
         last_seen_ip=last_seen_ip,
     )
+    if force and record.source not in _EXPLICIT_USER_REPLACEMENT_SOURCES:
+        raise ValueError("collector_original_endpoint_force_source_invalid")
     records = load_collector_registry(config_dir)
     existing = records.get(record.collector_pn)
-    if existing is not None and existing.original_endpoint_raw:
+    if not force and existing is not None and existing.original_endpoint_raw:
         if last_seen_ip and existing.last_seen_ip != record.last_seen_ip:
             existing = CollectorRegistryRecord(
                 collector_pn=existing.collector_pn,

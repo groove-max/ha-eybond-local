@@ -19,8 +19,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.connection.strategy_transition_context import (
+    CLOUD_PROVENANCE_EXPLICIT_USER,
     CLOUD_PROVENANCE_NONE,
+    CLOUD_PROVENANCE_OBSERVED_CURRENT,
     CLOUD_PROVENANCE_ORIGINAL,
+    CLOUD_PROVENANCE_REGISTRY,
     CloudRollbackEndpoint,
     PROVENANCE_CALLBACK_PROOF,
     PROVENANCE_CONFIRMED_HA_ENDPOINT,
@@ -30,11 +33,78 @@ from custom_components.eybond_local.connection.strategy_transition_context impor
     StrategyTransitionContext,
     TransitionEndpointCandidate,
     earned_advertised_route,
+    resolve_cloud_rollback_endpoint,
+    resolve_confirmed_ha_endpoint,
     resolve_default_ha_endpoint,
 )
 
 CB_ON = "callback_on_demand"
 INBOUND = "inbound"
+
+# Structure-preserving synthetic PNs (E500 family + V00 family).
+_PN_FULL = "E5000025SYN0000000001"
+_PN_SHORT = "E5000025SY"
+_PN_FOREIGN = "V0011SYNFOREIGN000009"
+_TS = "2026-07-21T10:00:00+00:00"
+
+
+def _rollback(**over):
+    base = dict(
+        explicit_user_endpoint="",
+        durable_original_endpoint="",
+        registry_endpoint="",
+        registry_pn="",
+        entry_pn="",
+        observed_current_endpoint="",
+        confirmed_ha_endpoint=None,
+    )
+    base.update(over)
+    return resolve_cloud_rollback_endpoint(**base)
+
+
+def _confirmed(host: str = "192.168.1.50", port: int = 8899):
+    return TransitionEndpointCandidate(
+        host=host,
+        port=port,
+        provenance=PROVENANCE_CONFIRMED_HA_ENDPOINT,
+    )
+
+
+def _recovery_contract(*, strategy: str, advertised: str = "195.191.72.37:18899"):
+    from custom_components.eybond_local.connection.recovery_contract import (
+        CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+        INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+        CallbackRecoveryProof,
+        InboundRecoveryProof,
+        RecoveryContract,
+    )
+
+    contract = RecoveryContract.empty_for_pn(
+        _PN_FULL, identity_source="fc2_parameter_2", updated_at=_TS
+    )
+    if strategy == CB_ON:
+        return contract.with_callback_proof(
+            CallbackRecoveryProof(
+                method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+                collector_pn=_PN_FULL,
+                identity_source="fc2_parameter_2",
+                verified_at=_TS,
+                trigger_target="203.0.113.10:58899",
+                advertised_ha_endpoint=advertised,
+                listener_port=8899,
+            ),
+            updated_at=_TS,
+        )
+    return contract.with_inbound_proof(
+        InboundRecoveryProof(
+            method=INBOUND_RECOVERY_REBOOT_RECONNECT_NO_TRIGGER,
+            collector_pn=_PN_FULL,
+            identity_source="fc2_parameter_2",
+            verified_at=_TS,
+            session_protocol="eybond_framed",
+        ),
+        updated_at=_TS,
+    )
 
 
 def _resolve(**over):
@@ -284,17 +354,20 @@ class CloudRollbackConstruction(unittest.TestCase):
             CloudRollbackEndpoint(endpoint="x", provenance=CLOUD_PROVENANCE_NONE)  # none w/ value
 
     def test_known_endpoint_is_syntactically_validated(self) -> None:
-        # A known rollback endpoint that could be WRITTEN must be a valid
-        # host,port[,proto]; garbage like "x" is rejected (not merely non-empty).
-        for bad in ("x", "host,port,TCP", "host,99999,TCP", ",18899,TCP"):
+        # All existing compact shapes are supported; malformed values are not.
+        for bad in ("host,port,TCP", "host,99999,TCP", ",18899,TCP"):
             with self.assertRaises(ValueError):
                 CloudRollbackEndpoint(endpoint=bad, provenance=CLOUD_PROVENANCE_ORIGINAL)
-        # host,port (proto defaults, no cloud-family involvement) is valid.
-        self.assertTrue(
+        for endpoint in ("ess.eybond.com", "203.0.113.9,18899", "203.0.113.9,18899,TCP"):
+            self.assertTrue(
+                CloudRollbackEndpoint(
+                    endpoint=endpoint, provenance=CLOUD_PROVENANCE_ORIGINAL
+                ).known
+            )
+        with self.assertRaises(ValueError):
             CloudRollbackEndpoint(
-                endpoint="203.0.113.9,18899", provenance=CLOUD_PROVENANCE_ORIGINAL
-            ).known
-        )
+                endpoint="host, 18899,tcp", provenance=CLOUD_PROVENANCE_ORIGINAL
+            )
 
     def test_wildcard_rollback_target_rejected(self) -> None:
         # A wildcard bind is syntactically parseable but is never a safe rollback
@@ -302,6 +375,400 @@ class CloudRollbackConstruction(unittest.TestCase):
         for wild in ("0.0.0.0,18899,TCP", "0.0.0.0,18899"):
             with self.assertRaises(ValueError):
                 CloudRollbackEndpoint(endpoint=wild, provenance=CLOUD_PROVENANCE_ORIGINAL)
+
+
+class ConfirmedHaEndpointResolution(unittest.TestCase):
+    def test_callback_uses_nat_visible_proof_not_local_runtime_address(self) -> None:
+        candidate = resolve_confirmed_ha_endpoint(
+            current_strategy=CB_ON,
+            entry_pn=_PN_FULL,
+            advertised_host="195.191.72.37",
+            advertised_port=18899,
+            recovery_contract=_recovery_contract(strategy=CB_ON),
+        )
+        self.assertEqual(candidate.provenance, PROVENANCE_CONFIRMED_HA_ENDPOINT)
+        self.assertEqual((candidate.host, candidate.port), ("195.191.72.37", 18899))
+
+    def test_callback_persisted_pair_must_match_proof(self) -> None:
+        candidate = resolve_confirmed_ha_endpoint(
+            current_strategy=CB_ON,
+            entry_pn=_PN_FULL,
+            advertised_host="192.168.1.50",
+            advertised_port=8899,
+            recovery_contract=_recovery_contract(strategy=CB_ON),
+        )
+        self.assertEqual(candidate.provenance, PROVENANCE_NONE)
+
+    def test_inbound_requires_atomic_pair_and_inbound_proof(self) -> None:
+        valid = resolve_confirmed_ha_endpoint(
+            current_strategy=INBOUND,
+            entry_pn=_PN_FULL,
+            advertised_host="198.51.100.20",
+            advertised_port=18899,
+            recovery_contract=_recovery_contract(strategy=INBOUND),
+        )
+        self.assertEqual((valid.host, valid.port), ("198.51.100.20", 18899))
+        missing_pair = resolve_confirmed_ha_endpoint(
+            current_strategy=INBOUND,
+            entry_pn=_PN_FULL,
+            advertised_host="",
+            advertised_port=0,
+            recovery_contract=_recovery_contract(strategy=INBOUND),
+        )
+        self.assertEqual(missing_pair.provenance, PROVENANCE_NONE)
+
+    def test_foreign_pn_and_duck_contract_fail_closed(self) -> None:
+        for contract, pn in (
+            (_recovery_contract(strategy=CB_ON), _PN_FOREIGN),
+            (object(), _PN_FULL),
+        ):
+            candidate = resolve_confirmed_ha_endpoint(
+                current_strategy=CB_ON,
+                entry_pn=pn,
+                advertised_host="195.191.72.37",
+                advertised_port=18899,
+                recovery_contract=contract,
+            )
+            self.assertEqual(candidate.provenance, PROVENANCE_NONE)
+
+
+class ResolveCloudRollbackA_DurableOriginal(unittest.TestCase):
+    def test_valid_whole_record_is_original(self) -> None:
+        r = _rollback(durable_original_endpoint="ess.eybond.com,18899,TCP")
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_ORIGINAL)
+        self.assertEqual(r.endpoint, "ess.eybond.com,18899,TCP")
+
+    def test_valid_original_beats_registry_and_observed(self) -> None:
+        r = _rollback(
+            durable_original_endpoint="ess.eybond.com,18899,TCP",
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+            observed_current_endpoint="cloud.other,18899,TCP",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_ORIGINAL)
+
+    def test_malformed_original_fails_closed_no_fall_through(self) -> None:
+        # A PRESENT-but-malformed durable record must NOT silently drop to the
+        # (valid) registry/observed source -- it fails closed to none. No options
+        # field mixing: only the chosen record's endpoint reached the resolver.
+        r = _rollback(
+            durable_original_endpoint="not-an-endpoint###",
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+            observed_current_endpoint="cloud.other,18899,TCP",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_partial_record_missing_endpoint_fails_closed(self) -> None:
+        # The boundary passes ``None`` for a present-but-partial record (metadata
+        # present, endpoint key absent): present-but-invalid -> fail closed.
+        r = _rollback(
+            durable_original_endpoint=None,
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_wildcard_original_is_none(self) -> None:
+        self.assertEqual(
+            _rollback(durable_original_endpoint="0.0.0.0,18899,TCP").provenance,
+            CLOUD_PROVENANCE_NONE,
+        )
+
+    def test_host_only_original_is_preserved(self) -> None:
+        result = _rollback(durable_original_endpoint="ess.eybond.com")
+        self.assertEqual(result.provenance, CLOUD_PROVENANCE_ORIGINAL)
+        self.assertEqual(result.endpoint, "ess.eybond.com")
+
+
+class ResolveCloudRollbackB_Registry(unittest.TestCase):
+    def test_same_pn_registry_endpoint(self) -> None:
+        r = _rollback(
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_REGISTRY)
+        self.assertEqual(r.endpoint, "reg.example,18899,TCP")
+
+    def test_short_and_full_same_identity_accepted(self) -> None:
+        for entry_pn, reg_pn in ((_PN_SHORT, _PN_FULL), (_PN_FULL, _PN_SHORT)):
+            r = _rollback(
+                registry_endpoint="reg.example,18899,TCP",
+                registry_pn=reg_pn,
+                entry_pn=entry_pn,
+            )
+            self.assertEqual(r.provenance, CLOUD_PROVENANCE_REGISTRY, (entry_pn, reg_pn))
+
+    def test_foreign_pn_rejected(self) -> None:
+        r = _rollback(
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FOREIGN,
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_malformed_registry_endpoint_rejected(self) -> None:
+        r = _rollback(
+            registry_endpoint="bad###endpoint",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_registry_does_not_override_valid_durable(self) -> None:
+        r = _rollback(
+            durable_original_endpoint="ess.eybond.com,18899,TCP",
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_ORIGINAL)
+
+    def test_host_only_registry_endpoint_is_preserved(self) -> None:
+        result = _rollback(
+            registry_endpoint="ess.eybond.com",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+        )
+        self.assertEqual(result.provenance, CLOUD_PROVENANCE_REGISTRY)
+        self.assertEqual(result.endpoint, "ess.eybond.com")
+
+
+class ResolveCloudRollbackC_ObservedCurrent(unittest.TestCase):
+    def test_confirmed_current_not_equivalent_is_candidate(self) -> None:
+        r = _rollback(
+            observed_current_endpoint="cloud.example,18899,TCP",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_OBSERVED_CURRENT)
+        self.assertEqual(r.endpoint, "cloud.example,18899,TCP")
+
+    def test_equivalent_endpoint_different_spelling_is_none(self) -> None:
+        # Equivalent host+port+protocol spellings are not rollback candidates.
+        for spelling in ("192.168.1.50,8899,TCP", "192.168.1.50,8899"):
+            r = _rollback(
+                observed_current_endpoint=spelling,
+                confirmed_ha_endpoint=_confirmed(),
+            )
+            self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE, spelling)
+
+    def test_same_host_different_explicit_port_or_protocol_is_distinct(self) -> None:
+        for endpoint in ("192.168.1.50,18899,TCP", "192.168.1.50,8899,UDP"):
+            r = _rollback(
+                observed_current_endpoint=endpoint,
+                confirmed_ha_endpoint=_confirmed(),
+            )
+            self.assertEqual(r.provenance, CLOUD_PROVENANCE_OBSERVED_CURRENT, endpoint)
+
+    def test_same_host_compact_endpoint_is_ambiguous(self) -> None:
+        r = _rollback(
+            observed_current_endpoint="192.168.1.50",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_missing_ha_endpoint_is_none(self) -> None:
+        r = _rollback(
+            observed_current_endpoint="cloud.example,18899,TCP",
+            confirmed_ha_endpoint=None,
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_malformed_observation_is_none(self) -> None:
+        r = _rollback(
+            observed_current_endpoint="junk###",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_host_only_different_host_is_candidate(self) -> None:
+        result = _rollback(
+            observed_current_endpoint="ess.eybond.com",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(result.provenance, CLOUD_PROVENANCE_OBSERVED_CURRENT)
+        self.assertEqual(result.endpoint, "ess.eybond.com")
+
+    def test_non_string_observation_is_never_coerced(self) -> None:
+        class EndpointDuck:
+            def __str__(self) -> str:
+                return "cloud.example,18899,TCP"
+
+        result = _rollback(
+            observed_current_endpoint=EndpointDuck(),
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(result.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_observation_does_not_override_durable_or_registry(self) -> None:
+        durable = _rollback(
+            durable_original_endpoint="ess.eybond.com,18899,TCP",
+            observed_current_endpoint="cloud.example,18899,TCP",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(durable.provenance, CLOUD_PROVENANCE_ORIGINAL)
+        registry = _rollback(
+            registry_endpoint="reg.example,18899,TCP",
+            registry_pn=_PN_FULL,
+            entry_pn=_PN_FULL,
+            observed_current_endpoint="cloud.example,18899,TCP",
+            confirmed_ha_endpoint=_confirmed(),
+        )
+        self.assertEqual(registry.provenance, CLOUD_PROVENANCE_REGISTRY)
+
+
+class ResolveCloudRollbackD_NoInference(unittest.TestCase):
+    def test_cloud_looking_host_without_confirmed_source_is_none(self) -> None:
+        # A cloud-looking observed hostname is NOT promoted without a known HA
+        # endpoint to prove it is external, and there is no durable/registry fact.
+        r = _rollback(observed_current_endpoint="dtu.smartesscloud.com,18899,TCP")
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_NONE)
+
+    def test_lan_looking_endpoint_with_valid_durable_stays_valid(self) -> None:
+        # Hostname shape is not the authority: a LAN-looking durable original is
+        # still a valid rollback endpoint.
+        r = _rollback(durable_original_endpoint="192.168.9.9,18899,TCP")
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_ORIGINAL)
+        self.assertEqual(r.endpoint, "192.168.9.9,18899,TCP")
+
+    def test_resolver_signature_has_no_family_provider_kind_or_peer_ip(self) -> None:
+        import inspect
+
+        params = set(
+            inspect.signature(resolve_cloud_rollback_endpoint).parameters
+        )
+        for banned in (
+            "cloud_family",
+            "provider",
+            "collector_kind",
+            "peer_ip",
+            "hostname",
+        ):
+            self.assertNotIn(banned, params)
+
+    def test_explicit_user_reserved_slot_wins_when_present(self) -> None:
+        # CP2B.2 forward-compat: an explicit user endpoint is the top priority.
+        r = _rollback(
+            explicit_user_endpoint="chosen.example,18899,TCP",
+            durable_original_endpoint="ess.eybond.com,18899,TCP",
+        )
+        self.assertEqual(r.provenance, CLOUD_PROVENANCE_EXPLICIT_USER)
+        self.assertEqual(r.endpoint, "chosen.example,18899,TCP")
+
+    def test_all_absent_is_none(self) -> None:
+        self.assertEqual(_rollback().provenance, CLOUD_PROVENANCE_NONE)
+
+
+class CloudRollbackSelectionModel(unittest.TestCase):
+    """CP2B.2 Test A: the typed selection model invariants."""
+
+    def _import(self):
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CloudRollbackSelection,
+            ROLLBACK_SELECTION_CATALOG,
+            ROLLBACK_SELECTION_CONFIRMED_CANDIDATE,
+            ROLLBACK_SELECTION_MANUAL,
+            ROLLBACK_SOURCE_USER_CONFIRMED_EXISTING,
+            ROLLBACK_SOURCE_USER_ENTERED_MANUAL,
+            ROLLBACK_SOURCE_USER_SELECTED_CATALOG,
+        )
+
+        return (
+            CloudRollbackSelection,
+            ROLLBACK_SELECTION_CONFIRMED_CANDIDATE,
+            ROLLBACK_SELECTION_CATALOG,
+            ROLLBACK_SELECTION_MANUAL,
+            ROLLBACK_SOURCE_USER_CONFIRMED_EXISTING,
+            ROLLBACK_SOURCE_USER_SELECTED_CATALOG,
+            ROLLBACK_SOURCE_USER_ENTERED_MANUAL,
+        )
+
+    def test_confirmed_candidate(self) -> None:
+        S, CONF, _CAT, _MAN, SRC_C, _s2, _s3 = self._import()
+        s = S(
+            endpoint=CloudRollbackEndpoint("ess.eybond.com,18899,TCP", CLOUD_PROVENANCE_ORIGINAL),
+            selection_kind=CONF,
+            candidate_provenance=CLOUD_PROVENANCE_ORIGINAL,
+            user_confirmed=True,
+        )
+        self.assertEqual(s.endpoint_value, "ess.eybond.com,18899,TCP")
+        self.assertEqual(s.persistence_source, SRC_C)
+
+    def test_catalog(self) -> None:
+        S, _c, CAT, _m, _s1, SRC_CAT, _s3 = self._import()
+        s = S(
+            endpoint=CloudRollbackEndpoint("dtu.example,18899,TCP", CLOUD_PROVENANCE_EXPLICIT_USER),
+            selection_kind=CAT,
+            catalog_profile_key="smartess_at",
+            user_confirmed=True,
+        )
+        self.assertEqual(s.persistence_source, SRC_CAT)
+        self.assertEqual(s.catalog_profile_key, "smartess_at")
+
+    def test_manual_host_only_preserved(self) -> None:
+        S, _c, _cat, MAN, _s1, _s2, SRC_MAN = self._import()
+        s = S(
+            endpoint=CloudRollbackEndpoint("cloud.example", CLOUD_PROVENANCE_EXPLICIT_USER),
+            selection_kind=MAN,
+            user_confirmed=True,
+        )
+        self.assertEqual(s.endpoint_value, "cloud.example")
+        self.assertEqual(s.persistence_source, SRC_MAN)
+
+    def test_all_endpoint_shapes_supported(self) -> None:
+        S, _c, _cat, MAN, *_ = self._import()
+        for shape in ("cloud.example", "cloud.example,18899", "cloud.example,18899,TCP"):
+            s = S(
+                endpoint=CloudRollbackEndpoint(shape, CLOUD_PROVENANCE_EXPLICIT_USER),
+                selection_kind=MAN,
+                user_confirmed=True,
+            )
+            self.assertEqual(s.endpoint_value, shape)
+
+    def test_rejections(self) -> None:
+        S, CONF, CAT, MAN, *_ = self._import()
+        ep_eu = CloudRollbackEndpoint("a.b,1,TCP", CLOUD_PROVENANCE_EXPLICIT_USER)
+        ep_orig = CloudRollbackEndpoint("a.b,1,TCP", CLOUD_PROVENANCE_ORIGINAL)
+        ep_obs = CloudRollbackEndpoint("a.b,1,TCP", CLOUD_PROVENANCE_OBSERVED_CURRENT)
+        cases = [
+            ("duck endpoint", lambda: S(endpoint="a.b,1,TCP", selection_kind=MAN, user_confirmed=True)),
+            ("unconfirmed", lambda: S(endpoint=ep_eu, selection_kind=MAN, user_confirmed=False)),
+            ("confirmed int 1", lambda: S(endpoint=ep_eu, selection_kind=MAN, user_confirmed=1)),
+            ("confirmed str", lambda: S(endpoint=ep_eu, selection_kind=MAN, user_confirmed="true")),
+            ("manual poses as observed", lambda: S(endpoint=ep_obs, selection_kind=MAN, user_confirmed=True)),
+            ("catalog no key", lambda: S(endpoint=ep_eu, selection_kind=CAT, user_confirmed=True)),
+            ("catalog wrong provenance", lambda: S(endpoint=ep_orig, selection_kind=CAT, catalog_profile_key="x", user_confirmed=True)),
+            ("confirmed provenance mismatch", lambda: S(endpoint=ep_orig, selection_kind=CONF, candidate_provenance=CLOUD_PROVENANCE_OBSERVED_CURRENT, user_confirmed=True)),
+            ("confirmed with catalog key", lambda: S(endpoint=ep_orig, selection_kind=CONF, candidate_provenance=CLOUD_PROVENANCE_ORIGINAL, catalog_profile_key="x", user_confirmed=True)),
+            ("bad kind", lambda: S(endpoint=ep_eu, selection_kind="whatever", user_confirmed=True)),
+            ("wildcard endpoint", lambda: S(endpoint=CloudRollbackEndpoint("0.0.0.0,18899,TCP", CLOUD_PROVENANCE_EXPLICIT_USER), selection_kind=MAN, user_confirmed=True)),
+        ]
+        for desc, fn in cases:
+            with self.subTest(desc=desc):
+                with self.assertRaises((ValueError, TypeError)):
+                    fn()
+
+    def test_selection_subclass_rejected_by_facade_type_check(self) -> None:
+        # A subclass is NOT an exact CloudRollbackSelection: the coordinator's
+        # exact-type gate (type(x) is CloudRollbackSelection) rejects it. Proven
+        # here at the type level so the authority stays fail-closed.
+        S, _c, _cat, MAN, *_ = self._import()
+
+        class _Sneaky(S):
+            pass
+
+        obj = _Sneaky(
+            endpoint=CloudRollbackEndpoint("a.b,1,TCP", CLOUD_PROVENANCE_EXPLICIT_USER),
+            selection_kind=MAN,
+            user_confirmed=True,
+        )
+        self.assertIsNot(type(obj), S)
 
 
 class ContextConstruction(unittest.TestCase):

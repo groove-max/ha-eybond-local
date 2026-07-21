@@ -381,7 +381,10 @@
       "connection_strategy_risk_unconfirmed": "You must confirm you understand the risks before switching the connection method.",
       "identity_not_confirmed": "That collector's identity could not be confirmed. Try again.",
       "callback_identity_ambiguous": "More than one collector answered. Make sure only the collector you are adding can reach Home Assistant, then try again.",
-      "callback_trigger_interference": "Another connection request ran at the same time, so the answer could not be attributed. Try again."
+      "callback_trigger_interference": "Another connection request ran at the same time, so the answer could not be attributed. Try again.",
+      "rollback_choice_invalid": "That cloud endpoint choice is no longer available. Choose again.",
+      "rollback_endpoint_invalid": "That is not a valid endpoint. Use host, host,port or host,port,protocol.",
+      "rollback_choice_required": "Choose a cloud endpoint to hand the collector back to."
     },
     "step": {
       "listener": {
@@ -636,7 +639,7 @@
       },
       "strategy_transition": {
         "title": "Confirm the connection switch",
-        "description": "Switching to **{target_strategy}** must be verified with a controlled collector restart before it is saved.\n\n⚠️ {connection_strategy_risk}\n\nCheck the addresses below. Behind NAT/port-forwarding enter the public host and port the collector can really reach — they are used exactly as written.",
+        "description": "Switching to **{target_strategy}** must be verified with a controlled collector restart before it is saved.\n\n⚠️ {connection_strategy_risk}\n\nℹ️ {connection_strategy_rollback}\n\nCheck the addresses below. Behind NAT/port-forwarding enter the public host and port the collector can really reach — they are used exactly as written.",
         "data": {
           "advertised_server_ip": "Home Assistant host the collector connects to",
           "advertised_tcp_port": "Port the collector connects to",
@@ -645,6 +648,17 @@
         },
         "data_description": {
           "confirm_connection_strategy_risk": "Required. The switch will not start until this box is checked."
+        }
+      },
+      "strategy_transition_rollback": {
+        "title": "Choose the cloud endpoint to restore",
+        "description": "Switching to on-demand means Home Assistant will hand the collector back to a cloud endpoint. Pick the endpoint to write to the collector. This is the collector's CLOUD endpoint — it is separate from the Home Assistant callback address you entered.\n\nSaved candidate: {candidate_endpoint}",
+        "data": {
+          "rollback_choice": "Cloud endpoint",
+          "rollback_manual_endpoint": "Manual endpoint (host, host,port or host,port,protocol)"
+        },
+        "data_description": {
+          "rollback_manual_endpoint": "Only used when \"Enter a cloud endpoint manually\" is selected above. Leave blank otherwise."
         }
       },
       "strategy_transition_failed": {

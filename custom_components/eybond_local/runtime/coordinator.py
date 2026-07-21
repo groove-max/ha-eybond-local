@@ -5134,6 +5134,106 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return runtime_target
         return self._normalized_remembered_collector_server_endpoint()
 
+    async def collector_cloud_rollback_context(self):
+        """Return the typed, READ-ONLY cloud rollback endpoint for the transition UX.
+
+        CP2B.1 convergence: this gathers already-persisted/observed facts through
+        the EXISTING APIs and hands them to the neutral
+        ``resolve_cloud_rollback_endpoint`` resolver. It performs NO network I/O,
+        NO writes to the entry/registry/runtime, NO cloud-family fallback and
+        reads NO private link fields -- it is a pre-run read model the strategy
+        transition form presents, never a second endpoint authority or a proof.
+
+        Sources gathered (the resolver owns the priority + fail-closed rules):
+
+        * the durable original cloud endpoint, read as ONE whole record
+          (``entry.data`` owns it when any original-endpoint field is present
+          there; ``entry.options`` is only a legacy whole-record fallback and its
+          fields are never mixed with data's);
+        * the PN-bound collector-registry endpoint, via the existing read-only
+          ``get_collector_registry_record`` (executor, no write);
+        * the confirmed current endpoint from the live snapshot.
+        """
+
+        from ..connection.strategy_transition_context import (
+            resolve_confirmed_ha_endpoint,
+            resolve_cloud_rollback_endpoint,
+        )
+        from ..connection.recovery_contract import RecoveryContract
+
+        data = self.config_entry.data
+        options = self.config_entry.options
+        original_fields = (
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+        )
+        # Whole-record precedence: data owns the record when ANY original field is
+        # present there (a partial data record yields a missing endpoint -> the
+        # resolver fails closed, never mixing in an options field). Only a total
+        # absence in data falls back to the whole options record.
+        if any(field in data for field in original_fields):
+            durable_original = data.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT)
+        elif any(field in options for field in original_fields):
+            durable_original = options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT)
+        else:
+            durable_original = ""
+
+        # Durable identity only.  Do not stringify a malformed entry value or
+        # substitute a transient live PN at this read-model trust boundary.
+        raw_entry_pn = data.get(CONF_COLLECTOR_PN)
+        entry_pn = (
+            raw_entry_pn
+            if type(raw_entry_pn) is str
+            and raw_entry_pn
+            and raw_entry_pn == raw_entry_pn.strip()
+            else ""
+        )
+        registry_endpoint = ""
+        registry_pn = ""
+        if entry_pn and not self.collector_capabilities.virtual_bridge:
+            try:
+                config_dir = Path(self.hass.config.config_dir)
+                record = await self.hass.async_add_executor_job(
+                    lambda: get_collector_registry_record(
+                        config_dir=config_dir,
+                        collector_pn=entry_pn,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive read
+                logger.debug("Cloud rollback context registry read failed: %s", exc)
+                record = None
+            if record is not None and record.original_endpoint_raw:
+                registry_endpoint = record.original_endpoint_raw
+                registry_pn = record.collector_pn
+
+        # The complete HA endpoint must be earned and PN-bound.  Runtime/local
+        # server fallbacks are intentionally absent: behind NAT they are not the
+        # address the collector was proven to dial.
+        recovery_contract = RecoveryContract.from_entry_data(data)
+        confirmed_ha_endpoint = resolve_confirmed_ha_endpoint(
+            current_strategy=resolve_connection_strategy(data, options),
+            entry_pn=raw_entry_pn,
+            advertised_host=data.get(CONF_ADVERTISED_SERVER_IP, ""),
+            advertised_port=data.get(CONF_ADVERTISED_TCP_PORT, 0),
+            recovery_contract=recovery_contract,
+        )
+        # Pass the raw observed value.  A non-string/duck value must fail closed
+        # in the neutral resolver, never become an endpoint via ``str()``.
+        observed_current = self.data.values.get("collector_server_endpoint", "")
+
+        return resolve_cloud_rollback_endpoint(
+            # CP2B.1 offers NO explicit user choice yet (reserved for CP2B.2).
+            explicit_user_endpoint="",
+            durable_original_endpoint=durable_original,
+            registry_endpoint=registry_endpoint,
+            registry_pn=registry_pn,
+            entry_pn=entry_pn,
+            observed_current_endpoint=observed_current,
+            confirmed_ha_endpoint=confirmed_ha_endpoint,
+        )
+
     @property
     def collector_callback_target_endpoint(self) -> str:
         """Return the effective callback endpoint configured for this entry."""
@@ -5600,6 +5700,228 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         return ""
 
+    def _durable_transition_collector_pn(
+        self, *, identity_registry=None, owner_id: str = ""
+    ) -> str:
+        """Return the strongly-proven PN owned by this entry, or ``""``.
+
+        A live/snapshot PN is transient and cannot key durable rollback facts.
+        The entry PN must be exact-normalized and backed by its own validated
+        RecoveryContract (whose parser enforces a strong identity source).
+        """
+
+        from ..connection.recovery_contract import RecoveryContract
+        from ..connection.session_registry import pn_is_same_identity
+
+        raw_pn = self.config_entry.data.get(CONF_COLLECTOR_PN)
+        if (
+            type(raw_pn) is not str
+            or not raw_pn
+            or raw_pn != raw_pn.strip()
+        ):
+            return ""
+        contract = RecoveryContract.from_entry_data(self.config_entry.data)
+        if contract is not None and pn_is_same_identity(
+            raw_pn, contract.collector_pn
+        ):
+            return raw_pn
+
+        # Older entries intentionally received no synthetic RecoveryContract
+        # during migration.  They may still earn the same boundary from the
+        # exact currently-owned socket: strict SessionHandle, observed,
+        # conflict-free, same PN and an authoritative FC2/DTUPN source.
+        if identity_registry is None or type(owner_id) is not str or not owner_id:
+            return ""
+        from ..connection.session_handle import SessionHandle
+        from ..connection.session_registry import (
+            CallbackSessionRegistry,
+            identity_source_is_strong,
+        )
+
+        if type(identity_registry) is not CallbackSessionRegistry:
+            return ""
+        handle = identity_registry.session_handle_for_claimed_session(owner_id)
+        if (
+            type(handle) is not SessionHandle
+            or not handle.observed
+            or handle.conflict
+            or not pn_is_same_identity(raw_pn, handle.collector_pn)
+            or not any(identity_source_is_strong(s) for s in handle.identity_sources)
+        ):
+            return ""
+        return raw_pn
+
+    async def _async_persist_cloud_rollback_selection(
+        self,
+        selection,
+        *,
+        collector_pn: str | None = None,
+        identity_registry=None,
+        owner_id: str = "",
+    ) -> str:
+        """PERSIST-BEFORE-WRITE the user's typed cloud rollback selection.
+
+        Durably saves the chosen endpoint as the original-endpoint WHOLE RECORD in
+        ``entry.data`` (canonical; the stale ``options`` copies are dropped in the
+        SAME local update so they can never shadow) AND in the PN-bound collector
+        registry, BEFORE any endpoint write/apply/reboot/UDP. Reuses the existing
+        original-endpoint fields and registry (no second rollback record).
+
+        Returns ``""`` on success or a typed refusal reason. On any failure NO
+        endpoint write follows; a safely-written local entry intent may remain for
+        retry but is never presented as a wire-confirmed endpoint (the policy,
+        strategy and endpoint-written provenance are untouched here).
+        """
+
+        from ..connection.strategy_transition import (
+            TRANSITION_ROLLBACK_PERSIST_FAILED,
+            TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED,
+        )
+
+        # Registry is mandatory + PN-bound. A missing PN (or a virtual bridge with
+        # no durable registry identity) is refused BEFORE any write.
+        durable_pn = self._durable_transition_collector_pn(
+            identity_registry=identity_registry, owner_id=owner_id
+        )
+        if (
+            not durable_pn
+            or (collector_pn is not None and collector_pn != durable_pn)
+            or self.collector_capabilities.virtual_bridge
+        ):
+            return TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED
+
+        observed_at = datetime.now(timezone.utc).isoformat()
+        record = {
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: selection.endpoint_value,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE: selection.persistence_source,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: selection.catalog_profile_key,
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT: observed_at,
+        }
+        # 1. entry.data whole-record (canonical owner); drop stale options copies.
+        try:
+            data = dict(self.config_entry.data)
+            data.update(record)
+            options = dict(self.config_entry.options)
+            for key in record:
+                options.pop(key, None)
+            self._async_update_entry_without_reload(data=data, options=options)
+            self._remembered_collector_server_endpoint = selection.endpoint_value
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.info("Rollback selection entry persist failed: %s", exc)
+            return TRANSITION_ROLLBACK_PERSIST_FAILED
+
+        # 2. PN-bound registry.  The durable-PN boundary above requires either a
+        # strong RecoveryContract or the exact strongly identified owned socket;
+        # the registry's syntax check is not treated as identity evidence.
+        # ``force`` is additionally source-gated by the registry, so only these
+        # explicit user-selection source tokens can replace an older fact.
+        collector = getattr(self.data, "collector", None)
+        last_seen_ip = str(getattr(collector, "remote_ip", "") or "").strip()
+        try:
+            config_dir = Path(self.hass.config.config_dir)
+            await self.hass.async_add_executor_job(
+                lambda: remember_collector_original_endpoint(
+                    config_dir=config_dir,
+                    collector_pn=durable_pn,
+                    original_endpoint_raw=selection.endpoint_value,
+                    cloud_profile_key=selection.catalog_profile_key,
+                    source=selection.persistence_source,
+                    observed_at=observed_at,
+                    last_seen_ip=last_seen_ip,
+                    force=True,
+                )
+            )
+        except Exception as exc:
+            logger.info("Rollback selection registry persist failed: %s", exc)
+            return TRANSITION_ROLLBACK_PERSIST_FAILED
+        return ""
+
+    async def _async_persist_inbound_rollback_endpoint(
+        self,
+        endpoint: str,
+        *,
+        collector_pn: str,
+        identity_registry=None,
+        owner_id: str = "",
+    ) -> str:
+        """Preserve a known external endpoint before an inbound overwrite.
+
+        Registry persistence happens first.  Its existing non-force semantics
+        preserve an older durable original; the exact returned whole record is
+        then mirrored into canonical entry data.  A failure prevents the wire
+        write, so background snapshot timing is never a correctness condition.
+        """
+
+        from ..connection.strategy_transition import (
+            TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED,
+            TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED,
+        )
+
+        durable_pn = self._durable_transition_collector_pn(
+            identity_registry=identity_registry, owner_id=owner_id
+        )
+        if (
+            not durable_pn
+            or collector_pn != durable_pn
+            or self.collector_capabilities.virtual_bridge
+        ):
+            return TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED
+        normalized = ""
+        if endpoint:
+            try:
+                normalized = _normalize_preserved_collector_server_endpoint(endpoint)
+            except (TypeError, ValueError):
+                return TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+        if not normalized or self._endpoint_looks_like_local_collector_callback(
+            normalized
+        ):
+            # No external endpoint can be learned from this live snapshot.  The
+            # overwrite is safe only when an existing PN-bound durable original
+            # already resolves through the normal read model.
+            from ..connection.strategy_transition_context import (
+                CloudRollbackEndpoint,
+            )
+
+            existing = await self.collector_cloud_rollback_context()
+            if type(existing) is not CloudRollbackEndpoint or not existing.known:
+                return TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+            return ""
+
+        observed_at = datetime.now(timezone.utc).isoformat()
+        collector = getattr(self.data, "collector", None)
+        last_seen_ip = str(getattr(collector, "remote_ip", "") or "").strip()
+        try:
+            config_dir = Path(self.hass.config.config_dir)
+            saved = await self.hass.async_add_executor_job(
+                lambda: remember_collector_original_endpoint(
+                    config_dir=config_dir,
+                    collector_pn=durable_pn,
+                    original_endpoint_raw=normalized,
+                    source="runtime_observed_before_inbound_transition",
+                    observed_at=observed_at,
+                    last_seen_ip=last_seen_ip,
+                )
+            )
+            record = {
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: saved.original_endpoint_raw,
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE: saved.source,
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: saved.cloud_profile_key,
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT: saved.observed_at,
+            }
+            data = dict(self.config_entry.data)
+            data.update(record)
+            options = dict(self.config_entry.options)
+            for key in record:
+                options.pop(key, None)
+            self._async_update_entry_without_reload(data=data, options=options)
+            self._remembered_collector_server_endpoint = saved.original_endpoint_raw
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info("Inbound rollback endpoint persist failed: %s", exc)
+            return TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+        return ""
+
     async def async_run_connection_strategy_transition(
         self,
         *,
@@ -5609,6 +5931,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         advertised_host: str = "",
         advertised_port: int = 0,
         option_payload: dict[str, Any] | None = None,
+        cloud_rollback_selection: Any = None,
     ):
         """THE verified strategy-transition facade entry point (Batch 8).
 
@@ -5732,11 +6055,53 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                         listener_port=int(getattr(spec, "tcp_port", 0) or 0),
                     )
 
+            # CP2B.2: assemble read-only validation/persistence capabilities for
+            # the core authority.  This facade performs no early selection
+            # persistence: the authority invokes it only after route/state/live-
+            # session/management preflights and before write-ahead + wire I/O.
             restore_endpoint = ""
             if target == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
-                restore_endpoint = str(
-                    self.collector_server_endpoint_rollback_target or ""
-                ).strip()
+                needs_restore = (
+                    self.endpoint_control_policy
+                    == ENDPOINT_CONTROL_INTEGRATION_MANAGED
+                )
+
+            async def _validate_rollback_selection(selection) -> str:
+                from ..collector.cloud_rollback_catalog import (
+                    ROLLBACK_SELECTION_STALE,
+                    validate_cloud_rollback_selection,
+                )
+                from ..connection.strategy_transition import (
+                    TRANSITION_ROLLBACK_SELECTION_INVALID,
+                    TRANSITION_ROLLBACK_SELECTION_STALE,
+                )
+
+                # Resolve at the exact authority call, not during facade
+                # assembly: a candidate changed after the chooser render or
+                # while the transition was queued is stale, never silently
+                # substituted.
+                current_rollback_candidate = (
+                    await self.collector_cloud_rollback_context()
+                )
+                status = validate_cloud_rollback_selection(
+                    selection,
+                    confirmed_candidate=current_rollback_candidate,
+                )
+                if not status:
+                    return ""
+                if status == ROLLBACK_SELECTION_STALE:
+                    return TRANSITION_ROLLBACK_SELECTION_STALE
+                return TRANSITION_ROLLBACK_SELECTION_INVALID
+
+            durable_entry_pn = self.config_entry.data.get(CONF_COLLECTOR_PN)
+
+            async def _persist_rollback_selection(selection) -> str:
+                return await self._async_persist_cloud_rollback_selection(
+                    selection,
+                    collector_pn=durable_entry_pn,
+                    identity_registry=registry,
+                    owner_id=entry_id,
+                )
 
             # PRE-BUILD the TYPED recovery state (startable pending phase) from
             # the route + durable PN, BEFORE any physical side effect. It
@@ -5776,13 +6141,41 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
             recovery_state = _build_recovery_state()
 
-            current_endpoint = str(
-                self.data.values.get("collector_server_endpoint") or ""
-            ).strip()
+            raw_current_endpoint = self.data.values.get(
+                "collector_server_endpoint", ""
+            )
+            current_endpoint = (
+                raw_current_endpoint
+                if type(raw_current_endpoint) is str
+                and raw_current_endpoint == raw_current_endpoint.strip()
+                else ""
+            )
             endpoint_needs_write = bool(inbound_endpoint) and (
                 self._endpoint_effective_parts(current_endpoint)
                 != self._endpoint_effective_parts(inbound_endpoint)
             )
+            current_external_endpoint = ""
+            if current_endpoint:
+                try:
+                    normalized_current_endpoint = (
+                        _normalize_preserved_collector_server_endpoint(
+                            current_endpoint
+                        )
+                    )
+                except ValueError:
+                    normalized_current_endpoint = ""
+                if normalized_current_endpoint and not self._endpoint_looks_like_local_collector_callback(
+                    normalized_current_endpoint
+                ):
+                    current_external_endpoint = normalized_current_endpoint
+
+            async def _persist_inbound_rollback(endpoint: str) -> str:
+                return await self._async_persist_inbound_rollback_endpoint(
+                    endpoint,
+                    collector_pn=durable_entry_pn,
+                    identity_registry=registry,
+                    owner_id=entry_id,
+                )
 
             async def _write_endpoint(endpoint: str) -> dict[str, object]:
                 return await self._runtime.async_set_collector_server_endpoint(
@@ -5885,9 +6278,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 prepare_listener=_prepare_local_listener,
                 local_listener_port=int(getattr(spec, "tcp_port", 0) or 0),
                 on_endpoint_written=_on_written,
+                current_external_endpoint=current_external_endpoint,
+                persist_inbound_rollback_endpoint=_persist_inbound_rollback,
                 callback_route=callback_route,
                 endpoint_control_policy=self.endpoint_control_policy,
                 restore_endpoint=restore_endpoint,
+                cloud_rollback_selection=cloud_rollback_selection,
+                validate_rollback_selection=_validate_rollback_selection,
+                persist_rollback_selection=_persist_rollback_selection,
+                management_action_available=self.collector_management_action_available,
                 on_endpoint_restored=_on_restored,
                 persist_pending=_persist_pending,
                 persist_confirmed=_persist_confirmed,

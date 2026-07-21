@@ -40,6 +40,7 @@ Hard rules encoded here:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -75,6 +76,7 @@ from .strategy_transition_recovery import (
     RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
     StrategyTransitionRecoveryState,
 )
+from .strategy_transition_context import CloudRollbackSelection
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,21 @@ TRANSITION_PERSIST_PENDING_FAILED = "transition_persist_pending_failed"
 # effect: without it the confirmed-restore phase could never be written, so the
 # restore must not begin at all.
 TRANSITION_PERSIST_CONFIRMED_UNAVAILABLE = "transition_persist_confirmed_unavailable"
+
+# CP2B.2 facade-level rollback selection refusals (raised BEFORE any mutation /
+# wire): the coordinator requires exactly ONE typed CloudRollbackSelection from
+# the config flow for an integration-managed callback restore, persists it
+# durably before the write, and refuses fail-closed on a missing/malformed
+# selection, a persistence failure, or a missing/weak PN for the registry.
+TRANSITION_ROLLBACK_SELECTION_REQUIRED = "transition_rollback_selection_required"
+TRANSITION_ROLLBACK_SELECTION_INVALID = "transition_rollback_selection_invalid"
+TRANSITION_ROLLBACK_PERSIST_FAILED = "transition_rollback_persist_failed"
+TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED = "transition_rollback_registry_pn_required"
+TRANSITION_ROLLBACK_SELECTION_STALE = "transition_rollback_selection_stale"
+TRANSITION_MANAGEMENT_UNAVAILABLE = "transition_management_unavailable"
+TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED = (
+    "transition_inbound_rollback_persist_failed"
+)
 
 # The typed persisted degraded marker (stored under
 # ``const.CONF_STRATEGY_TRANSITION_STATE``): the collector's endpoint was
@@ -352,11 +369,17 @@ async def async_run_strategy_transition(
     prepare_listener: Callable[[int], Awaitable[None]] | None = None,
     local_listener_port: int = 0,
     on_endpoint_written: Callable[[str], None] | None = None,
+    current_external_endpoint: str = "",
+    persist_inbound_rollback_endpoint: Callable[[str], Any] | None = None,
     # --- to callback_on_demand -------------------------------------------
     callback_route: CallbackRecoveryRoute | None = None,
     trigger_sender: Any = None,
     endpoint_control_policy: str = "",
     restore_endpoint: str = "",
+    cloud_rollback_selection: CloudRollbackSelection | None = None,
+    validate_rollback_selection: Callable[[CloudRollbackSelection], Any] | None = None,
+    persist_rollback_selection: Callable[[CloudRollbackSelection], Any] | None = None,
+    management_action_available: Callable[[str], bool] | None = None,
     on_endpoint_restored: Callable[[str], None] | None = None,
     # Write-ahead persistence hooks. The AUTHORITY owns their ORDER (pending
     # BEFORE the first side effect; confirmed as ONE local write AFTER a
@@ -462,6 +485,9 @@ async def async_run_strategy_transition(
             prepare_listener=prepare_listener,
             local_listener_port=local_listener_port,
             on_endpoint_written=on_endpoint_written,
+            current_external_endpoint=current_external_endpoint,
+            persist_inbound_rollback_endpoint=persist_inbound_rollback_endpoint,
+            management_action_available=management_action_available,
             silent_session_probe=silent_session_probe,
             axis_extra=axis_extra,
             options_updates=options_updates,
@@ -481,6 +507,10 @@ async def async_run_strategy_transition(
         trigger_sender=trigger_sender,
         endpoint_control_policy=endpoint_control_policy,
         restore_endpoint=restore_endpoint,
+        cloud_rollback_selection=cloud_rollback_selection,
+        validate_rollback_selection=validate_rollback_selection,
+        persist_rollback_selection=persist_rollback_selection,
+        management_action_available=management_action_available,
         write_endpoint=write_endpoint,
         reboot=reboot,
         on_endpoint_restored=on_endpoint_restored,
@@ -512,6 +542,9 @@ async def _async_transition_to_inbound(
     prepare_listener: Callable[[int], Awaitable[None]] | None,
     local_listener_port: int,
     on_endpoint_written: Callable[[str], None] | None,
+    current_external_endpoint: str,
+    persist_inbound_rollback_endpoint: Callable[[str], Any] | None,
+    management_action_available: Callable[[str], bool] | None,
     silent_session_probe: Any,
     axis_extra: dict[str, Any],
     options_updates: dict[str, Any],
@@ -531,6 +564,46 @@ async def _async_transition_to_inbound(
             target_strategy=CONNECTION_STRATEGY_INBOUND,
             failure_reason=TRANSITION_ENDPOINT_REQUIRED,
         )
+
+    if endpoint_needs_write and management_action_available is not None:
+        if not management_action_available("write_endpoint") or not management_action_available(
+            "apply_changes"
+        ):
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_INBOUND,
+                failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
+            )
+
+    # Preserve a known current external endpoint inside THIS transaction,
+    # before the Home Assistant endpoint can overwrite it.  Background snapshot
+    # learning remains useful but is no longer a correctness prerequisite.
+    external_endpoint = str(current_external_endpoint or "").strip()
+    if endpoint_needs_write:
+        if persist_inbound_rollback_endpoint is None:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_INBOUND,
+                failure_reason=TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED,
+            )
+        try:
+            # An empty live snapshot is not permission to overwrite the
+            # collector endpoint.  The persistence authority must still prove
+            # that a PN-bound durable rollback target already exists.
+            persist_result = persist_inbound_rollback_endpoint(external_endpoint)
+            if inspect.isawaitable(persist_result):
+                persist_result = await persist_result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info("Inbound rollback endpoint persist failed: %s", exc)
+            persist_result = TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+        if persist_result:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_INBOUND,
+                failure_reason=TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED,
+            )
 
     if prepare_listener is not None and int(local_listener_port or 0) > 0:
         # NAT split: the integration prepares its LOCAL listener bind port —
@@ -648,6 +721,10 @@ async def _async_transition_to_callback(
     trigger_sender: Any,
     endpoint_control_policy: str,
     restore_endpoint: str,
+    cloud_rollback_selection: CloudRollbackSelection | None,
+    validate_rollback_selection: Callable[[CloudRollbackSelection], Any] | None,
+    persist_rollback_selection: Callable[[CloudRollbackSelection], Any] | None,
+    management_action_available: Callable[[str], bool] | None,
     write_endpoint: Callable[[str], Awaitable[Any]] | None,
     reboot: Callable[[], Awaitable[Any]] | None,
     on_endpoint_restored: Callable[[str], None] | None,
@@ -672,7 +749,7 @@ async def _async_transition_to_callback(
         == ENDPOINT_CONTROL_INTEGRATION_MANAGED
     )
     restore_target = str(restore_endpoint or "").strip()
-    if needs_restore and (not restore_target or write_endpoint is None):
+    if needs_restore and write_endpoint is None:
         # integration_managed means WE pointed the collector here; handing
         # control back requires the REALLY SAVED previous endpoint. Guessing a
         # vendor/cloud endpoint by hostname/provider/kind is forbidden.
@@ -719,6 +796,51 @@ async def _async_transition_to_callback(
             failure_reason=TRANSITION_RECOVERY_STATE_INVALID,
         )
 
+    if needs_restore:
+        if management_action_available is not None:
+            if not management_action_available(
+                "write_endpoint"
+            ) or not management_action_available("apply_changes"):
+                return StrategyTransitionResult(
+                    success=False,
+                    target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                    failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
+                )
+        if type(cloud_rollback_selection) is not CloudRollbackSelection:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                failure_reason=(
+                    TRANSITION_ROLLBACK_SELECTION_REQUIRED
+                    if cloud_rollback_selection is None
+                    else TRANSITION_ROLLBACK_SELECTION_INVALID
+                ),
+            )
+        if validate_rollback_selection is None:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                failure_reason=TRANSITION_ROLLBACK_SELECTION_INVALID,
+            )
+        try:
+            validation_refusal = validate_rollback_selection(
+                cloud_rollback_selection
+            )
+            if inspect.isawaitable(validation_refusal):
+                validation_refusal = await validation_refusal
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info("Rollback selection validation failed: %s", exc)
+            validation_refusal = TRANSITION_ROLLBACK_SELECTION_INVALID
+        if validation_refusal:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                failure_reason=validation_refusal,
+            )
+        restore_target = cloud_rollback_selection.endpoint_value
+
     # --- CONFIRMED-restore hook must exist BEFORE write-ahead (Blocker 4) --
     # An integration-managed restore WILL confirm the endpoint external and MUST
     # then persist the confirmed-unproven phase in one local write. If the
@@ -749,6 +871,32 @@ async def _async_transition_to_callback(
             target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
             failure_reason=TRANSITION_RECOVERY_STATE_UNAVAILABLE,
         )
+
+    # All route/state/session/capability/persistence-hook preflights above are
+    # complete.  Only now may the explicit rollback choice become durable; it
+    # still precedes write-ahead and every physical collector side effect.
+    if needs_restore:
+        if persist_rollback_selection is None:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                failure_reason=TRANSITION_ROLLBACK_PERSIST_FAILED,
+            )
+        try:
+            persist_result = persist_rollback_selection(cloud_rollback_selection)
+            if inspect.isawaitable(persist_result):
+                persist_result = await persist_result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info("Rollback selection persist failed: %s", exc)
+            persist_result = TRANSITION_ROLLBACK_PERSIST_FAILED
+        if persist_result:
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                failure_reason=str(persist_result),
+            )
     try:
         pending_refusal = persist_pending(recovery_state)
     except Exception as exc:

@@ -159,6 +159,46 @@ class CollectorRegistryTests(unittest.TestCase):
                     original_endpoint_raw="ess.eybond.com",
                 )
 
+    def test_runtime_observation_cannot_force_replace_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            remember_collector_original_endpoint(
+                config_dir=config_dir,
+                collector_pn="PN12345",
+                original_endpoint_raw="original.example",
+            )
+            with self.assertRaisesRegex(
+                ValueError, "collector_original_endpoint_force_source_invalid"
+            ):
+                remember_collector_original_endpoint(
+                    config_dir=config_dir,
+                    collector_pn="PN12345",
+                    original_endpoint_raw="foreign.example",
+                    source="runtime_observed",
+                    force=True,
+                )
+            record = get_collector_registry_record(
+                config_dir=config_dir, collector_pn="PN12345"
+            )
+            self.assertEqual(record.original_endpoint_raw, "original.example")
+
+    def test_only_closed_explicit_user_sources_may_force_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            for source in (
+                "user_confirmed_existing",
+                "user_selected_catalog",
+                "user_entered_manual",
+            ):
+                record = remember_collector_original_endpoint(
+                    config_dir=config_dir,
+                    collector_pn="PN12345",
+                    original_endpoint_raw=f"{source}.example",
+                    source=source,
+                    force=True,
+                )
+                self.assertEqual(record.source, source)
+
 
 if __name__ == "__main__":
     unittest.main()

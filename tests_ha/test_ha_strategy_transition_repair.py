@@ -820,14 +820,15 @@ async def test_activation_failure_after_proof_keeps_proof_and_offers_reload_only
 
             ledger = get_callback_trigger_ledger()
 
-            def _repair_sequences() -> int:
-                return sum(
-                    1 for r in ledger._history if r.source == "degraded_repair_bootstrap"
-                )
+            generation_before = ledger.snapshot_generation()
 
-            # The trigger ledger is a process-global singleton; baseline it so the
-            # count is this repair's OWN contribution, not leakage from prior tests.
-            seq_before = _repair_sequences()
+            def _repair_sequences_since_baseline() -> int:
+                return sum(
+                    1
+                    for r in ledger.recent_records()
+                    if r.generation > generation_before
+                    and r.source == "degraded_repair_bootstrap"
+                )
 
             # ---- the proof succeeds, but HA cannot bring the entry up ---------
             setup_calls: list = []
@@ -891,7 +892,7 @@ async def test_activation_failure_after_proof_keeps_proof_and_offers_reload_only
             assert registry.owner_for_pn(FULL_PN) == target.entry_id
 
             # ---- the physical repair ran EXACTLY once (A + B); no repeat ------
-            assert _repair_sequences() - seq_before == 2, [
+            assert _repair_sequences_since_baseline() == 2, [
                 (r.generation, r.source) for r in ledger._history
             ]
             assert len(setup_calls) == 1, setup_calls
@@ -917,7 +918,7 @@ async def test_activation_failure_after_proof_keeps_proof_and_offers_reload_only
             assert contract_after.callback_proof.collector_pn == FULL_PN
             assert registry.owner_for_pn(FULL_PN) == target.entry_id
             # The retry loaded the proven config; it never re-ran Phase A/B.
-            assert _repair_sequences() - seq_before == 2, [
+            assert _repair_sequences_since_baseline() == 2, [
                 (r.generation, r.source) for r in ledger._history
             ]
     finally:
@@ -1007,12 +1008,15 @@ async def test_activation_retry_failure_stays_on_activation_menu(
             registry = get_callback_session_registry(hass)
             ledger = get_callback_trigger_ledger()
 
-            def _repair_sequences() -> int:
-                return sum(
-                    1 for r in ledger._history if r.source == "degraded_repair_bootstrap"
-                )
+            generation_before = ledger.snapshot_generation()
 
-            seq_before = _repair_sequences()
+            def _repair_sequences_since_baseline() -> int:
+                return sum(
+                    1
+                    for r in ledger.recent_records()
+                    if r.generation > generation_before
+                    and r.source == "degraded_repair_bootstrap"
+                )
 
             # The TARGET entry can NEVER be loaded (every activation fails); the
             # boot listener entry loads normally.
@@ -1037,7 +1041,7 @@ async def test_activation_retry_failure_stays_on_activation_menu(
             assert result["type"] is FlowResultType.MENU, result
             assert "strategy_transition_activation_retry" in result["menu_options"]
             assert "strategy_transition" not in result["menu_options"]
-            assert _repair_sequences() - seq_before == 2  # A + B once
+            assert _repair_sequences_since_baseline() == 2  # A + B once
 
             # ---- retry ALSO fails -> STAYS on the activation-only menu --------
             retry = await options.async_configure(
@@ -1054,7 +1058,7 @@ async def test_activation_retry_failure_stays_on_activation_menu(
             assert target.data["connection_strategy"] == "callback_on_demand"
             assert CONF_STRATEGY_TRANSITION_STATE not in target.data
             assert RecoveryContract.from_entry_data(target.data) is not None
-            assert _repair_sequences() - seq_before == 2
+            assert _repair_sequences_since_baseline() == 2
 
             # ---- the action is REPEATABLE (retry again -> still menu) --------
             retry2 = await options.async_configure(
@@ -1063,7 +1067,7 @@ async def test_activation_retry_failure_stays_on_activation_menu(
             )
             retry2 = await _drain_options(options, retry2, hass)
             assert retry2["type"] is FlowResultType.MENU, retry2
-            assert _repair_sequences() - seq_before == 2  # still no repeat
+            assert _repair_sequences_since_baseline() == 2  # still no repeat
 
             # ---- cancel closes the flow, rolling back NOTHING ---------------
             cancel = await options.async_configure(
@@ -1075,7 +1079,7 @@ async def test_activation_retry_failure_stays_on_activation_menu(
             assert target.data["endpoint_control_policy"] == "external"
             assert CONF_STRATEGY_TRANSITION_STATE not in target.data
             assert RecoveryContract.from_entry_data(target.data) is not None
-            assert _repair_sequences() - seq_before == 2
+            assert _repair_sequences_since_baseline() == 2
     finally:
         for entry in (target, boot):
             if entry is not None and entry.state is ConfigEntryState.LOADED:

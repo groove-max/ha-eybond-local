@@ -2435,7 +2435,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             snapshot = self.RuntimeSnapshot(
                 connected=True,
-                values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
+                values={"collector_server_endpoint": "192.168.1.50,8899,TCP"},
             )
             coordinator.data = snapshot
 
@@ -2731,6 +2731,590 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertFalse(coordinator.collector_capabilities.ha_only_required)
         self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
         self.assertTrue(coordinator.collector_home_assistant_primary)
+
+    def _rollback_boundary_coordinator(self, *, data, options, values):
+        """Build a bare coordinator wired for the read-only rollback boundary.
+
+        Any config-entry write is a test failure. The registry read is routed
+        through a fake executor at a non-existent config dir, so the existing
+        read-only registry API returns nothing without touching the filesystem.
+        """
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data=dict(data), options=dict(options))
+        coordinator.data = self.RuntimeSnapshot(values=dict(values), collector=None)
+        coordinator._runtime = types.SimpleNamespace(effective_advertised_server_ip="192.168.1.50")
+        coordinator._connection_spec = types.SimpleNamespace(effective_advertised_server_ip="192.168.1.50")
+
+        def _forbidden_write(**kwargs):
+            raise AssertionError("read-only rollback boundary must not write the entry")
+
+        coordinator._async_update_entry_without_reload = _forbidden_write
+
+        async def _run_executor(func, *args):
+            return func(*args)
+
+        coordinator.hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(config_dir="/nonexistent-cp2b1-test-config-dir"),
+            async_add_executor_job=_run_executor,
+        )
+        return coordinator
+
+    @staticmethod
+    def _proof_backed_inbound_data(*, pn: str = "E5000025SYN0000000001"):
+        timestamp = "2026-07-21T10:00:00+00:00"
+        return {
+            "collector_kind": "factory_eybond",
+            "collector_pn": pn,
+            "connection_strategy": "inbound",
+            "advertised_server_ip": "192.168.1.50",
+            "advertised_tcp_port": 8899,
+            "recovery_contract": {
+                "schema_version": 1,
+                "collector_pn": pn,
+                "collector_identity_source": "fc2_parameter_2",
+                "updated_at": timestamp,
+                "inbound": {
+                    "method": "reboot_reconnect_no_trigger",
+                    "collector_pn": pn,
+                    "identity_source": "fc2_parameter_2",
+                    "verified_at": timestamp,
+                    "session_protocol": "eybond_framed",
+                },
+            },
+        }
+
+    @staticmethod
+    def _proof_backed_callback_data(*, pn: str = "E5000025SYN0000000001"):
+        timestamp = "2026-07-21T10:00:00+00:00"
+        return {
+            "collector_kind": "factory_eybond",
+            "collector_pn": pn,
+            "connection_strategy": "callback_on_demand",
+            "advertised_server_ip": "195.191.72.37",
+            "advertised_tcp_port": 18899,
+            "recovery_contract": {
+                "schema_version": 1,
+                "collector_pn": pn,
+                "collector_identity_source": "fc2_parameter_2",
+                "updated_at": timestamp,
+                "callback": {
+                    "method": "reset_unicast_reconnect_same_pn",
+                    "collector_pn": pn,
+                    "identity_source": "fc2_parameter_2",
+                    "verified_at": timestamp,
+                    "trigger_target": "203.0.113.10:58899",
+                    "advertised_ha_endpoint": "195.191.72.37:18899",
+                    "listener_port": 8899,
+                },
+            },
+        }
+
+    def test_cloud_rollback_context_returns_durable_original_read_only(self) -> None:
+        # CP2B.1 Test E: the read-only boundary returns a typed context from the
+        # durable original endpoint and NEVER writes the entry/registry/runtime.
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CloudRollbackEndpoint,
+        )
+
+        async def _run() -> None:
+            coordinator = self._rollback_boundary_coordinator(
+                data={"collector_kind": "factory_eybond", "collector_pn": "E5000025SYN0000000001"},
+                options={"collector_original_server_endpoint": "ess.eybond.com,18899,TCP"},
+                values={"collector_server_endpoint": "ess.eybond.com,18899,TCP"},
+            )
+            context = await coordinator.collector_cloud_rollback_context()
+            self.assertIsInstance(context, CloudRollbackEndpoint)
+            self.assertEqual(context.provenance, "original_cloud_endpoint")
+            self.assertEqual(context.endpoint, "ess.eybond.com,18899,TCP")
+
+        asyncio.run(_run())
+
+    def test_cloud_rollback_context_none_when_no_facts(self) -> None:
+        # No durable/registry/observed-external fact -> honest none, still no write.
+        async def _run() -> None:
+            coordinator = self._rollback_boundary_coordinator(
+                data=self._proof_backed_inbound_data(),
+                options={},
+                # Complete endpoint equals the proof-backed HA endpoint.
+                values={"collector_server_endpoint": "192.168.1.50,8899,TCP"},
+            )
+            context = await coordinator.collector_cloud_rollback_context()
+            self.assertEqual(context.provenance, "none")
+            self.assertEqual(context.endpoint, "")
+
+        asyncio.run(_run())
+
+    def test_cloud_rollback_context_observed_external_when_no_durable(self) -> None:
+        # Durable/registry absent; the current endpoint differs from the HA host
+        # -> observed external candidate. Still read-only.
+        async def _run() -> None:
+            coordinator = self._rollback_boundary_coordinator(
+                data=self._proof_backed_inbound_data(),
+                options={},
+                values={"collector_server_endpoint": "dtu.example,18899,TCP"},
+            )
+            context = await coordinator.collector_cloud_rollback_context()
+            self.assertEqual(context.provenance, "observed_current_external_endpoint")
+            self.assertEqual(context.endpoint, "dtu.example,18899,TCP")
+
+        asyncio.run(_run())
+
+    def test_cloud_rollback_context_same_host_other_port_is_external(self) -> None:
+        async def _run() -> None:
+            coordinator = self._rollback_boundary_coordinator(
+                data=self._proof_backed_inbound_data(),
+                options={},
+                values={"collector_server_endpoint": "192.168.1.50,18899,TCP"},
+            )
+            context = await coordinator.collector_cloud_rollback_context()
+            self.assertEqual(
+                context.provenance, "observed_current_external_endpoint"
+            )
+
+        asyncio.run(_run())
+
+    def test_cloud_rollback_context_does_not_coerce_observed_duck(self) -> None:
+        class EndpointDuck:
+            def __str__(self) -> str:
+                return "dtu.example,18899,TCP"
+
+        async def _run() -> None:
+            coordinator = self._rollback_boundary_coordinator(
+                data=self._proof_backed_inbound_data(),
+                options={},
+                values={"collector_server_endpoint": EndpointDuck()},
+            )
+            context = await coordinator.collector_cloud_rollback_context()
+            self.assertEqual(context.provenance, "none")
+
+        asyncio.run(_run())
+
+    def test_cloud_rollback_context_uses_nat_proof_not_runtime_local_host(self) -> None:
+        async def _run() -> None:
+            coordinator = self._rollback_boundary_coordinator(
+                data=self._proof_backed_callback_data(),
+                options={},
+                # This is exactly the public endpoint certified by the callback
+                # proof, while the runtime stub still advertises 192.168.1.50.
+                values={"collector_server_endpoint": "195.191.72.37,18899,TCP"},
+            )
+            context = await coordinator.collector_cloud_rollback_context()
+            self.assertEqual(context.provenance, "none")
+
+        asyncio.run(_run())
+
+    # ---- CP2B.2: persistence-before-write for the typed rollback selection ----
+    def _catalog_selection(self):
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CLOUD_PROVENANCE_EXPLICIT_USER,
+            CloudRollbackEndpoint,
+            CloudRollbackSelection,
+            ROLLBACK_SELECTION_CATALOG,
+        )
+
+        return CloudRollbackSelection(
+            endpoint=CloudRollbackEndpoint("dtu.example,18899,TCP", CLOUD_PROVENANCE_EXPLICIT_USER),
+            selection_kind=ROLLBACK_SELECTION_CATALOG,
+            catalog_profile_key="smartess_at",
+            user_confirmed=True,
+        )
+
+    def _persist_coordinator(self, *, data, options, config_dir, executor_raises=False):
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RecoveryContract,
+        )
+
+        order: list[str] = []
+        data = dict(data)
+        durable_pn = data.get("collector_pn")
+        if durable_pn and not data.get("collector_virtual_bridge"):
+            RecoveryContract.empty_for_pn(
+                durable_pn, identity_source="fc2_parameter_2"
+            ).write_to(data)
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data=dict(data), options=dict(options))
+        coordinator.data = self.RuntimeSnapshot(
+            values={},
+            collector=types.SimpleNamespace(
+                remote_ip="192.168.1.55",
+                collector_pn=str(data.get("collector_pn", "")),
+                collector_virtual_bridge=bool(data.get("collector_virtual_bridge")),
+            ),
+        )
+
+        def _update(**kwargs):
+            order.append("entry")
+            coordinator.config_entry = types.SimpleNamespace(
+                data=kwargs.get("data", coordinator.config_entry.data),
+                options=kwargs.get("options", coordinator.config_entry.options),
+            )
+
+        coordinator._async_update_entry_without_reload = _update
+
+        async def _run_executor(func, *args):
+            order.append("registry")
+            if executor_raises:
+                raise OSError("simulated registry failure")
+            return func(*args)
+
+        coordinator.hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(config_dir=str(config_dir)),
+            async_add_executor_job=_run_executor,
+        )
+        return coordinator, order
+
+    def test_persist_selection_writes_data_then_registry_in_order(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            get_collector_registry_record,
+        )
+
+        async def _run() -> None:
+            tmp = Path(tempfile.mkdtemp())
+            coordinator, order = self._persist_coordinator(
+                data={"collector_kind": "factory_eybond", "collector_pn": "E5000025SYN0000000001"},
+                # A stale options copy of the original endpoint must be dropped.
+                options={"collector_original_server_endpoint": "old.example,18899,TCP"},
+                config_dir=tmp,
+            )
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection()
+            )
+            self.assertEqual(error, "")
+            # §5 ordering: entry whole-record BEFORE the PN registry.
+            self.assertEqual(order, ["entry", "registry"])
+            # Canonical entry.data holds the honest whole record.
+            new_data = coordinator.config_entry.data
+            self.assertEqual(new_data["collector_original_server_endpoint"], "dtu.example,18899,TCP")
+            self.assertEqual(new_data["collector_original_server_endpoint_source"], "user_selected_catalog")
+            self.assertEqual(new_data["collector_original_server_endpoint_profile_key"], "smartess_at")
+            self.assertTrue(new_data["collector_original_server_endpoint_observed_at"])
+            # Stale options copy dropped so it cannot shadow.
+            self.assertNotIn("collector_original_server_endpoint", coordinator.config_entry.options)
+            # PN-bound registry holds the selected endpoint.
+            record = get_collector_registry_record(
+                config_dir=tmp, collector_pn="E5000025SYN0000000001"
+            )
+            self.assertIsNotNone(record)
+            self.assertEqual(record.original_endpoint_raw, "dtu.example,18899,TCP")
+            self.assertEqual(record.source, "user_selected_catalog")
+
+        asyncio.run(_run())
+
+    def test_persist_selection_registry_forces_over_prior_observed(self) -> None:
+        from custom_components.eybond_local.support.collector_registry import (
+            get_collector_registry_record,
+            remember_collector_original_endpoint,
+        )
+
+        async def _run() -> None:
+            tmp = Path(tempfile.mkdtemp())
+            # A prior auto-observed original already exists for this PN.
+            remember_collector_original_endpoint(
+                config_dir=tmp,
+                collector_pn="E5000025SYN0000000001",
+                original_endpoint_raw="observed.old,18899,TCP",
+                source="runtime_observed",
+            )
+            coordinator, _order = self._persist_coordinator(
+                data={"collector_kind": "factory_eybond", "collector_pn": "E5000025SYN0000000001"},
+                options={},
+                config_dir=tmp,
+            )
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection()
+            )
+            self.assertEqual(error, "")
+            record = get_collector_registry_record(
+                config_dir=tmp, collector_pn="E5000025SYN0000000001"
+            )
+            # The explicit user choice replaced the prior observed record.
+            self.assertEqual(record.original_endpoint_raw, "dtu.example,18899,TCP")
+
+        asyncio.run(_run())
+
+    def test_persist_selection_pn_required_when_missing(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED,
+        )
+
+        async def _run() -> None:
+            coordinator, order = self._persist_coordinator(
+                data={"collector_kind": "factory_eybond"},  # no collector_pn
+                options={},
+                config_dir="/nonexistent-cp2b2",
+            )
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection()
+            )
+            self.assertEqual(error, TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED)
+            self.assertEqual(order, [])  # zero writes before wire
+
+        asyncio.run(_run())
+
+    def test_persist_selection_rejects_entry_pn_without_strong_contract(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED,
+        )
+
+        async def _run() -> None:
+            coordinator, order = self._persist_coordinator(
+                data={"collector_kind": "factory_eybond", "collector_pn": "WEAK"},
+                options={},
+                config_dir="/nonexistent-cp2b2",
+            )
+            coordinator.config_entry.data.pop("recovery_contract", None)
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection(), collector_pn="WEAK"
+            )
+            self.assertEqual(error, TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED)
+            self.assertEqual(order, [])
+
+        asyncio.run(_run())
+
+    def test_persist_selection_rejects_foreign_strong_contract(self) -> None:
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RecoveryContract,
+        )
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED,
+        )
+
+        async def _run() -> None:
+            coordinator, order = self._persist_coordinator(
+                data={
+                    "collector_kind": "factory_eybond",
+                    "collector_pn": "E5000025SYN0000000001",
+                },
+                options={},
+                config_dir="/nonexistent-cp2b2",
+            )
+            RecoveryContract.empty_for_pn(
+                "V001020SYN62344022", identity_source="fc2_parameter_2"
+            ).write_to(coordinator.config_entry.data)
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection(),
+                collector_pn="E5000025SYN0000000001",
+            )
+            self.assertEqual(error, TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED)
+            self.assertEqual(order, [])
+
+        asyncio.run(_run())
+
+    def test_durable_transition_pn_accepts_exact_owned_strong_session_for_legacy_entry(self) -> None:
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        pn = "E5000025SYN0000000001"
+        inventory = (
+            {
+                "session_id": "legacy-live-session",
+                "collector_pn": pn,
+                "collector_identity_source": "fc2_parameter_2",
+                "state": "routed_framed",
+                "protocol_shape": "eybond_framed",
+            },
+        )
+        registry = CallbackSessionRegistry(sessions_source=lambda: inventory)
+        registry.claim_session("entry-id", session_id="legacy-live-session")
+        registry.promote_claim_to_full_pn("entry-id", pn)
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_pn": pn}, options={}
+        )
+        self.assertEqual(
+            coordinator._durable_transition_collector_pn(
+                identity_registry=registry, owner_id="entry-id"
+            ),
+            pn,
+        )
+
+    def test_durable_transition_pn_rejects_weak_owned_session(self) -> None:
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+
+        pn = "E5000025SYN0000000001"
+        inventory = (
+            {
+                "session_id": "weak-live-session",
+                "collector_pn": pn,
+                "collector_identity_source": "framed_heartbeat",
+                "state": "routed_framed",
+                "protocol_shape": "eybond_framed",
+            },
+        )
+        registry = CallbackSessionRegistry(sessions_source=lambda: inventory)
+        registry.claim_session("entry-id", session_id="weak-live-session")
+        registry.promote_claim_to_full_pn("entry-id", pn)
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_pn": pn}, options={}
+        )
+        self.assertEqual(
+            coordinator._durable_transition_collector_pn(
+                identity_registry=registry, owner_id="entry-id"
+            ),
+            "",
+        )
+
+    def test_persist_selection_pn_required_for_bridge(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED,
+        )
+
+        async def _run() -> None:
+            coordinator, order = self._persist_coordinator(
+                data={"collector_virtual_bridge": True, "collector_pn": "E5000025SYN0000000001"},
+                options={},
+                config_dir="/nonexistent-cp2b2",
+            )
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection()
+            )
+            self.assertEqual(error, TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED)
+            self.assertEqual(order, [])
+
+        asyncio.run(_run())
+
+    def test_persist_selection_registry_failure_keeps_entry_intent_no_wire(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_ROLLBACK_PERSIST_FAILED,
+        )
+
+        async def _run() -> None:
+            coordinator, order = self._persist_coordinator(
+                data={"collector_kind": "factory_eybond", "collector_pn": "E5000025SYN0000000001"},
+                options={},
+                config_dir="/nonexistent-cp2b2",
+                executor_raises=True,
+            )
+            error = await coordinator._async_persist_cloud_rollback_selection(
+                self._catalog_selection()
+            )
+            self.assertEqual(error, TRANSITION_ROLLBACK_PERSIST_FAILED)
+            # The safe local entry intent was written (retryable); registry failed.
+            self.assertEqual(order, ["entry", "registry"])
+            self.assertEqual(
+                coordinator.config_entry.data["collector_original_server_endpoint"],
+                "dtu.example,18899,TCP",
+            )
+
+        asyncio.run(_run())
+
+    def test_inbound_overwrite_without_live_endpoint_requires_saved_original(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED,
+        )
+
+        async def _run() -> None:
+            tmp = Path(tempfile.mkdtemp())
+            coordinator, order = self._persist_coordinator(
+                data={
+                    "collector_kind": "factory_eybond",
+                    "collector_pn": "E5000025SYN0000000001",
+                },
+                options={},
+                config_dir=tmp,
+            )
+            refusal = await coordinator._async_persist_inbound_rollback_endpoint(
+                "", collector_pn="E5000025SYN0000000001"
+            )
+            self.assertEqual(
+                refusal, TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+            )
+            self.assertEqual(order, ["registry"])
+
+        asyncio.run(_run())
+
+    def test_inbound_overwrite_accepts_existing_durable_original_when_live_is_empty(self) -> None:
+        async def _run() -> None:
+            tmp = Path(tempfile.mkdtemp())
+            coordinator, order = self._persist_coordinator(
+                data={
+                    "collector_kind": "factory_eybond",
+                    "collector_pn": "E5000025SYN0000000001",
+                    "collector_original_server_endpoint": "saved.example,18899,TCP",
+                    "collector_original_server_endpoint_source": "runtime_observed",
+                },
+                options={},
+                config_dir=tmp,
+            )
+            refusal = await coordinator._async_persist_inbound_rollback_endpoint(
+                "", collector_pn="E5000025SYN0000000001"
+            )
+            self.assertEqual(refusal, "")
+            self.assertEqual(order, ["registry"])
+
+        asyncio.run(_run())
+
+    def test_inbound_remembers_external_endpoint_before_any_overwrite(self) -> None:
+        # CP2B.2 §9 audit: the EXISTING continuous remember (run on every snapshot
+        # prepare, BEFORE any inbound transition) durably saves the current
+        # external endpoint into the entry (options whole-record) AND the PN
+        # registry. This is the mechanism the inbound overwrite relies on -- it is
+        # proven here so the switch never loses the original cloud endpoint.
+        from custom_components.eybond_local.support.collector_registry import (
+            get_collector_registry_record,
+        )
+
+        async def _run() -> None:
+            tmp = Path(tempfile.mkdtemp())
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(
+                data={
+                    "collector_kind": "factory_eybond",
+                    "collector_pn": "E5000025SYN0000000001",
+                    "collector_ip": "192.168.1.55",
+                },
+                options={},
+            )
+            coordinator.data = self.RuntimeSnapshot(
+                values={"collector_server_endpoint": "ess.eybond.com,18899,TCP"},
+                collector=types.SimpleNamespace(
+                    remote_ip="192.168.1.55",
+                    collector_pn="E5000025SYN0000000001",
+                    collector_virtual_bridge=False,
+                ),
+            )
+            # HA's own advertised host (the endpoint we would OVERWRITE to) differs
+            # from the external endpoint, so the external one is remembered.
+            coordinator._runtime = types.SimpleNamespace(effective_advertised_server_ip="192.168.1.50")
+            coordinator._connection_spec = types.SimpleNamespace(effective_advertised_server_ip="192.168.1.50")
+            coordinator._remembered_collector_server_endpoint = ""
+
+            def _update(**kwargs):
+                if "options" in kwargs:
+                    coordinator.config_entry = types.SimpleNamespace(
+                        data=coordinator.config_entry.data, options=kwargs["options"]
+                    )
+
+            coordinator._async_update_entry_without_reload = _update
+
+            async def _run_executor(func, *args):
+                return func(*args)
+
+            coordinator.hass = types.SimpleNamespace(
+                config=types.SimpleNamespace(config_dir=str(tmp)),
+                async_add_executor_job=_run_executor,
+            )
+
+            await coordinator._async_remember_collector_server_endpoint(coordinator.data)
+
+            # Saved as the durable original in the entry (options whole-record).
+            self.assertEqual(
+                coordinator.config_entry.options.get("collector_original_server_endpoint"),
+                "ess.eybond.com,18899,TCP",
+            )
+            # Saved PN-bound in the registry.
+            record = get_collector_registry_record(
+                config_dir=tmp, collector_pn="E5000025SYN0000000001"
+            )
+            self.assertIsNotNone(record)
+            self.assertEqual(record.original_endpoint_raw, "ess.eybond.com,18899,TCP")
+
+        asyncio.run(_run())
 
     def test_runtime_bridge_syncs_profile_without_persisting_operation_mode(self) -> None:
         updates: list[dict[str, object]] = []

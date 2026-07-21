@@ -13455,11 +13455,271 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         # Inbound warns about pointing the collector at HA / cloud reachability.
         self.assertIn("SmartESS", inbound_note)
         # Callback is honest about the current boundary: only a previously
-        # saved endpoint can be restored, and an unknown target is refused
-        # instead of guessed (catalog/manual selection belongs to CP2B).
+        # saved endpoint is restored automatically, while an unknown target
+        # requires an explicit catalog/manual choice before any mutation.
         self.assertIn("previously saved", callback_note)
-        self.assertIn("refused", callback_note)
-        self.assertIn("instead of guessing", callback_note)
+        self.assertIn("does not guess", callback_note)
+        self.assertIn("choose a catalog endpoint", callback_note)
+
+    # -- CP2B.1 Test F: read-only rollback summary -------------------------
+    @staticmethod
+    def _rollback_stub(endpoint: str, provenance: str):
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CloudRollbackEndpoint,
+        )
+
+        async def _ctx():
+            if provenance == "none":
+                return CloudRollbackEndpoint.none()
+            return CloudRollbackEndpoint(endpoint=endpoint, provenance=provenance)
+
+        return _ctx
+
+    async def _rollback_note(self, *, target: str, endpoint: str, provenance: str) -> str:
+        flow, _calls = self._make_flow()
+        flow._transition_target_strategy = target
+        flow._config_entry.runtime_data.collector_cloud_rollback_context = (
+            self._rollback_stub(endpoint, provenance)
+        )
+        form = await flow.async_step_strategy_transition()
+        return form["description_placeholders"]["connection_strategy_rollback"]
+
+    async def test_rollback_summary_known_vs_unknown_differs(self) -> None:
+        callback_known = await self._rollback_note(
+            target="callback_on_demand",
+            endpoint="ess.eybond.com,18899,TCP",
+            provenance="original_cloud_endpoint",
+        )
+        callback_unknown = await self._rollback_note(
+            target="callback_on_demand", endpoint="", provenance="none"
+        )
+        self.assertNotEqual(callback_known, callback_unknown)
+        # Known callback summary shows the entry's own endpoint + provenance.
+        self.assertIn("ess.eybond.com,18899,TCP", callback_known)
+        self.assertIn("saved original endpoint", callback_known)
+        self.assertIn("offered for confirmation", callback_known)
+        self.assertNotIn("will be used", callback_known.lower())
+        # Unknown callback summary is honest that no endpoint is guessed.
+        self.assertNotIn("ess.eybond.com", callback_unknown)
+
+    async def test_rollback_summary_inbound_vs_callback_wording_differs(self) -> None:
+        inbound_known = await self._rollback_note(
+            target="inbound",
+            endpoint="ess.eybond.com,18899,TCP",
+            provenance="original_cloud_endpoint",
+        )
+        callback_known = await self._rollback_note(
+            target="callback_on_demand",
+            endpoint="ess.eybond.com,18899,TCP",
+            provenance="original_cloud_endpoint",
+        )
+        self.assertNotEqual(inbound_known, callback_known)
+        # Inbound known/unknown wording differs too.
+        inbound_unknown = await self._rollback_note(
+            target="inbound", endpoint="", provenance="none"
+        )
+        self.assertNotEqual(inbound_known, inbound_unknown)
+
+    async def test_rollback_summary_is_read_only_never_a_field_or_persisted(self) -> None:
+        # The rollback summary is a description placeholder only: it is not a form
+        # field, it does not change the submitted payload/transition call, and it
+        # is never persisted. A KNOWN context does not alter the confirmed flow.
+        flow, calls = self._make_flow()
+        flow._transition_target_strategy = "callback_on_demand"
+        flow._config_entry.runtime_data.collector_cloud_rollback_context = (
+            self._rollback_stub("ess.eybond.com,18899,TCP", "original_cloud_endpoint")
+        )
+        form = await flow.async_step_strategy_transition()
+        # Not an editable field.
+        self.assertNotIn("connection_strategy_rollback", form["data_schema"].schema)
+        # Submitting is unchanged: consent + addresses proceed, payload untouched.
+        submitted = await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+                "confirm_connection_strategy_risk": True,
+            }
+        )
+        self.assertEqual(submitted["type"], "progress")
+        await flow._transition_task
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].get("option_payload"), {"poll_mode": "auto"})
+        self.assertNotIn(
+            "connection_strategy_rollback", calls[0].get("option_payload", {}) or {}
+        )
+
+    # -- CP2B.2 Test B: the cloud rollback chooser -------------------------
+    def _make_chooser_flow(self, *, candidate_endpoint=None, provenance="original_cloud_endpoint"):
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CloudRollbackEndpoint,
+        )
+
+        flow, calls = self._make_flow()
+        flow._config_entry.data = dict(flow._config_entry.data)
+        # An integration-managed callback restore requires the chooser.
+        flow._config_entry.data["endpoint_control_policy"] = "integration_managed"
+
+        async def _ctx():
+            if candidate_endpoint is None:
+                return CloudRollbackEndpoint.none()
+            return CloudRollbackEndpoint(candidate_endpoint, provenance)
+
+        flow._config_entry.runtime_data.collector_cloud_rollback_context = _ctx
+        flow._transition_target_strategy = "callback_on_demand"
+        return flow, calls
+
+    def _catalog_key(self) -> str:
+        from custom_components.eybond_local.collector.cloud_rollback_catalog import (
+            writable_cloud_rollback_catalog_options,
+        )
+
+        return writable_cloud_rollback_catalog_options()[0].key
+
+    async def _reach_chooser(self, flow):
+        return await flow.async_step_strategy_transition(
+            {
+                "advertised_server_ip": "198.51.100.20",
+                "advertised_tcp_port": 19000,
+                "collector_ip": "203.0.113.10",
+                "confirm_connection_strategy_risk": True,
+            }
+        )
+
+    async def test_external_policy_skips_chooser(self) -> None:
+        # The default fake entry is external -> the chooser is skipped and the
+        # transition proceeds directly with no rollback selection.
+        flow, calls = self._make_flow()
+        submitted = await self._reach_chooser(flow)
+        self.assertEqual(submitted["type"], "progress")
+        self.assertIsNone(flow._transition_rollback_selection)
+        await flow._transition_task
+        self.assertIsNone(calls[0].get("cloud_rollback_selection"))
+
+    async def test_integration_managed_routes_to_chooser(self) -> None:
+        flow, _calls = self._make_chooser_flow(candidate_endpoint="ess.eybond.com,18899,TCP")
+        form = await self._reach_chooser(flow)
+        self.assertEqual(form["type"], "form")
+        self.assertEqual(form["step_id"], "strategy_transition_rollback")
+        self.assertIsNone(flow._transition_task)  # no transition started yet
+
+    async def test_chooser_shows_known_candidate(self) -> None:
+        # A known candidate is surfaced (endpoint shown) AND selectable; the
+        # confirmed option builds a confirmed-candidate selection.
+        flow, _calls = self._make_chooser_flow(candidate_endpoint="ess.eybond.com,18899,TCP")
+        flow._transition_confirmed_input = {"host": "198.51.100.20", "port": 19000, "collector_ip": "203.0.113.10"}
+        form = await flow.async_step_strategy_transition_rollback()
+        self.assertEqual(form["step_id"], "strategy_transition_rollback")
+        self.assertEqual(
+            form["description_placeholders"]["candidate_endpoint"],
+            "ess.eybond.com,18899,TCP",
+        )
+        self.assertIn("rollback_choice", form["data_schema"].schema)
+        self.assertIn("rollback_manual_endpoint", form["data_schema"].schema)
+
+    async def test_chooser_no_candidate_offers_catalog_and_manual(self) -> None:
+        # With no candidate, the confirmed option is not accepted, but catalog and
+        # manual choices are, and no endpoint is guessed.
+        flow, _calls = self._make_chooser_flow(candidate_endpoint=None)
+        flow._transition_confirmed_input = {"host": "1.2.3.4", "port": 19000, "collector_ip": "203.0.113.10"}
+        form = await flow.async_step_strategy_transition_rollback()
+        self.assertEqual(form["step_id"], "strategy_transition_rollback")
+        self.assertEqual(form["description_placeholders"]["candidate_endpoint"], "")
+        self.assertIn("rollback_choice", form["data_schema"].schema)
+
+    async def _submit_chooser(self, flow, choice, *, manual=""):
+        flow._transition_confirmed_input = {"host": "198.51.100.20", "port": 19000, "collector_ip": "203.0.113.10"}
+        return await flow.async_step_strategy_transition_rollback(
+            {"rollback_choice": choice, "rollback_manual_endpoint": manual}
+        )
+
+    async def test_chooser_confirmed_builds_selection_and_is_single_authority(self) -> None:
+        flow, calls = self._make_chooser_flow(candidate_endpoint="ess.eybond.com,18899,TCP")
+        result = await self._submit_chooser(flow, "__confirmed_candidate__")
+        self.assertEqual(result["type"], "progress")
+        selection = flow._transition_rollback_selection
+        self.assertEqual(selection.selection_kind, "confirmed_candidate")
+        self.assertEqual(selection.endpoint_value, "ess.eybond.com,18899,TCP")
+        await flow._transition_task
+        # NAT separation + single authority: the advertised HA route and the cloud
+        # rollback endpoint travel as SEPARATE args, never substituted.
+        self.assertEqual(calls[0]["advertised_host"], "198.51.100.20")
+        self.assertEqual(calls[0]["advertised_port"], 19000)
+        self.assertEqual(calls[0]["callback_target_ip"], "203.0.113.10")
+        self.assertIs(calls[0]["cloud_rollback_selection"], selection)
+        self.assertNotEqual(
+            calls[0]["cloud_rollback_selection"].endpoint_value, calls[0]["advertised_host"]
+        )
+
+    async def test_chooser_catalog_builds_selection(self) -> None:
+        flow, calls = self._make_chooser_flow(candidate_endpoint=None)
+        key = self._catalog_key()
+        result = await self._submit_chooser(flow, key)
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(flow._transition_rollback_selection.selection_kind, "catalog")
+        self.assertEqual(flow._transition_rollback_selection.catalog_profile_key, key)
+
+    async def test_chooser_manual_valid_builds_selection(self) -> None:
+        flow, _calls = self._make_chooser_flow(candidate_endpoint=None)
+        result = await self._submit_chooser(flow, "__manual__", manual="my.cloud,18899,TCP")
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(flow._transition_rollback_selection.selection_kind, "manual")
+        self.assertEqual(flow._transition_rollback_selection.endpoint_value, "my.cloud,18899,TCP")
+
+    async def test_chooser_manual_malformed_is_form_error(self) -> None:
+        flow, calls = self._make_chooser_flow(candidate_endpoint=None)
+        result = await self._submit_chooser(flow, "__manual__", manual="bad###ep")
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"].get("rollback_manual_endpoint"), "rollback_endpoint_invalid")
+        self.assertIsNone(flow._transition_rollback_selection)
+        self.assertIsNone(flow._transition_task)
+        self.assertEqual(calls, [])
+
+    async def test_chooser_stale_catalog_key_is_form_error(self) -> None:
+        flow, calls = self._make_chooser_flow(candidate_endpoint=None)
+        result = await self._submit_chooser(flow, "___removed_key___")
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"].get("rollback_choice"), "rollback_choice_invalid")
+        self.assertIsNone(flow._transition_rollback_selection)
+        self.assertEqual(calls, [])
+
+    async def test_chooser_confirmed_without_candidate_is_form_error(self) -> None:
+        flow, _calls = self._make_chooser_flow(candidate_endpoint=None)
+        result = await self._submit_chooser(flow, "__confirmed_candidate__")
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"].get("rollback_choice"), "rollback_choice_invalid")
+
+    async def test_chooser_submit_uses_the_candidate_that_was_shown(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CLOUD_PROVENANCE_ORIGINAL,
+            CloudRollbackEndpoint,
+        )
+
+        flow, _calls = self._make_chooser_flow(candidate_endpoint=None)
+        shown = CloudRollbackEndpoint(
+            "shown.example,18899,TCP", CLOUD_PROVENANCE_ORIGINAL
+        )
+        changed = CloudRollbackEndpoint(
+            "changed.example,18899,TCP", CLOUD_PROVENANCE_ORIGINAL
+        )
+        reads = 0
+
+        async def _changing_context():
+            nonlocal reads
+            reads += 1
+            return shown if reads == 1 else changed
+
+        flow._config_entry.runtime_data.collector_cloud_rollback_context = (
+            _changing_context
+        )
+        form = await flow.async_step_strategy_transition_rollback()
+        self.assertEqual(form["description_placeholders"]["candidate_endpoint"], shown.endpoint)
+        result = await self._submit_chooser(flow, "__confirmed_candidate__")
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(
+            flow._transition_rollback_selection.endpoint_value, shown.endpoint
+        )
+        self.assertEqual(reads, 1)
 
     async def test_confirm_form_requires_explicit_addresses(self) -> None:
         flow, _calls = self._make_flow()

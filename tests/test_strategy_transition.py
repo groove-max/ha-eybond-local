@@ -36,6 +36,7 @@ from custom_components.eybond_local.connection.strategy_transition import (  # n
     TRANSITION_INBOUND_RECOVERED_INSTEAD,
     TRANSITION_NOT_REQUIRED,
     TRANSITION_ROLLBACK_ENDPOINT_UNAVAILABLE,
+    TRANSITION_ROLLBACK_SELECTION_REQUIRED,
     TRANSITION_SESSION_UNAVAILABLE,
     async_run_strategy_transition,
 )
@@ -217,6 +218,9 @@ class _Harness:
 
     # --- run ---------------------------------------------------------------
     async def run(self, *, target: str, **kwargs):
+        from custom_components.eybond_local.collector.cloud_rollback_catalog import (
+            cloud_rollback_selection_from_manual,
+        )
         from custom_components.eybond_local.connection.strategy_transition_recovery import (
             StrategyTransitionRecoveryState,
         )
@@ -253,7 +257,27 @@ class _Harness:
             ),
             persist_pending=self.persist_pending,
             persist_confirmed=self.persist_confirmed,
+            # A callback->inbound overwrite must preserve the currently
+            # external endpoint inside the same transaction.  Individual
+            # refusal tests override these seams.
+            current_external_endpoint="vendor.example.net,5074,TCP",
+            persist_inbound_rollback_endpoint=lambda _endpoint: "",
         )
+        # Legacy test inputs used a loose restore_endpoint.  Production no
+        # longer accepts that authority; adapt the harness to the exact typed
+        # manual selection while preserving each test's intended endpoint.
+        restore_endpoint = kwargs.get("restore_endpoint")
+        if (
+            kwargs.get("endpoint_control_policy") == "integration_managed"
+            and restore_endpoint
+            and "cloud_rollback_selection" not in kwargs
+        ):
+            selection = cloud_rollback_selection_from_manual(restore_endpoint)
+            base.update(
+                cloud_rollback_selection=selection,
+                validate_rollback_selection=lambda _selection: "",
+                persist_rollback_selection=lambda _selection: "",
+            )
         base.update(kwargs)
         return await async_run_strategy_transition(**base)
 
@@ -342,6 +366,55 @@ class CallbackToInboundTransitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h.reboot_calls, 0)
         self.assertIsNone(h.committed)
 
+    async def test_missing_current_endpoint_must_still_prove_saved_rollback(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED,
+        )
+
+        h = _Harness(current_strategy="callback_on_demand")
+        seen: list[str] = []
+
+        def _refuse_missing(endpoint: str) -> str:
+            seen.append(endpoint)
+            return TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="198.51.100.20:18899",
+            endpoint_needs_write=True,
+            current_external_endpoint="",
+            persist_inbound_rollback_endpoint=_refuse_missing,
+            write_endpoint=h.write_endpoint,
+            reboot=h.reboot,
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(
+            result.failure_reason, TRANSITION_INBOUND_ROLLBACK_PERSIST_FAILED
+        )
+        self.assertEqual(seen, [""])
+        self.assertEqual(h.write_calls, [])
+
+    async def test_management_preflight_precedes_inbound_persistence(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_MANAGEMENT_UNAVAILABLE,
+        )
+
+        h = _Harness(current_strategy="callback_on_demand")
+        persists: list[str] = []
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="198.51.100.20:18899",
+            endpoint_needs_write=True,
+            management_action_available=lambda _action: False,
+            persist_inbound_rollback_endpoint=lambda endpoint: persists.append(endpoint),
+            write_endpoint=h.write_endpoint,
+            reboot=h.reboot,
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure_reason, TRANSITION_MANAGEMENT_UNAVAILABLE)
+        self.assertEqual(persists, [])
+        self.assertEqual(h.write_calls, [])
+
 
 class InboundToCallbackTransitionTests(unittest.IsolatedAsyncioTestCase):
     """C. inbound -> callback_on_demand."""
@@ -360,16 +433,16 @@ class InboundToCallbackTransitionTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074,TCP",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
         )
         self.assertTrue(result.success, result.failure_reason)
         # The restore used ONLY the saved provenance endpoint, exactly once.
-        self.assertEqual(h.write_calls, ["vendor.example.net:5074"])
+        self.assertEqual(h.write_calls, ["vendor.example.net,5074,TCP"])
         self.assertEqual(h.reboot_calls, 0)
-        self.assertEqual(h.restored_provenance, ["vendor.example.net:5074"])
+        self.assertEqual(h.restored_provenance, ["vendor.example.net,5074,TCP"])
         self.assertTrue(result.endpoint_restored)
         # Exactly ONE logical set>server sequence.
         self.assertEqual(len(sender.routes), 1)
@@ -402,12 +475,48 @@ class InboundToCallbackTransitionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(result.success)
         self.assertEqual(
-            result.failure_reason, TRANSITION_ROLLBACK_ENDPOINT_UNAVAILABLE
+            result.failure_reason, TRANSITION_ROLLBACK_SELECTION_REQUIRED
         )
         self.assertEqual(h.write_calls, [])
         self.assertEqual(h.reboot_calls, 0)
         self.assertEqual(sender.routes, [])
         self.assertIsNone(h.committed)
+
+    async def test_async_stale_selection_validation_precedes_persistence(self) -> None:
+        from custom_components.eybond_local.collector.cloud_rollback_catalog import (
+            cloud_rollback_selection_from_manual,
+        )
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_ROLLBACK_SELECTION_STALE,
+        )
+
+        h = _Harness(current_strategy="inbound")
+        selection = cloud_rollback_selection_from_manual(
+            "vendor.example.net,5074,TCP"
+        )
+        persists: list[object] = []
+
+        async def _stale(_selection) -> str:
+            await asyncio.sleep(0)
+            return TRANSITION_ROLLBACK_SELECTION_STALE
+
+        result = await h.run(
+            target="callback_on_demand",
+            callback_route=_route(),
+            trigger_sender=_Sender(ledger=h.ledger),
+            endpoint_control_policy="integration_managed",
+            cloud_rollback_selection=selection,
+            validate_rollback_selection=_stale,
+            persist_rollback_selection=lambda value: persists.append(value),
+            write_endpoint=h.write_endpoint_no_reconnect,
+            reboot=h.reboot,
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(
+            result.failure_reason, TRANSITION_ROLLBACK_SELECTION_STALE
+        )
+        self.assertEqual(persists, [])
+        self.assertEqual(h.write_calls, [])
 
     async def test_external_policy_needs_no_restore_and_keeps_policy_untouched(
         self,
@@ -522,7 +631,7 @@ class TransitionFailureMatrixTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074,TCP",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -532,7 +641,7 @@ class TransitionFailureMatrixTests(unittest.IsolatedAsyncioTestCase):
         # The restore is a confirmed FACT (policy external persisted by the
         # hook) even though the proof failed; strategy stays inbound.
         self.assertTrue(result.endpoint_restored)
-        self.assertEqual(h.restored_provenance, ["vendor.example.net:5074"])
+        self.assertEqual(h.restored_provenance, ["vendor.example.net,5074,TCP"])
         self.assertIsNone(h.committed)
         self.assertEqual(len(sender.routes), 1)
 
@@ -987,7 +1096,7 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1019,7 +1128,7 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
                 callback_route=_route(),
                 trigger_sender=sender,
                 endpoint_control_policy="integration_managed",
-                restore_endpoint="vendor.example.net:5074",
+                restore_endpoint="vendor.example.net,5074",
                 write_endpoint=h.write_endpoint_no_reconnect,
                 reboot=h.reboot,
                 on_endpoint_restored=h.on_restored,
@@ -1032,7 +1141,7 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
         # The restore had already CONFIRMED: the confirmed-unproven state was
         # persisted at that boundary and is NOT deleted by the cancellation
         # (CancelledError still propagates unchanged). Nothing is rolled back.
-        self.assertEqual(h.restored_provenance, ["vendor.example.net:5074"])
+        self.assertEqual(h.restored_provenance, ["vendor.example.net,5074"])
         self.assertEqual(len(h.pending_states), 1)
         self.assertEqual(len(h.confirmed_states), 1)
         self.assertNotIn("commit", h.events)
@@ -1053,7 +1162,7 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=_restore_but_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1173,7 +1282,7 @@ class AtomicRestoreAndInboundRecoveredTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             # The restore drops the old socket; the collector then autonomously
             # re-dials (write_endpoint adds the new session) -> inbound_recovered.
             write_endpoint=h.write_endpoint,
@@ -1221,7 +1330,7 @@ class AtomicRestoreAndInboundRecoveredTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=_write_endpoint,
             reboot=h.reboot,
             on_endpoint_restored=restored.append,
@@ -1305,7 +1414,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1407,7 +1516,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
                     callback_route=_route(),
                     trigger_sender=sender,
                     endpoint_control_policy="integration_managed",
-                    restore_endpoint="vendor.example.net:5074",
+                    restore_endpoint="vendor.example.net,5074",
                     write_endpoint=h.write_endpoint_no_reconnect,
                     reboot=h.reboot,
                     on_endpoint_restored=h.on_restored,
@@ -1434,7 +1543,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1462,7 +1571,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1488,7 +1597,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1512,14 +1621,14 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
         )
         self.assertFalse(result.success)
         # The restore physically HAPPENED before the crash...
-        self.assertEqual(h.write_calls, ["vendor.example.net:5074"])
+        self.assertEqual(h.write_calls, ["vendor.example.net,5074"])
         self.assertTrue(result.endpoint_restored)
         # ...the write-ahead pending state survives, the confirmed write was
         # ATTEMPTED, and NO terminal strategy was ever committed.
@@ -1550,7 +1659,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1591,7 +1700,7 @@ class WriteAheadOrderingTests(unittest.IsolatedAsyncioTestCase):
             callback_route=_route(),
             trigger_sender=sender,
             endpoint_control_policy="integration_managed",  # restore path
-            restore_endpoint="vendor.example.net:5074",
+            restore_endpoint="vendor.example.net,5074",
             write_endpoint=h.write_endpoint_no_reconnect,
             reboot=h.reboot,
             on_endpoint_restored=h.on_restored,
@@ -1667,3 +1776,139 @@ class OptionPayloadAllowlistTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(res2.success)
                 self.assertEqual(res2.failure_reason, "transition_payload_forbidden")
                 self.assertIsNone(h2.committed)
+
+
+class RollbackAuthorityOrderingTests(unittest.IsolatedAsyncioTestCase):
+    """CP2B.2 corrective: preflight, persistence and wire have one owner."""
+
+    @staticmethod
+    def _selection(endpoint="vendor.example.net,5074,TCP"):
+        from custom_components.eybond_local.collector.cloud_rollback_catalog import (
+            cloud_rollback_selection_from_manual,
+        )
+
+        return cloud_rollback_selection_from_manual(endpoint)
+
+    async def test_management_refusal_precedes_selection_persistence(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_MANAGEMENT_UNAVAILABLE,
+        )
+
+        h = _Harness(current_strategy="inbound")
+        persisted: list[str] = []
+        result = await h.run(
+            target="callback_on_demand",
+            callback_route=_route(),
+            trigger_sender=_Sender(ledger=h.ledger),
+            endpoint_control_policy="integration_managed",
+            write_endpoint=h.write_endpoint_no_reconnect,
+            reboot=h.reboot,
+            cloud_rollback_selection=self._selection(),
+            validate_rollback_selection=lambda _selection: "",
+            persist_rollback_selection=lambda selection: persisted.append(
+                selection.endpoint_value
+            ),
+            management_action_available=lambda _action: False,
+        )
+        self.assertEqual(result.failure_reason, TRANSITION_MANAGEMENT_UNAVAILABLE)
+        self.assertEqual(persisted, [])
+        self.assertEqual(h.pending_states, [])
+        self.assertEqual(h.write_calls, [])
+
+    async def test_forged_catalog_selection_is_refused_before_mutation(self) -> None:
+        from custom_components.eybond_local.collector.cloud_rollback_catalog import (
+            validate_cloud_rollback_selection,
+            writable_cloud_rollback_catalog_options,
+        )
+        from custom_components.eybond_local.connection.strategy_transition_context import (
+            CLOUD_PROVENANCE_EXPLICIT_USER,
+            ROLLBACK_SELECTION_CATALOG,
+            CloudRollbackEndpoint,
+            CloudRollbackSelection,
+        )
+
+        key = writable_cloud_rollback_catalog_options()[0].key
+        forged = CloudRollbackSelection(
+            endpoint=CloudRollbackEndpoint(
+                "evil.example,18899,TCP", CLOUD_PROVENANCE_EXPLICIT_USER
+            ),
+            selection_kind=ROLLBACK_SELECTION_CATALOG,
+            catalog_profile_key=key,
+            user_confirmed=True,
+        )
+        h = _Harness(current_strategy="inbound")
+        persisted: list[str] = []
+        result = await h.run(
+            target="callback_on_demand",
+            callback_route=_route(),
+            trigger_sender=_Sender(ledger=h.ledger),
+            endpoint_control_policy="integration_managed",
+            write_endpoint=h.write_endpoint_no_reconnect,
+            reboot=h.reboot,
+            cloud_rollback_selection=forged,
+            validate_rollback_selection=lambda selection: (
+                "transition_rollback_selection_invalid"
+                if validate_cloud_rollback_selection(selection)
+                else ""
+            ),
+            persist_rollback_selection=lambda selection: persisted.append(
+                selection.endpoint_value
+            ),
+        )
+        self.assertEqual(
+            result.failure_reason, "transition_rollback_selection_invalid"
+        )
+        self.assertEqual(persisted, [])
+        self.assertEqual(h.pending_states, [])
+        self.assertEqual(h.write_calls, [])
+
+    async def test_selection_persists_after_preflight_before_pending_and_wire(self) -> None:
+        h = _Harness(current_strategy="inbound")
+        selection = self._selection()
+
+        def _persist(_selection):
+            h.events.append("persist_selection")
+            return ""
+
+        sender = _Sender(
+            ledger=h.ledger,
+            on_send=lambda: h.inventory.append(_session(NEW_SESSION, FULL_PN)),
+        )
+        result = await h.run(
+            target="callback_on_demand",
+            callback_route=_route(),
+            trigger_sender=sender,
+            endpoint_control_policy="integration_managed",
+            write_endpoint=h.write_endpoint_no_reconnect,
+            reboot=h.reboot,
+            cloud_rollback_selection=selection,
+            validate_rollback_selection=lambda _selection: "",
+            persist_rollback_selection=_persist,
+        )
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertLess(
+            h.events.index("persist_selection"), h.events.index("persist_pending")
+        )
+        self.assertLess(h.events.index("persist_pending"), h.events.index("endpoint_write"))
+
+    async def test_inbound_preserves_known_external_endpoint_before_overwrite(self) -> None:
+        h = _Harness(current_strategy="callback_on_demand")
+
+        def _persist(endpoint):
+            h.events.append(f"preserve:{endpoint}")
+            return ""
+
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="198.51.100.20:18899",
+            endpoint_needs_write=True,
+            current_external_endpoint="factory.example,18899,TCP",
+            persist_inbound_rollback_endpoint=_persist,
+            write_endpoint=h.write_endpoint,
+            reboot=h.reboot,
+        )
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertLess(
+            h.events.index("preserve:factory.example,18899,TCP"),
+            h.events.index("endpoint_write"),
+        )
