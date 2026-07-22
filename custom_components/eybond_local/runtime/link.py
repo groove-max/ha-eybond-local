@@ -1972,6 +1972,60 @@ class EybondRuntimeLinkManager:
             timeout=timeout, require_heartbeat=require_heartbeat
         )
 
+    async def async_activate_claimed_session(
+        self,
+        *,
+        expected_session_id: str,
+        timeout: float,
+    ) -> bool:
+        """Activate exactly one registry-certified callback socket, without UDP.
+
+        Strategy-recovery has already established causality, strong identity and
+        permanent ownership.  This boundary performs only the missing transport
+        handoff: attach the runtime facade to the listener, route the exact
+        claimed session into it and verify that the same claim is still active.
+        It deliberately does not call :meth:`async_try_connect`, because losing
+        the claim must fail closed instead of silently sending a new set>server.
+        """
+
+        expected = str(expected_session_id or "").strip()
+        if not expected:
+            return False
+        if self._domain_ownership_active():
+            registry = self._callback_ownership_registry
+            if (
+                registry.claimed_session_id(self._callback_entry_id) != expected
+                or registry.session_handle_for_owned_session(
+                    self._callback_entry_id,
+                    expected,
+                )
+                is None
+            ):
+                return False
+        elif self._claimed_session_id() != expected:
+            return False
+
+        self._activation_session_id = expected
+        try:
+            await self._async_follow_owned_session_listener()
+            self._apply_live_wire_to_transports()
+            if self._claimed_session_id() != expected:
+                return False
+            activated = await self._async_await_callback_session(
+                timeout=max(0.0, float(timeout)),
+                require_heartbeat=False,
+            )
+            return bool(
+                activated
+                and self.connected
+                and self._claimed_session_id() == expected
+            )
+        finally:
+            self._activation_session_id = ""
+            # Restore the ordinary dynamic provider after the one exact
+            # handoff has either completed or failed.
+            self._apply_live_wire_to_transports()
+
     def _callback_attempt_seq(self) -> str:
         """A unique id for ONE runtime callback attempt.
 
@@ -2556,6 +2610,29 @@ class EybondRuntimeLinkManager:
         if not self._domain_ownership_active():
             return None
         try:
+            exact_session_id = str(
+                getattr(self, "_activation_session_id", "") or ""
+            ).strip()
+            if exact_session_id:
+                registry = self._callback_ownership_registry
+                if (
+                    registry.claimed_session_id(self._callback_entry_id)
+                    != exact_session_id
+                    or registry.session_handle_for_owned_session(
+                        self._callback_entry_id,
+                        exact_session_id,
+                    )
+                    is None
+                ):
+                    return None
+                return next(
+                    (
+                        session
+                        for session in registry.observed_sessions_per_socket()
+                        if session.session_id == exact_session_id
+                    ),
+                    None,
+                )
             return self._callback_ownership_registry.owned_session_location(
                 self._callback_entry_id
             )

@@ -62,7 +62,9 @@ class OnboardingPresentationTests(unittest.TestCase):
                 ip="192.168.1.56",
                 udp_reply="pong" if replied else "",
                 connected=not replied,
-                collector=CollectorInfo(collector_pn="PN456"),
+                collector=(
+                    None if replied else CollectorInfo(collector_pn="PN456")
+                ),
             )
         )
 
@@ -114,6 +116,17 @@ class OnboardingPresentationTests(unittest.TestCase):
         self.assertEqual(scan_result_status_code(self._smartess_hint_result()), "smartess_hint")
         self.assertEqual(scan_result_status_code(self._collector_only_result()), "collector_only")
         self.assertEqual(scan_result_status_code(self._collector_only_result(replied=True)), "collector_replied")
+        identified_reply = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.56",
+                source="autodetect",
+                ip="192.168.1.56",
+                udp_reply="pong",
+                connected=False,
+                collector=CollectorInfo(collector_pn="PN456"),
+            )
+        )
+        self.assertEqual(scan_result_status_code(identified_reply), "collector_only")
         timed_out = OnboardingResult(
             collector=CollectorCandidate(
                 target_ip="192.168.1.58",
@@ -130,6 +143,23 @@ class OnboardingPresentationTests(unittest.TestCase):
         )
         self.assertEqual(scan_result_status_code(timed_out), "detection_timeout")
         self.assertEqual(scan_result_status_label(timed_out), "Detection ran out of time")
+        timed_out_after_reply = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.55",
+                udp_reply="rsp>server=1;",
+            ),
+            detection=TargetDetectionEvidence(
+                depth="fast",
+                status="target_timeout",
+                reason="deadline_exhausted",
+                budget_exhausted=True,
+            ),
+        )
+        self.assertEqual(
+            scan_result_status_code(timed_out_after_reply), "collector_replied"
+        )
         self.assertEqual(scan_result_status_label(self._smartess_hint_result()), "SmartESS hint")
         self.assertEqual(scan_result_status_label(self._matched_result()), "Ready")
         self.assertEqual(scan_result_status_label(self._matched_result(), already_added=True), "Already added")

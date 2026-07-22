@@ -432,7 +432,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
 
-    async def test_interactive_snapshot_includes_retired_live_session(self) -> None:
+    async def test_interactive_snapshot_quarantines_unloaded_entry_session(self) -> None:
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)
         session = {
@@ -454,13 +454,18 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         await discovery._async_poll_once()
         observations = discovery.snapshot_unclaimed_collector_sessions()
 
-        # Passive publication stays retired, while an explicit interactive scan
-        # sees the same live, unclaimed exact session from the shared inventory.
+        # Until setup resumes the entry or permanent removal finalizes it, the
+        # exact old socket is not a valid interactive candidate either.
         self.assertEqual(hass.config_entries.flow.flows, [])
+        self.assertEqual(observations, ())
+
+        # A successful normal reload cancels only the removal quarantine. The
+        # old publication history remains separate and user-refreshable.
+        discovery.resume_entry_sessions("entry-v0011")
+        observations = discovery.snapshot_unclaimed_collector_sessions()
         self.assertEqual(len(observations), 1)
         self.assertEqual(observations[0].collector_pn, "V001107SYN282291016")
         self.assertEqual(observations[0].session_id, "listener-8899-retired")
-        self.assertEqual(observations[0].listener_port, 8899)
 
     async def test_retired_socket_survives_coalesced_winner_change(self) -> None:
         hass = _FakeHass()
@@ -501,7 +506,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         await discovery._async_poll_once()
         self.assertEqual(hass.config_entries.flow.flows, [])
 
-    async def test_user_refresh_republishes_retired_live_session_without_reconnect(self) -> None:
+    async def test_user_refresh_cannot_bypass_removal_quarantine(self) -> None:
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)
         session = {
@@ -526,7 +531,69 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.connected_unclaimed_count, 1)
         self.assertEqual(result.suppressed_candidate_count, 1)
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+        # Once setup proves this was only a reload, the explicit refresh may
+        # publish the still-live unclaimed socket under the historical behavior.
+        discovery.resume_entry_sessions("entry-e500")
+        result = await discovery.async_show_discovered_devices_again()
+        self.assertEqual(result.connected_unclaimed_count, 1)
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+    async def test_removal_ticket_is_exact_and_new_session_id_is_discoverable(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-8899-old",
+            "peer_ip": "192.168.1.1",
+            "collector_pn": "E500SYN253884199645",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        listener = _FakeListener((session,))
+        discovery._listeners[8899] = listener
+        discovery._registry.claim("entry-e500", collector_pn=session["collector_pn"])
+
+        discovery.retire_entry_sessions("entry-e500")
+        discovery._registry.release("entry-e500")
+        ticket = discovery.take_entry_removal_ticket("entry-e500")
+
+        self.assertIsNotNone(ticket)
+        self.assertEqual(ticket.session_id, "listener-8899-old")
+        self.assertEqual(ticket.listener_port, 8899)
+        self.assertEqual(discovery.snapshot_unclaimed_collector_sessions(), ())
+
+        # Closing the restarted socket prunes only its exact quarantine key. An
+        # autonomous inbound collector returns under a new session id and is a
+        # genuinely new discovery edge, even when the NAT peer IP is identical.
+        listener._sessions = ()
+        await discovery._async_poll_once()
+        listener._sessions = ({**session, "session_id": "listener-8899-new"},)
+        observations = discovery.snapshot_unclaimed_collector_sessions()
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].session_id, "listener-8899-new")
+
+    async def test_removal_ticket_does_not_coerce_listener_bind_host(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-8899-e500",
+            "peer_ip": "192.168.1.1",
+            "collector_pn": "E500SYN253884199645",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+            "listener_bind_host": object(),
+        }
+        discovery._listeners[8899] = _FakeListener((session,))
+        discovery._registry.claim("entry-e500", collector_pn=session["collector_pn"])
+
+        discovery.retire_entry_sessions("entry-e500")
+        discovery._registry.release("entry-e500")
+
+        self.assertIsNone(discovery.take_entry_removal_ticket("entry-e500"))
+        self.assertEqual(discovery.snapshot_unclaimed_collector_sessions(), ())
 
     async def test_user_refresh_does_not_publish_registry_owned_session(self) -> None:
         hass = _FakeHass()

@@ -78,6 +78,16 @@
           "result_key": "Pick a found device to add it, or pick a follow-up action."
         }
       },
+      "scan_collector_route": {
+        "title": "Choose the collector address",
+        "description": "Collector **{collector_pn}** was found. Its incoming connection came from **{peer_ip}**, which may be your router rather than the collector itself.\n\nAddresses found during the scan:\n{route_candidates}\n\nChoose the collector's address. Home Assistant will verify that it leads to this collector before saving the device.",
+        "data": {
+          "collector_ip": "Reachable collector address"
+        },
+        "data_description": {
+          "collector_ip": "Choose a found address or enter the collector's IPv4 address."
+        }
+      },
       "change_scan_interface": {
         "title": "Change Scan Interface",
         "description": "Choose the Home Assistant interface below, then run the scan again.",
@@ -234,7 +244,7 @@
       },
       "verify_connection": {
         "title": "Verify collector connection",
-        "description": "Collector **{collector_pn}** was found at {peer_ip}. Home Assistant will restart it and verify that it reconnects on its own. The connection may be interrupted for up to three minutes."
+        "description": "{verification_explanation}"
       },
       "verify_connection_failed": {
         "title": "Collector was not added",
@@ -284,8 +294,8 @@
         }
       },
       "manual_recovery_confirm": {
-        "title": "Verify the callback route",
-        "description": "Collector **{collector_pn}** answered at {collector_ip} — its identity is confirmed. Before the entry is saved, Home Assistant should verify it can REGAIN this collector after a connection loss.\n\nVerification will:\n1. Restart the collector (it briefly stops reporting).\n2. Wait to see whether it reconnects on its own.\n3. If it stays silent, send ONE addressed callback request.\n\nA normal callback entry is created only after this recovery route is proven. You can also test the address again, change the values, or save a read-only Pending Device without verification.",
+        "title": "Verify recovery",
+        "description": "Step 2 of 2. Collector **{collector_pn}** was identified at **{collector_ip}**. Home Assistant will now verify that the connection can be restored when needed: it restarts the collector, waits for an autonomous reconnection, and requests a callback if necessary. Continue when you are ready.",
         "menu_options": {
           "manual_recovery_verify": "Verify recovery (restarts the collector)",
           "manual_probe_again": "Probe again",
@@ -303,7 +313,7 @@
       },
       "manual_recovery_failed": {
         "title": "Recovery verification did not succeed",
-        "description": "Collector **{collector_pn}**: {failure_explanation}\n\nNo entry was created. You can run a full new attempt, change the address/settings, or save a read-only Pending Device that waits for the collector.",
+        "description": "Collector **{collector_pn}**: {failure_explanation}\n\nNo entry was created. Use one of the available actions below to retry or change the address/settings.",
         "menu_options": {
           "manual_probe_again": "Try again (new attempt)",
           "manual_edit_settings": "Edit settings",
@@ -314,7 +324,8 @@
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond collectors…",
       "shadow_learning": "{control_discovery_hint}",
-      "verify_connection": "Restarting collector {collector_pn} and waiting for it to reconnect. This may take up to three minutes.",
+      "verify_connection": "Restarting collector {collector_pn}. After the current connection closes, Home Assistant waits up to one minute for the replacement.",
+      "active_scan_recovery_verify": "Checking the connection to collector {collector_pn}…",
       "manual_recovery_verify": "Verifying the recovery route for collector {collector_pn}: restarting it, waiting for its own reconnection, then (only if needed) sending one addressed callback request. This can take a couple of minutes."
     },
     "error": {

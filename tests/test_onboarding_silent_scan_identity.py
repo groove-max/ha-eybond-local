@@ -91,6 +91,31 @@ def _silent_framed_service(
     )
 
 
+class _RewrittenUdpReplyService(FakeCollectorService):
+    """Reply from a gateway address while the addressed route stays distinct."""
+
+    def __init__(self, *args, udp_reply_bind_ip: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._udp_reply_bind_ip = udp_reply_bind_ip
+
+    async def handle_discovery(self, data: bytes, addr: tuple[str, int]) -> None:
+        # Model a hairpin-NAT/UDP-proxy topology: HA addressed ``listen_ip``,
+        # while the reply source is a different local address.  The reverse TCP
+        # source is independently controlled by ``tcp_bind_ip``.
+        reply = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            reply.bind((self._udp_reply_bind_ip, 0))
+            reply.sendto(b"rsp>server=1;", addr)
+        finally:
+            reply.close()
+        original = self._udp_reply
+        self._udp_reply = ""
+        try:
+            await super().handle_discovery(data, addr)
+        finally:
+            self._udp_reply = original
+
+
 def _result_pns(results) -> set[str]:
     pns: set[str] = set()
     for result in results:
@@ -683,7 +708,6 @@ class SilentScanArchitectureGuards(unittest.TestCase):
             "cloud_family",
             "hostname",
             "collector_cloud_profiles",
-            "protocol_shape",
             "collector_session_protocol_from_inventory_state",
             "CONF_COLLECTOR_SESSION_PROTOCOL",
             "startswith",  # no PN-prefix wire inference
@@ -693,6 +717,11 @@ class SilentScanArchitectureGuards(unittest.TestCase):
                 ids,
                 msg=f"silent-scan wire authority must not use {banned!r}",
             )
+        # protocol_shape is copied from the exact observation into the typed
+        # admission carrier. It must not choose the automatic query wire: that
+        # remains the framed-only intent passed to async_identify_exact_session.
+        helper = self._helper_source()
+        self.assertIn("AutomaticFramedIdentityIntent", helper)
 
     def test_uses_the_one_ledger_and_the_one_probe_boundary(self) -> None:
         ids = self._code_identifiers(self._helper_source())
@@ -821,6 +850,12 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
         self.assertEqual(result.collector.ip, route_s2)
         self.assertEqual(result.collector.collector.remote_ip, peer)
         self.assertNotEqual(result.collector.ip, peer)
+        self.assertEqual(result.observed_session.session_id.startswith("listener-"), True)
+        self.assertEqual(result.observed_session.collector_pn, TARGET_PN)
+        self.assertEqual(result.observed_session.identity_source, "fc2_parameter_2")
+        self.assertEqual(result.observed_session.protocol_shape, "eybond_framed")
+        self.assertEqual(result.callback_route.trigger_target_ip, route_s2)
+        self.assertEqual(result.callback_route.advertised_ha_host, "127.0.0.1")
         # Stale S1 of another route survived the target's cleanup, still parked.
         self.assertIn(stale_sid, post_silent)
         # No leaked payload owner for the route address; owners back to baseline.
@@ -872,6 +907,53 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
         self.assertEqual(result.collector.ip, route)         # route, not peer
         self.assertEqual(info.remote_ip, peer)
         self.assertEqual(gen_after - gen_before, 1)          # exactly one trigger
+
+    async def test_unicast_route_is_not_replaced_by_rewritten_udp_reply(self) -> None:
+        """The attempted route is durable; reply source and TCP peer are facts only."""
+
+        route = "127.0.0.2"
+        reply_source = "127.0.0.4"
+        peer = "127.0.0.1"
+        udp_port = _free_port(socket.SOCK_DGRAM)
+        service = _RewrittenUdpReplyService(
+            listen_ip=route,
+            udp_port=udp_port,
+            tcp_bind_ip=peer,
+            heartbeat_interval=30.0,
+            connect_timeout=2.0,
+            udp_reply="rsp>server=1;",
+            scenario=resolve_scenario(
+                preset="collector_only",
+                profile=CollectorProfile(pn=TARGET_PN),
+                first_heartbeat_delay=3600.0,
+            ),
+            udp_reply_bind_ip=reply_source,
+        )
+        await service.start()
+        try:
+            detector = OnboardingDetector(
+                server_ip="127.0.0.1",
+                tcp_port=self._tcp_port,
+                udp_port=udp_port,
+            )
+            result = await asyncio.wait_for(
+                detector._async_detect_target(
+                    DiscoveryTarget(ip=route, source="subnet_unicast"),
+                    discovery_timeout=0.4,
+                    connect_timeout=4.0,
+                    heartbeat_timeout=0.2,
+                    enrich_runtime_details=False,
+                ),
+                timeout=_HARNESS_TIMEOUT,
+            )
+        finally:
+            await service.stop()
+
+        self.assertEqual(result.collector.ip, route)
+        self.assertEqual(result.collector.target_ip, route)
+        self.assertTrue(result.collector.udp_reply_from.startswith(reply_source + ":"))
+        self.assertEqual(result.collector.collector.remote_ip, peer)
+        self.assertEqual(result.collector.collector.collector_pn, TARGET_PN)
 
     async def test_lease_busy_is_distinct_retryable_outcome_zero_sends(self) -> None:
         """Lease-busy: a FOREIGN owner holds the callback causality lease. THIS
@@ -986,6 +1068,134 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
         info = result.collector.collector
         self.assertEqual(str(getattr(info, "collector_pn", "") or ""), "")
         self.assertEqual(_result_pns([result]), set())
+
+    async def test_active_scan_session_reaches_callback_recovery_handoff(self) -> None:
+        """Regression for an added E500 entry whose sensors stayed offline.
+
+        The real active scan's exact session is adopted with ZERO extra identity
+        trigger; the shared recovery authority then reboots and sends one
+        addressed callback, returning a prepared callback proof on the new
+        fully-silent session.
+        """
+
+        from dataclasses import replace
+        from types import SimpleNamespace
+
+        from custom_components.eybond_local.connection.admission import (
+            CollectorAdmissionRequest,
+        )
+        from custom_components.eybond_local.connection.admission_transaction import (
+            CollectorAdmissionTransaction,
+        )
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityRequest,
+        )
+        from custom_components.eybond_local.connection.session_registry import (
+            CallbackSessionRegistry,
+        )
+        from custom_components.eybond_local.const import (
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            DOMAIN,
+        )
+        from custom_components.eybond_local.onboarding.timeouts import (
+            DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+        )
+
+        route = "127.0.0.2"
+        udp_port = _free_port(socket.SOCK_DGRAM)
+        service = FakeCollectorService(
+            listen_ip=route,
+            udp_port=udp_port,
+            tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=3600.0,
+            connect_timeout=2.0,
+            udp_reply="rsp>server=1;",
+            scenario=resolve_scenario(
+                preset="collector_only",
+                profile=CollectorProfile(pn=TARGET_PN),
+                first_heartbeat_delay=3600.0,
+                set_29_mode="reboot_silent",
+                reboot_reconnect_delay=0.2,
+            ),
+        )
+        await service.start()
+        try:
+            detector = OnboardingDetector(
+                server_ip="127.0.0.1",
+                tcp_port=self._tcp_port,
+                udp_port=udp_port,
+            )
+            result = await asyncio.wait_for(
+                detector._async_detect_target(
+                    DiscoveryTarget(ip=route, source="subnet_unicast"),
+                    discovery_timeout=0.3,
+                    connect_timeout=4.0,
+                    heartbeat_timeout=0.1,
+                    enrich_runtime_details=False,
+                ),
+                timeout=_HARNESS_TIMEOUT,
+            )
+            self.assertIsNotNone(result.observed_session)
+            self.assertIsNotNone(result.callback_route)
+
+            registry = CallbackSessionRegistry(
+                sessions_source=lambda: tuple(
+                    {**session, "listener_port": self._tcp_port}
+                    for session in self._listener.discovered_collector_sessions()
+                )
+            )
+            hass = SimpleNamespace(
+                data={DOMAIN: {"callback_session_registry": registry}}
+            )
+            policy = replace(
+                DEFAULT_ONBOARDING_TIMEOUT_POLICY,
+                callback_identity_session_wait=2.0,
+                callback_recovery_session_wait=4.0,
+                inbound_restart_disconnect_timeout=3.0,
+                inbound_reconnect_timeout=0.5,
+                callback_causality_lease_wait=3.0,
+            )
+            transaction = CollectorAdmissionTransaction(
+                CollectorAdmissionRequest(
+                    observed_session=result.observed_session,
+                    origin="active_scan",
+                    callback_route=result.callback_route,
+                ),
+                registry_provider=lambda: registry,
+                listener_host="0.0.0.0",
+                policy_provider=lambda: policy,
+                hass_provider=lambda: hass,
+            )
+            transaction.begin_observed_callback_continuation()
+            context = transaction.identity_context
+            identity = await asyncio.wait_for(
+                transaction.async_run_identity(
+                    CallbackIdentityRequest(
+                        server_ip=result.callback_route.bind_ip,
+                        tcp_port=result.callback_route.listener_port,
+                        udp_port=result.callback_route.trigger_udp_port,
+                        target_ip=result.callback_route.trigger_target_ip,
+                        strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                        expected_pn=context.expected_pn,
+                        old_session_id=context.old_session_id,
+                        bootstrap_probe=transaction.observed_wire_probe_intent(),
+                    )
+                ),
+                timeout=5.0,
+            )
+            self.assertTrue(identity.identity_certified, identity.result)
+            transaction.adopt_certified_pn(identity.collector_pn)
+            outcome = await asyncio.wait_for(
+                transaction.async_run_recovery(result.callback_route), timeout=8.0
+            )
+            self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+            self.assertNotEqual(outcome.new_session_id, result.observed_session.session_id)
+            consumed = transaction.consume_recovery_outcome()
+            self.assertIs(consumed, outcome)
+            self.assertTrue(transaction.adopt_recovery(consumed))
+            self.assertTrue(transaction.terminal_input.callback_proof)
+        finally:
+            await service.stop()
 
 
 class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):

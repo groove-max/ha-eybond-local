@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .recovery.verification import CallbackRecoveryRoute
+
 
 @dataclass(frozen=True, slots=True)
 class ObservedCollectorSession:
@@ -89,14 +91,14 @@ class CollectorAdmissionRequest:
     DIAGNOSTIC label only and must never influence the algorithm. This request
     is not a RecoveryProof and is never serialized into an entry.
 
-    A callback route/hint is deliberately NOT part of this Batch-1 model: it was
-    speculative API with no consumer. Batch 2 introduces the callback phase and
-    will add a route in the neutral connection layer, so the base data models
-    never take a back-dependency on ``onboarding``.
+    ``callback_route`` is present only when an ACTIVE scan actually exercised
+    that exact route. Its presence authorizes the existing callback recovery
+    transaction; it is never inferred from ``origin`` or a TCP peer address.
     """
 
     observed_session: ObservedCollectorSession
     origin: str = ""
+    callback_route: CallbackRecoveryRoute | None = None
 
     def __post_init__(self) -> None:
         if type(self.observed_session) is not ObservedCollectorSession:
@@ -105,6 +107,18 @@ class CollectorAdmissionRequest:
             raise TypeError("collector_admission_request_origin_must_be_str")
         if self.origin != self.origin.strip():
             raise ValueError("collector_admission_request_origin_not_normalized")
+        if self.callback_route is not None:
+            if type(self.callback_route) is not CallbackRecoveryRoute:
+                raise TypeError("collector_admission_request_callback_route_invalid")
+            invalid = self.callback_route.invalid_reason()
+            if invalid:
+                raise ValueError(
+                    f"collector_admission_request_callback_route_invalid:{invalid}"
+                )
+            if self.callback_route.listener_port != self.observed_session.listener_port:
+                raise ValueError(
+                    "collector_admission_request_listener_port_mismatch"
+                )
 
 
 __all__ = ["CollectorAdmissionRequest", "ObservedCollectorSession"]

@@ -2950,6 +2950,7 @@ class _SharedEybondListener:
         close_payload: bool = False,
         close_at: bool = False,
         close_pending: bool = False,
+        preserve_session_id: str = "",
     ) -> None:
         if not collector_ip and not collector_pn:
             return
@@ -2979,8 +2980,12 @@ class _SharedEybondListener:
         ):
             close_at = False
 
+        preserve_session_id = str(preserve_session_id or "").strip()
+
         if close_pending and collector_ip:
             for pending in tuple(self._pending_sockets.values()):
+                if preserve_session_id and pending.session_id == preserve_session_id:
+                    continue
                 remote_ip = pending.remote_ip
                 if not self._callback_ip_matches_collector(collector_ip, remote_ip):
                     continue
@@ -3001,6 +3006,14 @@ class _SharedEybondListener:
                 payload_keys.update(
                     self._connection_keys_for_collector(collector_ip, self._connections)
                 )
+            if preserve_session_id:
+                preserved = self._session_payload_connections.get(preserve_session_id)
+                if preserved is not None:
+                    payload_keys = {
+                        key
+                        for key in payload_keys
+                        if self._connections.get(key) is not preserved
+                    }
             await self._disconnect_connection_keys(
                 self._connections,
                 tuple(payload_keys),
@@ -3621,6 +3634,7 @@ async def _release_shared_listener(
     unregister_at_owner: bool = False,
     unregister_at_pn_owner: bool = False,
     unregister_session_protocol_owner: bool = False,
+    preserve_session_id: str = "",
 ) -> None:
     async def _release() -> None:
         async with _LISTENERS_LOCK:
@@ -3641,6 +3655,7 @@ async def _release_shared_listener(
                 close_payload=close_payload,
                 close_at=close_at,
                 close_pending=close_pending,
+                preserve_session_id=preserve_session_id,
             )
             closed = await listener.release()
             if closed:
@@ -3868,9 +3883,18 @@ class SharedEybondTransport:
             )
         self._connection(create_placeholder=bool(self._collector_ip))
 
-    async def stop(self) -> None:
+    async def stop(self, *, preserve_session_id: str = "") -> None:
+        """Release this facade, optionally leaving one exact socket observable.
+
+        The preservation hook is for the scan-to-admission boundary only: a
+        strongly identified session may have to survive the UI selection step
+        before the admission transaction claims it.  It never preserves by
+        route or peer address.
+        """
+
         if self._listener is None:
             return
+        preserve_session_id = str(preserve_session_id or "").strip()
         listener = self._listener
         self._listener = None
         if self._connection_watcher_token is not None:
@@ -3886,6 +3910,7 @@ class SharedEybondTransport:
             unregister_payload_owner=True,
             unregister_payload_pn_owner=True,
             unregister_session_protocol_owner=True,
+            preserve_session_id=preserve_session_id,
         )
 
     async def async_snapshot_shared_connection(self) -> _CollectorConnection | None:

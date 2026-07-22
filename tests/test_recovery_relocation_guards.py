@@ -227,7 +227,7 @@ class RecoveryRelocationGuards(unittest.TestCase):
         self.assertIn("CLEAN", result.stdout, msg=result.stdout)
 
     # 7 -------------------------------------------------------------------
-    def test_timeout_defaults_are_single_and_unchanged(self) -> None:
+    def test_timeout_defaults_have_one_neutral_authority(self) -> None:
         from custom_components.eybond_local import timeout_policy as tp
         from custom_components.eybond_local.onboarding import timeouts as ot
 
@@ -239,8 +239,10 @@ class RecoveryRelocationGuards(unittest.TestCase):
         )
         # The policy CLASS is defined in exactly one file (guarded in #4 too).
         default = tp.DEFAULT_ONBOARDING_TIMEOUT_POLICY
-        # Current values are preserved byte-for-byte (a representative, load-bearing
-        # subset spanning scan, callback and inbound-recovery budgets).
+        # Representative load-bearing subset spanning scan, callback and
+        # inbound-recovery budgets.  The callback-recovery link window is longer
+        # than the identity-only window because it starts after a physical reboot;
+        # production E500 hardware can need more than 30 seconds to dial back in.
         expected = {
             "discovery_timeout": 1.5,
             "connect_timeout": 5.0,
@@ -250,10 +252,10 @@ class RecoveryRelocationGuards(unittest.TestCase):
             "auto_total_timeout": 45.0,
             "callback_identity_session_wait": 20.0,
             "callback_causality_lease_wait": 30.0,
-            "callback_recovery_session_wait": 20.0,
+            "callback_recovery_session_wait": 60.0,
             "inbound_strong_identity_timeout": 30.0,
-            "inbound_restart_disconnect_timeout": 45.0,
-            "inbound_reconnect_timeout": 180.0,
+            "inbound_restart_disconnect_timeout": 65.0,
+            "inbound_reconnect_timeout": 60.0,
             "deep_scan_concurrency": 32,
             "deep_scan_hard_ceiling_seconds": 900.0,
         }

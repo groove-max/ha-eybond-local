@@ -365,6 +365,11 @@ async def test_cold_degraded_repair_through_real_ha(
                     "setup_ok": bool(ok),
                     "sid": registry.claimed_session_id(target.entry_id),
                     "cert_sid": cert_sid,
+                    "runtime_activation_receipt": getattr(
+                        target.runtime_data,
+                        "_setup_callback_activation_receipt",
+                        None,
+                    ),
                     "observed": any(
                         s.session_id == cert_sid
                         for s in registry.observed_sessions_per_socket()
@@ -426,6 +431,11 @@ async def test_cold_degraded_repair_through_real_ha(
             assert after.get("observed") is True, "certified session gone after setup"
             assert after.get("handle_ok") is True, "no trusted handle for the session"
             assert after.get("handle_pn_same") is True
+            assert after.get("runtime_activation_receipt") == (
+                target.entry_id,
+                after.get("cert_sid"),
+                FULL_PN,
+            ), "registry proof was not consumed by the payload runtime"
             assert after.get("runtime_triggers") == 0, "runtime re-triggered on setup"
 
             # ---- proven commit, cleared state, owned identity --------------

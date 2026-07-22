@@ -651,6 +651,50 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("session-one", listener._session_payload_connections)
         self.assertIn("session-two", listener._session_payload_connections)
 
+    async def test_release_preserves_only_the_exact_scan_session(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        stale = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        stale_writer = _FakeWriter()
+        stale._writer = stale_writer  # type: ignore[assignment]
+        observed = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        observed_writer = _FakeWriter()
+        observed._writer = observed_writer  # type: ignore[assignment]
+        # Both private peers are eligible aliases for the same public trigger
+        # route.  The preservation decision must therefore come from session_id,
+        # never from peer/route matching.
+        listener._connections["192.168.1.1"] = stale
+        listener._connections["192.168.1.2"] = observed
+        listener._session_payload_connections["session-stale"] = stale
+        listener._session_payload_connections["session-observed"] = observed
+
+        await listener.release_collector_connections(
+            "8.8.8.8",
+            close_payload=True,
+            preserve_session_id="session-observed",
+        )
+
+        self.assertTrue(stale_writer.closed)
+        self.assertFalse(observed_writer.closed)
+        self.assertNotIn("session-stale", listener._session_payload_connections)
+        self.assertIs(
+            listener._session_payload_connections["session-observed"], observed
+        )
+
+        await listener.release_collector_connections(
+            "8.8.8.8",
+            close_payload=True,
+        )
+        self.assertTrue(observed_writer.closed)
+        self.assertNotIn("session-observed", listener._session_payload_connections)
+
     async def test_release_collector_connections_keeps_connection_when_pn_prefix_owner_remains(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener.register_payload_pn_owner("E5000020000000")

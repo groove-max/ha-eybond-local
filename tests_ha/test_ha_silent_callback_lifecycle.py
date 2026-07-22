@@ -55,7 +55,7 @@ def _free_tcp_port() -> int:
 
 
 @pytest.mark.timeout(180)
-async def test_silent_callback_full_ha_lifecycle(
+async def test_active_scan_silent_callback_full_ha_lifecycle(
     hass: HomeAssistant, socket_enabled
 ) -> None:
     from unittest.mock import patch
@@ -131,12 +131,42 @@ async def test_silent_callback_full_ha_lifecycle(
                 "broadcast": "127.255.255.255",
             }
         ]
-        async def _empty_scan(self) -> None:
-            # The network auto-scan is an external boundary (like the fake
-            # device): stub the WORK, not the transitions. Every step still
-            # routes through the real flow manager; auto-scan simply finds
-            # nothing, so the flow lands on scan_results -> advanced -> manual.
-            self._autodetect_results = {}
+        async def _active_scan(self) -> None:
+            # Keep the HA flow-manager test bounded to one route while running
+            # the REAL target detector: one set>server, exact-session FC=2 and
+            # driver detection. The resulting typed observed session + callback
+            # route must then cross admission/recovery/handoff into runtime.
+            from custom_components.eybond_local.onboarding.detection import (
+                DiscoveryTarget,
+                OnboardingDetector,
+            )
+
+            self._auto_config.update(
+                {
+                    "server_ip": "127.0.0.1",
+                    "tcp_port": tcp_port,
+                    "udp_port": udp_port,
+                    "discovery_target": "127.0.0.1",
+                    "heartbeat_interval": 60,
+                }
+            )
+
+            detector = OnboardingDetector(
+                server_ip="127.0.0.1",
+                tcp_port=tcp_port,
+                udp_port=udp_port,
+                driver_hint="auto",
+            )
+            detected = await detector._async_detect_target(
+                DiscoveryTarget(ip="127.0.0.1", source="subnet_unicast"),
+                discovery_timeout=0.5,
+                connect_timeout=6.0,
+                heartbeat_timeout=0.2,
+                enrich_runtime_details=False,
+            )
+            assert detected.observed_session is not None
+            assert detected.callback_route is not None
+            self._autodetect_results = {"0": detected}
 
         with patch.object(integration, "PLATFORMS", ()), patch(
             "custom_components.eybond_local.runtime.link._default_local_ip",
@@ -148,7 +178,7 @@ async def test_silent_callback_full_ha_lifecycle(
             "custom_components.eybond_local.config_flow._get_local_ip",
             return_value="127.0.0.1",
         ), patch.object(
-            config_flow_module.EybondLocalConfigFlow, "_async_do_scan", _empty_scan
+            config_flow_module.EybondLocalConfigFlow, "_async_do_scan", _active_scan
         ), patch.object(
             config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
         ), patch(
@@ -178,22 +208,6 @@ async def test_silent_callback_full_ha_lifecycle(
 
             # ---- 1-2. EVERY transition through the real flow manager -----
             flows = hass.config_entries.flow
-            # The manual form groups advanced fields under a collapsible
-            # section, exactly as the frontend submits them.
-            manual_input = {
-                "server_ip": "127.0.0.1",
-                "collector_ip": "127.0.0.1",
-                "driver_hint": "pi30",
-                "connection_strategy": "callback_on_demand",
-                "advanced_connection": {
-                    "tcp_port": tcp_port,
-                    "udp_port": udp_port,
-                    "discovery_target": "127.0.0.1",
-                    "discovery_interval": 3,
-                    "heartbeat_interval": 60,
-                },
-            }
-
             async def _menu(result, option):
                 assert result["type"] is FlowResultType.MENU, result
                 assert option in result["menu_options"], result["menu_options"]
@@ -217,8 +231,8 @@ async def test_silent_callback_full_ha_lifecycle(
                 return result
 
             result = await flows.async_init(DOMAIN, context={"source": "user"})
-            # user -> collector_network -> auto (empty scan) -> scan_results
-            # -> advanced_setup -> manual, all as manager transitions.
+            # user -> collector_network -> one active scan result -> admission
+            # consent. The one-result shortcut must not jump to summary/create.
             for _ in range(12):
                 if result["type"] in (
                     FlowResultType.SHOW_PROGRESS,
@@ -230,38 +244,57 @@ async def test_silent_callback_full_ha_lifecycle(
                     step = result["step_id"]
                     if step == "collector_network":
                         result = await _menu(result, "auto")
-                    elif step == "advanced_setup":
-                        result = await _menu(result, "manual")
                     else:
                         result = await _menu(result, result["menu_options"][0])
                     continue
-                if result["type"] is FlowResultType.FORM and result["step_id"] == "scan_results":
-                    # Empty auto-scan: pick the advanced-setup action key.
-                    from custom_components.eybond_local.config_flow import (
-                        _SCAN_RESULTS_ACTION_ADVANCED,
-                    )
+                break
+            assert result["type"] is FlowResultType.FORM, result
+            if result["step_id"] == "scan_results":
+                # Select the only real candidate through the public form.  The
+                # scan screen also carries refresh/advanced actions, so a single
+                # device is intentionally not auto-submitted by the flow.
+                selector_options = result["data_schema"].schema["result_key"].config[
+                    "options"
+                ]
+                candidate_values = [
+                    option["value"]
+                    for option in selector_options
+                    if not str(option["value"]).startswith("action:")
+                ]
+                assert candidate_values == ["0"], selector_options
+                result = await flows.async_configure(
+                    result["flow_id"], {"result_key": candidate_values[0]}
+                )
+            assert result["type"] is FlowResultType.FORM, result
+            assert result["step_id"] == "verify_connection", result
+            result = await flows.async_configure(result["flow_id"], {})
+            result = await _drain_progress(result)
 
+            # Drive summary/confirm to manager-owned entry creation.
+            for _ in range(8):
+                if result["type"] is FlowResultType.CREATE_ENTRY:
+                    break
+                if result["type"] in (
+                    FlowResultType.SHOW_PROGRESS,
+                    FlowResultType.SHOW_PROGRESS_DONE,
+                ):
+                    result = await _drain_progress(result)
+                elif result["type"] is FlowResultType.MENU:
+                    result = await _menu(
+                        result,
+                        "confirm"
+                        if "confirm" in result["menu_options"]
+                        else result["menu_options"][0],
+                    )
+                elif result["type"] is FlowResultType.FORM:
                     result = await flows.async_configure(
                         result["flow_id"],
-                        {"result_key": _SCAN_RESULTS_ACTION_ADVANCED},
+                        {"poll_mode": "auto"}
+                        if result["step_id"] == "confirm"
+                        else {},
                     )
-                    continue
-                break
-            # The manual form.
-            assert result["type"] is FlowResultType.FORM, result
-            assert result["step_id"] == "manual", result
-            result = await flows.async_configure(result["flow_id"], manual_input)
-
-            # Fully silent first socket -> honest taxonomy -> explicit framed.
-            assert result["type"] is FlowResultType.MENU, result
-            assert result["step_id"] == "manual_confirm", result
-            assert "manual_bootstrap_framed" in result["menu_options"]
-            result = await _menu(result, "manual_bootstrap_framed")
-
-            # Recovery consent -> progress -> result, all manager-driven.
-            assert result["step_id"] == "manual_recovery_confirm", result
-            result = await _menu(result, "manual_recovery_verify")
-            result = await _drain_progress(result)
+                else:
+                    break
 
             # The FLOW MANAGER created the entry.
             assert result["type"] is FlowResultType.CREATE_ENTRY, result

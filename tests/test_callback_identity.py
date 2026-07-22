@@ -1302,7 +1302,9 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
     def test_intent_constructor_is_strict(self) -> None:
         from custom_components.eybond_local.connection.callback_identity import (
             BOOTSTRAP_SOURCE_EXPLICIT_USER,
+            BOOTSTRAP_SOURCE_OBSERVED_SCAN,
             OnboardingWireProbeIntent,
+            ObservedSessionWireProbeIntent,
         )
 
         OnboardingWireProbeIntent(protocol="eybond_framed", session_id="s-1")
@@ -1321,6 +1323,44 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     OnboardingWireProbeIntent(**bad)
         self.assertEqual(BOOTSTRAP_SOURCE_EXPLICIT_USER, "explicit_user_selection")
+        observed = ObservedSessionWireProbeIntent(
+            protocol="eybond_framed",
+            session_id="s-1",
+            collector_pn=FULL_PN,
+            identity_source="fc2_parameter_2",
+        )
+        self.assertEqual(observed.source, BOOTSTRAP_SOURCE_OBSERVED_SCAN)
+        weak = ObservedSessionWireProbeIntent(
+            protocol="eybond_framed",
+            session_id="s-weak",
+            collector_pn=SHORT_PN,
+            identity_source="framed_heartbeat",
+        )
+        self.assertEqual(weak.identity_source, "framed_heartbeat")
+        unknown_source = ObservedSessionWireProbeIntent(
+            protocol="eybond_framed",
+            session_id="s-unknown-source",
+            collector_pn=SHORT_PN,
+            identity_source="",
+        )
+        self.assertEqual(unknown_source.identity_source, "")
+        for changes in (
+            {"collector_pn": ""},
+            {"session_id": " s-1 "},
+            {"identity_source": " framed_heartbeat "},
+            {"identity_source": object()},
+            {"protocol": "unknown"},
+            {"source": "explicit_user_selection"},
+        ):
+            values = {
+                "protocol": "eybond_framed",
+                "session_id": "s-1",
+                "collector_pn": FULL_PN,
+                "identity_source": "fc2_parameter_2",
+                **changes,
+            }
+            with self.assertRaises((TypeError, ValueError)):
+                ObservedSessionWireProbeIntent(**values)
 
     async def test_duck_intent_is_rejected_before_any_trigger(self) -> None:
         from types import SimpleNamespace
@@ -1426,6 +1466,119 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
             registry.prepared_handoff_identity(outcome.handoff_owner, FULL_PN),
             FULL_PN,
         )
+
+    async def test_observed_scan_intent_reuses_exact_session_with_zero_trigger(self) -> None:
+        from custom_components.eybond_local.connection.callback_identity import (
+            ObservedSessionWireProbeIntent,
+        )
+
+        live = _Live(())
+        listener = self._FakeListener(
+            live, silent_ids=["s-observed"], identify_pn=FULL_PN
+        )
+        reader = _Reader(pn=FULL_PN, source="fc2_parameter_2")
+        sender = _Sender()
+        outcome, _registry = await self._run(
+            listener=listener,
+            request=_request(
+                bootstrap_probe=ObservedSessionWireProbeIntent(
+                    protocol="eybond_framed",
+                    session_id="s-observed",
+                    collector_pn=FULL_PN,
+                    identity_source="fc2_parameter_2",
+                )
+            ),
+            reader=reader,
+            sender=sender,
+        )
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        self.assertEqual(sender.calls, 0)
+        self.assertEqual(listener.identify_calls, [("s-observed", "eybond_framed")])
+
+    async def test_weak_readable_scan_session_is_upgraded_on_exact_socket_without_trigger(
+        self,
+    ) -> None:
+        """A heartbeat PN authorizes only a pinned strong read, never identity."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            ObservedSessionWireProbeIntent,
+        )
+
+        weak_session = _observed("s-weak-readable", SHORT_PN)
+        weak_session["collector_identity_source"] = "framed_heartbeat"
+        live = _Live((weak_session,))
+        listener = self._FakeListener(live)
+
+        def _record_strong(_kwargs) -> None:
+            live.sessions[:] = [_observed("s-weak-readable", FULL_PN)]
+
+        reader = _Reader(
+            pn=FULL_PN,
+            source="fc2_parameter_2",
+            on_read=_record_strong,
+        )
+        sender = _Sender()
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(
+                expected_pn=SHORT_PN,
+                bootstrap_probe=ObservedSessionWireProbeIntent(
+                    protocol="eybond_framed",
+                    session_id="s-weak-readable",
+                    collector_pn=SHORT_PN,
+                    identity_source="framed_heartbeat",
+                ),
+            ),
+            reader=reader,
+            sender=sender,
+        )
+
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        self.assertEqual(outcome.collector_pn, FULL_PN)
+        self.assertEqual(outcome.session_id, "s-weak-readable")
+        self.assertEqual(sender.calls, 0)
+        self.assertEqual(listener.identify_calls, [])
+        self.assertEqual(reader.calls[0]["session_id"], "s-weak-readable")
+        self.assertEqual(
+            registry.prepared_handoff_identity(outcome.handoff_owner, FULL_PN),
+            FULL_PN,
+        )
+
+    async def test_weak_readable_scan_session_cannot_certify_without_strong_read(
+        self,
+    ) -> None:
+        from custom_components.eybond_local.connection.callback_identity import (
+            IDENTITY_UNVERIFIED,
+            ObservedSessionWireProbeIntent,
+        )
+
+        weak_session = _observed("s-weak-unverified", SHORT_PN)
+        weak_session["collector_identity_source"] = "framed_heartbeat"
+        live = _Live((weak_session,))
+        listener = self._FakeListener(live)
+        reader = _Reader(pn="", source="")
+        sender = _Sender()
+
+        outcome, registry = await self._run(
+            listener=listener,
+            request=_request(
+                expected_pn=SHORT_PN,
+                bootstrap_probe=ObservedSessionWireProbeIntent(
+                    protocol="eybond_framed",
+                    session_id="s-weak-unverified",
+                    collector_pn=SHORT_PN,
+                    identity_source="framed_heartbeat",
+                ),
+            ),
+            reader=reader,
+            sender=sender,
+        )
+
+        self.assertEqual(outcome.result, IDENTITY_UNVERIFIED)
+        self.assertFalse(outcome.identity_certified)
+        self.assertEqual(sender.calls, 0)
+        self.assertEqual(listener.identify_calls, [])
+        self.assertEqual(registry.owner_for_pn(SHORT_PN), "")
 
     async def test_at_intent_probes_with_at_wire(self) -> None:
         from custom_components.eybond_local.connection.callback_identity import (

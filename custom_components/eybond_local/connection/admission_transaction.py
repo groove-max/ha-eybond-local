@@ -34,6 +34,7 @@ from .callback_continuation import (
 from .callback_identity import (
     CallbackIdentityOutcome,
     CallbackIdentityRequest,
+    ObservedSessionWireProbeIntent,
     SilentSessionBootstrapOffer,
     async_run_callback_identity_transaction,
 )
@@ -703,6 +704,52 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         self._outcome = None
         self._reset_callback_attempt()
         self._state = _STATE_CALLBACK_READY
+
+    def begin_observed_callback_continuation(self) -> None:
+        """Start selected-route verification from one exact observed session.
+
+        This first pass sends no callback request. It claims and authoritatively
+        reads the exact socket selected by the scan; therefore a weak heartbeat
+        observation may be upgraded by FC=2/DTUPN, but can never certify itself.
+        Recovery starts only after that strong read succeeds. If recovery fails,
+        a retry starts from ``CALLBACK_READY`` and must obtain a new same-PN
+        session through the selected route; it cannot reuse this observation.
+        """
+
+        observed = self._request.observed_session
+        if self._state != _STATE_READY:
+            raise RuntimeError("admission_transaction_not_callback_ready")
+        if self._close_requested:
+            raise RuntimeError("admission_transaction_closed")
+        if type(self._request.callback_route) is not CallbackRecoveryRoute:
+            raise RuntimeError("admission_transaction_callback_route_missing")
+        # Construct now so an unsupported/malformed observed wire fails before
+        # any state mutation or registry ownership change.
+        self.observed_wire_probe_intent(_state_override=_STATE_READY)
+        self._reset_callback_attempt()
+        # The initial attempt adopts the exact observed socket. A later retry
+        # runs from CALLBACK_READY and therefore performs a normal addressed
+        # callback identity attempt instead of calling this method again.
+        self._old_session_id = ""
+        self._state = _STATE_CALLBACK_READY
+
+    def observed_wire_probe_intent(
+        self, *, _state_override: str = ""
+    ) -> ObservedSessionWireProbeIntent:
+        """Return the exact zero-send identity capability for this observation."""
+
+        if (_state_override or self._state) not in (
+            _STATE_READY,
+            _STATE_CALLBACK_READY,
+        ):
+            raise RuntimeError("admission_transaction_observed_probe_unavailable")
+        observed = self._request.observed_session
+        return ObservedSessionWireProbeIntent(
+            protocol=observed.protocol_shape,
+            session_id=observed.session_id,
+            collector_pn=observed.collector_pn,
+            identity_source=observed.identity_source,
+        )
 
     def _reset_callback_attempt(self) -> None:
         """Release the current callback owner + clear all held callback proof.

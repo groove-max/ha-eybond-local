@@ -1427,6 +1427,55 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         self.assertEqual(transport.claim_provider(), "listener-8899-target")
         self.assertEqual(domain.owner_for_pn(self._FOREIGN_PN), "")
 
+    def test_proven_session_activation_is_exact_and_never_triggers(self) -> None:
+        manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+        target = self._session(self._PN)
+        target["session_id"] = "listener-8899-certified"
+        domain = CallbackSessionRegistry(sessions_source=lambda: (target,))
+        domain.claim(
+            "entry-target",
+            collector_pn=self._PN,
+            session_id="listener-8899-certified",
+        )
+        manager.set_callback_ownership(domain, "entry-target")
+        transport = _ClaimRecordingTransport(
+            connected=False,
+            connect_result=True,
+            observed_sessions=(target,),
+        )
+        manager._transport = transport  # type: ignore[assignment]
+        probe = _fake_probe()
+
+        with patch(
+            "custom_components.eybond_local.runtime.link.async_send_callback_trigger",
+            probe,
+        ):
+            activated = asyncio.run(
+                manager.async_activate_claimed_session(
+                    expected_session_id="listener-8899-certified",
+                    timeout=2.0,
+                )
+            )
+
+        self.assertTrue(activated)
+        self.assertEqual(transport.connected_waits, [2.0])
+        self.assertEqual(probe.await_count, 0)
+        self.assertEqual(manager._callback_trigger_count, 0)
+
+        # A stale/foreign certification target fails before transport I/O and
+        # must not degrade into the ordinary callback-on-demand path.
+        transport.connected = False
+        transport.connected_waits.clear()
+        refused = asyncio.run(
+            manager.async_activate_claimed_session(
+                expected_session_id="listener-8899-foreign",
+                timeout=2.0,
+            )
+        )
+        self.assertFalse(refused)
+        self.assertEqual(transport.connected_waits, [])
+        self.assertEqual(probe.await_count, 0)
+
     def test_callback_on_demand_does_not_retrigger_while_exact_session_is_unusable(
         self,
     ) -> None:

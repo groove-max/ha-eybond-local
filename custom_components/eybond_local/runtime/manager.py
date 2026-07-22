@@ -47,6 +47,15 @@ class RuntimeManager(Protocol):
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
         ...
 
+    async def async_activate_claimed_session(
+        self,
+        *,
+        expected_session_id: str,
+        timeout: float,
+    ) -> bool:
+        """Activate one exact registry-claimed callback session without UDP."""
+        ...
+
     def invalidate_collector_runtime_values(self) -> None:
         ...
 

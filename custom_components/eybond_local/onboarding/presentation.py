@@ -70,11 +70,32 @@ def scan_result_status_code(result: OnboardingResult, already_added: bool = Fals
         return "ready"
     if result.match is not None:
         return "review"
+    # A later identity/driver deadline does not undo a route observation that
+    # already completed successfully. Keep an unidentified UDP responder
+    # actionable as an address result while retaining the timeout in typed
+    # diagnostics. Connected or PN-bearing candidates continue through their
+    # stronger status paths below.
+    if (
+        collector is not None
+        and not collector.connected
+        and collector.udp_reply
+        and not (
+            collector.collector is not None
+            and collector.collector.collector_pn
+        )
+    ):
+        return "collector_replied"
     if result.detection is not None and result.detection.budget_exhausted:
         return "detection_timeout"
     if collector is not None and collector.connected and has_smartess_collector_hint(result):
         return "smartess_hint"
     if collector is not None and collector.connected:
+        return "collector_only"
+    if (
+        collector is not None
+        and collector.collector is not None
+        and collector.collector.collector_pn
+    ):
         return "collector_only"
     if collector is not None and collector.udp_reply:
         return "collector_replied"
@@ -93,7 +114,7 @@ def scan_result_status_label(result: OnboardingResult, already_added: bool = Fal
         "detection_timeout": "Detection ran out of time",
         "smartess_hint": "SmartESS hint",
         "collector_only": "Collector only",
-        "collector_replied": "Collector replied",
+        "collector_replied": "Address replied",
         "unknown": "Unknown",
     }.get(status_code, "Unknown")
 

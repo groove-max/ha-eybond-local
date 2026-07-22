@@ -49,16 +49,27 @@ class OnboardingTimeoutPolicy:
     # after the consented read-only identity probe.
     inbound_strong_identity_timeout: float = 30.0
     # How long after a confirmed reboot the OLD socket may take to actually
-    # close. The collector itself must drop it; we never close it for it.
-    inbound_restart_disconnect_timeout: float = 45.0
-    # Old factory collectors can take well over a minute to boot and re-open
-    # their outbound link; bounded but generous, polled from the in-memory
-    # session inventory (no UDP loops).
-    inbound_reconnect_timeout: float = 180.0
-    # Callback recovery: after the inbound window expired and exactly ONE
-    # unicast set>server sequence went out, how long the collector may take to
-    # dial the advertised endpoint. LINK budget only -- no detection runs here.
-    callback_recovery_session_wait: float = 20.0
+    # close. E500 hardware has been observed applying the acknowledged restart
+    # on its one-minute device cadence (60.1s in production). Keep a small
+    # scheduler/polling margin beyond that cadence; the collector itself must
+    # drop the socket and we never close it on its behalf.
+    inbound_restart_disconnect_timeout: float = 65.0
+    # Autonomous recovery uses the same bounded session-observation mechanism
+    # as callback recovery. One minute is enough for the slow E500 reboot seen
+    # in production without making every failed discovery flow block for three
+    # minutes. This is an upper bound; a session ends the wait immediately.
+    inbound_reconnect_timeout: float = 60.0
+    # Callback recovery: after the immediate autonomous snapshot and exactly
+    # ONE unicast set>server sequence, how long the collector may take to dial
+    # the advertised endpoint. LINK budget only -- no detection runs here.
+    #
+    # E500 hardware observed in production may accept the reboot, take roughly
+    # 30 seconds to drop the old socket, and then need another ~30 seconds after
+    # the callback trigger before opening the replacement socket.  The disconnect
+    # phase has its own budget above; this value must still cover the latter dial
+    # delay instead of declaring a timeout while the proven collector is booting.
+    # This is only an upper bound: a faster collector completes immediately.
+    callback_recovery_session_wait: float = 60.0
     # The detector owns the manual onboarding work budget above.  A wrapper may
     # wait this little bit longer only so the detector can materialize and
     # return its partial result after its own deadline expires.  This is not

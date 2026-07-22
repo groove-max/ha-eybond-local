@@ -32,6 +32,11 @@ RECOVERY_FAIL_KEYS = (
     "recovery_fail_generic",
 )
 
+# Identity failures are rendered by the same recovery-failure screen.  Keep
+# this key explicit: if it disappears, ru/uk silently fall back to the English
+# sentence embedded in config_flow.py.
+IDENTITY_FAIL_KEYS = ("manual_probe_callback_session_silent",)
+
 
 class TranslationShapeTests(unittest.TestCase):
     def test_option_flow_errors_are_declared_at_options_error_level(self) -> None:
@@ -95,7 +100,7 @@ class RecoveryFailureLocalizationTests(unittest.TestCase):
     def test_every_recovery_fail_key_exists_in_each_bundle(self) -> None:
         for path in FLOW_TRANSLATION_FILES:
             dynamic = self._dynamic(path)
-            for key in RECOVERY_FAIL_KEYS:
+            for key in (*RECOVERY_FAIL_KEYS, *IDENTITY_FAIL_KEYS):
                 with self.subTest(path=path.name, key=key):
                     value = dynamic.get(key)
                     self.assertIsInstance(value, str)
@@ -174,6 +179,7 @@ class RecoveryFailureLocalizationTests(unittest.TestCase):
             "inbound_reconnect_timeout",
             "restart_not_supported",
             "recovery_ownership_unavailable",
+            "callback_session_silent",
         ):
             english = self._explain("en", code)
             russian = self._explain("ru", code)

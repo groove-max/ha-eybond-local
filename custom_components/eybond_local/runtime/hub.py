@@ -1331,6 +1331,25 @@ class EybondHub:
         self._last_snapshot = snapshot
         return snapshot
 
+    async def async_activate_claimed_session(
+        self,
+        *,
+        expected_session_id: str,
+        timeout: float,
+    ) -> bool:
+        """Activate an already-certified callback socket without sending UDP.
+
+        This is the post-setup half of a recovery handoff.  The recovery
+        transaction has already proved and pinned the exact physical session;
+        activation may only consume that claim, never start a fresh callback
+        attempt or substitute another same-PN socket.
+        """
+
+        return await self._link_manager.async_activate_claimed_session(
+            expected_session_id=expected_session_id,
+            timeout=timeout,
+        )
+
     async def _async_read_collector_runtime_values(
         self,
         *,

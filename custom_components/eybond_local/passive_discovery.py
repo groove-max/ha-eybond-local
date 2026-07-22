@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
 from .connection.admission import ObservedCollectorSession
+from .connection.removal_finalization import CollectorRemovalSessionTicket
 from .connection.session_registry import (
     CallbackSessionRegistry,
+    SESSION_STATE_CLOSED,
     identity_source_is_strong,
     pn_is_same_identity,
 )
@@ -126,6 +128,15 @@ class PassiveCallbackDiscovery:
         # but the exact retired socket stays hidden until it physically closes or
         # the user explicitly asks to show connected collectors again.
         self._retired_entry_sessions: set[str] = set()
+        # Removal needs stronger semantics than ordinary publication history.
+        # While an entry is unloading, quarantine its exact physical sockets so
+        # neither background discovery nor an interactive scan can race the
+        # subsequent async_remove_entry finalizer.  A successful reload cancels
+        # this quarantine; permanent removal keeps it until that exact socket
+        # physically disappears.  New session ids are never suppressed.
+        self._entry_retired_session_keys: dict[str, set[str]] = {}
+        self._removal_quarantined_sessions: set[str] = set()
+        self._entry_removal_tickets: dict[str, CollectorRemovalSessionTicket] = {}
         # The single ownership + short/full PN reconciliation authority. Passive
         # discovery reads coalesced, unclaimed candidates from it; the listener
         # inventory is only its raw source.
@@ -204,12 +215,89 @@ class PassiveCallbackDiscovery:
         owner = str(entry_id or "").strip()
         if not owner:
             return
-        for candidate in self._registry.observed_sessions_per_socket():
-            if candidate.owner_entry_id != owner:
-                continue
+        candidates = tuple(
+            candidate
+            for candidate in self._registry.observed_sessions_per_socket()
+            if candidate.owner_entry_id == owner
+        )
+        keys: set[str] = set()
+        for candidate in candidates:
             key = _session_inventory_key(candidate.raw)
             if key:
                 self._retired_entry_sessions.add(key)
+                self._removal_quarantined_sessions.add(key)
+                keys.add(key)
+        if keys:
+            self._entry_retired_session_keys[owner] = keys
+
+        # Capture one exact restart capability while ownership is still live.
+        # Prefer an explicitly-pinned claim.  Without one, only a single strong
+        # owned socket is unambiguous enough to ticket.  Never choose by peer IP
+        # and never pick first/last among several same-PN sockets.
+        claimed_session_id = self._registry.claimed_session_id(owner)
+        eligible = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.has_strong_identity
+            and candidate.state != SESSION_STATE_CLOSED
+            and candidate.session_id
+            and candidate.listener_port > 0
+        )
+        selected = None
+        if claimed_session_id:
+            selected = next(
+                (
+                    candidate
+                    for candidate in eligible
+                    if candidate.session_id == claimed_session_id
+                ),
+                None,
+            )
+        elif len(eligible) == 1:
+            selected = eligible[0]
+        if selected is None:
+            self._entry_removal_tickets.pop(owner, None)
+            return
+        raw_listener_host = selected.raw.get("listener_bind_host")
+        listener_host = (
+            _LISTENER_HOST
+            if raw_listener_host is None
+            or (type(raw_listener_host) is str and raw_listener_host == "")
+            else raw_listener_host
+        )
+        try:
+            self._entry_removal_tickets[owner] = CollectorRemovalSessionTicket(
+                collector_pn=selected.collector_pn,
+                identity_source=selected.identity_source,
+                session_id=selected.session_id,
+                listener_host=listener_host,
+                listener_port=selected.listener_port,
+            )
+        except (TypeError, ValueError):
+            self._entry_removal_tickets.pop(owner, None)
+
+    def resume_entry_sessions(self, entry_id: str) -> None:
+        """Cancel a pending removal quarantine after a normal successful reload."""
+
+        owner = str(entry_id or "").strip()
+        if not owner:
+            return
+        keys = self._entry_retired_session_keys.pop(owner, set())
+        self._removal_quarantined_sessions.difference_update(keys)
+        self._entry_removal_tickets.pop(owner, None)
+
+    def take_entry_removal_ticket(
+        self, entry_id: str
+    ) -> CollectorRemovalSessionTicket | None:
+        """Commit an unload quarantine as permanent removal and take its ticket."""
+
+        owner = str(entry_id or "").strip()
+        if not owner:
+            return None
+        # Keep the exact keys quarantined; only the per-entry bookkeeping is no
+        # longer needed once removal has committed to consuming the ticket.
+        self._entry_retired_session_keys.pop(owner, None)
+        return self._entry_removal_tickets.pop(owner, None)
 
     def snapshot_unclaimed_collector_sessions(
         self,
@@ -228,6 +316,8 @@ class PassiveCallbackDiscovery:
         observations: list[ObservedCollectorSession] = []
         for candidate in self._registry.list_unclaimed_sessions():
             session = dict(candidate.raw)
+            if _session_inventory_key(session) in self._removal_quarantined_sessions:
+                continue
             try:
                 collector_pn = str(session.get("collector_pn") or "").strip()
                 session_id = _session_id(session)
@@ -318,6 +408,12 @@ class PassiveCallbackDiscovery:
         # A later TCP connection is a new edge and must remain discoverable.
         self._probe_suppressed_sessions.intersection_update(current)
         self._retired_entry_sessions.intersection_update(current)
+        self._removal_quarantined_sessions.intersection_update(current)
+        for owner, keys in tuple(self._entry_retired_session_keys.items()):
+            keys.intersection_update(current)
+            if not keys:
+                self._entry_retired_session_keys.pop(owner, None)
+                self._entry_removal_tickets.pop(owner, None)
 
     def _session_is_suppressed(self, session: Mapping[str, object]) -> bool:
         key = _session_inventory_key(session)
@@ -326,6 +422,7 @@ class PassiveCallbackDiscovery:
             and (
                 key in self._probe_suppressed_sessions
                 or key in self._retired_entry_sessions
+                or key in self._removal_quarantined_sessions
             )
         )
 
@@ -390,11 +487,15 @@ class PassiveCallbackDiscovery:
 
         sessions: list[dict[str, object]] = []
         seen: set[tuple[int, str]] = set()
-        listeners: list[tuple[int, Any]] = list(self._listeners.items())
+        listeners: list[tuple[str, int, Any]] = [
+            (_LISTENER_HOST, port, listener)
+            for port, listener in self._listeners.items()
+        ]
         listeners.extend(
-            (port, listener) for _host, port, listener in self._ensured_listeners.values()
+            (host, port, listener)
+            for host, port, listener in self._ensured_listeners.values()
         )
-        for port, listener in listeners:
+        for host, port, listener in listeners:
             inventory_provider = getattr(listener, "discovered_collector_sessions", None)
             if not callable(inventory_provider):
                 continue
@@ -413,6 +514,7 @@ class PassiveCallbackDiscovery:
                     seen.add(key)
                 enriched = dict(session)
                 enriched.setdefault("listener_port", int(port))
+                enriched.setdefault("listener_bind_host", str(host))
                 enriched.setdefault(
                     "session_protocol",
                     collector_session_protocol_from_inventory_state(

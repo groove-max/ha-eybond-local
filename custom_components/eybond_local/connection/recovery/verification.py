@@ -643,7 +643,9 @@ class _ControlledResetRecoveryEngine:
         self._disconnect_timeout = max(
             0.0, float(policy.inbound_restart_disconnect_timeout)
         )
-        self._reconnect_timeout = max(0.0, float(policy.inbound_reconnect_timeout))
+        self._reconnect_timeout = max(
+            0.0, float(policy.inbound_reconnect_timeout)
+        )
         self._identity_timeout = max(0.0, float(policy.inbound_strong_identity_timeout))
         self._callback_wait_timeout = max(
             0.0, float(policy.callback_recovery_session_wait)
@@ -869,6 +871,12 @@ class _ControlledResetRecoveryEngine:
                             weak_session_id,
                             exc,
                         )
+            # A probe above may have synchronously enriched the exact session.
+            # Observe that result before applying the deadline so a zero-wait
+            # caller still gets one complete snapshot+probe pass without sleep.
+            new_session_id = self._find_new_inbound_session()
+            if new_session_id:
+                return _ReconnectWaitResult(session_id=new_session_id)
             if loop.time() >= deadline:
                 return _ReconnectWaitResult(silent_failure=last_silent_failure)
             await asyncio.sleep(self._poll_interval)
@@ -1178,12 +1186,20 @@ class _ControlledResetRecoveryEngine:
             # for the collector's fresh dial-in.
             await self._close_channel()
 
-        # waiting_for_disconnect -> waiting_for_inbound_reconnect. The FULL
-        # bounded inbound window always runs first: autonomous recovery must be
-        # excluded before any callback may be proven.
+        # waiting_for_disconnect -> waiting_for_inbound_reconnect. Only an
+        # inbound-only verification waits for autonomous recovery. A transaction
+        # that already carries a typed callback route performs exactly one
+        # non-waiting pass of the SAME reconnect mechanism. That pass may enrich
+        # an already-present silent/weak exact session once; it never sleeps for
+        # a future arrival. Otherwise the transaction proceeds directly to its
+        # one addressed callback sequence. No arbitrary grace period pretends
+        # to prove that a later autonomous reconnect is impossible.
         self._enter(STATE_WAITING_FOR_INBOUND_RECONNECT)
+        reconnect_deadline = loop.time() + (
+            0.0 if self._callback_route is not None else self._reconnect_timeout
+        )
         wait = await self._async_wait_for_new_same_pn_session(
-            loop.time() + self._reconnect_timeout
+            reconnect_deadline
         )
         new_session_id = wait.session_id
         if not new_session_id:

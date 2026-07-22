@@ -356,6 +356,44 @@ async def test_discovery_inbound_full_ha_lifecycle(
             assert await hass.config_entries.async_setup(entry.entry_id)
             await hass.async_block_till_done()
             assert entry.state is ConfigEntryState.LOADED
+            # A normal unload/reload never executes the removal ticket.
+            assert registry.claimed_session_id(entry.entry_id) == recovered_session_id
+
+            # ---- 6. permanent removal restarts the exact owned socket ------
+            # Let the autonomous inbound reconnect announce itself normally so
+            # the post-removal session becomes a genuine new discovery edge.
+            service._scenario = dataclasses.replace(
+                service._scenario, first_heartbeat_delay=0.0
+            )
+            discovery_rx_before_removal = service.discovery_rx_count
+            remove_result = await hass.config_entries.async_remove(entry.entry_id)
+            await hass.async_block_till_done()
+            assert remove_result == {"require_restart": False}
+            assert hass.config_entries.async_get_entry(entry.entry_id) is None
+            assert registry.owner_for_pn(FULL_PN) == ""
+
+            deadline = asyncio.get_running_loop().time() + 6.0
+            replacement = None
+            while asyncio.get_running_loop().time() < deadline:
+                replacement = next(
+                    (
+                        session
+                        for session in registry.observed_sessions_per_socket()
+                        if session.session_id != recovered_session_id
+                        and not session.state.startswith("closed")
+                        and session.collector_pn.startswith(FULL_PN[:14])
+                    ),
+                    None,
+                )
+                if replacement is not None:
+                    break
+                await asyncio.sleep(0.05)
+            assert replacement is not None
+            assert replacement.session_id != recovered_session_id
+            assert replacement.owner_entry_id == ""
+            # Removal clears volatile callback state by FC=3 restart; it never
+            # emits a set>server UDP trigger or matches the replacement by IP.
+            assert service.discovery_rx_count == discovery_rx_before_removal
     finally:
         if entry is not None and entry.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(entry.entry_id)

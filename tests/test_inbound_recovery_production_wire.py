@@ -47,6 +47,11 @@ from custom_components.eybond_local.connection.recovery.verification import (
     InboundRecoveryVerifier,
     ObservedSessionRestartChannel,
 )
+from custom_components.eybond_local.connection.removal_finalization import (
+    CollectorRemovalSessionTicket,
+    REMOVAL_RESTART_CONFIRMED,
+    async_finalize_collector_entry_removal,
+)
 from custom_components.eybond_local.onboarding.timeouts import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
 )
@@ -314,6 +319,167 @@ class InboundRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(outcome.proof)
         # An unacknowledged FC=3/29 is a confirmation failure, honestly typed.
         self.assertEqual(outcome.failure_reason, "restart_not_confirmed")
+
+    async def test_entry_removal_restarts_exact_wire_and_callback_does_not_return(self) -> None:
+        """Permanent removal uses the real FC=3/29 wire and clears callback state."""
+
+        service = FakeCollectorService(
+            listen_ip="127.0.0.1",
+            udp_port=0,
+            tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=30.0,
+            connect_timeout=2.0,
+            udp_reply="",
+            scenario=resolve_scenario(
+                preset="collector_only",
+                profile=CollectorProfile(pn=FULL_PN),
+                set_29_mode="reboot_silent",
+                reboot_reconnect_delay=0.3,
+            ),
+        )
+        redirect = f"set>server=127.0.0.1:{self._tcp_port};".encode("ascii")
+        await service.handle_discovery(redirect, ("127.0.0.1", 0))
+        old_session_id = await self._wait_for_live_session()
+
+        # Mirror the already-running entry: its exact session has previously
+        # earned the authoritative full PN over FC=2.
+        self._registry.claim_session("entry-removing", session_id=old_session_id)
+        identity_channel = ObservedSessionRestartChannel(
+            host="127.0.0.1",
+            port=self._tcp_port,
+            collector_pn="",
+            session_id=old_session_id,
+            session_id_provider=lambda: self._registry.claimed_session_id(
+                "entry-removing"
+            ),
+            handle_provider=lambda: self._registry.session_handle_for_claimed_session(
+                "entry-removing"
+            ),
+        )
+        full_pn = await identity_channel.async_probe_identity()
+        self.assertEqual(full_pn, FULL_PN)
+        self._registry.promote_claim_to_full_pn("entry-removing", full_pn)
+        await identity_channel.async_close()
+
+        deadline = asyncio.get_running_loop().time() + 2.0
+        observed = None
+        while asyncio.get_running_loop().time() < deadline:
+            observed = next(
+                (
+                    session
+                    for session in self._registry.observed_sessions_per_socket()
+                    if session.session_id == old_session_id
+                    and session.has_strong_identity
+                ),
+                None,
+            )
+            if observed is not None:
+                break
+            await asyncio.sleep(0.05)
+        self.assertIsNotNone(observed, "listener never established strong FC=2 identity")
+
+        # The entry-owned ticket is captured before unload releases its claim.
+        ticket = CollectorRemovalSessionTicket(
+            collector_pn=observed.collector_pn,
+            identity_source=observed.identity_source,
+            session_id=old_session_id,
+            listener_host="127.0.0.1",
+            listener_port=self._tcp_port,
+        )
+        self._registry.release("entry-removing")
+
+        try:
+            result = await asyncio.wait_for(
+                async_finalize_collector_entry_removal(
+                    ticket,
+                    self._registry,
+                    disconnect_timeout=5.0,
+                ),
+                timeout=_HARNESS_TIMEOUT,
+            )
+            await asyncio.sleep(0.5)
+            live = tuple(
+                session
+                for session in self._registry.observed_sessions_per_socket()
+                if not session.state.startswith("closed")
+            )
+        finally:
+            await service.stop()
+
+        self.assertEqual(result.status, REMOVAL_RESTART_CONFIRMED)
+        self.assertTrue(result.disconnect_observed)
+        self.assertEqual(live, ())
+        self.assertEqual(self._registry.owner_for_pn(FULL_PN), "")
+
+    async def test_entry_removal_allows_autonomous_inbound_reconnect_as_new_session(self) -> None:
+        """An inbound collector returns after reboot under a fresh discovery edge."""
+
+        service = FakeCollectorService(
+            listen_ip="127.0.0.1",
+            udp_port=0,
+            tcp_bind_ip="127.0.0.1",
+            heartbeat_interval=30.0,
+            connect_timeout=2.0,
+            udp_reply="",
+            scenario=resolve_scenario(
+                preset="collector_only",
+                profile=CollectorProfile(pn=FULL_PN),
+                set_29_mode="reboot",
+                reboot_reconnect_delay=0.3,
+            ),
+        )
+        redirect = f"set>server=127.0.0.1:{self._tcp_port};".encode("ascii")
+        await service.handle_discovery(redirect, ("127.0.0.1", 0))
+        old_session_id = await self._wait_for_live_session()
+
+        self._registry.claim_session("entry-removing", session_id=old_session_id)
+        identity_channel = ObservedSessionRestartChannel(
+            host="127.0.0.1",
+            port=self._tcp_port,
+            collector_pn="",
+            session_id=old_session_id,
+            session_id_provider=lambda: self._registry.claimed_session_id(
+                "entry-removing"
+            ),
+            handle_provider=lambda: self._registry.session_handle_for_claimed_session(
+                "entry-removing"
+            ),
+        )
+        full_pn = await identity_channel.async_probe_identity()
+        self._registry.promote_claim_to_full_pn("entry-removing", full_pn)
+        await identity_channel.async_close()
+
+        observed = next(
+            session
+            for session in self._registry.observed_sessions_per_socket()
+            if session.session_id == old_session_id and session.has_strong_identity
+        )
+        ticket = CollectorRemovalSessionTicket(
+            collector_pn=observed.collector_pn,
+            identity_source=observed.identity_source,
+            session_id=old_session_id,
+            listener_host="127.0.0.1",
+            listener_port=self._tcp_port,
+        )
+        self._registry.release("entry-removing")
+
+        try:
+            result = await asyncio.wait_for(
+                async_finalize_collector_entry_removal(
+                    ticket,
+                    self._registry,
+                    disconnect_timeout=5.0,
+                ),
+                timeout=_HARNESS_TIMEOUT,
+            )
+            new_session_id = await self._wait_for_live_session(timeout=5.0)
+        finally:
+            await service.stop()
+
+        self.assertEqual(result.status, REMOVAL_RESTART_CONFIRMED)
+        self.assertTrue(result.disconnect_observed)
+        self.assertNotEqual(new_session_id, old_session_id)
+        self.assertEqual(self._registry.owner_for_pn(FULL_PN), "")
 
 
 if __name__ == "__main__":

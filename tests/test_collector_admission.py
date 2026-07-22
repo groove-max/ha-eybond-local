@@ -34,6 +34,9 @@ from custom_components.eybond_local.connection.admission import (
     CollectorAdmissionRequest,
     ObservedCollectorSession,
 )
+from custom_components.eybond_local.connection.recovery.verification import (
+    CallbackRecoveryRoute,
+)
 
 FULL_PN = "V001020SYN62344022"
 SESSION_ID = "listener-8899-1"
@@ -196,21 +199,49 @@ class CollectorAdmissionRequestModelTests(unittest.TestCase):
             CollectorAdmissionRequest(observed_session=_observed()).origin, ""
         )
 
-    def test_request_is_not_a_recovery_proof_and_has_no_speculative_route(
-        self,
-    ) -> None:
+    def test_request_carries_only_observation_route_and_diagnostic_origin(self) -> None:
         names = {f.name for f in fields(CollectorAdmissionRequest)}
-        # Exactly the two fields -- the speculative callback_route was removed;
-        # Batch 2 will introduce a route in the neutral connection layer.
-        self.assertEqual(names, {"observed_session", "origin"})
+        # The route is now a real consumer-backed capability: only an ACTIVE
+        # scan that exercised it supplies one. It is still not a proof/strategy.
+        self.assertEqual(names, {"observed_session", "origin", "callback_route"})
         for banned in (
-            "callback_route",
             "inbound_verified",
             "recovery_contract",
             "proof",
             "strategy",
         ):
             self.assertNotIn(banned, names)
+
+    def test_callback_route_is_exact_typed_and_structurally_valid(self) -> None:
+        route = CallbackRecoveryRoute(
+            bind_ip="192.0.2.10",
+            trigger_target_ip="192.0.2.20",
+            trigger_udp_port=58899,
+            advertised_ha_host="198.51.100.10",
+            advertised_ha_port=18899,
+            listener_port=8899,
+        )
+        request = CollectorAdmissionRequest(
+            observed_session=_observed(), callback_route=route
+        )
+        self.assertIs(request.callback_route, route)
+        with self.assertRaises(TypeError):
+            CollectorAdmissionRequest(
+                observed_session=_observed(),
+                callback_route=SimpleNamespace(invalid_reason=lambda: ""),
+            )
+        with self.assertRaises(ValueError):
+            CollectorAdmissionRequest(
+                observed_session=_observed(),
+                callback_route=CallbackRecoveryRoute(
+                    bind_ip="",
+                    trigger_target_ip="192.0.2.20",
+                    trigger_udp_port=58899,
+                    advertised_ha_host="198.51.100.10",
+                    advertised_ha_port=18899,
+                    listener_port=8899,
+                ),
+            )
 
 
 class CollectorAdmissionArchitectureGuards(unittest.TestCase):

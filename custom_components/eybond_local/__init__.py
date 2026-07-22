@@ -1689,6 +1689,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
         logger.exception("Failed to set up EyeBond Local entry %s", entry.entry_id)
         raise
+    # Reaching this point -- not merely reclaiming the PN near the beginning of
+    # setup -- proves that an unload was a reload/recovery rather than a
+    # permanent removal. A later setup failure must leave the exact old socket
+    # quarantined; otherwise it can leak into interactive discovery while the
+    # entry itself is still unavailable.
+    from .passive_discovery import get_passive_callback_discovery
+
+    discovery = get_passive_callback_discovery(hass)
+    if discovery is not None:
+        discovery.resume_entry_sessions(entry.entry_id)
     return True
 
 
@@ -1715,7 +1725,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Drop saved cloud-evidence files for the entry being removed."""
+    """Finalize the exact owned collector session and remove entry evidence."""
 
     if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
         # Removing this explicit service entry is how the user disables the
@@ -1729,7 +1739,45 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # immediately.
         return
 
+    from .connection.removal_finalization import (
+        REMOVAL_RESTART_CONFIRMED,
+        async_finalize_collector_entry_removal,
+    )
+    from .passive_discovery import get_passive_callback_discovery
     from .support.cloud_evidence import remove_cloud_evidence_for_entry
+
+    discovery = get_passive_callback_discovery(hass)
+    if discovery is not None:
+        ticket = discovery.take_entry_removal_ticket(entry.entry_id)
+        if ticket is not None:
+            try:
+                result = await async_finalize_collector_entry_removal(
+                    ticket,
+                    discovery.registry,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Home Assistant removes the config entry regardless of cleanup
+                # callback errors. Keep the exact socket quarantined and make the
+                # failure explicit instead of exposing it as a valid scan result.
+                logger.exception(
+                    "Failed to finalize collector session while removing entry %s",
+                    entry.entry_id,
+                )
+            else:
+                log = (
+                    logger.info
+                    if result.status == REMOVAL_RESTART_CONFIRMED
+                    else logger.warning
+                )
+                log(
+                    "Collector removal finalization entry=%s status=%s restarted=%s disconnect_observed=%s",
+                    entry.entry_id,
+                    result.status,
+                    result.restarted,
+                    result.disconnect_observed,
+                )
 
     config_dir = Path(hass.config.path())
     collector_pn = str(entry.data.get(CONF_COLLECTOR_PN) or "").strip()

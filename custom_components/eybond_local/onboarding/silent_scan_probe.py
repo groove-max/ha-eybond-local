@@ -78,6 +78,7 @@ class SilentIdentityResolution:
     session_id: str = ""
     collector_pn: str = ""
     identity_source: str = ""
+    protocol_shape: str = ""
     # Two or more post-baseline sessions appeared in the union view: attribution is
     # impossible without a peer-IP / order tiebreak, so nothing is probed/adopted.
     ambiguous: bool = False
@@ -98,6 +99,8 @@ class SilentIdentityResolution:
             and type(self.identity_source) is str
             and self.identity_source
             and self.identity_source == self.identity_source.strip()
+            and type(self.protocol_shape) is str
+            and self.protocol_shape == self.protocol_shape.strip()
             and identity_source_is_strong(self.identity_source)
         )
 
@@ -219,6 +222,7 @@ async def async_resolve_silent_session_identity(
                     session_id=obs.session_id,
                     collector_pn=pn,
                     identity_source=str(obs.identity_source or "").strip(),
+                    protocol_shape=str(obs.protocol_shape or "").strip(),
                 )
             # PN-less silent OR weak framed heartbeat -> upgrade to a strong/full
             # PN with ONE framed FC=2 read on the SAME exact session id.
@@ -229,6 +233,7 @@ async def async_resolve_silent_session_identity(
                 session_id=obs.session_id,
                 collector_pn=str(probed or "").strip(),
                 identity_source="fc2_parameter_2" if probed else "",
+                protocol_shape=WIRE_FRAMED if probed else "",
             )
         if len(fresh) > 1:
             # Never resolve ambiguity by peer IP or arrival order.

@@ -111,8 +111,12 @@ def _observed() -> ObservedCollectorSession:
     )
 
 
-def _request() -> CollectorAdmissionRequest:
-    return CollectorAdmissionRequest(observed_session=_observed(), origin="passive_scan")
+def _request(*, callback_route=None) -> CollectorAdmissionRequest:
+    return CollectorAdmissionRequest(
+        observed_session=_observed(),
+        origin="passive_scan",
+        callback_route=callback_route,
+    )
 
 
 def _identity_request(
@@ -233,6 +237,51 @@ class TransactionCallbackContinuationBasics(unittest.IsolatedAsyncioTestCase):
         ctx = txn.identity_context
         self.assertEqual(ctx.expected_pn, PN)
         self.assertEqual(ctx.old_session_id, OLD_SESSION)
+
+    async def test_active_scan_bootstraps_exact_observed_session_once(self) -> None:
+        txn = CollectorAdmissionTransaction(
+            _request(callback_route=_route()),
+            registry_provider=lambda: _registry(),
+            listener_host="0.0.0.0",
+        )
+        txn.begin_observed_callback_continuation()
+        self.assertEqual(txn.state, "callback_ready")
+        self.assertEqual(txn.identity_context.expected_pn, PN)
+        self.assertEqual(txn.identity_context.old_session_id, "")
+        intent = txn.observed_wire_probe_intent()
+        self.assertEqual(intent.session_id, OLD_SESSION)
+        self.assertEqual(intent.collector_pn, PN)
+
+    async def test_active_scan_callback_requires_route_but_accepts_weak_exact_session(
+        self,
+    ) -> None:
+        missing = CollectorAdmissionTransaction(
+            _request(), registry_provider=lambda: _registry(), listener_host="0.0.0.0"
+        )
+        with self.assertRaises(RuntimeError):
+            missing.begin_observed_callback_continuation()
+        self.assertEqual(missing.state, "ready")
+
+        weak = ObservedCollectorSession(
+            collector_pn=PN[:14],
+            identity_source="framed_heartbeat",
+            session_id=OLD_SESSION,
+            listener_port=18899,
+            protocol_shape="eybond_framed",
+        )
+        transaction = CollectorAdmissionTransaction(
+            CollectorAdmissionRequest(
+                observed_session=weak, callback_route=_route()
+            ),
+            registry_provider=lambda: _registry(),
+            listener_host="0.0.0.0",
+        )
+        transaction.begin_observed_callback_continuation()
+        self.assertEqual(transaction.state, "callback_ready")
+        intent = transaction.observed_wire_probe_intent()
+        self.assertEqual(intent.session_id, OLD_SESSION)
+        self.assertEqual(intent.collector_pn, PN[:14])
+        self.assertEqual(intent.identity_source, "framed_heartbeat")
 
 
 class TransactionIdentityPhase(unittest.IsolatedAsyncioTestCase):

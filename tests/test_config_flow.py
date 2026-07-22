@@ -358,6 +358,9 @@ from custom_components.eybond_local.connection.admission import (
     CollectorAdmissionRequest,
     ObservedCollectorSession,
 )
+from custom_components.eybond_local.connection.recovery.verification import (
+    CallbackRecoveryRoute,
+)
 from custom_components.eybond_local.models import (
     CollectorCandidate,
     CollectorInfo,
@@ -2900,7 +2903,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(submit["step_id"], "detection_summary")
         self.assertIs(flow._selected_result, flow._autodetect_results["0"])
 
-    async def test_scan_results_udp_only_candidate_is_still_selectable(self) -> None:
+    async def test_scan_results_udp_only_route_is_selectable_for_identification(self) -> None:
         flow = self._make_flow()
         flow._autodetect_results = {
             "0": OnboardingResult(
@@ -2922,6 +2925,76 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         options = _schema_select_options(result["data_schema"], "result_key")
         self.assertIn("0", options)
+        self.assertIn(
+            "Identify collector at 192.168.1.14",
+            flow._result_label(flow._autodetect_results["0"]),
+        )
+        self.assertIn("action:refresh_scan", options)
+        self.assertIn("192.168.1.14", result["description_placeholders"]["candidate_list"])
+        self.assertIn(
+            "no collector has been identified",
+            result["description_placeholders"]["scan_summary"],
+        )
+
+    async def test_scan_results_nat_peer_and_route_have_distinct_safe_actions(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+        full_pn = "E50000253884199645"
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.255",
+                    source="callback_listener",
+                    ip="192.168.1.1",
+                    connected=True,
+                    collector=CollectorInfo(
+                        remote_ip="192.168.1.1",
+                        collector_pn=full_pn,
+                    ),
+                ),
+                connection_mode="callback_listener",
+                observed_session=ObservedCollectorSession(
+                    collector_pn=full_pn,
+                    identity_source="fc2_parameter_2",
+                    session_id="listener-8899-2",
+                    listener_port=8899,
+                    protocol_shape="eybond_framed",
+                    peer_hint="192.168.1.1",
+                ),
+            ),
+            "1": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.55",
+                    source="subnet_unicast",
+                    ip="192.168.1.55",
+                    udp_reply="rsp>server=1;",
+                    udp_reply_from="192.168.1.1:58899",
+                    connected=False,
+                ),
+                connection_mode="subnet_unicast",
+                next_action="manual_input",
+                last_error="collector_not_connected",
+            ),
+        }
+
+        result = await flow.async_step_scan_results()
+
+        options = _schema_select_options(result["data_schema"], "result_key")
+        self.assertIn("0", options)
+        self.assertIn("1", options)
+        self.assertIn(
+            "Ідентифікувати колектор за адресою 192.168.1.55",
+            flow._result_label(flow._autodetect_results["1"]),
+        )
+        candidate_list = result["description_placeholders"]["candidate_list"]
+        self.assertIn(f"PN {full_pn}", candidate_list)
+        self.assertIn("з’єднання від 192.168.1.1", candidate_list)
+        self.assertIn("Адреса відповіла", candidate_list)
+        self.assertIn("адреса 192.168.1.55", candidate_list)
+        self.assertIn(
+            "1** ідентифікованих колекторів",
+            result["description_placeholders"]["scan_summary"],
+        )
 
     def test_scan_discovery_targets_use_selected_broadcast_only(self) -> None:
         flow = self._make_flow()
@@ -3320,7 +3393,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_detection_summary({})
         self.assertEqual(result["step_id"], "confirm")
 
-    async def test_choose_step_udp_only_candidate_can_create_pending_entry(self) -> None:
+    async def test_choose_step_udp_only_route_enters_callback_identification(self) -> None:
         flow = self._make_flow()
         flow._auto_config = {
             "server_ip": "192.168.1.104",
@@ -3347,13 +3420,19 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             )
         }
 
-        await flow.async_step_choose({CONF_RESULT_KEY: "0"})
-        result = await flow._async_create_entry_from_result({"poll_interval": 30})
+        result = await flow.async_step_choose({CONF_RESULT_KEY: "0"})
 
-        # Item 1: a UDP-only candidate that never connected has NO collector PN,
-        # so no normal collector entry is created (no IP fallback).
-        self.assertEqual(result["type"], "abort")
-        self.assertEqual(result["reason"], "collector_identity_required")
+        # A UDP response is a route observation, not a collector identity. Its
+        # selection opens the existing callback identity path with the address
+        # prefilled; it never reaches entry creation directly.
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "manual")
+        self.assertIs(flow._selected_result, flow._autodetect_results["0"])
+        self.assertEqual(
+            flow._manual_preselected_strategy,
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        self.assertEqual(flow._manual_defaults["collector_ip"], "192.168.1.14")
 
     async def test_create_entry_persists_collector_cloud_family_from_onboarding(self) -> None:
         flow = self._make_flow()
@@ -4255,7 +4334,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             driver_hint="auto",
         )
 
-    async def test_do_scan_uses_single_attempt_for_quick_scan(self) -> None:
+    async def test_do_scan_collects_every_target_in_one_quick_scan_attempt(self) -> None:
         flow = self._make_flow()
         captured_kwargs: dict[str, object] = {}
 
@@ -4272,6 +4351,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured_kwargs["attempts"], 1)
         self.assertFalse(captured_kwargs["enrich_runtime_details"])
+        self.assertFalse(captured_kwargs["return_after_first_match"])
 
     async def test_do_scan_scopes_active_probe_against_passive_discovery(self) -> None:
         flow = self._make_flow()
@@ -4342,7 +4422,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.connection_mode, "callback_listener")
         self.assertEqual(result.collector.collector.collector_pn, "V000405SYN94677058")
 
-    async def test_do_scan_uses_shared_registry_candidate_hidden_from_background(self) -> None:
+    async def test_do_scan_does_not_bypass_removed_entry_session_quarantine(self) -> None:
         from custom_components.eybond_local.passive_discovery import (
             PassiveCallbackDiscovery,
         )
@@ -4399,16 +4479,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await flow._async_do_scan()
 
-        self.assertEqual(len(flow._autodetect_results), 2)
-        result = next(
-            candidate
-            for candidate in flow._autodetect_results.values()
-            if candidate.observed_session is not None
+        # An exact socket retired by an unload is quarantined until either a
+        # successful reload resumes the entry or permanent removal restarts it.
+        # Interactive search must not reinterpret that stale callback socket as
+        # a new durable inbound collector.
+        self.assertEqual(len(flow._autodetect_results), 1)
+        self.assertTrue(
+            all(
+                candidate.observed_session is None
+                for candidate in flow._autodetect_results.values()
+            )
         )
-        self.assertEqual(result.collector.collector.collector_pn, "V001107SYN282291016")
-        self.assertIs(type(result.observed_session), ObservedCollectorSession)
-        self.assertEqual(result.observed_session.session_id, session["session_id"])
-        self.assertEqual(result.observed_session.listener_port, 18899)
 
     async def test_do_scan_with_passive_seed_runs_progress_updater(self) -> None:
         flow = self._make_flow()
@@ -5887,7 +5968,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Refresh scan", placeholders["scan_next_hint"])
         self.assertNotIn("Enter address manually", placeholders["scan_next_hint"])
 
-    async def test_scan_results_placeholders_surface_localized_smartess_pending_state(self) -> None:
+    async def test_scan_results_placeholders_do_not_offer_pending_from_scan(self) -> None:
         flow = self._make_flow()
         flow.hass.config.language = "ru"
         flow._autodetect_results = {
@@ -5913,7 +5994,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result_label = flow._result_label(flow._autodetect_results["0"])
 
         self.assertIn("локальное сопоставление инвертора пока не подтверждено", placeholders["scan_summary"])
-        self.assertIn("сохранить его как ожидающее", placeholders["scan_next_hint"])
+        self.assertNotIn("ожидающее", placeholders["scan_next_hint"].lower())
+        self.assertIn("ввести адрес вручную", placeholders["scan_next_hint"].lower())
         self.assertIn("Есть признаки SmartESS", result_label)
 
     async def test_scan_result_labels_name_passive_callback_peer_address_explicitly(self) -> None:
@@ -9362,10 +9444,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         self.assertEqual(legacy_flow._verified_connection_strategy, "")
 
-    async def test_discovery_and_passive_share_one_admission_entrypoint(self) -> None:
-        """Both source adapters build the SAME typed request type and enter the ONE
-        admission entrypoint (the consent step) -- differing only by a diagnostic
-        origin. This is the unified boundary the batch introduces."""
+    async def test_discovery_admits_inbound_but_scan_requires_explicit_route(self) -> None:
+        """Discovery verifies an inbound session; scan never guesses its route."""
 
         # Source A: integration discovery.
         disc_flow = self._make_flow()
@@ -9401,19 +9481,17 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             )
         }
         scan = await scan_flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
-        scan_request = scan_flow._admission_transaction.request
-
-        # SAME request TYPE, SAME entrypoint (the consent step); origin differs
-        # only as a diagnostic label and never steers the algorithm.
+        # An integration-discovery session is an inbound observation and enters
+        # admission.  A scan inventory session may have arrived through NAT, so
+        # it first asks for an independently observed/editable route and starts
+        # no admission transaction merely from its TCP peer.
         self.assertEqual(disc["step_id"], "verify_connection")
-        self.assertEqual(scan["step_id"], "verify_connection")
+        self.assertEqual(scan["step_id"], "scan_collector_route")
         self.assertIs(type(disc_request), CollectorAdmissionRequest)
-        self.assertIs(type(scan_request), CollectorAdmissionRequest)
         self.assertEqual(disc_request.origin, "integration_discovery")
-        self.assertEqual(scan_request.origin, "passive_scan")
-        # The same durable collector identity travels on both typed carriers.
         self.assertEqual(disc_request.observed_session.collector_pn, self.FULL_PN)
-        self.assertEqual(scan_request.observed_session, observed)
+        self.assertIsNone(scan_flow._admission_transaction)
+        self.assertIs(scan_flow._selected_result.observed_session, observed)
 
     async def test_passive_adapter_fails_closed_on_duck_or_subclass_observation(
         self,
@@ -9456,10 +9534,466 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result, msg=f"admission started for {bogus!r}")
             self.assertIsNone(flow._admission_transaction)
 
+    async def test_single_active_scan_result_reuses_its_exact_typed_route(self) -> None:
+        """An active result must not ask the user to reselect its proven route."""
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
+        route = CallbackRecoveryRoute(
+            bind_ip="192.168.1.50",
+            trigger_target_ip="192.168.1.55",
+            trigger_udp_port=58899,
+            advertised_ha_host="192.168.1.50",
+            advertised_ha_port=8899,
+            listener_port=8899,
+        )
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.55",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.FULL_PN),
+            ),
+            observed_session=observed,
+            callback_route=route,
+        )
+        flow._autodetect_results = {"0": result}
+
+        selected = await flow.async_step_choose()
+
+        self.assertEqual(selected["step_id"], "verify_connection")
+        request = flow._admission_transaction.request
+        self.assertEqual(request.origin, "scan_selected_route")
+        self.assertIs(request.observed_session, observed)
+        self.assertIs(request.callback_route, route)
+        self.assertEqual(request.callback_route.trigger_target_ip, "192.168.1.55")
+        self.assertNotIn("manual_create_pending", selected.get("menu_options", ()))
+
+    async def test_selected_route_retry_reuses_address_with_a_new_identity_attempt(self) -> None:
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint="192.168.1.1",
+        )
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.FULL_PN),
+            ),
+            observed_session=observed,
+            callback_route=CallbackRecoveryRoute(
+                bind_ip="192.168.1.50",
+                trigger_target_ip="192.168.1.55",
+                trigger_udp_port=58899,
+                advertised_ha_host="192.168.1.50",
+                advertised_ha_port=8899,
+                listener_port=8899,
+            ),
+        )
+        await flow.async_step_scan_collector_route(
+            {"collector_ip": "192.168.1.55"}
+        )
+        transaction = flow._admission_transaction
+        transaction.begin_observed_callback_continuation()
+        # Model the post-failure state produced after recovery releases its
+        # unadopted owner. Retry must keep this transaction and selected route.
+        transaction._state = "callback_ready"
+
+        retry = await flow.async_step_verify_connection_retry()
+        self.assertEqual(retry["step_id"], "verify_connection")
+        self.assertIs(flow._admission_transaction, transaction)
+        self.assertEqual(
+            transaction.request.callback_route.trigger_target_ip,
+            "192.168.1.55",
+        )
+
+        captured = []
+
+        async def _identity(_hass, request):
+            captured.append(request)
+            return CallbackIdentityOutcome(result="callback_timeout")
+
+        with patch.object(
+            admission_transaction_module,
+            "async_run_callback_identity_transaction",
+            side_effect=_identity,
+        ):
+            await flow._async_run_observed_callback_admission(transaction)
+
+        self.assertEqual(len(captured), 1)
+        self.assertIsNone(captured[0].bootstrap_probe)
+        self.assertEqual(captured[0].target_ip, "192.168.1.55")
+        self.assertEqual(flow._admission_callback_error, "callback_timeout")
+
+    async def test_selected_route_weak_session_runs_exact_identity_read_before_recovery(
+        self,
+    ) -> None:
+        """Regression: heartbeat-only V0010 must not fail before the authority."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+            IDENTITY_UNVERIFIED,
+            ObservedSessionWireProbeIntent,
+        )
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.SHORT_PN,
+            identity_source="framed_heartbeat",
+            session_id=self.OLD_SESSION,
+            listener_port=18899,
+            protocol_shape="eybond_framed",
+            peer_hint="195.138.86.175",
+        )
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="195.138.86.175",
+                source="callback_listener",
+                ip="195.138.86.175",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.SHORT_PN),
+            ),
+            observed_session=observed,
+        )
+        await flow.async_step_scan_collector_route(
+            {"collector_ip": "195.138.86.175"}
+        )
+        transaction = flow._admission_transaction
+        captured = []
+
+        async def _identity(_hass, request):
+            captured.append(request)
+            return CallbackIdentityOutcome(result=IDENTITY_UNVERIFIED)
+
+        recovery = AsyncMock()
+        with (
+            patch.object(
+                admission_transaction_module,
+                "async_run_callback_identity_transaction",
+                side_effect=_identity,
+            ),
+            patch.object(transaction, "async_run_recovery", recovery),
+        ):
+            await flow._async_run_observed_callback_admission(transaction)
+
+        self.assertEqual(len(captured), 1)
+        intent = captured[0].bootstrap_probe
+        self.assertIs(type(intent), ObservedSessionWireProbeIntent)
+        self.assertEqual(intent.session_id, self.OLD_SESSION)
+        self.assertEqual(intent.collector_pn, self.SHORT_PN)
+        self.assertEqual(intent.identity_source, "framed_heartbeat")
+        self.assertEqual(captured[0].expected_pn, self.SHORT_PN)
+        self.assertEqual(captured[0].target_ip, "195.138.86.175")
+        self.assertEqual(flow._admission_callback_error, IDENTITY_UNVERIFIED)
+        recovery.assert_not_awaited()
+
+    async def test_stale_scan_socket_immediately_tests_the_selected_route(self) -> None:
+        """A vanished zero-send bootstrap must not become an instant UI failure."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+            IDENTITY_SILENT_SESSION_STALE,
+        )
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint="192.168.1.1",
+        )
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.FULL_PN),
+            ),
+            observed_session=observed,
+            callback_route=CallbackRecoveryRoute(
+                bind_ip="192.168.1.50",
+                trigger_target_ip="192.168.1.55",
+                trigger_udp_port=58899,
+                advertised_ha_host="192.168.1.50",
+                advertised_ha_port=8899,
+                listener_port=8899,
+            ),
+        )
+        await flow.async_step_scan_collector_route(
+            {"collector_ip": "192.168.1.55"}
+        )
+        transaction = flow._admission_transaction
+        captured = []
+
+        async def _identity(_hass, request):
+            captured.append(request)
+            if len(captured) == 1:
+                return CallbackIdentityOutcome(
+                    result=IDENTITY_SILENT_SESSION_STALE
+                )
+            return CallbackIdentityOutcome(result="callback_timeout")
+
+        with patch.object(
+            admission_transaction_module,
+            "async_run_callback_identity_transaction",
+            side_effect=_identity,
+        ):
+            await flow._async_run_observed_callback_admission(transaction)
+
+        self.assertEqual(len(captured), 2)
+        self.assertIsNotNone(captured[0].bootstrap_probe)
+        self.assertIsNone(captured[1].bootstrap_probe)
+        self.assertEqual(
+            [request.target_ip for request in captured],
+            ["192.168.1.55", "192.168.1.55"],
+        )
+        self.assertEqual(flow._admission_callback_error, "callback_timeout")
+        failed = await flow.async_step_verify_connection_failed()
+        explanation = failed["description_placeholders"]["failure_explanation"]
+        self.assertIn("did not call back", explanation)
+        self.assertNotIn("could not verify the collector connection", explanation)
+
+    def test_identified_scan_session_keeps_route_addresses_independent(self) -> None:
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint="192.168.1.1",
+        )
+        identified = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.FULL_PN),
+            ),
+            observed_session=observed,
+            callback_route=CallbackRecoveryRoute(
+                bind_ip="192.168.1.50",
+                trigger_target_ip="192.168.1.55",
+                trigger_udp_port=58899,
+                advertised_ha_host="192.168.1.50",
+                advertised_ha_port=8899,
+                listener_port=8899,
+            ),
+        )
+        route_only = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="subnet_unicast",
+                ip="192.168.1.51",
+                udp_reply="rsp>server=1;",
+            ),
+        )
+        flow._autodetect_results = {"identified": identified, "route": route_only}
+
+        options = flow._scan_collector_route_options(identified)
+
+        self.assertEqual(
+            set(options), {"192.168.1.55", "192.168.1.51", "192.168.1.1"}
+        )
+        self.assertIn("responded", options["192.168.1.55"])
+        self.assertIn("responded", options["192.168.1.51"])
+        self.assertIn("may be a router", options["192.168.1.1"])
+
+    async def test_route_only_scan_never_offers_or_creates_pending(self) -> None:
+        flow = self._make_flow()
+        route_only = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.51",
+                source="subnet_unicast",
+                ip="192.168.1.51",
+                udp_reply="rsp>server=1;",
+            ),
+        )
+        flow._autodetect_results = {"route": route_only}
+
+        manual = await flow.async_step_scan_results({CONF_RESULT_KEY: "route"})
+        self.assertEqual(manual["step_id"], "manual")
+        self.assertEqual(flow._manual_defaults["collector_ip"], "192.168.1.51")
+        self.assertFalse(flow._manual_pending_allowed())
+        stage_note = manual["description_placeholders"]["verification_note"]
+        self.assertIn("Step 1 of 2", stage_note)
+        self.assertIn("192.168.1.51", stage_note)
+
+        flow._manual_config = self._manual_input("192.168.1.51")
+        flow._manual_result = OnboardingResult(
+            connection_mode="manual",
+            next_action="create_pending_entry",
+            last_error="callback_timeout",
+        )
+        menu = await flow.async_step_manual_confirm()
+        self.assertNotIn("manual_create_pending", menu["menu_options"])
+        blocked = await flow.async_step_manual_create_pending()
+        self.assertEqual(blocked["step_id"], "manual_confirm")
+        self.assertNotIn("manual_create_pending", blocked["menu_options"])
+
+    async def test_identified_collector_only_selector_label_includes_pn_and_route(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.language = "uk"
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn="E50000253884199645"),
+            ),
+            connection_mode="subnet_unicast",
+            next_action="manual_driver_selection",
+        )
+
+        await flow._async_ensure_translation_bundle()
+        label = flow._result_label(result)
+
+        self.assertIn("PN E50000253884199645", label)
+        self.assertIn("192.168.1.1", label)
+
+    def _flow_with_verified_selected_callback_route(self):
+        """Model the exact post-recovery state of a NAT/hairpin scan result."""
+
+        from custom_components.eybond_local.connection.admission import (
+            CollectorAdmissionRequest,
+        )
+        from custom_components.eybond_local.connection.admission_transaction import (
+            CollectorAdmissionTransaction,
+        )
+        from custom_components.eybond_local.connection.recovery.terminal import (
+            RecoveryTerminalInput,
+        )
+        from custom_components.eybond_local.connection.recovery_contract import (
+            CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            CallbackRecoveryProof,
+        )
+
+        flow = self._make_flow()
+        route = CallbackRecoveryRoute(
+            bind_ip="192.168.1.50",
+            trigger_target_ip="192.168.1.55",
+            trigger_udp_port=58899,
+            advertised_ha_host="192.168.1.50",
+            advertised_ha_port=8899,
+            listener_port=8899,
+        )
+        selected = self._callback_listener_selected_result(
+            with_observed_session=True
+        )
+        flow._selected_result = selected
+        request = CollectorAdmissionRequest(
+            observed_session=selected.observed_session,
+            origin="scan_selected_route",
+            callback_route=route,
+        )
+        transaction = CollectorAdmissionTransaction(
+            request,
+            registry_provider=flow._callback_session_registry,
+            listener_host="0.0.0.0",
+            policy_provider=lambda: config_flow_module._ONBOARDING_TIMEOUT_POLICY,
+        )
+        proof = CallbackRecoveryProof(
+            method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            verified_at="2026-07-22T10:00:00+00:00",
+            trigger_target=route.trigger_target,
+            advertised_ha_endpoint=route.advertised_ha_endpoint,
+            listener_port=route.listener_port,
+        )
+        transaction._callback_terminal_input = RecoveryTerminalInput(
+            collector_pn=self.FULL_PN,
+            callback_proof=proof,
+            prepared_handoff_owner="callback_recovery:test",
+        )
+        flow._admission_transaction = transaction
+        flow._callback_continuation = transaction
+        flow._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        return flow, route
+
+    async def test_verified_callback_route_and_tcp_peer_are_presented_separately(
+        self,
+    ) -> None:
+        flow, route = self._flow_with_verified_selected_callback_route()
+        flow.hass.config.language = "uk"
+        await flow._async_ensure_translation_bundle()
+
+        summary = flow._detection_summary_placeholders()
+        placeholders = flow._result_placeholders(flow._selected_result)
+        table = placeholders["collector_confirm_table"]
+
+        self.assertEqual(summary["tier_headline"], "Колектор перевірено")
+        self.assertIn(route.trigger_target_ip, summary["tier_details"])
+        self.assertIn(self.PEER_IP, summary["tier_details"])
+        self.assertIn("Адреса для callback", table)
+        self.assertIn(route.trigger_target_ip, table)
+        self.assertIn("Джерело вхідного з’єднання", table)
+        self.assertIn(self.PEER_IP, table)
+        self.assertEqual(placeholders["collector_ip"], route.trigger_target_ip)
+
+    async def test_verified_callback_route_not_tcp_peer_is_persisted_for_runtime(
+        self,
+    ) -> None:
+        from custom_components.eybond_local.connection.recovery_contract import (
+            RecoveryContract,
+        )
+
+        flow, route = self._flow_with_verified_selected_callback_route()
+        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
+
+        def _run_terminal(_pn, terminal, *, recovery):
+            self.assertIs(recovery.callback_proof, transaction.terminal_input.callback_proof)
+            return terminal()
+
+        transaction = flow._admission_transaction
+        with patch.object(
+            flow,
+            "_create_entry_with_handoff",
+            side_effect=_run_terminal,
+        ):
+            created = await flow._async_create_entry_from_result()
+
+        self.assertEqual(created["type"], "create_entry")
+        data = created["data"]
+        self.assertEqual(
+            data[config_flow_module.CONF_COLLECTOR_IP], route.trigger_target_ip
+        )
+        self.assertNotEqual(data[config_flow_module.CONF_COLLECTOR_IP], self.PEER_IP)
+        self.assertEqual(data[config_flow_module.CONF_CONNECTION_MODE], "known_ip")
+        self.assertEqual(
+            data[config_flow_module.CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+        contract = RecoveryContract.from_entry_data(data)
+        self.assertIsNotNone(contract)
+        self.assertEqual(contract.callback_proof.trigger_target, route.trigger_target)
+
     async def test_stale_passive_scan_session_requires_restart_verification(self) -> None:
         """Deleting an entry must not turn its old callback into inbound proof."""
-
-        from dataclasses import replace
 
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
@@ -9499,48 +10033,17 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         selected = await flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
         self.assertEqual(selected["type"], "form")
-        self.assertEqual(selected["step_id"], "verify_connection")
-        # The passive adapter admits the exact typed session through the ONE
-        # entrypoint -- session authority comes from observed_session, not details.
-        request = flow._admission_transaction.request
-        self.assertIsInstance(request, CollectorAdmissionRequest)
-        self.assertEqual(request.origin, "passive_scan")
-        self.assertEqual(request.observed_session, observed)
+        self.assertEqual(selected["step_id"], "scan_collector_route")
+        self.assertIsNone(flow._admission_transaction)
 
-        restarts: list[str] = []
-
-        class _FakeChannel:
-            def __init__(self, **_kwargs) -> None:
-                return None
-
-            async def async_send_restart(self) -> None:
-                restarts.append("restart")
-                # The stale callback socket dies with the reboot and the
-                # collector does NOT reconnect autonomously.
-                inventory.clear()
-
-            def is_connected(self) -> bool:
-                return False
-
-            async def async_close(self) -> None:
-                return None
-
-        policy = replace(
-            config_flow_module._ONBOARDING_TIMEOUT_POLICY,
-            inbound_restart_disconnect_timeout=0.05,
-            inbound_reconnect_timeout=0.05,
-            inbound_strong_identity_timeout=0.05,
-            callback_causality_lease_wait=0.5,
+        consent = await flow.async_step_scan_collector_route(
+            {"collector_ip": self.PEER_IP}
         )
-        with patch.object(
-            admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel
-        ), patch.object(
-            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", policy
-        ):
-            failed = await self._drive_verification(flow)
-
-        self.assertEqual(restarts, ["restart"])
-        self.assertEqual(failed["step_id"], "verify_connection_failed")
+        self.assertEqual(consent["step_id"], "verify_connection")
+        request = flow._admission_transaction.request
+        self.assertEqual(request.origin, "scan_selected_route")
+        self.assertEqual(request.observed_session, observed)
+        self.assertEqual(request.callback_route.trigger_target_ip, self.PEER_IP)
         self.assertEqual(flow._verified_connection_strategy, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 

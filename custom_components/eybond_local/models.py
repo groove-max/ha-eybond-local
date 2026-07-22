@@ -10,6 +10,7 @@ from .link_models import EybondLinkRoute
 
 if TYPE_CHECKING:
     from .connection.admission import ObservedCollectorSession
+    from .connection.recovery.verification import CallbackRecoveryRoute
 
 
 def key_to_title(key: str) -> str:
@@ -605,6 +606,10 @@ class OnboardingResult:
     # config-flow admission trust boundary -- session authority no longer travels
     # through the free-form ``detection.details`` dict.
     observed_session: ObservedCollectorSession | None = None
+    # Exact callback route exercised by this ACTIVE scan result.  It is a
+    # transient admission capability, never inferred from the TCP peer/reply
+    # source and never persisted by the detector itself.
+    callback_route: CallbackRecoveryRoute | None = None
 
     @property
     def confidence(self) -> str:

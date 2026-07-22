@@ -74,6 +74,7 @@ from .silent_scan_probe import (
     SilentIdentityResolution,
 )
 from ..connection.admission import ObservedCollectorSession
+from ..connection.recovery.verification import CallbackRecoveryRoute
 from ..models import (
     CollectorCandidate,
     CollectorInfo,
@@ -201,6 +202,12 @@ class DiscoveryTarget:
     source: str
     collector_pn: str = ""
     observed_session: SilentIdentityResolution | None = None
+    # A unicast fallback target is not merely scheduled work: returning it from
+    # the probe means this exact attempted route already answered.  Keep the
+    # typed wire observation attached while later identity work enriches (or
+    # times out on) the target; otherwise a valid responder disappears whenever
+    # a sibling wins the serialized callback-identity phase.
+    observed_probe: DiscoveryProbeResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +261,29 @@ def _already_configured_result(target: DiscoveryTarget, depth: str) -> Onboardin
         depth=depth,
         status="already_configured",
         reason="configured_entry_owns_collector",
+    )
+
+
+def _collector_candidate_from_target(target: DiscoveryTarget) -> CollectorCandidate:
+    """Project one target without discarding an earlier exact-route UDP reply."""
+
+    probe = target.observed_probe
+    if (
+        type(probe) is DiscoveryProbeResult
+        and probe.target_ip == target.ip
+        and bool(probe.reply)
+    ):
+        udp_reply = probe.reply
+        udp_reply_from = probe.reply_from
+    else:
+        udp_reply = ""
+        udp_reply_from = ""
+    return CollectorCandidate(
+        target_ip=target.ip,
+        source=target.source,
+        ip=target.ip,
+        udp_reply=udp_reply,
+        udp_reply_from=udp_reply_from,
     )
 
 
@@ -408,8 +438,13 @@ async def async_probe_fallback_targets(
         if not probe.reply:
             return None
 
-        responder_ip = probe.reply_from.split(":", 1)[0] if probe.reply_from else target.ip
-        return DiscoveryTarget(ip=responder_ip, source=target.source)
+        # This is an addressed unicast attempt: the address HA successfully
+        # sent to is the route capability.  ``reply_from`` is only an observed
+        # diagnostic address and may be rewritten by hairpin NAT, a UDP proxy,
+        # or the collector's gateway.  Replacing the attempted route with that
+        # address creates entries which can identify the first callback socket
+        # but can never trigger the collector again after it disconnects.
+        return replace(target, observed_probe=probe)
 
     iterator = iter(targets)
     deduped: dict[str, DiscoveryTarget] = {}
@@ -1009,13 +1044,10 @@ class OnboardingDetector:
         if not replied_targets:
             return tuple(self._dedupe_results(aggregated))
 
-        known_ips = {
-            result.collector.ip
-            for result in aggregated
-            if result.collector is not None and result.collector.ip
-        }
-        known_ips.update(target.ip for target in resolved_targets)
-        replied_targets = tuple(target for target in replied_targets if target.ip not in known_ips)
+        preserved_reply_ips = _observed_route_reply_ips(aggregated)
+        replied_targets = tuple(
+            target for target in replied_targets if target.ip not in preserved_reply_ips
+        )
         if not replied_targets:
             return tuple(self._dedupe_results(aggregated))
 
@@ -1107,14 +1139,19 @@ class OnboardingDetector:
                 timeout=discovery_timeout,
                 source="onboarding_detect_probe",
             )
-            candidate.udp_reply = probe.reply
-            candidate.udp_reply_from = probe.reply_from
-            # candidate.ip tracks the ROUTE address (the UDP reply source -- the
-            # collector's own route hint), NEVER the TCP peer (which lives only in
-            # CollectorInfo.remote_ip and must not become the transport's owner).
-            if probe.reply_from:
-                candidate.ip = probe.reply_from.split(":", 1)[0]
-                transport.set_collector_ip(candidate.ip)
+            # A later retry may legitimately receive no datagram even though
+            # the fallback sweep already proved this exact route. Enrichment is
+            # monotonic: replace earlier wire evidence only with a new reply,
+            # never erase it with an empty retry result.
+            if probe.reply:
+                candidate.udp_reply = probe.reply
+                candidate.udp_reply_from = probe.reply_from
+            # ``target.ip`` is the route this addressed attempt exercised.
+            # Preserve it verbatim.  UDP reply source and TCP peer are observed
+            # diagnostics only; either can be a router/NAT address and neither
+            # is authority to retarget the next callback attempt.
+            candidate.ip = target.ip
+            transport.set_collector_ip(target.ip)
             return probe
 
         def _effective_connect_timeout(probe: Any) -> float:
@@ -1241,6 +1278,9 @@ class OnboardingDetector:
         preidentified_source = (
             observed_session.identity_source if observed_session is not None else ""
         )
+        preidentified_protocol_shape = (
+            observed_session.protocol_shape if observed_session is not None else ""
+        )
         preidentified = observed_session is not None
         if preidentified:
             # The broadcast expansion already proved this exact socket inside
@@ -1250,17 +1290,14 @@ class OnboardingDetector:
             transport.set_claimed_session_provider(
                 lambda: preidentified_session_id
             )
-        candidate = CollectorCandidate(
-            target_ip=target.ip,
-            source=target.source,
-            ip=target.ip,
-        )
+        candidate = _collector_candidate_from_target(target)
         if detection_state is not None:
             detection_state.candidate = candidate
 
         existing_shared_connection = None
         if cleanup_new_shared_connection:
             existing_shared_connection = await transport.async_snapshot_shared_connection()
+        preserve_observed_session_id = ""
 
         # start() is INSIDE the try so a start failure still runs the finally
         # (releases the shared listener): cleanup covers success / error / cancel
@@ -1277,6 +1314,7 @@ class OnboardingDetector:
                     session_id=preidentified_session_id,
                     collector_pn=preidentified_pn,
                     identity_source=preidentified_source,
+                    protocol_shape=preidentified_protocol_shape,
                 )
                 lease_busy = False
                 connected = await transport.wait_until_connected(connect_timeout)
@@ -1335,13 +1373,11 @@ class OnboardingDetector:
             heartbeat_seen = await transport.wait_until_heartbeat(timeout=heartbeat_timeout)
             candidate.collector = transport.collector_info
             if candidate.collector.remote_ip and not silent_identity.identified:
-                # Volunteering (non-silent) path keeps its existing behaviour. For a
-                # silent target identified by EXACT session id, the ROUTE address
-                # stays candidate.ip and the transport's owner; the TCP peer lives
-                # only in CollectorInfo.remote_ip and must NOT become the owner
-                # (ownership never transfers from the route hint to the peer IP).
-                candidate.ip = candidate.collector.remote_ip
-                transport.set_collector_ip(candidate.ip)
+                # A volunteering socket changes no route authority either.  Its
+                # peer remains available as ``CollectorInfo.remote_ip`` only.
+                # This is load-bearing for collectors behind NAT: using the peer
+                # here makes the first scan succeed and every later callback fail.
+                transport.set_collector_ip(target.ip)
             if silent_identity.identified and candidate.collector is not None:
                 # Reconcile the exact-session FC=2 identity with whatever the
                 # activated connection reports, through the ONE centralized short/
@@ -1389,6 +1425,35 @@ class OnboardingDetector:
                         reason="probed_identity_conflicts_with_activated_session",
                     )
 
+            admission_kwargs: dict[str, object] = {}
+            if silent_identity.identified and candidate.collector is not None:
+                collector_pn = str(candidate.collector.collector_pn or "").strip()
+                protocol_shape = str(silent_identity.protocol_shape or "").strip()
+                callback_route = CallbackRecoveryRoute(
+                    bind_ip=self._connection.server_ip,
+                    trigger_target_ip=target.ip,
+                    trigger_udp_port=self._connection.udp_port,
+                    advertised_ha_host=(
+                        self._connection.effective_advertised_server_ip
+                    ),
+                    advertised_ha_port=(
+                        self._connection.effective_advertised_tcp_port
+                    ),
+                    listener_port=self._connection.tcp_port,
+                )
+                if collector_pn and protocol_shape and not callback_route.invalid_reason():
+                    admission_kwargs = {
+                        "observed_session": ObservedCollectorSession(
+                            collector_pn=collector_pn,
+                            identity_source=silent_identity.identity_source,
+                            session_id=silent_identity.session_id,
+                            listener_port=self._connection.tcp_port,
+                            protocol_shape=protocol_shape,
+                            peer_hint=str(candidate.collector.remote_ip or "").strip(),
+                        ),
+                        "callback_route": callback_route,
+                    }
+
             smartess_probe = await _async_probe_smartess_onboarding(transport)
             if candidate.collector is not None and smartess_probe is not None:
                 _apply_smartess_probe_to_collector(candidate.collector, smartess_probe)
@@ -1429,6 +1494,8 @@ class OnboardingDetector:
                         candidate.collector,
                         collector_ip=candidate.ip,
                     )
+                if admission_kwargs:
+                    preserve_observed_session_id = silent_identity.session_id
                 return _with_detection_evidence(
                     OnboardingResult(
                         collector=candidate,
@@ -1437,6 +1504,7 @@ class OnboardingDetector:
                         warnings=tuple(warnings),
                         next_action="manual_driver_selection",
                         last_error="target_detection_timeout",
+                        **admission_kwargs,
                     ),
                     depth=depth,
                     status="target_timeout",
@@ -1475,6 +1543,8 @@ class OnboardingDetector:
                         silent_details["link_baud_hints"] = list(catalog_link_baud_hints())
                     if sweep_outcome is not None:
                         silent_details["link_baud_sweep"] = sweep_outcome.as_details()
+                    if admission_kwargs:
+                        preserve_observed_session_id = silent_identity.session_id
                     return _with_detection_evidence(
                         OnboardingResult(
                             collector=candidate,
@@ -1483,6 +1553,7 @@ class OnboardingDetector:
                             warnings=tuple(warnings),
                             next_action="manual_driver_selection",
                             last_error=str(exc),
+                            **admission_kwargs,
                         ),
                         depth=depth,
                         status="collector_only",
@@ -1532,6 +1603,8 @@ class OnboardingDetector:
                         budget_details["link_baud_hints"] = list(catalog_link_baud_hints())
                     if sweep_outcome is not None:
                         budget_details["link_baud_sweep"] = sweep_outcome.as_details()
+                    if admission_kwargs:
+                        preserve_observed_session_id = silent_identity.session_id
                     return _with_detection_evidence(
                         OnboardingResult(
                             collector=candidate,
@@ -1540,6 +1613,7 @@ class OnboardingDetector:
                             warnings=tuple(warnings),
                             next_action="manual_driver_selection",
                             last_error="target_detection_timeout",
+                            **admission_kwargs,
                         ),
                         depth=depth,
                         status="target_timeout",
@@ -1575,6 +1649,8 @@ class OnboardingDetector:
                 details["probe_log"] = list(scan.probe_log)
             if sweep_outcome is not None and sweep_outcome.matched:
                 details["link_baud_sweep"] = sweep_outcome.as_details()
+            if admission_kwargs:
+                preserve_observed_session_id = silent_identity.session_id
             return _with_detection_evidence(
                 OnboardingResult(
                     collector=candidate,
@@ -1586,6 +1662,7 @@ class OnboardingDetector:
                     connection_mode=target.source,
                     warnings=tuple(warnings),
                     next_action="create_entry",
+                    **admission_kwargs,
                 ),
                 depth=depth,
                 status=(
@@ -1610,7 +1687,12 @@ class OnboardingDetector:
                         target.source,
                         exc,
                     )
-            await transport.stop()
+            if preserve_observed_session_id:
+                await transport.stop(
+                    preserve_session_id=preserve_observed_session_id,
+                )
+            else:
+                await transport.stop()
 
     async def _async_detect_driver_with_retries(
         self,
@@ -2080,13 +2162,6 @@ class OnboardingDetector:
         if not any(target.source == "broadcast" for target in resolved_targets):
             return ()
 
-        known_ips = {
-            result.collector.ip
-            for result in results
-            if result.collector is not None and result.collector.ip
-        }
-        known_ips.update(target.ip for target in resolved_targets)
-
         timeout = deadline.bounded_timeout(min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT))
         if timeout is not None and timeout <= 0:
             return ()
@@ -2106,7 +2181,15 @@ class OnboardingDetector:
             identity_listener_port=self._connection.tcp_port,
             identity_wait_seconds=DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
         )
-        return tuple(target for target in replied_targets if target.ip not in known_ips)
+        # Seeing an address earlier is not evidence that its addressed UDP
+        # reply was preserved.  In particular, a causality-lease-busy target is
+        # only a retryable placeholder.  Suppress a fallback target solely when
+        # the exact route reply is already present; otherwise the later strong
+        # observation must be allowed to enrich/replace the weak result.
+        preserved_reply_ips = _observed_route_reply_ips(results)
+        return tuple(
+            target for target in replied_targets if target.ip not in preserved_reply_ips
+        )
 
     async def _async_wait_for_fanout_targets(
         self,
@@ -2143,11 +2226,7 @@ class OnboardingDetector:
     def _timeout_result_for_state(state: _TargetDetectionState) -> OnboardingResult:
         candidate = state.candidate
         if candidate is None:
-            candidate = CollectorCandidate(
-                target_ip=state.target.ip,
-                source=state.target.source,
-                ip=state.target.ip,
-            )
+            candidate = _collector_candidate_from_target(state.target)
             next_action = "manual_input"
         else:
             next_action = "manual_driver_selection" if candidate.connected else "manual_input"
@@ -2179,11 +2258,7 @@ class OnboardingDetector:
 
         candidate = state.candidate
         if candidate is None:
-            candidate = CollectorCandidate(
-                target_ip=state.target.ip,
-                source=state.target.source,
-                ip=state.target.ip,
-            )
+            candidate = _collector_candidate_from_target(state.target)
             next_action = "manual_input"
         else:
             next_action = "manual_driver_selection" if candidate.connected else "manual_input"
@@ -2398,11 +2473,24 @@ class OnboardingDetector:
         )
 
 
-def _result_priority(result: OnboardingResult) -> tuple[int, int, int]:
+def _observed_route_reply_ips(results: Sequence[OnboardingResult]) -> set[str]:
+    """Return exact attempted routes whose UDP replies survived projection."""
+
+    return {
+        collector.target_ip
+        for result in results
+        if (collector := result.collector) is not None
+        and collector.target_ip
+        and collector.udp_reply
+    }
+
+
+def _result_priority(result: OnboardingResult) -> tuple[int, int, int, int]:
     return (
         _CONFIDENCE_SCORE.get(result.confidence, 0),
         1 if result.match is not None else 0,
         1 if result.collector is not None and result.collector.connected else 0,
+        1 if result.collector is not None and result.collector.udp_reply else 0,
     )
 
 

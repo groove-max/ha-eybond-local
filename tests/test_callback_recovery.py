@@ -2,7 +2,7 @@
 
 The engine proves FUTURE recoverability over one explicit unicast route --
 never mere identity of a live session. These tests pin the phase transition
-(full inbound window first), the single causal lease across both phases, the
+(immediate autonomous snapshot before callback), the single causal lease across both phases, the
 exactly-one-sequence trigger accounting, the route/NAT model, the proof gate,
 ownership/cleanup, and the architecture guards.
 """
@@ -213,6 +213,35 @@ def _reset_drops_old(inventory):
 
 
 class CallbackRecoverySuccessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_callback_route_does_not_wait_the_inbound_budget(self) -> None:
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        sender = _Sender(
+            ledger=ledger,
+            on_send=lambda: inventory.sessions.append(
+                _session(NEW_SESSION, FULL_PN)
+            ),
+        )
+        policy = replace(
+            FAST_POLICY,
+            inbound_reconnect_timeout=30.0,
+            callback_recovery_session_wait=0.2,
+        )
+
+        outcome = await asyncio.wait_for(
+            _verifier(
+                _reset_drops_old(inventory),
+                inventory,
+                ledger=ledger,
+                sender=sender,
+                policy=policy,
+            ).async_verify(),
+            timeout=1.0,
+        )
+
+        self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+        self.assertEqual(len(sender.routes), 1)
+
     async def test_callback_after_reset_yields_validated_proof(self) -> None:
         ledger = CallbackTriggerLedger()
         inventory = _Inventory(_strong_old())
@@ -253,7 +282,7 @@ class CallbackRecoverySuccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(contract.callback_verified)
         # SUCCESS retargeted the claim onto the NEW callback session.
         self.assertEqual(retargets[-1], NEW_SESSION)
-        # The full inbound window ran FIRST; the transition trail shows it.
+        # The immediate autonomous snapshot ran first; no timed inbound window.
         self.assertIn(STATE_WAITING_FOR_CALLBACK_SESSION, outcome.transitions)
         self.assertIn("waiting_for_inbound_reconnect", outcome.transitions)
 

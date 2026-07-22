@@ -229,6 +229,7 @@ from .connection.callback_identity import (
     BOOTSTRAP_SOURCE_EXPLICIT_USER,
     CallbackIdentityOutcome,
     CallbackIdentityRequest,
+    IDENTITY_SILENT_SESSION_STALE,
     OnboardingWireProbeIntent,
     async_run_callback_identity_transaction,
 )
@@ -1463,6 +1464,49 @@ def _is_ipv4(ip: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _RECOVERY_FAILURE_EXPLANATIONS = {
+    # The selected-route admission screen owns both the callback-identity phase
+    # and the recovery phase.  Identity failures must remain honest here instead
+    # of falling through to the generic recovery message.
+    "callback_timeout": (
+        "common.dynamic.manual_probe_callback_timeout",
+        "The collector did not connect during this attempt.",
+    ),
+    "callback_identity_mismatch": (
+        "common.dynamic.manual_probe_callback_identity_mismatch",
+        "A collector connected, but its identity did not match this attempt.",
+    ),
+    "callback_identity_conflict": (
+        "common.dynamic.manual_probe_callback_identity_conflict",
+        "This collector is already owned by another entry or setup flow.",
+    ),
+    "callback_identity_ambiguous": (
+        "common.dynamic.manual_probe_callback_identity_ambiguous",
+        "More than one collector answered, so none was selected.",
+    ),
+    "callback_trigger_not_sent": (
+        "common.dynamic.manual_probe_callback_trigger_not_sent",
+        "The connection request could not be sent.",
+    ),
+    "callback_trigger_interference": (
+        "common.dynamic.manual_probe_callback_trigger_interference",
+        "Another connection request overlapped this attempt.",
+    ),
+    "callback_identity_unverified": (
+        "common.dynamic.manual_probe_callback_identity_unverified",
+        "The collector connected but did not report a verifiable identity.",
+    ),
+    "callback_session_silent": (
+        "common.dynamic.manual_probe_callback_session_silent",
+        "The collector connected but did not identify itself.",
+    ),
+    "onboarding_wire_probe_failed": (
+        "common.dynamic.manual_probe_onboarding_wire_probe_failed",
+        "The collector did not answer the identity query.",
+    ),
+    "callback_silent_session_unavailable": (
+        "common.dynamic.manual_probe_callback_silent_session_unavailable",
+        "The previously observed connection has closed.",
+    ),
     "recovery_silent_session_ambiguous": (
         "common.dynamic.recovery_fail_silent_ambiguous",
         "More than one collector connected silently at the same time, "
@@ -2087,6 +2131,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._admission_transaction: CollectorAdmissionTransaction | None = None
         self._admission_next_step = "detection_summary"
         self._admission_task: asyncio.Task | None = None
+        self._admission_callback_error = ""
         # The typed recovery evidence carried from a successful verification to
         # the terminal entry-create path. ONLY the terminal boundary
         # (connection.recovery.terminal) turns it into the entry's
@@ -2111,6 +2156,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # is only a form DEFAULT -- the user still confirms it, and it is never
         # inferred from discovery/peer IP/cloud family.
         self._manual_preselected_strategy = ""
+        # A route selected from scan results is an identification attempt, not
+        # an explicit request to create a future/Pending collector.  Keep the
+        # chosen address in one place so every manual/recovery menu applies the
+        # same fail-closed policy and the ordinary manual flow stays unchanged.
+        self._manual_scan_route_address = ""
         # Callback-trigger ledger generation sampled immediately BEFORE this
         # flow's own active callback attempt, so the shared matcher can prove the
         # attempt's trigger provenance (exactly one trigger: ours).
@@ -2466,16 +2516,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
     async def _async_admit_selected_scan_result(
         self,
+        *,
+        callback_route: CallbackRecoveryRoute | None = None,
     ) -> ConfigFlowResult | None:
-        """Source adapter: admit the selected passive scan result, if any.
+        """Admit a selected scan identity only with an exact typed route.
 
-        Returns ``None`` for a result that is NOT an observed callback session
-        (it has no typed ``observed_session``), so the normal scan flow
-        continues untouched. This adapter branches ONLY on the presence of the
-        typed session carrier -- never on ``connection_mode``, ``detection``
-        reason, collector kind, cloud family, hostname, peer IP or model -- and
-        reads session authority ONLY from that typed carrier, never from
-        ``detection.details``.
+        A passive TCP observation alone can never enter this adapter.  Its route
+        either came from the active scan that exercised it for this exact
+        session, or from the user's explicit editable route choice.  Only that
+        typed route plus the exact observed session may enter the shared
+        admission/recovery transaction.
         """
 
         result = self._selected_result
@@ -2484,13 +2534,241 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # must fail closed (continue the normal scan, start NO admission) rather
         # than reach the strict CollectorAdmissionRequest constructor and raise an
         # unhandled TypeError into the flow.
-        if type(observed) is not ObservedCollectorSession:
+        if (
+            type(observed) is not ObservedCollectorSession
+            or type(callback_route) is not CallbackRecoveryRoute
+        ):
             return None
         return await self._async_begin_collector_admission(
             CollectorAdmissionRequest(
                 observed_session=observed,
-                origin="passive_scan",
+                origin="scan_selected_route",
+                callback_route=callback_route,
             )
+        )
+
+    async def _async_continue_selected_scan_result(self) -> ConfigFlowResult:
+        """One continuation for auto, selected and driver-choice scan results."""
+
+        result = self._selected_result
+        observed = getattr(result, "observed_session", None) if result else None
+        if type(observed) is ObservedCollectorSession:
+            # An active scan may already carry the exact typed route it
+            # exercised to obtain this exact session.  Preserve that causal
+            # result and enter the shared admission transaction immediately;
+            # asking the user to choose the same address again only lets the
+            # short-lived scan session expire before verification starts.
+            #
+            # A passive/inventory session has no such route authority (its TCP
+            # peer may be a router/NAT address), so it still needs the explicit
+            # editable route step below.  No PN<->peer-IP guess is introduced.
+            callback_route = getattr(result, "callback_route", None)
+            if type(callback_route) is CallbackRecoveryRoute:
+                admission = await self._async_admit_selected_scan_result(
+                    callback_route=callback_route
+                )
+                if admission is not None:
+                    return admission
+            return await self.async_step_scan_collector_route()
+        if self._selected_result is not None and self._is_route_scan_result(
+            self._selected_result
+        ):
+            # A UDP reply proves only that this ROUTE is worth trying; it does
+            # not identify a collector and can never enter entry creation.  The
+            # user's selection explicitly asks to identify that address, so
+            # continue through the existing callback identity + controlled
+            # recovery transaction with the route prefilled.  No PN/peer-IP
+            # association and no second matcher is introduced here.
+            route_address = str(
+                self._selected_result.collector.ip
+                if self._selected_result.collector is not None
+                else ""
+            ).strip()
+            self._prepare_scan_route_manual(
+                address=route_address,
+            )
+            return await self.async_step_manual()
+        if self._selected_result_needs_driver_choice():
+            return await self.async_step_driver_choice()
+        return await self.async_step_detection_summary()
+
+    def _scan_collector_route_options(
+        self, result: OnboardingResult
+    ) -> dict[str, str]:
+        """Return independent route hints for one identified scan session.
+
+        No item is associated with the PN here.  UDP targets and the TCP peer
+        are separate observations; selecting one merely authorizes a callback
+        identity attempt whose expected PN is already fixed by ``result``.
+        """
+
+        options: dict[str, str] = {}
+
+        def add(address: object, *, peer: bool = False) -> None:
+            if type(address) is not str:
+                return
+            normalized = address.strip()
+            if not normalized or normalized != address or not _is_ipv4(normalized):
+                return
+            if normalized in options:
+                return
+            if peer:
+                options[normalized] = self._tr(
+                    "common.dynamic.scan_route_peer_option",
+                    "{address} — source of the incoming connection (may be a router)",
+                    {"address": normalized},
+                )
+            else:
+                options[normalized] = self._tr(
+                    "common.dynamic.scan_route_responded_option",
+                    "{address} — address responded during the scan",
+                    {"address": normalized},
+                )
+
+        # Preserve every address observation as its own choice.  A route carried
+        # by an active result is still only an observed target here, never an
+        # automatic PN<->IP association.
+        route = result.callback_route
+        if type(route) is CallbackRecoveryRoute:
+            add(route.trigger_target_ip)
+        for candidate in self._autodetect_results.values():
+            if not self._is_route_scan_result(candidate):
+                continue
+            collector = candidate.collector
+            add(collector.ip if collector is not None else "")
+
+        observed = result.observed_session
+        if type(observed) is ObservedCollectorSession:
+            add(observed.peer_hint, peer=True)
+        elif result.collector is not None:
+            add(result.collector.ip, peer=True)
+        return options
+
+    def _prepare_scan_route_manual(
+        self,
+        *,
+        address: str,
+    ) -> None:
+        """Prepare identification of one route-only scan result."""
+
+        self._release_unadopted_recovery_outcome()
+        self._release_verification_claim()
+        self._callback_continuation = _LegacyCallbackContinuation(self)
+        self._verification_expected_pn = ""
+        self._verification_old_session_id = ""
+        self._manual_declared_expected_pn = None
+        self._manual_verified_full_pn = ""
+        self._manual_verified_session_id = ""
+        self._manual_silent_offer = None
+        self._manual_result = None
+        self._manual_preselected_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+        self._manual_scan_route_address = address
+        self._manual_defaults[CONF_COLLECTOR_IP] = address
+
+    def _scan_callback_route(
+        self,
+        *,
+        result: OnboardingResult,
+        observed: ObservedCollectorSession,
+        address: str,
+    ) -> CallbackRecoveryRoute:
+        """Build the typed route selected for an already identified session."""
+
+        existing = result.callback_route
+        if type(existing) is CallbackRecoveryRoute:
+            return CallbackRecoveryRoute(
+                bind_ip=existing.bind_ip,
+                trigger_target_ip=address,
+                trigger_udp_port=existing.trigger_udp_port,
+                advertised_ha_host=existing.advertised_ha_host,
+                advertised_ha_port=existing.advertised_ha_port,
+                listener_port=observed.listener_port,
+            )
+
+        values = dict(self._auto_connection_defaults(), **self._auto_config)
+        spec = build_connection_spec_from_values(
+            self._current_connection_type(), values
+        )
+        return CallbackRecoveryRoute(
+            bind_ip=spec.server_ip,
+            trigger_target_ip=address,
+            trigger_udp_port=spec.udp_port,
+            advertised_ha_host=spec.effective_advertised_server_ip,
+            advertised_ha_port=spec.effective_advertised_tcp_port,
+            listener_port=observed.listener_port,
+        )
+
+    @_with_translation_bundle
+    async def async_step_scan_collector_route(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose a reachable route for one strongly identified scan session."""
+
+        result = self._selected_result
+        observed = getattr(result, "observed_session", None) if result else None
+        if type(observed) is not ObservedCollectorSession:
+            return await self.async_step_scan_results()
+
+        options = self._scan_collector_route_options(result)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            raw_address = user_input.get(CONF_COLLECTOR_IP)
+            if (
+                type(raw_address) is not str
+                or raw_address != raw_address.strip()
+                or not _is_ipv4(raw_address)
+            ):
+                errors[CONF_COLLECTOR_IP] = "invalid_ip"
+            else:
+                route = self._scan_callback_route(
+                    result=result,
+                    observed=observed,
+                    address=raw_address,
+                )
+                # Preserve the explicit choice for the failure/edit path.  It
+                # remains a scan-origin attempt, so even the manual fallback is
+                # barred from creating a Pending Device.
+                self._manual_scan_route_address = raw_address
+                self._manual_defaults[CONF_COLLECTOR_IP] = raw_address
+                admission = await self._async_admit_selected_scan_result(
+                    callback_route=route
+                )
+                if admission is not None:
+                    return admission
+                errors[CONF_COLLECTOR_IP] = "invalid_selection"
+
+        selector = SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=address, label=label)
+                    for address, label in options.items()
+                ],
+                custom_value=True,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        )
+        field = (
+            vol.Required(CONF_COLLECTOR_IP, default=next(iter(options)))
+            if len(options) == 1
+            else vol.Required(CONF_COLLECTOR_IP)
+        )
+        return self.async_show_form(
+            step_id="scan_collector_route",
+            data_schema=vol.Schema({field: selector}),
+            errors=errors,
+            description_placeholders={
+                "collector_pn": observed.collector_pn,
+                "peer_ip": observed.peer_hint
+                or self._tr("common.dynamic.unknown", "Unknown"),
+                "route_candidates": "\n".join(
+                    f"- {label}" for label in options.values()
+                )
+                or self._tr(
+                    "common.dynamic.scan_route_no_candidates",
+                    "No route address was observed; enter one manually.",
+                ),
+            },
         )
 
     # ---- steps: connection-strategy verification (passive discovery) ----
@@ -2512,6 +2790,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             return await self._async_continue_after_verification()
         if user_input is not None:
             return await self.async_step_verify_connection_progress()
+        verification_values = {
+            "collector_pn": str(transaction.expected_pn or ""),
+            "peer_ip": str(transaction.peer_hint or ""),
+            "selected_route": str(
+                transaction.request.callback_route.trigger_target_ip
+                if transaction.request.callback_route is not None
+                else ""
+            ),
+        }
+        verification_explanation = (
+            self._tr(
+                (
+                    "common.dynamic.verify_active_callback_retry_explanation"
+                    if transaction.state == "callback_ready"
+                    else "common.dynamic.verify_active_callback_explanation"
+                ),
+                (
+                    "Checking address **{selected_route}** again for collector **{collector_pn}**. Home Assistant will verify the connection and its recovery after a restart."
+                    if transaction.state == "callback_ready"
+                    else "Collector **{collector_pn}** was found. Home Assistant will verify the selected address **{selected_route}** and make sure the same collector restores its connection after a restart."
+                ),
+                verification_values,
+            )
+            if transaction.request.callback_route is not None
+            else self._tr(
+                "common.dynamic.verify_inbound_explanation",
+                "Collector **{collector_pn}** was found at {peer_ip}. Home Assistant will restart it and verify that it reconnects on its own. After the current connection closes, Home Assistant waits up to one minute for the replacement.",
+                verification_values,
+            )
+        )
         return self.async_show_form(
             step_id="verify_connection",
             data_schema=vol.Schema({}),
@@ -2520,6 +2828,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 # is only an editable route hint, never identity.
                 "collector_pn": str(transaction.expected_pn or ""),
                 "peer_ip": str(transaction.peer_hint or ""),
+                "verification_explanation": verification_explanation,
             },
         )
 
@@ -2533,14 +2842,24 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         transaction = self._admission_transaction
         task = self._admission_task
         if task is None and transaction is not None:
-            task = self.hass.async_create_task(transaction.async_run())
+            if transaction.request.callback_route is not None:
+                task = self.hass.async_create_task(
+                    self._async_run_observed_callback_admission(transaction)
+                )
+            else:
+                task = self.hass.async_create_task(transaction.async_run())
             self._admission_task = task
         if task is None or task.done():
             self._admission_task = None
             return self.async_show_progress_done(next_step_id="verify_connection_result")
         return self.async_show_progress(
             step_id="verify_connection_progress",
-            progress_action="verify_connection",
+            progress_action=(
+                "active_scan_recovery_verify"
+                if transaction is not None
+                and transaction.request.callback_route is not None
+                else "verify_connection"
+            ),
             progress_task=task,
             description_placeholders={
                 "collector_pn": str(
@@ -2548,6 +2867,75 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 ),
             },
         )
+
+    async def _async_run_observed_callback_admission(
+        self, transaction: CollectorAdmissionTransaction
+    ) -> None:
+        """Prove the selected route, then prove recovery through that route.
+
+        A still-live exact scan session is adopted without a second trigger and
+        enters the controlled recovery transaction, whose post-reset callback
+        proves the selected route.  If that scan session has already closed, its
+        zero-send bootstrap is followed immediately by one normal addressed
+        identity attempt.  Every accepted session must carry the same PN.
+        """
+
+        self._admission_callback_error = ""
+        route = transaction.request.callback_route
+        if type(route) is not CallbackRecoveryRoute:
+            self._admission_callback_error = "callback_route_invalid"
+            return
+        try:
+            bootstrap_probe = None
+            if transaction.state == "ready":
+                transaction.begin_observed_callback_continuation()
+                bootstrap_probe = transaction.observed_wire_probe_intent()
+            elif transaction.state != "callback_ready":
+                raise RuntimeError("selected_route_transaction_not_retryable")
+            context = transaction.identity_context
+
+            async def _run_identity(probe: object = None) -> CallbackIdentityOutcome:
+                return await transaction.async_run_identity(
+                    CallbackIdentityRequest(
+                        server_ip=route.bind_ip,
+                        tcp_port=route.listener_port,
+                        udp_port=route.trigger_udp_port,
+                        target_ip=route.trigger_target_ip,
+                        strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                        expected_pn=context.expected_pn,
+                        old_session_id=context.old_session_id,
+                        owner_prefix="active_scan_identity",
+                        bootstrap_probe=probe,
+                    )
+                )
+
+            identity = await _run_identity(bootstrap_probe)
+            if (
+                bootstrap_probe is not None
+                and not identity.identity_certified
+                and identity.result == IDENTITY_SILENT_SESSION_STALE
+            ):
+                # The scan's exact socket disappeared between rendering the
+                # results and the user's confirmation.  That bootstrap sent
+                # zero datagrams and owns nothing, so immediately perform the
+                # normal addressed identity attempt the user authorized instead
+                # of presenting an instant failure before testing the selected
+                # route.  No other failure (wire, conflict, mismatch, ambiguity)
+                # may take this continuation.
+                context = transaction.identity_context
+                identity = await _run_identity()
+            if not identity.identity_certified:
+                self._admission_callback_error = identity.result or "callback_timeout"
+                return
+            transaction.adopt_certified_pn(identity.collector_pn)
+            outcome = await transaction.async_run_recovery(route)
+            if outcome is None:
+                self._admission_callback_error = "recovery_session_unavailable"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Active-scan collector admission failed")
+            self._admission_callback_error = "recovery_transaction_failed"
 
     async def async_step_verify_connection_result(
         self,
@@ -2569,6 +2957,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         if abort is not None:
             return abort
+        if transaction.request.callback_route is not None:
+            outcome = transaction.recovery_outcome
+            if outcome is not None and (
+                outcome.callback_verified or outcome.inbound_recovered
+            ):
+                consumed = transaction.consume_recovery_outcome()
+                adopted = bool(
+                    consumed is not None and transaction.adopt_recovery(consumed)
+                )
+                if adopted:
+                    self._verified_connection_strategy = (
+                        CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                        if outcome.callback_verified
+                        else CONNECTION_STRATEGY_INBOUND
+                    )
+                    self._verified_strategy_evidence = ""
+                    return await self._async_continue_after_verification()
+                self._admission_callback_error = "recovery_ownership_unavailable"
+            else:
+                self._admission_callback_error = (
+                    self._admission_callback_error
+                    or str(getattr(outcome, "failure_reason", "") or "")
+                    or "callback_recovery_timeout"
+                )
+                transaction.release_unadopted_recovery()
+            logger.info(
+                "Active-scan recovery not confirmed (%s)",
+                self._admission_callback_error,
+            )
+            return await self.async_step_verify_connection_failed()
         if transaction.verified:
             # The strategy is the INTENT of this passive-discovery inbound flow;
             # the verifier proved RECOVERY, not strategy. No legacy
@@ -2613,7 +3031,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         del user_input
         transaction = self._admission_transaction
-        failure_reason = transaction.failure_reason if transaction is not None else ""
+        failure_reason = (
+            self._admission_callback_error
+            or (transaction.failure_reason if transaction is not None else "")
+        )
         return self.async_show_menu(
             step_id="verify_connection_failed",
             menu_options=[
@@ -2644,6 +3065,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         del user_input
         transaction = self._admission_transaction
+        if transaction is not None and transaction.request.callback_route is not None:
+            # Retry the SAME explicitly selected route.  The failed identity or
+            # recovery attempt has already returned the transaction to
+            # callback_ready and released its owner.  Re-scanning here was both
+            # surprising UX and discarded the route the user had just chosen.
+            # The next progress task performs a full new addressed identity
+            # attempt; it never reuses the previous proof/session.
+            self._admission_callback_error = ""
+            self._admission_task = None
+            return await self.async_step_verify_connection()
         if transaction is not None:
             transaction.reset_for_retry()
         self._admission_task = None
@@ -2671,6 +3102,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         transaction = self._admission_transaction
         self._admission_task = None
         if transaction is not None:
+            if transaction.request.callback_route is not None:
+                # The automatic recovery released its failed outcome back to
+                # CALLBACK_READY. Keep the SAME transaction/identity context;
+                # the manual submit runs a full new one-trigger attempt through
+                # the shared continuation, with no legacy PN/session hand-across.
+                self._manual_preselected_strategy = (
+                    CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+                )
+                return await self.async_step_manual()
             # Clear the completed inbound attempt and enter the callback-ready
             # lifecycle IN the same transaction (its inbound owner was already
             # released and channels closed on the failure path). No hand-across,
@@ -3220,6 +3660,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         attempts=1,
                         enrich_runtime_details=False,
                         total_timeout=detector_timeout,
+                        # This flow renders an inventory, not a one-device
+                        # shortcut.  Let every target already discovered in the
+                        # bounded quick-scan batch finish; otherwise the first
+                        # inverter match cancels the sibling route and makes
+                        # .51/.55 alternate between scans.
+                        return_after_first_match=False,
                         skip_probe_ips=skip_probe_ips,
                     )
         except TimeoutError:
@@ -3364,7 +3810,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """One screen: pick a found device directly, or pick a follow-up action."""
 
-        available_results = self._available_autodetect_results()
+        selectable_results = self._selectable_autodetect_results()
 
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -3373,7 +3819,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 return await self.async_step_refresh_scan()
             if selection == _SCAN_RESULTS_ACTION_ADVANCED:
                 return await self.async_step_advanced_setup()
-            result = available_results.get(selection)
+            result = selectable_results.get(selection)
             if result is None:
                 errors["base"] = "invalid_selection"
             elif self._existing_entry_for_result(result) is not None:
@@ -3383,16 +3829,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else:
                 self._set_selected_result(result)
                 self._detection_summary_context = "auto"
-                admission = await self._async_admit_selected_scan_result()
-                if admission is not None:
-                    return admission
-                if self._selected_result_needs_driver_choice():
-                    return await self.async_step_driver_choice()
-                return await self.async_step_detection_summary()
+                return await self._async_continue_selected_scan_result()
 
         options: dict[str, str] = {
             key: self._result_label(result)
-            for key, result in available_results.items()
+            for key, result in selectable_results.items()
         }
         options[_SCAN_RESULTS_ACTION_REFRESH] = self._refresh_scan_action_label()
         options[_SCAN_RESULTS_ACTION_ADVANCED] = self._scan_action_label(
@@ -3492,13 +3933,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not self._autodetect_results:
             return await self.async_step_auto()
 
-        available_results = self._available_autodetect_results()
-        if not available_results:
+        selectable_results = self._selectable_autodetect_results()
+        if not selectable_results:
             return await self.async_step_scan_results()
 
         errors: dict[str, str] = {}
-        if user_input is None and len(available_results) == 1:
-            candidate = next(iter(available_results.values()))
+        if user_input is None and len(selectable_results) == 1:
+            candidate = next(iter(selectable_results.values()))
             if _result_indicates_inverter_link_down(candidate):
                 # Collector answered but the inverter link is down: never
                 # classify, let the user fix cabling/power and rescan.
@@ -3506,13 +3947,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else:
                 self._set_selected_result(candidate)
                 self._detection_summary_context = "auto"
-                if self._selected_result_needs_driver_choice():
-                    return await self.async_step_driver_choice()
-                return await self.async_step_detection_summary()
+                return await self._async_continue_selected_scan_result()
 
         if user_input is not None:
             selected_key = user_input[CONF_RESULT_KEY]
-            result = available_results.get(selected_key)
+            result = selectable_results.get(selected_key)
             if result is None:
                 errors["base"] = "invalid_selection"
             elif self._existing_entry_for_result(result) is not None:
@@ -3522,13 +3961,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else:
                 self._set_selected_result(result)
                 self._detection_summary_context = "auto"
-                if self._selected_result_needs_driver_choice():
-                    return await self.async_step_driver_choice()
-                return await self.async_step_detection_summary()
+                return await self._async_continue_selected_scan_result()
 
         options = {
             key: self._result_label(result)
-            for key, result in available_results.items()
+            for key, result in selectable_results.items()
         }
         data_schema = vol.Schema(
             {
@@ -3692,6 +4129,30 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "common.dynamic.detection_tier_driver_details",
                 "The device was identified by its protocol driver. The standard "
                 "sensor set for this driver will be added.",
+            )
+        elif (verified_route := self._verified_callback_route_for_result(result)) is not None:
+            observed = result.observed_session
+            peer_ip = (
+                observed.peer_hint
+                if type(observed) is ObservedCollectorSession and observed.peer_hint
+                else self._tr("common.dynamic.unknown", "Unknown")
+            )
+            headline = self._tr(
+                "common.dynamic.detection_tier_verified_callback_headline",
+                "Collector verified",
+            )
+            details = self._tr(
+                "common.dynamic.detection_tier_verified_callback_details",
+                "The callback address **{callback_address}** and collector PN were "
+                "verified. The incoming connection was observed from "
+                "**{peer_ip}**, which may be a router/NAT address.\n\n"
+                "The inverter was not identified during setup. You can add the "
+                "collector now; runtime detection will continue after the entry "
+                "takes ownership of the verified session.",
+                {
+                    "callback_address": verified_route.trigger_target_ip,
+                    "peer_ip": peer_ip,
+                },
             )
         elif self._result_is_passive_callback(result):
             headline = self._tr(
@@ -4368,6 +4829,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         admission-origin callback -- so the note shows for both.
         """
 
+        scan_route = getattr(self, "_manual_scan_route_address", "")
+        if scan_route:
+            return self._tr(
+                "common.dynamic.manual_scan_route_stage_note",
+                "Step 1 of 2: identify the collector reachable at **{collector_ip}**. After it answers, the next step verifies recovery before the device is saved.",
+                {"collector_ip": scan_route},
+            )
         if not self._callback_continuation.identity_context.expected_pn:
             return ""
         return self._tr(
@@ -4408,7 +4876,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         if self._can_offer_smartess_cloud_assist(self._manual_result):
             menu_options.append("manual_smartess_cloud_assist")
-        menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
+        if self._manual_pending_allowed():
+            menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
 
         return self.async_show_menu(
             step_id="manual_confirm",
@@ -4524,6 +4993,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         del user_input
         if not self._manual_config:
             return await self.async_step_manual()
+        if not self._manual_pending_allowed():
+            # A scan result is evidence to identify NOW, not explicit intent to
+            # create a future collector.  Guard the handler as well as the menu
+            # so a stale/direct flow action cannot bypass the policy.
+            return await self.async_step_manual_confirm()
         if (
             self._callback_continuation.certified_pn
             and self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
@@ -4564,14 +5038,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         del user_input
         if not self._manual_config or not self._callback_continuation.certified_pn:
             return await self.async_step_manual()
+        menu_options = [
+            "manual_recovery_verify",
+            MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+            MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+        ]
+        if self._manual_pending_allowed():
+            menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
         return self.async_show_menu(
             step_id="manual_recovery_confirm",
-            menu_options=[
-                "manual_recovery_verify",
-                MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
-                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
-                MANUAL_CONFIRM_ACTION_CREATE_PENDING,
-            ],
+            menu_options=menu_options,
             description_placeholders={
                 "collector_pn": self._callback_continuation.certified_pn,
                 "collector_ip": str(
@@ -4788,13 +5264,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         del user_input
         self._callback_continuation.release_unadopted_recovery()
+        menu_options = [
+            MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+            MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+        ]
+        if self._manual_pending_allowed():
+            menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
         return self.async_show_menu(
             step_id="manual_recovery_failed",
-            menu_options=[
-                MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
-                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
-                MANUAL_CONFIRM_ACTION_CREATE_PENDING,
-            ],
+            menu_options=menu_options,
             description_placeholders={
                 "collector_pn": self._callback_continuation.certified_pn
                 or self._callback_continuation.identity_context.expected_pn,
@@ -5107,7 +5585,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         existing_entry = self._existing_entry_for_result(result)
         if existing_entry is not None:
             return self.async_abort(reason="already_configured")
-        collector_ip = result.collector.ip if result.collector is not None else ""
+        verified_callback_route = self._verified_callback_route_for_result(result)
+        observed_peer_ip = result.collector.ip if result.collector is not None else ""
+        collector_ip = (
+            verified_callback_route.trigger_target_ip
+            if verified_callback_route is not None
+            else observed_peer_ip
+        )
         collector_pn = self._collector_pn_for_result(result)
         driver_hint = (
             result.match.driver_key
@@ -5132,14 +5616,21 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         connection_type = result.connection_type or self._current_connection_type()
         collector_capabilities = _result_collector_capabilities(result)
         result_connection_mode = str(result.connection_mode or "").strip()
-        is_passive_callback = result_connection_mode == "callback_listener"
+        is_verified_callback_route = verified_callback_route is not None
+        is_passive_callback = bool(
+            not is_verified_callback_route
+            and result_connection_mode == "callback_listener"
+        )
         is_callback_listener = bool(
-            is_passive_callback
-            or (
-                self._collector_endpoint_bind_applied
-                and (
-                    collector_capabilities.ha_only_required
-                    or self._collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
+            not is_verified_callback_route
+            and (
+                is_passive_callback
+                or (
+                    self._collector_endpoint_bind_applied
+                    and (
+                        collector_capabilities.ha_only_required
+                        or self._collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
+                    )
                 )
             )
         )
@@ -5149,6 +5640,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else collector_ip or self._auto_config.get(CONF_COLLECTOR_IP, "")
         )
         connection_overrides = dict(self._auto_config)
+        if is_verified_callback_route:
+            # The terminal callback proof, not the TCP peer, owns the runtime
+            # trigger target. Pin it over every stale scan/default value.
+            connection_overrides[CONF_COLLECTOR_IP] = collector_ip
         if is_passive_callback and collector_pn:
             connection_overrides.pop(CONF_COLLECTOR_IP, None)
         connection_settings = with_driver_hint(
@@ -5877,6 +6372,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         driver_hint = DRIVER_HINT_AUTO
         if result is not None and result.collector is not None:
             collector_ip = result.collector.ip
+        scan_route_address = getattr(self, "_manual_scan_route_address", "")
+        if scan_route_address:
+            collector_ip = scan_route_address
         if result is not None and result.match is not None:
             driver_hint = result.match.driver_key
         defaults = self._connection_branch().build_manual_base_values(
@@ -5894,6 +6392,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             defaults.update(flat)
         self._manual_defaults = defaults
         return defaults
+
+    def _manual_pending_allowed(self) -> bool:
+        """Whether this flow was explicitly started as a future-device setup."""
+
+        return not bool(getattr(self, "_manual_scan_route_address", ""))
 
     def _normalize_current_server_ip(self, values: MutableMapping[str, Any]) -> None:
         if not self._local_ip:
@@ -6163,7 +6666,47 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         result = self._selected_result
         if result is None or result.collector is None:
             return ""
+        verified_route = self._verified_callback_route_for_result(result)
+        if verified_route is not None:
+            return verified_route.trigger_target_ip
         return str(result.collector.ip or result.collector.target_ip or "").strip()
+
+    def _verified_callback_route_for_result(
+        self, result: OnboardingResult
+    ) -> CallbackRecoveryRoute | None:
+        """Return the callback route earned by this result's terminal proof.
+
+        The selected scan result still describes the physical TCP observation,
+        whose peer may be a router/NAT address. It must never become the
+        operational callback target merely because verification completed.
+        Conversely, an offered/selected route is only a hint until the same
+        transaction returns a strict callback proof for that exact route.
+        """
+
+        transaction = self._admission_transaction
+        if (
+            result is not self._selected_result
+            or type(transaction) is not CollectorAdmissionTransaction
+        ):
+            return None
+        route = transaction.request.callback_route
+        if type(route) is not CallbackRecoveryRoute or route.invalid_reason():
+            return None
+        terminal = transaction.terminal_input
+        proof = terminal.callback_proof
+        if proof is None:
+            return None
+        if (
+            not pn_is_same_identity(
+                terminal.collector_pn, transaction.expected_pn
+            )
+            or not pn_is_same_identity(proof.collector_pn, transaction.expected_pn)
+            or proof.trigger_target != route.trigger_target
+            or proof.advertised_ha_endpoint != route.advertised_ha_endpoint
+            or proof.listener_port != route.listener_port
+        ):
+            return None
+        return route
 
     def _selected_result_is_passive_callback(self) -> bool:
         result = self._selected_result
@@ -8035,14 +8578,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 {"peer_label": self._peer_label()},
             )
 
-        return {
-            "probe_summary": probe_summary,
-            "collector_ip": collector_ip or self._tr("common.dynamic.unknown", "Unknown"),
-            "collector_pn": collector_pn or self._tr("common.dynamic.unknown", "Unknown"),
-            "model_name": model_name,
-            "serial_number": serial_number,
-            "smartess_cloud_summary": self._smartess_cloud_summary(result),
-            "control_summary": self._tr(
+        if self._manual_pending_allowed():
+            control_summary = self._tr(
                 (
                     "common.dynamic.manual_control_summary_smartess_hint"
                     if smartess_hint_available
@@ -8054,8 +8591,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     else "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until the {peer_label} connects and detection completes."
                 ),
                 {"peer_label": self._peer_label()},
-            ),
-            "next_actions_hint": self._tr(
+            )
+            next_actions_hint = self._tr(
                 "common.dynamic.manual_probe_next_actions",
                 "Choose **{probe_again_action_label}** to test again, **{edit_settings_action_label}** to change the values, or **{create_pending_action_label}** to save the read-only Pending Device now.",
                 {
@@ -8072,7 +8609,36 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         "Save Pending Device",
                     ),
                 },
-            ),
+            )
+        else:
+            control_summary = self._tr(
+                "common.dynamic.scan_route_no_pending_summary",
+                "This address came from the current scan. It must identify a collector now; it will never create a Pending Device.",
+            )
+            next_actions_hint = self._tr(
+                "common.dynamic.scan_route_no_pending_actions",
+                "Choose **{probe_again_action_label}** to test this address again or **{edit_settings_action_label}** to choose another address.",
+                {
+                    "probe_again_action_label": self._manual_confirm_action_label(
+                        MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+                        "Probe again",
+                    ),
+                    "edit_settings_action_label": self._manual_confirm_action_label(
+                        MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+                        "Edit settings",
+                    ),
+                },
+            )
+
+        return {
+            "probe_summary": probe_summary,
+            "collector_ip": collector_ip or self._tr("common.dynamic.unknown", "Unknown"),
+            "collector_pn": collector_pn or self._tr("common.dynamic.unknown", "Unknown"),
+            "model_name": model_name,
+            "serial_number": serial_number,
+            "smartess_cloud_summary": self._smartess_cloud_summary(result),
+            "control_summary": control_summary,
+            "next_actions_hint": next_actions_hint,
         }
 
     @staticmethod
@@ -8106,6 +8672,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collector = result.collector
         collector_ip = collector.ip if collector is not None else self._tr("common.dynamic.unknown", "Unknown")
         status_label = self._result_status_label(result)
+        if self._is_route_scan_result(result):
+            return self._tr(
+                "common.dynamic.result_label_identify_route",
+                "Identify collector at {collector_ip}",
+                {"collector_ip": collector_ip},
+            )
         if match is None:
             suffix = (
                 self._tr(
@@ -8134,6 +8706,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         "incoming collector",
                     )
                 )
+                if (
+                    type(result.observed_session) is ObservedCollectorSession
+                    and self._existing_entry_for_result(result) is None
+                ):
+                    return self._tr(
+                        "common.dynamic.result_label_identity_needs_route",
+                        "PN {collector_pn} — choose a reachable collector address (connection from {peer_ip})",
+                        {
+                            "collector_pn": self._collector_pn_for_result(result),
+                            "peer_ip": collector_ip,
+                        },
+                    )
                 return self._tr(
                     "common.dynamic.result_label_incoming_unmatched",
                     "{status_label}: {collector_identity} ({suffix}; connection from {peer_ip})",
@@ -8142,6 +8726,18 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         "collector_identity": collector_identity,
                         "suffix": suffix,
                         "peer_ip": collector_ip,
+                    },
+                )
+            collector_pn = self._collector_pn_for_result(result)
+            if collector_pn:
+                return self._tr(
+                    "common.dynamic.result_label_unmatched_identified",
+                    "{status_label}: PN {collector_pn} — {collector_ip} ({suffix})",
+                    {
+                        "status_label": status_label,
+                        "collector_pn": collector_pn,
+                        "collector_ip": collector_ip,
+                        "suffix": suffix,
                     },
                 )
             return self._tr(
@@ -8248,11 +8844,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collector = result.collector
         match = result.match
         assist_state = self._smartess_cloud_assist_state_for_result(result)
-        collector_ip = (
+        observed_peer_ip = (
             collector.ip if collector is not None and collector.ip else ""
         ) or (
             collector.target_ip if collector is not None and collector.target_ip else ""
         ) or self._tr("common.dynamic.unknown", "Unknown")
+        verified_callback_route = self._verified_callback_route_for_result(result)
+        collector_ip = (
+            verified_callback_route.trigger_target_ip
+            if verified_callback_route is not None
+            else observed_peer_ip
+        )
         not_available_yet = self._tr("common.dynamic.not_available_yet", "Not available yet")
         collector_pn = self._collector_pn_for_result(result)
         collector_info = collector.collector if collector is not None else None
@@ -8269,23 +8871,45 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             unit_key="common.dynamic.onboarding_confirm_power_value",
             unit_fallback="{value} W",
         )
-        collector_confirm_table = self._onboarding_confirm_table(
-            "common.dynamic.onboarding_confirm_collector_heading",
-            "**Collector**",
-            [
-                (
-                    "common.dynamic.onboarding_confirm_collector_pn_label",
-                    "Collector PN",
-                    collector_pn or not_available_yet,
-                ),
+        collector_rows = [
+            (
+                "common.dynamic.onboarding_confirm_collector_pn_label",
+                "Collector PN",
+                collector_pn or not_available_yet,
+            ),
+        ]
+        if verified_callback_route is not None:
+            collector_rows.extend(
+                [
+                    (
+                        "common.dynamic.onboarding_confirm_callback_route_label",
+                        "Callback address",
+                        verified_callback_route.trigger_target_ip,
+                    ),
+                    (
+                        "common.dynamic.onboarding_confirm_connection_source_label",
+                        "Incoming connection source",
+                        observed_peer_ip,
+                    ),
+                ]
+            )
+        else:
+            collector_rows.append(
                 (
                     "common.dynamic.onboarding_confirm_collector_ip_label",
                     "Collector IP",
                     collector_ip,
-                ),
-            ],
+                )
+            )
+        collector_confirm_table = self._onboarding_confirm_table(
+            "common.dynamic.onboarding_confirm_collector_heading",
+            "**Collector**",
+            collector_rows,
         )
-        if match is None and self._result_is_passive_callback(result):
+        if match is None and (
+            verified_callback_route is not None
+            or self._result_is_passive_callback(result)
+        ):
             inverter_confirm_table = self._tr(
                 "common.dynamic.onboarding_confirm_inverter_pending_after_add",
                 "**Inverter**\n\nThe collector is already connected to Home Assistant. "
@@ -8510,11 +9134,27 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 collector is not None
                 and (
                     collector.connected
-                    or bool(collector.udp_reply)
                     or (collector_info is not None and collector_info.collector_pn)
                 )
             )
         )
+
+    @staticmethod
+    def _is_route_scan_result(result: OnboardingResult) -> bool:
+        """Return whether the result is only an address worth identifying."""
+
+        return scan_result_status_code(result) == "collector_replied"
+
+    def _selectable_autodetect_results(self) -> dict[str, OnboardingResult]:
+        """Return identified devices plus route-identification actions."""
+
+        return {
+            key: result
+            for key, result in self._sorted_autodetect_items()
+            if self._is_addable_scan_result(result)
+            or self._is_route_scan_result(result)
+            if self._existing_entry_for_result(result) is None
+        }
 
     def _available_autodetect_results(self) -> dict[str, OnboardingResult]:
         return {
@@ -8831,7 +9471,15 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             details = []
             if collector_pn:
                 details.append(f"PN {collector_pn}")
-            if is_passive_callback:
+            if status_code == "collector_replied":
+                details.append(
+                    self._tr(
+                        "common.dynamic.scan_line_route_address",
+                        "address {collector_ip}",
+                        {"collector_ip": collector_ip},
+                    )
+                )
+            elif is_passive_callback:
                 details.append(
                     self._tr(
                         "common.dynamic.scan_line_connection_from",
@@ -8839,6 +9487,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         {"peer_ip": collector_ip},
                     )
                 )
+                if existing_entry is None:
+                    details.append(
+                        self._tr(
+                            "common.dynamic.scan_line_route_required",
+                            "choose a reachable collector address",
+                        )
+                    )
             else:
                 details.append(f"{self._peer_label()} {collector_ip}")
             if (
@@ -8891,7 +9546,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             "detection_timeout": self._tr("common.dynamic.status_detection_timeout", "Detection ran out of time"),
             "smartess_hint": self._tr("common.dynamic.status_smartess_hint", "SmartESS hint"),
             "collector_only": self._tr("common.dynamic.status_collector_only", "Collector only"),
-            "collector_replied": self._tr("common.dynamic.status_collector_replied", "Collector replied"),
+            "collector_replied": self._tr("common.dynamic.status_collector_replied", "Address replied"),
             "unknown": self._tr("common.dynamic.status_unknown", "Unknown"),
         }.get(status_code, self._tr("common.dynamic.status_unknown", "Unknown"))
 
@@ -10768,10 +11423,40 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         getattr(result.outcome, "owner_certification", None)
                     )
                 )
+                runtime_activated = False
                 if (
                     lifecycle["activation_completed"]
                     and self._config_entry.state is ConfigEntryState.LOADED
                     and session_accepted
+                ):
+                    coordinator = getattr(self._config_entry, "runtime_data", None)
+                    activate = getattr(
+                        coordinator,
+                        "async_activate_proven_callback_session",
+                        None,
+                    )
+                    if callable(activate):
+                        try:
+                            runtime_activated = bool(
+                                await activate(
+                                    getattr(
+                                        result.outcome,
+                                        "owner_certification",
+                                        None,
+                                    )
+                                )
+                            )
+                        except Exception as exc:
+                            logger.info(
+                                "Activation of the proven callback session did "
+                                "not complete: %s",
+                                exc,
+                            )
+                if (
+                    lifecycle["activation_completed"]
+                    and self._config_entry.state is ConfigEntryState.LOADED
+                    and session_accepted
+                    and runtime_activated
                 ):
                     self._transition_error = ""
                     self._transition_activation_incomplete = False
@@ -10923,7 +11608,35 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             raise
         except Exception as exc:
             logger.info("Activation reload of proven entry did not complete: %s", exc)
+        runtime_activated = False
         if self._config_entry.state is ConfigEntryState.LOADED:
+            try:
+                coordinator = getattr(self._config_entry, "runtime_data", None)
+                ensure_ready = getattr(
+                    coordinator,
+                    "async_ensure_callback_runtime_ready",
+                    None,
+                )
+                runtime_activated = bool(
+                    callable(ensure_ready)
+                    and await ensure_ready(
+                        timeout=(
+                            DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_recovery_session_wait
+                        )
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.info(
+                    "Activation retry loaded the entry but did not activate "
+                    "its proven callback session: %s",
+                    exc,
+                )
+        if (
+            self._config_entry.state is ConfigEntryState.LOADED
+            and runtime_activated
+        ):
             self._transition_activation_incomplete = False
             self._transition_result = None
             self._transition_error = ""

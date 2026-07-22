@@ -109,6 +109,7 @@ _SESSION_POLL_INTERVAL = 0.25
 
 # The only provenance an onboarding wire-probe intent may carry.
 BOOTSTRAP_SOURCE_EXPLICIT_USER = "explicit_user_selection"
+BOOTSTRAP_SOURCE_OBSERVED_SCAN = "observed_active_scan"
 
 # The bound silent socket disappeared before the user's bootstrap continuation
 # could run its single read-only query. A NEW attempt happens only on an
@@ -198,6 +199,47 @@ class OnboardingWireProbeIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedSessionWireProbeIntent:
+    """Zero-send identity capability for one exact observed scan session.
+
+    This is not identity evidence and not a protocol guess. It is bound to the
+    active scan's exact session id and observed wire, and lets the ONE callback
+    identity transaction claim/re-read that socket without another trigger.
+    ``collector_pn`` and ``identity_source`` are only the observation the
+    authoritative read must reconcile with; a weak heartbeat source is allowed
+    precisely so FC=2/DTUPN can upgrade it on that same socket. Only the read's
+    strong result may certify identity.
+    """
+
+    protocol: str
+    session_id: str
+    collector_pn: str
+    identity_source: str
+    source: str = BOOTSTRAP_SOURCE_OBSERVED_SCAN
+
+    def __post_init__(self) -> None:
+        if type(self.protocol) is not str or self.protocol not in (
+            WIRE_FRAMED,
+            WIRE_AT_TEXT,
+        ):
+            raise ValueError("observed_wire_probe_protocol_invalid")
+        for label, value in (
+            ("session", self.session_id),
+            ("collector_pn", self.collector_pn),
+        ):
+            if type(value) is not str:
+                raise TypeError(f"observed_wire_probe_{label}_must_be_str")
+            if not value or value != value.strip():
+                raise ValueError(f"observed_wire_probe_{label}_invalid")
+        if type(self.identity_source) is not str:
+            raise TypeError("observed_wire_probe_identity_source_must_be_str")
+        if self.identity_source != self.identity_source.strip():
+            raise ValueError("observed_wire_probe_identity_source_invalid")
+        if type(self.source) is not str or self.source != BOOTSTRAP_SOURCE_OBSERVED_SCAN:
+            raise ValueError("observed_wire_probe_source_invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class CallbackIdentityRequest:
     """Everything ONE identity transaction needs. No driver/detection inputs."""
 
@@ -221,7 +263,7 @@ class CallbackIdentityRequest:
     # The ONLY wire authority for a first-ever fully-silent socket: the user's
     # explicit bootstrap protocol selection (see OnboardingWireProbeIntent).
     # ``None`` keeps today's passive-evidence-only behavior.
-    bootstrap_probe: OnboardingWireProbeIntent | None = None
+    bootstrap_probe: OnboardingWireProbeIntent | ObservedSessionWireProbeIntent | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,7 +450,7 @@ async def _async_wait_for_new_session(
     timeout: float,
     probe_channel: Any = None,
     pending_baseline: frozenset[str] = frozenset(),
-    bootstrap: OnboardingWireProbeIntent | None = None,
+    bootstrap: OnboardingWireProbeIntent | ObservedSessionWireProbeIntent | None = None,
 ) -> tuple[dict[str, Any] | None, bool, str, str]:
     """Wait, bounded, for the ONE session this attempt may own.
 
@@ -588,7 +630,10 @@ async def _async_run_attempt(
         return CallbackIdentityOutcome(result=IDENTITY_TIMEOUT)
 
     bootstrap = request.bootstrap_probe
-    if bootstrap is not None and type(bootstrap) is not OnboardingWireProbeIntent:
+    if bootstrap is not None and type(bootstrap) not in (
+        OnboardingWireProbeIntent,
+        ObservedSessionWireProbeIntent,
+    ):
         # Fail closed on ducks: only the strict typed capability (whose
         # constructor pinned protocol + explicit-user provenance) may permit
         # a bootstrap probe. Nothing is triggered, claimed or probed.
@@ -791,10 +836,12 @@ async def _async_run_attempt(
 
 __all__ = [
     "BOOTSTRAP_SOURCE_EXPLICIT_USER",
+    "BOOTSTRAP_SOURCE_OBSERVED_SCAN",
     "IDENTITY_SESSION_SILENT",
     "IDENTITY_SILENT_SESSION_STALE",
     "IDENTITY_WIRE_PROBE_FAILED",
     "OnboardingWireProbeIntent",
+    "ObservedSessionWireProbeIntent",
     "SilentSessionBootstrapOffer",
     "CallbackIdentityOutcome",
     "CallbackIdentityReader",
