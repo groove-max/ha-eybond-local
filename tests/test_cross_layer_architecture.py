@@ -1302,7 +1302,7 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
         self.assertIn("async_apply_collector_changes", writers)
         self.assertIn("async_reboot_collector", writers)
         self.assertIn("async_trigger_collector_rediscovery", writers)
-        self.assertIn("_async_reconcile_collector_operation_mode_endpoint", writers)
+        self.assertIn("_async_reconcile_managed_collector_endpoint", writers)
         # The transition facade maps a busy authority to the typed reason.
         facade = self._method_source(src, "async_run_connection_strategy_transition")
         self.assertIn("COLLECTOR_ENDPOINT_OPERATION_BUSY", facade)

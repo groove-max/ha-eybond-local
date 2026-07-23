@@ -286,6 +286,42 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertIn("_proxy_capture_menu_available", proxy_step)
         self.assertNotIn('"proxy_capture"', diagnostics_menu)
 
+    def test_runtime_route_never_re_reads_legacy_operation_mode(self) -> None:
+        path = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "runtime"
+            / "coordinator.py"
+        )
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        coordinator_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "EybondLocalCoordinator"
+        )
+
+        def _method_source(name: str) -> str:
+            method = next(
+                node
+                for node in coordinator_class.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            )
+            return ast.get_source_segment(source, method) or ""
+
+        route = _method_source("collector_uses_home_assistant_route")
+        reconcile = _method_source("_async_reconcile_managed_collector_endpoint")
+        pruning = _method_source("_prune_collector_values_for_connection")
+
+        self.assertIn("self.connection_strategy", route)
+        for decision in (route, reconcile, pruning):
+            self.assertNotIn("CONF_COLLECTOR_OPERATION_MODE", decision)
+            self.assertNotIn("DEFAULT_COLLECTOR_OPERATION_MODE", decision)
+            self.assertNotIn("collector_operation_mode ==", decision)
+
     def test_endpoint_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
         coordinator_path = (
             REPO_ROOT

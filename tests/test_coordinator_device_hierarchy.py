@@ -2304,7 +2304,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator.data = disconnected_snapshot
 
-            await coordinator._async_reconcile_collector_operation_mode_endpoint(
+            await coordinator._async_reconcile_managed_collector_endpoint(
                 disconnected_snapshot
             )
 
@@ -2320,7 +2320,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             connected_snapshot = self.RuntimeSnapshot(connected=True, values={})
             coordinator.data = connected_snapshot
 
-            await coordinator._async_reconcile_collector_operation_mode_endpoint(
+            await coordinator._async_reconcile_managed_collector_endpoint(
                 connected_snapshot
             )
 
@@ -2379,7 +2379,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator.data = snapshot
 
-            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+            await coordinator._async_reconcile_managed_collector_endpoint(snapshot)
 
             # It wrote the Home Assistant endpoint, not restored to the previous.
             self.assertEqual(len(endpoint_writes), 1)
@@ -2419,7 +2419,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator.data = snapshot
 
-            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+            await coordinator._async_reconcile_managed_collector_endpoint(snapshot)
 
             self.assertFalse(wrote)
             self.assertEqual(
@@ -2533,7 +2533,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator.data = snapshot
 
-            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+            await coordinator._async_reconcile_managed_collector_endpoint(snapshot)
 
             self.assertEqual(set_endpoint_calls, [])
             self.assertEqual(
@@ -2655,9 +2655,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
         self.assertEqual(coordinator.collector_operation_mode, "custom")
-        # The read-only UX profile does not alter the legacy runtime routing
-        # decision in this batch.
-        self.assertTrue(coordinator.collector_home_assistant_primary)
+        self.assertTrue(coordinator.collector_uses_home_assistant_route)
 
     def test_unproven_external_inbound_is_reported_custom(self) -> None:
         # Inbound alone cannot claim the complete HA-only product profile when
@@ -2676,7 +2674,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         # so the projection is driven purely by the canonical strategy.
         self.assertFalse(coordinator.collector_capabilities.ha_only_required)
         self.assertEqual(coordinator.collector_operation_mode, "custom")
-        self.assertTrue(coordinator.collector_home_assistant_primary)
+        self.assertTrue(coordinator.collector_uses_home_assistant_route)
 
     def test_operation_mode_projects_callback_ignoring_stale_ha_only_mode(self) -> None:
         # CP2A Test B: an entry that declares the canonical CALLBACK strategy
@@ -2695,7 +2693,25 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(
             coordinator.collector_operation_mode, "smartess_cloud_home_assistant"
         )
-        self.assertFalse(coordinator.collector_home_assistant_primary)
+        self.assertFalse(coordinator.collector_uses_home_assistant_route)
+
+    def test_runtime_route_uses_canonical_legacy_strategy_derivation(self) -> None:
+        # A pre-schema manual entry with a stale HA-only compatibility value is
+        # callback-on-demand. The coordinator must use the central resolver;
+        # directly re-reading the old mode would incorrectly classify it inbound.
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_kind": "factory_eybond",
+                "connection_mode": "manual",
+                "collector_operation_mode": "home_assistant_only",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
+
+        self.assertEqual(coordinator.connection_strategy, "callback_on_demand")
+        self.assertFalse(coordinator.collector_uses_home_assistant_route)
 
     def test_legacy_mode_without_proven_axes_is_reported_custom(self) -> None:
         # The legacy field can derive transport compatibility, but it is not
@@ -2711,7 +2727,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
         self.assertFalse(coordinator.collector_capabilities.ha_only_required)
         self.assertEqual(coordinator.collector_operation_mode, "custom")
-        self.assertTrue(coordinator.collector_home_assistant_primary)
+        self.assertTrue(coordinator.collector_uses_home_assistant_route)
 
     def _rollback_boundary_coordinator(self, *, data, options, values):
         """Build a bare coordinator wired for the read-only rollback boundary.
@@ -5329,7 +5345,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator.async_stop_shadow_learning = _async_stop_shadow_learning
             coordinator._shadow_learning_process_running = lambda: False
             coordinator._proxy_capture_process_running = lambda: False
-            coordinator.collector_operation_mode_apply_lock_code = lambda: None
+            coordinator.collector_endpoint_sync_lock_code = lambda: None
 
             with patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
@@ -5874,7 +5890,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator.data = snapshot
 
-            await coordinator._async_reconcile_collector_operation_mode_endpoint(snapshot)
+            await coordinator._async_reconcile_managed_collector_endpoint(snapshot)
 
             self.assertEqual(endpoint_writes, [], "busy reconcile must not write the endpoint")
             self.assertEqual(
@@ -6581,7 +6597,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             async_start_proxy_capture_route=pick("route", d_route),
             async_set_collector_server_endpoint=pick("redirect", d_redirect),
         )
-        coordinator.collector_operation_mode_apply_lock_code = lambda: None
+        coordinator.collector_endpoint_sync_lock_code = lambda: None
         coordinator._async_active_shadow_learning_state = d_active_shadow
         coordinator._shadow_learning_process_running = lambda: False
         coordinator._proxy_capture_process_running = lambda: False
@@ -7439,7 +7455,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._sync_collector_capability_profile = lambda: None
             coordinator._configure_reverse_discovery_mode = lambda: None
             coordinator._async_warm_effective_metadata_cache = AsyncMock()
-            coordinator._async_reconcile_collector_operation_mode_endpoint = AsyncMock()
+            coordinator._async_reconcile_managed_collector_endpoint = AsyncMock()
             coordinator._write_exposure_context = lambda: {
                 "variant_key": "",
                 "profile_name": "",
@@ -7453,7 +7469,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._support_workflow_values = lambda _snapshot: {}
             coordinator._collector_onboarding_values = lambda _snapshot: {}
             coordinator._proxy_capture_values = AsyncMock(return_value={})
-            coordinator._prune_hidden_collector_values_for_mode = lambda _snapshot: None
+            coordinator._prune_collector_values_for_connection = lambda _snapshot: None
             coordinator.async_sync_device_registry = lambda _snapshot: None
 
             with patch.object(

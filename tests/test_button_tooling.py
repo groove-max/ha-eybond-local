@@ -168,15 +168,15 @@ class _CoordinatorStub:
             return "Proxy capture is changing the collector callback. Wait for the transition to finish."
         if status == "running":
             return "Stop proxy capture before changing collector callback actions."
-        return self.collector_operation_mode_apply_lock_reason()
+        return self.collector_endpoint_sync_lock_reason()
 
-    def collector_operation_mode_apply_lock_reason(self) -> str | None:
+    def collector_endpoint_sync_lock_reason(self) -> str | None:
         sync_status = str(
             self.data.values.get("collector_operation_endpoint_sync_status") or ""
         ).strip()
         if sync_status in {"applied", "waiting_for_collector", "cooldown"}:
             return (
-                "Collector is applying the new operation mode. "
+                "Collector is applying the new connection endpoint. "
                 "Wait for the collector to restart and reconnect."
             )
         return None
@@ -643,10 +643,10 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertTrue(entity.available)
         self.assertEqual(entity.extra_state_attributes["availability_reason"], "Ready")
 
-    def test_apply_collector_changes_button_is_disabled_while_mode_change_applies(self) -> None:
+    def test_apply_collector_changes_button_is_disabled_while_endpoint_change_applies(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.collector_configuration_lock_reason = lambda: (
-            "Collector is applying the new operation mode. Wait for the collector to restart and reconnect."
+            "Collector is applying the new connection endpoint. Wait for the collector to restart and reconnect."
         )
         entity = EybondToolingButton(
             coordinator,
@@ -661,7 +661,7 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertFalse(entity.available)
         self.assertEqual(
             entity.extra_state_attributes["availability_reason"],
-            "Collector is applying the new operation mode. Wait for the collector to restart and reconnect.",
+            "Collector is applying the new connection endpoint. Wait for the collector to restart and reconnect.",
         )
 
     def test_start_proxy_capture_button_uses_proxy_overview_availability(self) -> None:
@@ -714,10 +714,10 @@ class ToolingButtonTests(unittest.TestCase):
             "No upstream callback endpoint is available yet. Restore cloud access first or wait for one external callback endpoint to be detected.",
         )
 
-    def test_start_proxy_capture_button_is_disabled_while_mode_change_applies(self) -> None:
+    def test_start_proxy_capture_button_is_disabled_while_endpoint_change_applies(self) -> None:
         coordinator = _CoordinatorStub()
-        coordinator.collector_operation_mode_apply_lock_reason = lambda: (
-            "Collector is applying the new operation mode. Wait for the collector to restart and reconnect."
+        coordinator.collector_endpoint_sync_lock_reason = lambda: (
+            "Collector is applying the new connection endpoint. Wait for the collector to restart and reconnect."
         )
         entity = EybondToolingButton(
             coordinator,
@@ -732,7 +732,7 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertFalse(entity.available)
         self.assertEqual(
             entity.extra_state_attributes["availability_reason"],
-            "Collector is applying the new operation mode. Wait for the collector to restart and reconnect.",
+            "Collector is applying the new connection endpoint. Wait for the collector to restart and reconnect.",
         )
 
     def test_stop_proxy_capture_button_reports_when_session_not_active(self) -> None:

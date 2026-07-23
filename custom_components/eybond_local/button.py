@@ -375,13 +375,13 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                 return "Collector IP is not configured."
             return None
         if self._spec.key == "start_proxy_capture":
-            mode_apply_lock_reason = getattr(
+            endpoint_sync_lock_reason = getattr(
                 self.coordinator,
-                "collector_operation_mode_apply_lock_reason",
+                "collector_endpoint_sync_lock_reason",
                 lambda: None,
             )()
-            if mode_apply_lock_reason is not None:
-                return mode_apply_lock_reason
+            if endpoint_sync_lock_reason is not None:
+                return endpoint_sync_lock_reason
             # When starting proxy capture redirects the collector callback endpoint,
             # it needs the write_endpoint capability; gate it so an
             # unavailable/conflict wire cannot offer a redirect it can't perform.

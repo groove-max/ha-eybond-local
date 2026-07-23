@@ -63,7 +63,6 @@ from ..metadata.compiled_detection_catalog import resolve_unique_full_model_surf
 from ..const import (
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_CLOUD_FAMILY,
-    CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
@@ -104,7 +103,6 @@ from ..const import (
     CONF_TCP_PORT,
     CONF_UDP_PORT,
     DEFAULT_COLLECTOR_IP,
-    DEFAULT_COLLECTOR_OPERATION_MODE,
     DEFAULT_CONTROL_MODE,
     DEFAULT_DISCOVERY_INTERVAL,
     DEFAULT_DISCOVERY_TARGET,
@@ -117,8 +115,6 @@ from ..const import (
     CONTROL_MODE_AUTO,
     CONTROL_MODE_FULL,
     CONTROL_MODE_READ_ONLY,
-    COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_MODES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
     ENDPOINT_CONTROL_EXTERNAL,
@@ -136,7 +132,6 @@ from ..const import (
 from ..connection.models import build_connection_spec
 from ..connection.connection_policy import (
     collector_identity_binding_required,
-    entry_declares_connection_strategy,
     may_auto_manage_endpoint,
     may_run_steady_reverse_discovery,
     resolve_connection_strategy,
@@ -266,7 +261,7 @@ logger = logging.getLogger(__name__)
 
 _COMPONENT_SETUP_COMPLETE_KEY = "component_setup_complete"
 
-_PENDING_COLLECTOR_OPERATION_SYNC_STATUSES: frozenset[str] = frozenset(
+_PENDING_MANAGED_ENDPOINT_SYNC_STATUSES: frozenset[str] = frozenset(
     {"applied", "waiting_for_collector", "cooldown"}
 )
 _HIDDEN_HA_ONLY_COLLECTOR_VALUE_KEYS: frozenset[str] = frozenset(
@@ -1438,23 +1433,23 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if lock_code is not None:
             raise RuntimeError(lock_code)
 
-    def collector_operation_mode_apply_lock_code(self) -> str | None:
-        """Return one lock code while the collector is still applying a mode change."""
+    def collector_endpoint_sync_lock_code(self) -> str | None:
+        """Return one lock code while a managed endpoint change is still applying."""
 
         sync_status = str(
             self.data.values.get("collector_operation_endpoint_sync_status") or ""
         ).strip()
-        if sync_status in _PENDING_COLLECTOR_OPERATION_SYNC_STATUSES:
-            return "collector_operation_mode_apply_pending"
+        if sync_status in _PENDING_MANAGED_ENDPOINT_SYNC_STATUSES:
+            return "collector_endpoint_sync_pending"
         return None
 
-    def collector_operation_mode_apply_lock_reason(self) -> str | None:
-        """Return a user-facing reason while the collector is still applying a mode change."""
+    def collector_endpoint_sync_lock_reason(self) -> str | None:
+        """Return a user-facing reason while a managed endpoint change is applying."""
 
-        if self.collector_operation_mode_apply_lock_code() is None:
+        if self.collector_endpoint_sync_lock_code() is None:
             return None
         return (
-            "Collector is applying the new operation mode. "
+            "Collector is applying the new connection endpoint. "
             "Wait for the collector to restart and reconnect."
         )
 
@@ -1467,7 +1462,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return "collector_configuration_proxy_transition_active"
         if overview_status == "running":
             return "collector_configuration_proxy_session_active"
-        return self.collector_operation_mode_apply_lock_code()
+        return self.collector_endpoint_sync_lock_code()
 
     def collector_configuration_lock_reason(self) -> str | None:
         """Return a user-facing reason while collector callback actions must stay blocked."""
@@ -1480,8 +1475,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         if lock_code == "collector_configuration_proxy_session_active":
             return "Stop proxy capture before changing collector callback actions."
-        if lock_code == "collector_operation_mode_apply_pending":
-            return self.collector_operation_mode_apply_lock_reason()
+        if lock_code == "collector_endpoint_sync_pending":
+            return self.collector_endpoint_sync_lock_reason()
         return None
 
     def collector_management_capabilities(self):
@@ -2357,41 +2352,17 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
 
     @property
-    def collector_home_assistant_primary(self) -> bool:
-        """Return the legacy runtime routing decision.
+    def collector_uses_home_assistant_route(self) -> bool:
+        """Return whether the canonical strategy routes the collector to HA.
 
-        This is intentionally NOT derived from the user-facing operating
-        profile.  Existing endpoint reconcile, capture, and shadow-learning
-        code consumes this boolean as an operational transport decision.  Batch
-        1 adds a read-only UX projection and must not change those wire
-        semantics; the dedicated endpoint-operation batch will replace this
-        legacy boundary explicitly.
+        ``resolve_connection_strategy`` owns all pre-schema compatibility
+        fallback. Runtime code must not read ``collector_operation_mode`` again:
+        doing so would create a second strategy resolver with different answers.
         """
 
         if self.collector_capabilities.ha_only_required:
             return True
-
-        data = self.config_entry.data
-        options = self.config_entry.options
-        if entry_declares_connection_strategy(data, options):
-            return self.connection_strategy == CONNECTION_STRATEGY_INBOUND
-
-        # Pre-schema entries had no explicit strategy. Preserve their exact
-        # operational fallback until migration/Batch 2 replaces the consumers;
-        # this value is never exposed as the new user-facing profile.
-        mode = str(
-            options.get(
-                CONF_COLLECTOR_OPERATION_MODE,
-                data.get(
-                    CONF_COLLECTOR_OPERATION_MODE,
-                    DEFAULT_COLLECTOR_OPERATION_MODE,
-                ),
-            )
-            or DEFAULT_COLLECTOR_OPERATION_MODE
-        ).strip()
-        if mode not in COLLECTOR_OPERATION_MODES:
-            mode = DEFAULT_COLLECTOR_OPERATION_MODE
-        return mode == COLLECTOR_OPERATION_HA_ONLY
+        return self.connection_strategy == CONNECTION_STRATEGY_INBOUND
 
     @property
     def collector_endpoint_tools_allowed(self) -> bool:
@@ -3229,7 +3200,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         except ValueError:
             return "", 0, ""
 
-    async def _async_reconcile_collector_operation_mode_endpoint(
+    async def _async_reconcile_managed_collector_endpoint(
         self,
         snapshot: RuntimeSnapshot,
     ) -> None:
@@ -3382,10 +3353,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return False
         return bool(state is not None and shadow_learning_session_is_active(state))
 
-    def _prune_hidden_collector_values_for_mode(self, snapshot: RuntimeSnapshot) -> None:
-        """Hide collector diagnostics that do not apply in Home-Assistant-primary mode."""
+    def _prune_collector_values_for_connection(self, snapshot: RuntimeSnapshot) -> None:
+        """Hide diagnostics that do not apply while the collector routes to HA."""
 
-        if not self.collector_home_assistant_primary:
+        if not self.collector_uses_home_assistant_route:
             return
         for key in _HIDDEN_HA_ONLY_COLLECTOR_VALUE_KEYS:
             snapshot.values.pop(key, None)
@@ -3932,7 +3903,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
         await _timed(
             "endpoint_reconcile",
-            self._async_reconcile_collector_operation_mode_endpoint(snapshot),
+            self._async_reconcile_managed_collector_endpoint(snapshot),
         )
         # Persist the confirmed live wire (durable, PN-validated) so a same-PN
         # restart can bootstrap it. Pure entry-data write; no reload.
@@ -4008,7 +3979,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         snapshot.values.update(self._collector_onboarding_values(snapshot))
         snapshot.values.update(self._tooling_values)
         snapshot.values.update(await self._proxy_capture_values(snapshot))
-        self._prune_hidden_collector_values_for_mode(snapshot)
+        self._prune_collector_values_for_connection(snapshot)
         from .. import _async_self_heal_sensor_display_precision
 
         await _async_self_heal_sensor_display_precision(self.hass, self.config_entry)
@@ -4630,9 +4601,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> dict[str, object]:
         """Start one live collector proxy capture session."""
 
-        mode_apply_lock_code = self.collector_operation_mode_apply_lock_code()
-        if mode_apply_lock_code is not None:
-            raise RuntimeError(mode_apply_lock_code)
+        endpoint_sync_lock_code = self.collector_endpoint_sync_lock_code()
+        if endpoint_sync_lock_code is not None:
+            raise RuntimeError(endpoint_sync_lock_code)
 
         overview = self.proxy_capture_overview
         if not overview.can_start:

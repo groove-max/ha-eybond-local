@@ -10270,7 +10270,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # connection strategy, which this same save commits to entry.data
         # (_async_commit_runtime_options); an options copy would be a guaranteed
         # stale shadow the projection ignores. Endpoint reconcile is driven by
-        # the strategy-derived collector_home_assistant_primary /
+        # the strategy-derived collector_uses_home_assistant_route /
         # collector_callback_listener_required, not by a persisted mode value.
         for key in (
             CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
