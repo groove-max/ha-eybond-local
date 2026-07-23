@@ -4190,8 +4190,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             await flow._async_do_scan()
 
         self.assertEqual(captured_kwargs["attempts"], 1)
-        self.assertFalse(captured_kwargs["enrich_runtime_details"])
-        self.assertTrue(captured_kwargs["identify_collector_only"])
+        self.assertNotIn("enrich_runtime_details", captured_kwargs)
+        self.assertNotIn("identify_collector_only", captured_kwargs)
         self.assertEqual(
             captured_kwargs["total_timeout"],
             max(5.0, flow._scan_timeout_seconds - 5.0),
@@ -4200,7 +4200,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             captured_kwargs["total_timeout"],
             config_flow_module._ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds,
         )
-        self.assertFalse(captured_kwargs["return_after_first_match"])
+        self.assertFalse(captured_kwargs["return_after_first_identity"])
 
     async def test_do_scan_scopes_active_probe_against_passive_discovery(self) -> None:
         flow = self._make_flow()
@@ -4536,8 +4536,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await flow._async_do_scan()
 
-        self.assertFalse(captured_kwargs["enrich_runtime_details"])
-        self.assertTrue(captured_kwargs["identify_collector_only"])
+        self.assertNotIn("enrich_runtime_details", captured_kwargs)
+        self.assertNotIn("identify_collector_only", captured_kwargs)
 
     async def test_do_scan_preserves_new_collector_only_result_alongside_existing_matched_entry(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)

@@ -603,7 +603,7 @@ class OnboardingDetector:
             if listener is not None:
                 await _release_shared_listener(listener)
 
-    async def async_detect_targets(
+    async def _async_detect_targets(
         self,
         targets: Sequence[DiscoveryTarget],
         *,
@@ -738,14 +738,12 @@ class OnboardingDetector:
         heartbeat_timeout: float = 2.0,
         attempts: int = 3,
         attempt_delay: float = 0.75,
-        enrich_runtime_details: bool = True,
-        identify_collector_only: bool = False,
         total_timeout: float | None = None,
-        return_after_first_match: bool = True,
+        return_after_first_identity: bool = True,
         skip_probe_ips: frozenset[str] = frozenset(),
         deadline: OnboardingDeadline | ExtendableOnboardingDeadline | None = None,
     ) -> tuple[OnboardingResult, ...]:
-        """Run the default EyeBond onboarding discovery order."""
+        """Run the default collector-identification discovery order."""
 
         if deadline is None:
             deadline = OnboardingDeadline.from_timeout(total_timeout)
@@ -791,16 +789,16 @@ class OnboardingDetector:
 
                 detection_targets = _concrete_detection_targets(targets)
                 if detection_targets:
-                    results = await self.async_detect_targets(
+                    results = await self._async_detect_targets(
                         detection_targets,
                         depth=depth,
                         discovery_timeout=discovery_timeout,
                         connect_timeout=connect_timeout,
                         heartbeat_timeout=heartbeat_timeout,
-                        enrich_runtime_details=enrich_runtime_details,
-                        identify_collector_only=identify_collector_only,
+                        enrich_runtime_details=False,
+                        identify_collector_only=True,
                         total_timeout=deadline.remaining_seconds(),
-                        return_after_first_match=return_after_first_match,
+                        return_after_first_match=return_after_first_identity,
                         skip_probe_ips=skip_probe_ips,
                         deadline=deadline,
                     )
@@ -822,16 +820,16 @@ class OnboardingDetector:
                 if late_fanout_targets:
                     targets = _dedupe_discovery_targets((*targets, *late_fanout_targets))
                     aggregated.extend(
-                        await self.async_detect_targets(
+                        await self._async_detect_targets(
                             late_fanout_targets,
                             depth=depth,
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
-                            enrich_runtime_details=enrich_runtime_details,
-                            identify_collector_only=identify_collector_only,
+                            enrich_runtime_details=False,
+                            identify_collector_only=True,
                             total_timeout=deadline.remaining_seconds(),
-                            return_after_first_match=return_after_first_match,
+                            return_after_first_match=return_after_first_identity,
                             skip_probe_ips=skip_probe_ips,
                             deadline=deadline,
                         )
@@ -849,13 +847,7 @@ class OnboardingDetector:
 
                 deduped = self._dedupe_results(aggregated)
                 best = deduped[0] if deduped else None
-                if best is not None and (
-                    best.match is not None
-                    or (
-                        identify_collector_only
-                        and _result_has_collector_identity(best)
-                    )
-                ):
+                if best is not None and _result_has_collector_identity(best):
                     aggregated = list(deduped)
                     break
                 if attempt_index < max(1, attempts) - 1:
@@ -863,13 +855,7 @@ class OnboardingDetector:
 
             deduped = self._dedupe_results(aggregated)
             best = deduped[0] if deduped else None
-            if best is None or (
-                best.match is None
-                and not (
-                    identify_collector_only
-                    and _result_has_collector_identity(best)
-                )
-            ):
+            if best is None or not _result_has_collector_identity(best):
                 fallback_targets = await self._async_auto_unicast_fallback_targets(
                     resolved_targets=targets,
                     results=deduped,
@@ -878,16 +864,16 @@ class OnboardingDetector:
                 )
                 if fallback_targets:
                     aggregated.extend(
-                        await self.async_detect_targets(
+                        await self._async_detect_targets(
                             fallback_targets,
                             depth=depth,
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
-                            enrich_runtime_details=enrich_runtime_details,
-                            identify_collector_only=identify_collector_only,
+                            enrich_runtime_details=False,
+                            identify_collector_only=True,
                             total_timeout=deadline.remaining_seconds(),
-                            return_after_first_match=return_after_first_match,
+                            return_after_first_match=return_after_first_identity,
                             skip_probe_ips=skip_probe_ips,
                             deadline=deadline,
                         )
@@ -908,75 +894,6 @@ class OnboardingDetector:
             if listener is not None:
                 await _release_shared_listener(listener)
 
-    async def async_handoff_detect(
-        self,
-        *,
-        collector_ip: str,
-        collector_pn: str = "",
-        discovery_timeout: float = 1.5,
-        connect_timeout: float = 5.0,
-        heartbeat_timeout: float = 2.0,
-        attempts: int = 3,
-        attempt_delay: float = 0.75,
-        enrich_runtime_details: bool = True,
-        cleanup_new_shared_connection: bool = False,
-    ) -> OnboardingResult | None:
-        """Retry direct known-IP detection for post-provisioning handoff.
-
-        This keeps the BLE handoff path narrow: it probes only the collector IP that
-        just received Wi-Fi credentials and does not reopen broadcast discovery.
-
-        There is no raw session-protocol / provenance argument here, and this path
-        infers no wire from a hint. (The automatic detect path DOES do an active
-        exact-session framed FC=2 identity read for a fully-silent/weak collector
-        -- see ``_async_trigger_connect_identify`` -- but only on the ONE
-        post-baseline session it observed, under the callback lease, with a typed
-        framed-only capability, never from an address/protocol hint.) If no live
-        session is identified the caller sees an honest collector_not_connected /
-        identity-not-confirmed outcome.
-        """
-
-        collector_ip = str(collector_ip or "").strip()
-        collector_pn = str(collector_pn or "").strip()
-
-        if not collector_ip:
-            raise ValueError("collector_ip_required")
-
-        if collector_pn:
-            targets = (
-                DiscoveryTarget(
-                    ip=collector_ip,
-                    source="known_ip",
-                    collector_pn=collector_pn,
-                ),
-            )
-        else:
-            targets = build_default_discovery_targets(
-                collector_ip=collector_ip,
-                discovery_target="",
-            )
-        aggregated: list[OnboardingResult] = []
-
-        for attempt_index in range(max(1, attempts)):
-            results = await self.async_detect_targets(
-                targets,
-                discovery_timeout=discovery_timeout,
-                connect_timeout=connect_timeout,
-                heartbeat_timeout=heartbeat_timeout,
-                enrich_runtime_details=enrich_runtime_details,
-                cleanup_new_shared_connection=cleanup_new_shared_connection,
-            )
-            aggregated.extend(results)
-            deduped = self._dedupe_results(aggregated)
-            best = deduped[0] if deduped else None
-            if best is not None and best.match is not None:
-                return best
-            if attempt_index < max(1, attempts) - 1:
-                await asyncio.sleep(attempt_delay)
-
-        deduped = self._dedupe_results(aggregated)
-        return deduped[0] if deduped else None
-
     async def async_deep_detect(
         self,
         *,
@@ -989,26 +906,14 @@ class OnboardingDetector:
         heartbeat_timeout: float = 2.0,
         attempts: int = 3,
         attempt_delay: float = 0.75,
-        enrich_runtime_details: bool = True,
-        identify_collector_only: bool = False,
         total_timeout: float | None = None,
         skip_probe_ips: frozenset[str] = frozenset(),
     ) -> tuple[OnboardingResult, ...]:
-        """Run broadcast discovery first, then sweep the full selected IPv4 network."""
+        """Identify collectors across broadcast and the selected IPv4 network."""
 
-        if identify_collector_only:
-            # Config-flow deep search identifies collectors only. Its deadline
-            # is fixed by subnet batch count; driver sweeps and their extendable
-            # headroom are runtime concerns and must not inflate this flow.
-            deadline = OnboardingDeadline.from_timeout(total_timeout)
-        else:
-            deadline = ExtendableOnboardingDeadline(
-                base_timeout_seconds=total_timeout,
-                hard_ceiling_seconds=(
-                    float(total_timeout or 0.0)
-                    + DEFAULT_ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds
-                ),
-            )
+        # Driver sweeps and their extendable headroom belong to runtime. The
+        # onboarding deadline is therefore only the bounded collector scan.
+        deadline = OnboardingDeadline.from_timeout(total_timeout)
         resolved_targets = tuple(
             discovery_targets
             or build_default_discovery_targets(
@@ -1027,10 +932,8 @@ class OnboardingDetector:
                 heartbeat_timeout=heartbeat_timeout,
                 attempts=attempts,
                 attempt_delay=attempt_delay,
-                enrich_runtime_details=enrich_runtime_details,
-                identify_collector_only=identify_collector_only,
                 total_timeout=deadline.remaining_seconds(),
-                return_after_first_match=False,
+                return_after_first_identity=False,
                 skip_probe_ips=skip_probe_ips,
                 deadline=deadline,
             )
@@ -1084,14 +987,14 @@ class OnboardingDetector:
         if not replied_targets:
             return tuple(self._dedupe_results(aggregated))
 
-        fallback_results = await self.async_detect_targets(
+        fallback_results = await self._async_detect_targets(
             replied_targets,
             depth=DETECTION_DEPTH_DEEP,
             discovery_timeout=discovery_timeout,
             connect_timeout=connect_timeout,
             heartbeat_timeout=heartbeat_timeout,
-            enrich_runtime_details=enrich_runtime_details,
-            identify_collector_only=identify_collector_only,
+            enrich_runtime_details=False,
+            identify_collector_only=True,
             total_timeout=deadline.remaining_seconds(),
             return_after_first_match=False,
             skip_probe_ips=skip_probe_ips,

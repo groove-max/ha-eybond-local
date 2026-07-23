@@ -3718,8 +3718,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     results = await detector.async_deep_detect(
                         discovery_targets=discovery_targets,
                         unicast_network_cidr=deep_scan_plan["network_cidr"],
-                        enrich_runtime_details=False,
-                        identify_collector_only=True,
                         total_timeout=detector_timeout,
                         skip_probe_ips=skip_probe_ips,
                     )
@@ -3727,15 +3725,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     results = await detector.async_auto_detect(
                         discovery_targets=discovery_targets,
                         attempts=1,
-                        enrich_runtime_details=False,
-                        identify_collector_only=True,
                         total_timeout=detector_timeout,
                         # This flow renders an inventory, not a one-device
                         # shortcut.  Let every target already discovered in the
                         # bounded quick-scan batch finish; otherwise the first
                         # inverter match cancels the sibling route and makes
                         # .51/.55 alternate between scans.
-                        return_after_first_match=False,
+                        return_after_first_identity=False,
                         skip_probe_ips=skip_probe_ips,
                     )
         except TimeoutError:

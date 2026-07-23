@@ -34,26 +34,9 @@ class OnboardingManager(Protocol):
         heartbeat_timeout: float = 2.0,
         attempts: int = 3,
         attempt_delay: float = 0.75,
-        enrich_runtime_details: bool = True,
-        identify_collector_only: bool = False,
         total_timeout: float | None = None,
+        return_after_first_identity: bool = True,
     ) -> tuple[OnboardingResult, ...]:
-        ...
-
-    async def async_handoff_detect(
-        self,
-        *,
-        collector_ip: str,
-        collector_pn: str = "",
-        collector_session_protocol: str = "",
-        discovery_timeout: float = 1.5,
-        connect_timeout: float = 5.0,
-        heartbeat_timeout: float = 2.0,
-        attempts: int = 3,
-        attempt_delay: float = 0.75,
-        enrich_runtime_details: bool = True,
-        cleanup_new_shared_connection: bool = False,
-    ) -> OnboardingResult | None:
         ...
 
     async def async_deep_detect(
@@ -68,8 +51,7 @@ class OnboardingManager(Protocol):
         heartbeat_timeout: float = 2.0,
         attempts: int = 3,
         attempt_delay: float = 0.75,
-        enrich_runtime_details: bool = True,
-        identify_collector_only: bool = False,
         total_timeout: float | None = None,
+        skip_probe_ips: frozenset[str] = frozenset(),
     ) -> tuple[OnboardingResult, ...]:
         ...

@@ -329,13 +329,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 source="broadcast",
                 ip="192.168.1.55",
                 connected=True,
-            ),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632500000001",
-                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
+                collector=CollectorInfo(collector_pn="E50000200000000001"),
             ),
             connection_mode="broadcast",
         )
@@ -343,7 +337,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(return_value=(broadcast_result,)),
             ) as detect_targets,
             patch(
@@ -384,13 +378,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 source="broadcast",
                 ip="192.168.1.55",
                 connected=True,
-            ),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632500000001",
-                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
+                collector=CollectorInfo(collector_pn="E50000200000000001"),
             ),
             connection_mode="broadcast",
         )
@@ -407,7 +395,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(return_value=(broadcast_result,)),
             ) as detect_targets,
             patch(
@@ -482,7 +470,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(return_value=(primary_result, extra_result)),
             ) as detect_targets,
             patch(
@@ -581,7 +569,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(return_value=(primary_result,)),
             ) as detect_targets,
             patch(
@@ -663,7 +651,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(return_value=()),
             ) as detect_targets,
             patch(
@@ -700,7 +688,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(return_value=()),
             ) as detect_targets,
             patch(
@@ -725,7 +713,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             results = await detector.async_auto_detect(
                 discovery_target="192.168.1.255",
                 attempts=1,
-                enrich_runtime_details=False,
             )
 
         self.assertEqual(results, ())
@@ -763,7 +750,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(
                 detector,
-                "async_detect_targets",
+                "_async_detect_targets",
                 new=AsyncMock(side_effect=[(broadcast_result,), (fallback_result,)]),
             ) as detect_targets,
             patch(
@@ -816,71 +803,21 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         auto_detect.assert_awaited_once()
         probe_targets.assert_awaited_once()
 
-    async def test_handoff_detect_uses_known_ip_only_and_stops_after_match(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        collector_only_result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.55",
-                source="known_ip",
-                ip="192.168.1.55",
-                connected=True,
-            ),
-            connection_mode="known_ip",
-        )
-        matched_result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.55",
-                source="known_ip",
-                ip="192.168.1.55",
-                connected=True,
-            ),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632500000001",
-                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-            ),
-            connection_mode="known_ip",
-        )
-
-        with patch.object(
-            detector,
-            "async_detect_targets",
-            new=AsyncMock(side_effect=[(collector_only_result,), (matched_result,)]),
-        ) as detect_targets:
-            result = await detector.async_handoff_detect(
-                collector_ip="192.168.1.55",
-                attempts=3,
-                attempt_delay=0.0,
-            )
-
-        self.assertEqual(result, matched_result)
-        self.assertEqual(detect_targets.await_count, 2)
-        self.assertEqual(
-            detect_targets.await_args_list[0].args[0],
-            (DiscoveryTarget(ip="192.168.1.55", source="known_ip"),),
-        )
-        self.assertEqual(
-            detect_targets.await_args_list[1].args[0],
-            (DiscoveryTarget(ip="192.168.1.55", source="known_ip"),),
-        )
-
-    def test_handoff_detect_has_no_raw_session_protocol_or_provenance_args(self) -> None:
-        # Architectural guard: onboarding cannot be handed a raw session protocol
-        # or a self-declared provenance/lease -- an inferred hint may not arm an
-        # active probe. Only passive observation + runtime confirmed evidence do.
+    def test_public_scan_contract_is_collector_only(self) -> None:
+        # Architectural guard: config-flow onboarding has no switch that can
+        # resurrect pre-entry driver probing, and the dead BLE handoff detector
+        # is not part of the manager surface.
         import inspect
 
-        params = set(
-            inspect.signature(OnboardingDetector.async_handoff_detect).parameters
-        )
-        for forbidden in (
-            "collector_session_protocol",
-            "probe_protocol_provenance",
-            "probe_lease",
+        self.assertFalse(hasattr(OnboardingDetector, "async_handoff_detect"))
+        self.assertFalse(hasattr(OnboardingDetector, "async_detect_targets"))
+        for method in (
+            OnboardingDetector.async_auto_detect,
+            OnboardingDetector.async_deep_detect,
         ):
-            self.assertNotIn(forbidden, params)
+            params = set(inspect.signature(method).parameters)
+            self.assertNotIn("enrich_runtime_details", params)
+            self.assertNotIn("identify_collector_only", params)
 
     async def test_detect_target_builds_transport_without_session_protocol(self) -> None:
         # _async_detect_target must NOT pass any session protocol / probe lease to
@@ -1431,7 +1368,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("slow target must be cancelled")
 
         with patch.object(detector, "_async_detect_target", new=_detect_target):
-            results = await detector.async_detect_targets(
+            results = await detector._async_detect_targets(
                 (fast_target, slow_target),
                 return_after_first_match=True,
                 total_timeout=20.0,
@@ -1459,7 +1396,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             "_async_detect_target",
             new=AsyncMock(side_effect=AssertionError("configured collector must not be probed")),
         ) as detect_target:
-            results = await detector.async_detect_targets(
+            results = await detector._async_detect_targets(
                 targets,
                 skip_probe_ips=frozenset({"192.168.1.14", "192.168.1.55"}),
             )
@@ -2036,7 +1973,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             return OnboardingResult(collector=candidate, connection_mode=target.source)
 
         with patch.object(detector, "_async_detect_target", new=AsyncMock(side_effect=slow_detect)):
-            results = await detector.async_detect_targets(
+            results = await detector._async_detect_targets(
                 (target,),
                 total_timeout=0.01,
             )
@@ -2085,7 +2022,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch.object(detector, "_async_detect_target", new=AsyncMock(side_effect=detect_target)):
-            results = await detector.async_detect_targets(
+            results = await detector._async_detect_targets(
                 targets,
                 total_timeout=0.05,
                 concurrency=2,

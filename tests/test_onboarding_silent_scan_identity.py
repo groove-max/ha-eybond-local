@@ -225,7 +225,6 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
                         DiscoveryTarget(ip=route, source="broadcast"),
                     ),
                     attempts=1,
-                    enrich_runtime_details=False,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -295,7 +294,6 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
                             DiscoveryTarget(ip="127.0.0.255", source="broadcast"),
                         ),
                         attempts=1,
-                        enrich_runtime_details=False,
                         total_timeout=_HARNESS_TIMEOUT,
                     ),
                     timeout=_HARNESS_TIMEOUT + 2.0,
@@ -345,7 +343,6 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
                         DiscoveryTarget(ip="127.0.0.1", source="unicast"),
                     ),
                     attempts=1,
-                    enrich_runtime_details=False,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -840,7 +837,6 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
                         DiscoveryTarget(ip=route_s2, source="unicast"),
                     ),
                     attempts=1,
-                    enrich_runtime_details=False,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -1218,8 +1214,6 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
         target_service,
         route,
         s2_udp,
-        *,
-        identify_collector_only: bool = False,
     ):
         redirect = f"set>server=127.0.0.1:{self._tcp_port};".encode("ascii")
         stale = _silent_framed_service(
@@ -1241,8 +1235,6 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
                 detector.async_auto_detect(
                     discovery_targets=(DiscoveryTarget(ip=route, source="unicast"),),
                     attempts=1,
-                    enrich_runtime_details=False,
-                    identify_collector_only=identify_collector_only,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -1304,7 +1296,6 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
                 target,
                 route,
                 s2_udp,
-                identify_collector_only=True,
             )
 
         result = _result_with_pn(results, TARGET_PN)
