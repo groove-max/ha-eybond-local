@@ -260,6 +260,7 @@ from ..support.memory_guard import read_available_memory_mib, shadow_learning_me
 from ..support.package import export_support_package
 from ..support.shadow_learning_review_model import normalize_activation_selection
 from ..support.workflow import build_support_workflow_state
+from .shadow_learning_facade import ShadowLearningRuntimeFacade
 
 logger = logging.getLogger(__name__)
 
@@ -6964,6 +6965,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         }
 
     @property
+    def write_exposure_context(self) -> dict[str, Any]:
+        """Return a detached diagnostic view of capability exposure inputs."""
+
+        return dict(self._write_exposure_context())
+
+    @property
     def current_driver(self):
         """Return the registered driver for the detected inverter, if any."""
 
@@ -7079,6 +7086,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 exc_info=True,
             )
             return inverter
+
+    def apply_device_overlay_to_inverter(self, inverter, collector):
+        """Apply the active device overlay through the public coordinator boundary."""
+
+        return self._apply_device_overlay_to_inverter(inverter, collector)
 
     @property
     def has_inverter_identity(self) -> bool:
@@ -7809,6 +7821,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "ready": bool(status.get("ready")),
             "upstream_error": str(status.get("upstream_error") or ""),
         }
+
+    @property
+    def shadow_learning_runtime(self) -> ShadowLearningRuntimeFacade:
+        """Return the cohesive public facade for shadow-learning consumers."""
+
+        return ShadowLearningRuntimeFacade(
+            runtime=self._runtime,
+            cloud_evidence_provider=self._latest_smartess_cloud_evidence_record,
+        )
 
     async def _async_wait_for_shadow_learning_ready(
         self,

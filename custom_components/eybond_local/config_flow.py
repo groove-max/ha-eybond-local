@@ -218,6 +218,7 @@ from .collector.cloud_family import collector_cloud_family_observation_from_endp
 from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
 from .drivers.registry import driver_options
 from .runtime.manager import RuntimeInverterCandidate
+from .runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
 from .metadata.local_metadata import (
     local_profile_override_details,
     local_register_schema_override_details,
@@ -290,6 +291,10 @@ from .support.shadow_learning_overlay_generator import generate_shadow_learning_
 from .support.shadow_learning_review_model import (
     build_activation_selection,
     default_learned_control_label,
+)
+from .support.shadow_learning_runtime import (
+    ShadowLearningRouteStatus,
+    ShadowLearningRuntimeView,
 )
 
 CONF_RESULT_KEY = "result_key"
@@ -11908,7 +11913,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # The active provider owns login/fetch/parse/action/orchestrate; the flow
         # passes progress + observation callbacks and updates its own UI state via
         # the identity/learning hooks. It imports no provider HTTP client.
-        observation_source = self._shadow_learning_observation_source(coordinator)
+        shadow_runtime = self._shadow_learning_runtime(coordinator)
         runner = provider_impl.control_discovery_runner()
         outcome = await runner.async_run(
             executor=self.hass.async_add_executor_job,
@@ -11919,7 +11924,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
             progress=self._set_control_discovery_progress,
             orchestrator_callbacks=self._shadow_learning_orchestrator_callbacks(
-                coordinator, observation_source
+                coordinator,
+                shadow_runtime,
             ),
             on_identity=lambda identity: self._on_control_discovery_identity(
                 coordinator, identity
@@ -12056,7 +12062,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "status": "learning",
         }
 
-    def _shadow_learning_orchestrator_callbacks(self, coordinator, observation_source) -> dict[str, Any]:
+    def _shadow_learning_orchestrator_callbacks(
+        self,
+        coordinator,
+        shadow_runtime: ShadowLearningRuntimeFacade | None = None,
+    ) -> dict[str, Any]:
         """Return shared shadow-observation callbacks for provider runners."""
 
         def _on_test_progress(done: int, total: int) -> None:
@@ -12068,31 +12078,31 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 total=total,
             )
 
+        shadow_runtime = (
+            shadow_runtime
+            if type(shadow_runtime) is ShadowLearningRuntimeFacade
+            else self._shadow_learning_runtime(coordinator)
+        )
         return {
             "observation_cursor": (
-                getattr(observation_source, "observation_cursor", None)
-                if observation_source is not None
+                shadow_runtime.observation_cursor
+                if shadow_runtime is not None
                 else None
             ),
             "current_observations_since": (
-                getattr(observation_source, "observations_since", None)
-                if observation_source is not None
+                shadow_runtime.observations_since
+                if shadow_runtime is not None
                 else None
             ),
             "wait_for_observations_since": (
-                (lambda cursor, timeout_seconds: observation_source.wait_for_observations_since(
-                    cursor,
-                    timeout_seconds=timeout_seconds,
-                ))
-                if observation_source is not None
-                and callable(getattr(observation_source, "wait_for_observations_since", None))
+                shadow_runtime.async_wait_for_observations_since
+                if shadow_runtime is not None
                 else None
             ),
             "is_session_ready": lambda: self._shadow_learning_route_accepts_control(coordinator),
             "read_map_snapshot": (
-                (lambda: observation_source.read_map)
-                if observation_source is not None
-                and hasattr(observation_source, "read_map")
+                shadow_runtime.read_map_snapshot
+                if shadow_runtime is not None
                 else None
             ),
             "on_progress": _on_test_progress,
@@ -13192,7 +13202,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         raw_capture = None
         if connected:
             with suppress(Exception):
-                raw_capture = await coordinator._runtime.async_capture_support_evidence()
+                shadow_runtime = self._shadow_learning_runtime(coordinator)
+                if shadow_runtime is not None:
+                    raw_capture = await shadow_runtime.async_capture_support_evidence()
         seed, blockers = build_shadow_learning_seed(
             session_id=f"{self._config_entry.entry_id}_preview",
             entry_id=self._config_entry.entry_id,
@@ -13247,39 +13259,49 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             "profile_name": str(coordinator.effective_profile_name or ""),
             "schema_name": str(coordinator.effective_register_schema_name or ""),
             "shadow_session_state": self._shadow_learning_session_state(coordinator),
-            "shadow_session_active": bool(route_status.get("running")),
-            "shadow_session_ready": bool(route_status.get("ready")),
-            "shadow_session_running": bool(route_status.get("running")),
-            "shadow_session_collector_connected": bool(route_status.get("collector_connected")),
-            "shadow_session_upstream_connected": bool(route_status.get("upstream_connected")),
+            "shadow_session_active": route_status.running,
+            "shadow_session_ready": route_status.ready,
+            "shadow_session_running": route_status.running,
+            "shadow_session_collector_connected": route_status.collector_connected,
+            "shadow_session_upstream_connected": route_status.upstream_connected,
         }
 
-    def _shadow_learning_route_status(self, coordinator) -> dict[str, Any]:
-        route_status_fn = getattr(getattr(coordinator, "_runtime", None), "shadow_learning_route_status", None)
-        if callable(route_status_fn):
-            status = route_status_fn()
-            if isinstance(status, dict):
-                return {
-                    "running": bool(status.get("running")),
-                    "collector_connected": bool(status.get("collector_connected")),
-                    "collector_protocol_ingress": bool(status.get("collector_protocol_ingress")),
-                    "route_protocol_activity": bool(status.get("route_protocol_activity")),
-                    "upstream_connected": bool(status.get("upstream_connected")),
-                    "ready": bool(status.get("ready")),
-                    "upstream_error": str(status.get("upstream_error") or ""),
-                }
+    @staticmethod
+    def _shadow_learning_runtime(
+        coordinator,
+    ) -> ShadowLearningRuntimeFacade | None:
+        try:
+            facade = getattr(coordinator, "shadow_learning_runtime", None)
+        except Exception:
+            return None
+        return (
+            facade
+            if type(facade) is ShadowLearningRuntimeFacade
+            else None
+        )
 
-        route_running_fn = getattr(getattr(coordinator, "_runtime", None), "shadow_learning_route_running", None)
-        running = bool(route_running_fn()) if callable(route_running_fn) else False
-        return {
-            "running": running,
-            "collector_connected": False,
-            "collector_protocol_ingress": False,
-            "route_protocol_activity": False,
-            "upstream_connected": False,
-            "ready": False,
-            "upstream_error": "",
-        }
+    @staticmethod
+    def _shadow_learning_runtime_view(
+        coordinator,
+    ) -> ShadowLearningRuntimeView:
+        facade = EybondLocalOptionsFlow._shadow_learning_runtime(coordinator)
+        if facade is None:
+            return ShadowLearningRuntimeView()
+        try:
+            view = facade.view
+        except Exception:
+            return ShadowLearningRuntimeView()
+        return (
+            view
+            if type(view) is ShadowLearningRuntimeView
+            else ShadowLearningRuntimeView()
+        )
+
+    def _shadow_learning_route_status(
+        self,
+        coordinator,
+    ) -> ShadowLearningRouteStatus:
+        return self._shadow_learning_runtime_view(coordinator).route_status
 
     def _shadow_learning_settings_dat(self, coordinator) -> dict[str, Any] | None:
         record = self._cached_cloud_evidence_record(coordinator)
@@ -13321,27 +13343,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         }
 
     def _cached_cloud_evidence_record(self, coordinator):
-        latest = getattr(coordinator, "_latest_smartess_cloud_evidence_record", None)
-        if callable(latest):
-            return latest()
-        return None
+        return self._shadow_learning_runtime_view(coordinator).cloud_evidence
 
     def _shadow_learning_observed_writes(self, coordinator) -> tuple[Any, ...]:
-        handler = self._shadow_learning_observation_source(coordinator)
-        observations = getattr(handler, "write_observations", ())
-        return tuple(observations or ())
-
-    def _shadow_learning_observation_source(self, coordinator):
-        runtime = getattr(coordinator, "_runtime", None)
-        # ``coordinator._runtime`` is the EybondHub itself, which owns
-        # ``_link_manager`` directly; navigate to it without an intermediate
-        # ``_hub`` hop. A wrapped runtime that exposes the hub under ``_hub`` is
-        # still supported as a fallback.
-        link_manager = getattr(runtime, "_link_manager", None)
-        if link_manager is None:
-            hub = getattr(runtime, "_hub", None)
-            link_manager = getattr(hub, "_link_manager", None)
-        return getattr(link_manager, "_shadow_learning_handler", None)
+        return self._shadow_learning_runtime_view(coordinator).write_observations
 
     def _publish_shadow_learning_artifacts(self, coordinator) -> dict[str, Any]:
         """Publish the current UX artifact state into support-package runtime values."""
@@ -13421,14 +13426,20 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         route_status = self._shadow_learning_route_status(coordinator)
 
         # Route status is authoritative for live execution readiness.
-        if bool(route_status.get("ready")):
+        if route_status.ready:
             if explicit_state == "learning":
                 return "learning"
             return "ready"
-        if bool(route_status.get("running")):
-            if bool(route_status.get("collector_connected")) and not bool(route_status.get("route_protocol_activity")):
+        if route_status.running:
+            if (
+                route_status.collector_connected
+                and not route_status.route_protocol_activity
+            ):
                 return "waiting_for_collector"
-            if bool(route_status.get("route_protocol_activity")) and not bool(route_status.get("upstream_connected")):
+            if (
+                route_status.route_protocol_activity
+                and not route_status.upstream_connected
+            ):
                 return "connecting_upstream"
             return "degraded"
 
@@ -13460,15 +13471,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         """
 
         status = self._shadow_learning_route_status(coordinator)
-        if not bool(status.get("running")):
+        if not status.running:
             return False
-        if str(status.get("upstream_error") or "").strip():
+        if status.upstream_error:
             return False
         # SAFETY: start readiness and write readiness are deliberately different.
         # Start only needs a collector->proxy reconnect; an actual ctrlDevice must
         # also have a live proxy->cloud upstream socket, otherwise SmartESS may
         # deliver the command over the real-server route and bypass our shadow.
-        return route_status_indicates_control_write_ready(status)
+        return route_status_indicates_control_write_ready(status.to_mapping())
 
     def _shadow_learning_placeholders(self, coordinator) -> dict[str, str]:
         state = dict(self._shadow_learning_state or {})

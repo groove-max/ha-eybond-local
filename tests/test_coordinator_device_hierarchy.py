@@ -632,6 +632,7 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components",
     "custom_components.eybond_local",
     "custom_components.eybond_local.runtime",
+    "custom_components.eybond_local.runtime.shadow_learning_facade",
     "custom_components.eybond_local.const",
     "custom_components.eybond_local.connection.models",
     "custom_components.eybond_local.collector.entity_scope",
@@ -654,8 +655,10 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components.eybond_local.support.proxy_capture",
     "custom_components.eybond_local.support.proxy_session",
     "custom_components.eybond_local.support.proxy_trace",
+    "custom_components.eybond_local.support.shadow_learning",
     "custom_components.eybond_local.support.shadow_learning_backend",
     "custom_components.eybond_local.support.shadow_learning_proxy",
+    "custom_components.eybond_local.support.shadow_learning_runtime",
     "custom_components.eybond_local.support.shadow_learning_session",
     "custom_components.eybond_local.support.workflow",
     "custom_components.eybond_local.runtime.coordinator",
@@ -1489,7 +1492,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             lambda **_kwargs: stub_metadata
         )
         try:
-            result = coordinator._apply_device_overlay_to_inverter(inverter, None)
+            result = coordinator.apply_device_overlay_to_inverter(inverter, None)
         finally:
             self.coordinator_module.resolve_effective_metadata_selection = original
 
@@ -1514,7 +1517,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
         )
         coordinator = types.SimpleNamespace(
-            _apply_device_overlay_to_inverter=lambda inv, collector: merged,
+            apply_device_overlay_to_inverter=lambda inv, collector: merged,
             data=types.SimpleNamespace(collector=None),
         )
 
@@ -1566,7 +1569,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "resolve_effective_metadata_selection",
             side_effect=AssertionError("sync resolver should not run after warm-up"),
         ):
-            context = coordinator._write_exposure_context()
+            context = coordinator.write_exposure_context
 
         self.assertEqual(context["variant_key"], "smg_6200")
         self.assertEqual(context["profile_source_scope"], "external")

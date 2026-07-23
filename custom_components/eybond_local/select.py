@@ -93,12 +93,10 @@ async def async_setup_entry(
             if capability.value_kind == "enum" and capability.enum_value_map
         )
         exposure_context = {}
-        context_getter = getattr(coordinator, "_write_exposure_context", None)
-        if callable(context_getter):
-            try:
-                exposure_context = context_getter()
-            except Exception as exc:  # pragma: no cover - diagnostic only
-                exposure_context = {"error": f"{type(exc).__name__}:{exc}"}
+        try:
+            exposure_context = coordinator.write_exposure_context
+        except Exception as exc:  # pragma: no cover - diagnostic only
+            exposure_context = {"error": f"{type(exc).__name__}:{exc}"}
         _LOGGER.debug(
             "EyeBond select setup has inverter identity but no enum controls: entry=%s driver=%s inverter=%s capabilities=%d enum_capabilities=%d controls_enabled=%s reason=%s context=%s first_enum=%s first_enum_allowed=%s",
             entry.entry_id,

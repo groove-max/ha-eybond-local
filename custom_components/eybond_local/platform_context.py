@@ -155,7 +155,7 @@ def _merge_active_device_overlay(coordinator: Any, inverter: Any):
 
     if inverter is None:
         return inverter
-    applier = getattr(coordinator, "_apply_device_overlay_to_inverter", None)
+    applier = getattr(coordinator, "apply_device_overlay_to_inverter", None)
     if not callable(applier):
         return inverter
     collector = getattr(getattr(coordinator, "data", None), "collector", None)

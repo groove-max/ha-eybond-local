@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..models import RuntimeSnapshot
+from ..support.shadow_learning import ShadowWriteObservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +180,36 @@ class RuntimeManager(Protocol):
         ...
 
     def shadow_learning_route_status(self) -> dict[str, object]:
+        ...
+
+    def shadow_learning_write_observations(
+        self,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Return the exact observations captured by the active learning route."""
+        ...
+
+    def shadow_learning_observation_cursor(self) -> int:
+        """Return the current tail cursor of the active learning route."""
+        ...
+
+    def shadow_learning_observations_since(
+        self,
+        cursor: int,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Return observations captured at or after an exact cursor."""
+        ...
+
+    async def async_wait_for_shadow_learning_observations_since(
+        self,
+        cursor: int,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Wait a bounded interval for observations at or after a cursor."""
+        ...
+
+    def shadow_learning_read_map_snapshot(self) -> dict[str, Any]:
+        """Return a detached snapshot of reads observed by the learning route."""
         ...
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:

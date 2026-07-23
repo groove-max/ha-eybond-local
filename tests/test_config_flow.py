@@ -377,7 +377,30 @@ from custom_components.eybond_local.models import (
 from custom_components.eybond_local.onboarding.detection import DiscoveryTarget
 from custom_components.eybond_local.support.workflow import build_support_workflow_state
 from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceRecord, build_cloud_evidence_payload
+from custom_components.eybond_local.support.shadow_learning import (
+    ShadowWriteObservation,
+)
+from custom_components.eybond_local.support.shadow_learning_runtime import (
+    ShadowLearningRouteStatus,
+    ShadowLearningRuntimeView,
+)
 from custom_components.eybond_local.runtime.manager import RuntimeInverterCandidate
+from custom_components.eybond_local.runtime.shadow_learning_facade import (
+    ShadowLearningRuntimeFacade,
+)
+
+
+def _shadow_runtime_facade(
+    route_status: ShadowLearningRouteStatus,
+) -> ShadowLearningRuntimeFacade:
+    runtime = types.SimpleNamespace(
+        shadow_learning_route_status=route_status.to_mapping,
+        shadow_learning_write_observations=lambda: (),
+    )
+    return ShadowLearningRuntimeFacade(
+        runtime=runtime,
+        cloud_evidence_provider=lambda: None,
+    )
 
 
 class _FakeEntry:
@@ -7833,8 +7856,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         def _coordinator(collector_connected: bool) -> object:
             return types.SimpleNamespace(
-                _runtime=types.SimpleNamespace(
-                    shadow_learning_route_status=lambda: {
+                shadow_learning_runtime=_shadow_runtime_facade(
+                    ShadowLearningRouteStatus.from_mapping({
                         "running": True,
                         "collector_connected": collector_connected,
                         # Stale/sticky signals that must never override the live-socket check.
@@ -7843,7 +7866,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                         "upstream_connected": False,
                         "ready": False,
                         "upstream_error": "",
-                    }
+                    }),
                 )
             )
 
@@ -7859,8 +7882,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             options._shadow_learning_route_accepts_control(
                 types.SimpleNamespace(
-                    _runtime=types.SimpleNamespace(
-                        shadow_learning_route_status=lambda: {
+                    shadow_learning_runtime=_shadow_runtime_facade(
+                        ShadowLearningRouteStatus.from_mapping({
                             "running": True,
                             "collector_connected": True,
                             "collector_protocol_ingress": True,
@@ -7868,7 +7891,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                             "upstream_connected": True,
                             "ready": True,
                             "upstream_error": "",
-                        }
+                        }),
                     )
                 )
             )
@@ -7880,14 +7903,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "session": {"status": "learning"},
         }
         options._config_entry.runtime_data = types.SimpleNamespace(
-            _runtime=types.SimpleNamespace(
-                shadow_learning_route_status=lambda: {
+            shadow_learning_runtime=_shadow_runtime_facade(
+                ShadowLearningRouteStatus.from_mapping({
                     "running": False,
                     "collector_connected": False,
                     "upstream_connected": False,
                     "ready": False,
                     "upstream_error": "",
-                }
+                }),
             ),
             data=types.SimpleNamespace(values={}),
         )
@@ -7899,15 +7922,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     def test_shadow_learning_placeholders_surface_restore_failed_state(self) -> None:
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
-            _runtime=types.SimpleNamespace(
-                shadow_learning_route_status=lambda: {
+            shadow_learning_runtime=_shadow_runtime_facade(
+                ShadowLearningRouteStatus.from_mapping({
                     "running": False,
                     "collector_connected": False,
                     "collector_protocol_ingress": False,
                     "upstream_connected": False,
                     "ready": False,
                     "upstream_error": "",
-                }
+                }),
             ),
             data=types.SimpleNamespace(values={"shadow_learning_session_status": "restore_failed"}),
         )
@@ -8773,6 +8796,88 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     # ---- Automatic control-discovery runner (EYB-REF-041) ----
 
+    async def test_shadow_learning_callbacks_use_public_coordinator_port(self) -> None:
+        options = self._make_options_flow()
+        observation = ShadowWriteObservation(
+            register=7,
+            values=(1,),
+            function_code=16,
+            devcode=None,
+            devaddr=None,
+            raw_payload_hex="",
+        )
+        calls: list[tuple[str, object]] = []
+
+        class _Coordinator:
+            @property
+            def shadow_learning_runtime(self) -> ShadowLearningRuntimeFacade:
+                return ShadowLearningRuntimeFacade(
+                    runtime=self,
+                    cloud_evidence_provider=lambda: None,
+                )
+
+            @staticmethod
+            def shadow_learning_route_status() -> dict[str, object]:
+                return ShadowLearningRouteStatus(
+                    running=True,
+                    collector_connected=True,
+                    collector_protocol_ingress=True,
+                    route_protocol_activity=True,
+                    upstream_connected=True,
+                    ready=True,
+                ).to_mapping()
+
+            @staticmethod
+            def shadow_learning_write_observations() -> tuple:
+                return ()
+
+            @staticmethod
+            def shadow_learning_observation_cursor() -> int:
+                calls.append(("cursor", None))
+                return 3
+
+            @staticmethod
+            def shadow_learning_observations_since(cursor: int):
+                calls.append(("since", cursor))
+                return (observation,)
+
+            @staticmethod
+            async def async_wait_for_shadow_learning_observations_since(
+                cursor: int,
+                *,
+                timeout_seconds: float,
+            ):
+                calls.append(("wait", (cursor, timeout_seconds)))
+                return (observation,)
+
+            @staticmethod
+            def shadow_learning_read_map_snapshot() -> dict[str, object]:
+                calls.append(("read_map", None))
+                return {"registers": {"7": [1]}}
+
+        callbacks = options._shadow_learning_orchestrator_callbacks(_Coordinator())
+
+        self.assertEqual(callbacks["observation_cursor"](), 3)
+        self.assertEqual(callbacks["current_observations_since"](2), (observation,))
+        self.assertEqual(
+            await callbacks["wait_for_observations_since"](2, 0.25),
+            (observation,),
+        )
+        self.assertEqual(
+            callbacks["read_map_snapshot"](),
+            {"registers": {"7": [1]}},
+        )
+        self.assertTrue(callbacks["is_session_ready"]())
+        self.assertEqual(
+            calls,
+            [
+                ("cursor", None),
+                ("since", 2),
+                ("wait", (2, 0.25)),
+                ("read_map", None),
+            ],
+        )
+
     class _RunnerCoordinator:
         smartess_collector_pn = "E5000020000000"
         cloud_evidence_provider = "smartess"
@@ -8782,19 +8887,30 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         def __init__(self, *, ready: bool = True) -> None:
             self.data = types.SimpleNamespace(values={})
-            self._runtime = types.SimpleNamespace(
-                shadow_learning_route_status=lambda: {
-                    "running": True,
-                    "collector_connected": True,
-                    "collector_protocol_ingress": True,
-                    "upstream_connected": True,
-                    "ready": ready,
-                    "upstream_error": "",
-                }
+            self.route_status = ShadowLearningRouteStatus(
+                running=True,
+                collector_connected=True,
+                collector_protocol_ingress=True,
+                upstream_connected=True,
+                ready=ready,
             )
             self.started: list[dict] = []
             self.stopped: list[dict] = []
             self.published: list[dict] = []
+
+        @property
+        def shadow_learning_runtime(self) -> ShadowLearningRuntimeFacade:
+            return ShadowLearningRuntimeFacade(
+                runtime=self,
+                cloud_evidence_provider=lambda: None,
+            )
+
+        def shadow_learning_route_status(self) -> dict[str, object]:
+            return self.route_status.to_mapping()
+
+        @staticmethod
+        def shadow_learning_write_observations() -> tuple:
+            return ()
 
         async def async_start_shadow_learning(self, **kwargs):
             self.started.append(kwargs)
@@ -8833,7 +8949,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "devcode": 2376,
             "devaddr": 1,
         }
-        options._shadow_learning_observation_source = lambda _coordinator: None
         options._shadow_learning_state["wizard_credentials"] = {
             "username": "demo@example.com",
             "password": "cloud-secret",
@@ -8933,14 +9048,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # cloud login / writes — the route gate that replaced the deleted
         # advanced-step gating.
         coordinator = self._RunnerCoordinator(ready=False)
-        coordinator._runtime.shadow_learning_route_status = lambda: {
-            "running": True,
-            "collector_connected": True,
-            "collector_protocol_ingress": True,
-            "upstream_connected": False,
-            "ready": False,
-            "upstream_error": "",
-        }
+        coordinator.route_status = ShadowLearningRouteStatus(
+            running=True,
+            collector_connected=True,
+            collector_protocol_ingress=True,
+            upstream_connected=False,
+            ready=False,
+        )
         options = self._runner_options_flow(coordinator)
         captured: dict = {}
         login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)

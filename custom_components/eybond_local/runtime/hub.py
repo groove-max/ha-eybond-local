@@ -61,6 +61,7 @@ from ..link_transport import async_send_payload, select_payload_route
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
 from ..payload.modbus import ModbusSession, to_signed_16
 from ..runtime_labels import runtime_path_label
+from ..support.shadow_learning import ShadowWriteObservation
 from .collector_metadata import (
     CollectorMetadataRefreshResult,
     CollectorMetadataService,
@@ -994,6 +995,44 @@ class EybondHub:
         """Return detailed status for the active shadow route."""
 
         return self._link_manager.shadow_learning_route_status()
+
+    def shadow_learning_write_observations(
+        self,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Return observations through the runtime-manager public contract."""
+
+        return self._link_manager.shadow_learning_write_observations()
+
+    def shadow_learning_observation_cursor(self) -> int:
+        """Return the active route's observation tail cursor."""
+
+        return self._link_manager.shadow_learning_observation_cursor()
+
+    def shadow_learning_observations_since(
+        self,
+        cursor: int,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Return active-route observations at or after one cursor."""
+
+        return self._link_manager.shadow_learning_observations_since(cursor)
+
+    async def async_wait_for_shadow_learning_observations_since(
+        self,
+        cursor: int,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Wait for observations through the runtime-manager contract."""
+
+        return await self._link_manager.async_wait_for_shadow_learning_observations_since(
+            cursor,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def shadow_learning_read_map_snapshot(self) -> dict[str, object]:
+        """Return a detached read-map snapshot through the runtime contract."""
+
+        return self._link_manager.shadow_learning_read_map_snapshot()
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:
         """Drop active collector sockets without changing collector settings."""

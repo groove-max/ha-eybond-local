@@ -47,6 +47,7 @@ from ..link_models import LinkRoute
 from ..link_transport import PayloadLinkTransport
 from ..models import CollectorInfo
 from ..support.proxy_session import InProcessProxyCaptureHandler
+from ..support.shadow_learning import ShadowWriteObservation
 from ..support.shadow_learning_backend import ShadowLearningSeed
 from ..support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandler
 
@@ -1852,6 +1853,72 @@ class EybondRuntimeLinkManager:
                 "upstream_error": "",
             }
         return dict(handler.status())
+
+    def shadow_learning_write_observations(
+        self,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Return observations from the active route without exposing its handler."""
+
+        handler = self._shadow_learning_handler
+        if handler is None:
+            return ()
+        return tuple(handler.write_observations)
+
+    def shadow_learning_observation_cursor(self) -> int:
+        """Return the active route's observation tail without exposing its handler."""
+
+        handler = self._shadow_learning_handler
+        if handler is None:
+            return 0
+        return handler.observation_cursor()
+
+    def shadow_learning_observations_since(
+        self,
+        cursor: int,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Return observations from one validated active-route cursor."""
+
+        if type(cursor) is not int or cursor < 0:
+            raise ValueError("shadow_learning_observation_cursor_invalid")
+        handler = self._shadow_learning_handler
+        if handler is None:
+            return ()
+        return tuple(handler.observations_since(cursor))
+
+    async def async_wait_for_shadow_learning_observations_since(
+        self,
+        cursor: int,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[ShadowWriteObservation, ...]:
+        """Wait for active-route observations without exposing its handler."""
+
+        if type(cursor) is not int or cursor < 0:
+            raise ValueError("shadow_learning_observation_cursor_invalid")
+        if (
+            type(timeout_seconds) not in (int, float)
+            or type(timeout_seconds) is bool
+            or timeout_seconds < 0
+        ):
+            raise ValueError("shadow_learning_observation_timeout_invalid")
+        handler = self._shadow_learning_handler
+        if handler is None:
+            return ()
+        return tuple(
+            await handler.wait_for_observations_since(
+                cursor,
+                timeout_seconds=float(timeout_seconds),
+            )
+        )
+
+    def shadow_learning_read_map_snapshot(self) -> dict[str, object]:
+        """Return a detached read-map snapshot from the active route."""
+
+        handler = self._shadow_learning_handler
+        if handler is None:
+            return {}
+        read_map = handler.read_map
+        return dict(read_map) if isinstance(read_map, dict) else {}
 
     async def async_disconnect_collector_connections(self, *, reason: str = "") -> None:
         """Drop current collector sockets without restarting discovery."""
