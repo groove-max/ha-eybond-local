@@ -1,0 +1,62 @@
+# EyeBond Local architecture graph
+#
+# Keep the graph focused on production code, executable architecture
+# boundaries, real-HA lifecycles, tooling, and handwritten design docs.
+# Graphify also respects .gitignore; these rules only narrow the corpus.
+
+# Never ingest Graphify's own output or local/generated artifacts.
+graphify-out/
+.local/
+field_dumps/
+.codex/
+AGENTS.md
+
+# Repository automation and contribution forms describe the development
+# process, not the integration's runtime architecture.  Keep them out of
+# semantic extraction so their vocabulary cannot create inferred code links.
+.github/workflows/
+.github/ISSUE_TEMPLATE/
+.github/PULL_REQUEST_TEMPLATE*
+
+# Binary/UI assets and generated/reference-heavy documentation.
+custom_components/eybond_local/brand/
+docs/images/
+docs/generated/
+CHANGELOG.md
+README.uk.md
+
+# Localized copies and large data catalogs do not describe code authority.
+custom_components/eybond_local/translations/
+custom_components/eybond_local/flow_translations/
+custom_components/eybond_local/strings.json
+custom_components/eybond_local/protocol_catalogs/**/*.json
+catalog/
+
+# Replay/support fixtures are useful to tests, but add payload detail rather
+# than architectural relationships to the first graph.
+custom_components/eybond_local/fixtures/
+tests/helpers/
+
+# Start from selected executable invariants instead of all behavioral tests.
+tests/*
+!tests/test_*architecture.py
+!tests/test_*guards.py
+!tests/test_admission_callback_continuation.py
+!tests/test_callback_continuation_seam.py
+!tests/test_callback_identity.py
+!tests/test_callback_recovery.py
+!tests/test_collector_admission.py
+!tests/test_collector_admission_transaction.py
+!tests/test_collector_endpoint_operation.py
+!tests/test_collector_operating_profile.py
+!tests/test_lifecycle_cancellation.py
+!tests/test_recovery_relocation_guards.py
+!tests/test_session_ownership_handoff.py
+!tests/test_strategy_transition.py
+!tests/test_strategy_transition_context.py
+!tests/test_strategy_transition_recovery_state.py
+!tests/test_strategy_transition_repair.py
+!tests/test_strategy_verification.py
+
+# tests_ha/, tools/, README.md, docs/*.md, and all remaining production source
+# are intentionally included.
