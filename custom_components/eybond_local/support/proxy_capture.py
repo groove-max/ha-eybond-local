@@ -34,6 +34,7 @@ def build_proxy_capture_overview(
     collector_control_allowed: bool = True,
     collector_proxy_capture_allowed: bool = True,
     collector_connected: bool,
+    endpoint_tools_allowed: bool,
     collector_cloud_family: str = "",
     current_endpoint: str,
     upstream_endpoint: str = "",
@@ -50,6 +51,8 @@ def build_proxy_capture_overview(
     normalized_family = str(collector_cloud_family or "").strip().lower()
     normalized_trace_path = str(getattr(active_state, "trace_path", "") or latest_trace_path or "").strip()
     normalized_manifest_path = "" if active_state is not None else str(latest_manifest_path or "").strip()
+    if type(endpoint_tools_allowed) is not bool:
+        raise TypeError("proxy_capture_profile_gate_not_bool")
 
     if active_state is not None:
         status = str(active_state.status or "running").strip() or "running"
@@ -68,6 +71,28 @@ def build_proxy_capture_overview(
             upstream_endpoint=normalized_upstream,
             target_endpoint=normalized_target,
             masked_endpoint=str(active_state.original_endpoint or normalized_current).strip(),
+            latest_trace_path=normalized_trace_path,
+            latest_manifest_path=normalized_manifest_path,
+        )
+
+    if not endpoint_tools_allowed:
+        return ProxyCaptureOverview(
+            status="blocked",
+            status_label=_status_label("blocked"),
+            summary=(
+                "Switch the collector to Home Assistant only before starting "
+                "traffic capture."
+            ),
+            blocking_reason="operating_profile_requires_ha_only",
+            can_start=False,
+            can_stop=False,
+            critical_phase=False,
+            redirect_required=False,
+            collector_connected=collector_connected,
+            current_endpoint=normalized_current,
+            upstream_endpoint=normalized_upstream,
+            target_endpoint=normalized_target,
+            masked_endpoint=normalized_current or normalized_target,
             latest_trace_path=normalized_trace_path,
             latest_manifest_path=normalized_manifest_path,
         )

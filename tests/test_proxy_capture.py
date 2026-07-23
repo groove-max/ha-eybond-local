@@ -20,6 +20,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
             control_mode="auto",
             collector_control_allowed=True,
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="collector-cloud.smartess.example,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -34,6 +35,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
             control_mode="auto",
             collector_control_allowed=False,
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="collector-cloud.smartess.example,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -49,6 +51,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
             control_mode="auto",
             collector_proxy_capture_allowed=False,
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -62,6 +65,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="auto",
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -92,6 +96,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,
@@ -123,6 +128,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,
@@ -152,6 +158,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
+            endpoint_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,
@@ -160,6 +167,49 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         self.assertEqual(overview.status_label, "Restoring")
         self.assertTrue(overview.critical_phase)
         self.assertFalse(overview.can_stop)
+
+    def test_new_session_requires_home_assistant_only_profile(self) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="full",
+            collector_connected=True,
+            endpoint_tools_allowed=False,
+            current_endpoint="collector-cloud.smartess.example,18899,TCP",
+            upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+        )
+
+        self.assertEqual(overview.status, "blocked")
+        self.assertEqual(
+            overview.blocking_reason,
+            "operating_profile_requires_ha_only",
+        )
+        self.assertFalse(overview.can_start)
+        self.assertFalse(overview.can_stop)
+
+    def test_active_session_remains_stoppable_after_profile_drift(self) -> None:
+        state = build_proxy_capture_session_state(
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            original_endpoint="collector-cloud.smartess.example,18899,TCP",
+            proxy_endpoint="192.168.1.50,18899,TCP",
+            restore_required=True,
+            anonymized=True,
+            started_at="2026-04-28T12:00:00Z",
+            expires_at="2026-04-28T12:05:00Z",
+            status="running",
+        )
+
+        overview = build_proxy_capture_overview(
+            control_mode="full",
+            collector_connected=True,
+            endpoint_tools_allowed=False,
+            current_endpoint="192.168.1.50,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+            active_state=state,
+        )
+
+        self.assertEqual(overview.status, "running")
+        self.assertTrue(overview.can_stop)
 
 
 if __name__ == "__main__":

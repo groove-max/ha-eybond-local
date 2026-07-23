@@ -40,6 +40,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
             OPERATING_PROFILE_SMARTESS_AND_HA,
         )
         self.assertTrue(profile.stable)
+        self.assertFalse(profile.endpoint_tools_allowed)
 
     def test_managed_inbound_is_ha_only(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -49,6 +50,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.profile, OPERATING_PROFILE_HA_ONLY)
         self.assertTrue(profile.stable)
+        self.assertTrue(profile.endpoint_tools_allowed)
 
     def test_verified_user_managed_inbound_is_ha_only(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -68,6 +70,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.profile, OPERATING_PROFILE_CUSTOM)
         self.assertFalse(profile.stable)
+        self.assertFalse(profile.endpoint_tools_allowed)
 
     def test_callback_with_managed_endpoint_is_custom(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -144,6 +147,15 @@ class CollectorOperatingProfileTests(unittest.TestCase):
             with self.subTest(field=field):
                 with self.assertRaises(TypeError):
                     resolve_collector_operating_profile(**kwargs)
+
+    def test_endpoint_tool_permission_is_a_read_only_profile_projection(self) -> None:
+        profile = resolve_collector_operating_profile(
+            connection_strategy=CONNECTION_STRATEGY_INBOUND,
+            endpoint_control_policy=ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+        )
+
+        self.assertTrue(profile.endpoint_tools_allowed)
+        self.assertNotIn("endpoint_tools_allowed", profile.__dataclass_fields__)
 
     def test_direct_constructor_rejects_cross_field_contradictions(self) -> None:
         valid = CollectorOperatingProfile(
@@ -228,6 +240,48 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertNotIn("_stage_connection_strategy_transition", runtime_source or "")
         self.assertIn("_stage_connection_strategy_transition", connection_source or "")
         self.assertIn("async_step_strategy_transition", connection_source or "")
+
+    def test_endpoint_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
+        coordinator_path = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "runtime"
+            / "coordinator.py"
+        )
+        source = coordinator_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        coordinator_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "EybondLocalCoordinator"
+        )
+
+        def _async_method_source(name: str) -> str:
+            method = next(
+                node
+                for node in coordinator_class.body
+                if isinstance(node, ast.AsyncFunctionDef) and node.name == name
+            )
+            return ast.get_source_segment(source, method) or ""
+
+        shadow_start = _async_method_source("async_start_shadow_learning")
+        shadow_stop = _async_method_source("async_stop_shadow_learning")
+        proxy_start = _async_method_source("async_start_proxy_capture")
+        proxy_stop = _async_method_source("async_stop_proxy_capture")
+
+        self.assertIn("collector_endpoint_tools_allowed", shadow_start)
+        self.assertNotIn("async_set_collector_server_endpoint", shadow_start)
+        self.assertIn("proxy_capture_overview", proxy_start)
+        self.assertNotIn("collector_endpoint_tools_allowed", shadow_stop)
+        self.assertNotIn("collector_endpoint_tools_allowed", proxy_stop)
+        self.assertEqual(
+            source.count(
+                "endpoint_tools_allowed=self.collector_endpoint_tools_allowed"
+            ),
+            3,
+        )
 
 
 if __name__ == "__main__":

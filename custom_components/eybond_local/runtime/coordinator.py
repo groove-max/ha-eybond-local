@@ -593,43 +593,6 @@ def _collector_server_endpoints_equal(
         return str(left or "").strip() == str(right or "").strip()
 
 
-def _resolve_shadow_learning_main_redirect(
-    *,
-    home_assistant_primary: bool,
-    current_endpoint: str,
-    rollback_target: str,
-    upstream_endpoint: str,
-    callback_endpoint: str,
-) -> tuple[str, bool]:
-    """Return (restore_endpoint, redirect_required) for a shadow-learning main-endpoint switch.
-
-    When the collector is already in HA-only mode it is already isolated on the HA endpoint:
-    there is nothing to redirect and -- crucially -- nothing to restore. Restoring to the
-    real-server rollback target in that case would move an already-isolated collector ONTO the
-    real server after the scan (and leave its control entities unavailable). Mirrors proxy
-    capture, which also no-ops when already HA-only.
-
-    Otherwise (SmartESS + HA) the persisted main param-21 endpoint is the real server. Drive
-    the redirect (and restore target) off the REAL upstream endpoint -- the remembered rollback
-    target, else the upstream the proxy forwards to, else the live endpoint -- NOT the
-    possibly-already-HA live endpoint (the additive callback can make it look like HA, which
-    would skip the switch and leave the collector live on the real server). This moves the main
-    endpoint to the proxy for the whole scan and restores it to the real server afterwards.
-    """
-
-    if home_assistant_primary:
-        return "", False
-    restore_endpoint = str(
-        (rollback_target or "").strip()
-        or (upstream_endpoint or "").strip()
-        or (current_endpoint or "").strip()
-    ).strip()
-    redirect_required = bool(
-        restore_endpoint and restore_endpoint != str(callback_endpoint or "").strip()
-    )
-    return restore_endpoint, redirect_required
-
-
 def _normalize_preserved_collector_server_endpoint(endpoint: str) -> str:
     """Normalize one callback endpoint while keeping its compact raw shape."""
 
@@ -2430,6 +2393,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return mode == COLLECTOR_OPERATION_HA_ONLY
 
     @property
+    def collector_endpoint_tools_allowed(self) -> bool:
+        """Return whether a new temporary endpoint-owning tool may start."""
+
+        return self.collector_operating_profile.endpoint_tools_allowed
+
+    @property
     def collector_callback_listener_required(self) -> bool:
         """Return whether this entry must keep the callback listener prepared.
 
@@ -3396,13 +3365,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     async def _async_shadow_learning_owns_endpoint(self) -> bool:
         """Return whether an active shadow-learning route owns the collector endpoint.
 
-        Shadow learning temporarily takes over the collector's main endpoint as
-        the safety boundary of the scan. While it runs, the per-poll endpoint
-        reconcile must leave the endpoint alone -- restoring or realigning it
-        mid-run could hand the real cloud a live route to the collector and leak
-        the next control write to the real inverter. This is route ownership
-        (like the callback-session registry), not a collector_operation_mode
-        decision, and it never writes or restores anything.
+        New learning sessions start from HA-only and do not rewrite the endpoint,
+        but the active learning proxy still owns its route as the safety boundary
+        of the scan. Per-poll reconcile must leave that endpoint alone: a
+        concurrent realignment could move traffic outside the learning proxy.
+        This is route ownership (like the callback-session registry), not a
+        collector_operation_mode decision, and it never writes or restores here.
         """
 
         if self._shadow_learning_process_running():
@@ -5100,28 +5068,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "current_endpoint": current_endpoint,
         }
 
-    def _shadow_learning_main_redirect(self, callback_endpoint: str) -> tuple[str, bool]:
-        """Return (restore_endpoint, redirect_required) for the scan's main-endpoint switch.
-
-        SAFETY: the collector's MAIN (param 21) endpoint must be moved to the local proxy for
-        the whole session. In "SmartESS + HA" the HA callback is *additive* -- it does NOT
-        rewrite param 21 -- so the collector keeps a live link to the real cloud, and a
-        mid-scan reconnect/reboot lets a real ctrlDevice command reach the inverter. Drive the
-        redirect (and the restore target) off the REAL upstream endpoint (the remembered
-        rollback target / upstream), not the possibly-already-HA live endpoint: gating on the
-        live endpoint would skip the param-21 switch (leaving the collector on the real server)
-        and would later restore to HA, stranding the collector off SmartESS.
-        """
-
-        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
-        return _resolve_shadow_learning_main_redirect(
-            home_assistant_primary=self.collector_home_assistant_primary,
-            current_endpoint=current_endpoint,
-            rollback_target=self.collector_server_endpoint_rollback_target,
-            upstream_endpoint=self.proxy_capture_upstream_endpoint,
-            callback_endpoint=callback_endpoint,
-        )
-
     async def async_start_shadow_learning(
         self,
         *,
@@ -5130,6 +5076,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         allow_ack_writes: bool = False,
     ) -> dict[str, object]:
         """Start one fail-closed shadow-learning runtime session."""
+
+        if not self.collector_endpoint_tools_allowed:
+            raise RuntimeError("shadow_learning_requires_ha_only_profile")
 
         active_proxy_state = await self._async_active_proxy_capture_state(require_process=False)
         if active_proxy_state is not None and proxy_capture_session_is_active(active_proxy_state):
@@ -5195,11 +5144,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             or f"shadow_learning:{self.config_entry.entry_id}:{timestamp}"
         )
 
-        # CP2C: own the ONE per-entry endpoint-operation authority for the WHOLE
-        # active shadow-learning mode (it redirects the collector's main endpoint
-        # to the local proxy). Acquired fail-closed here, BEFORE the first
-        # persistence/wire side effect; the owner ref is the persisted route owner
-        # id so a reload/restart can adopt the same token. Held on success.
+        # Own the ONE per-entry endpoint-operation authority for the WHOLE active
+        # shadow-learning transaction. New starts are already HA-only and do not
+        # rewrite the endpoint, but they still take exclusive route ownership so
+        # reconcile/proxy/endpoint actions cannot interfere with the learning
+        # proxy. Acquired fail-closed BEFORE the first persistence/wire effect;
+        # the persisted route owner lets reload/restart adopt the same token.
         from ..connection.collector_endpoint_operation import (
             COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
             COLLECTOR_ENDPOINT_OPERATION_BUSY as _OP_BUSY,
@@ -5238,7 +5188,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 upstream_port=upstream_port,
             )
 
-            restore_endpoint, restore_required = self._shadow_learning_main_redirect(callback_endpoint)
+            # New control-discovery sessions start only from the typed HA-only
+            # profile. The collector endpoint is already owned by Home
+            # Assistant, so this transaction must not write or later "restore"
+            # that endpoint. Stop/recovery still honors restore_required on
+            # persisted sessions created by older versions.
+            restore_endpoint = ""
+            restore_required = False
             started_at = shadow_learning_session_timestamp()
             expires_at = build_shadow_learning_lease_deadline(
                 lease_seconds=self.proxy_capture_configured_duration_minutes * 60,
@@ -5257,7 +5213,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 updated_at=started_at,
                 status="preflight",
             )
-            endpoint_mutation_started = False
             try:
                 # FIRST persistence lives INSIDE the finalized region: from here
                 # the mode may OWN the endpoint, so a cancel during/after this save
@@ -5307,40 +5262,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 )
 
                 min_ready_sequence = 0
-                if restore_required:
-                    min_ready_sequence = int(
-                        self._shadow_learning_route_status().get(
-                            "collector_connection_sequence"
-                        )
-                        or 0
-                    )
-                    # Once this await starts, the endpoint may have changed even
-                    # when no result is returned. Before it starts, cleanup must
-                    # not issue a speculative restore write.
-                    endpoint_mutation_started = True
-                    redirect_result = await self._runtime.async_set_collector_server_endpoint(
-                        callback_endpoint,
-                        apply_changes=True,
-                    )
-                    readback_endpoint = str(
-                        redirect_result.get("readback_endpoint") or ""
-                    ).strip()
-                    if not readback_endpoint or not _collector_server_endpoints_equal(
-                        readback_endpoint,
-                        callback_endpoint,
-                        cloud_family=self.collector_cloud_family,
-                    ):
-                        raise RuntimeError(
-                            "shadow_learning_endpoint_redirect_not_confirmed"
-                        )
-                else:
-                    disconnect_current = getattr(
-                        self._runtime,
-                        "async_disconnect_collector_connections",
-                        None,
-                    )
-                    if disconnect_current is not None:
-                        await disconnect_current(reason="shadow_learning_start")
+                disconnect_current = getattr(
+                    self._runtime,
+                    "async_disconnect_collector_connections",
+                    None,
+                )
+                if disconnect_current is not None:
+                    await disconnect_current(reason="shadow_learning_start")
 
                 await self._async_wait_for_shadow_learning_ready(
                     trace_path=trace_path,
@@ -5368,18 +5296,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             except BaseException as exc:
                 # MANDATORY cancellation-safe cleanup (catches CancelledError too).
                 # ONE shielded finalization boundary runs to completion even under
-                # REPEATED cancellation: restore the endpoint, stop the route by
-                # exact owner id, then clear+release (confirmed) OR persist a
-                # recoverable restore_failed state and hold the token.
-                released, _pending_cancel = await self._run_finalization_shielded(
+                # REPEATED cancellation: stop the route by exact owner id, then
+                # atomically clear the tentative state and release ownership.
+                _released, _pending_cancel = await self._run_finalization_shielded(
                     lambda: self._finalize_shadow_learning_start_cleanup(
                         state=state,
-                        restore_endpoint=restore_endpoint,
-                        restore_required=restore_required,
-                        endpoint_mutation_started=endpoint_mutation_started,
                         entry_id=self.config_entry.entry_id,
                         token=_op_acquire.token,
-                        error=str(exc),
                     )
                 )
                 # The finalization now owns the token decision (released OR held),
@@ -5396,7 +5319,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                         refresh_exc,
                     )
                 self._publish_tooling_values(
-                    shadow_learning_session_status=("failed" if released else "restore_failed"),
+                    shadow_learning_session_status="failed",
                     shadow_learning_session_ready=False,
                     local_metadata_status="Shadow-learning route failed to start",
                 )
@@ -7417,6 +7340,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             collector_control_allowed=self.collector_actions_enabled,
             collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
             collector_connected=bool(snapshot.connected),
+            endpoint_tools_allowed=self.collector_endpoint_tools_allowed,
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(
                 values.get("collector_server_endpoint")
@@ -7744,36 +7668,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self,
         *,
         state,
-        restore_endpoint: str,
-        restore_required: bool,
-        endpoint_mutation_started: bool,
         entry_id: str,
         token,
-        error: str,
     ) -> bool:
         """The ONE mandatory cleanup for an interrupted shadow-learning start.
 
-        Mirror of :meth:`_finalize_proxy_capture_start_cleanup`: restore the
-        endpoint if needed, stop the route by exact owner id unconditionally, then
-        clear+release (confirmed) or persist a recoverable ``restore_failed`` state
-        and keep the token. Returns True when it released the token.
+        New starts are HA-only and never mutate the collector endpoint. Stop the
+        route by exact owner id unconditionally, then clear the tentative state
+        and release the exact token in this shielded critical section. Persisted
+        legacy sessions with ``restore_required`` are handled by normal
+        stop/startup-recovery paths, not by this new-start finalizer.
         """
 
         from ..connection.collector_endpoint_operation import (
             COLLECTOR_ENDPOINT_OPERATION_AUTHORITY as _OP_AUTHORITY,
         )
 
-        restore_confirmed = not (restore_required and endpoint_mutation_started)
-        restore_error = ""
-        if restore_required and endpoint_mutation_started:
-            if restore_endpoint:
-                restore_confirmed, restore_error = (
-                    await self._async_best_effort_restore_after_start_failure(
-                        restore_endpoint
-                    )
-                )
-            else:
-                restore_error = "restore_endpoint_unavailable"
         try:
             await self._runtime.async_stop_shadow_learning_route(
                 owner_id=state.route_owner_id,
@@ -7784,29 +7694,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 entry_id,
                 exc,
             )
-        if restore_confirmed:
-            await self._async_clear_shadow_learning_session_state()
-            _OP_AUTHORITY.release(entry_id, token)
-            return True
-        failed_state = build_shadow_learning_session_state(
-            entry_id=state.entry_id,
-            route_owner_id=state.route_owner_id,
-            collector_pn=state.collector_pn,
-            trace_path=state.trace_path,
-            original_endpoint=state.original_endpoint,
-            proxy_endpoint=state.proxy_endpoint,
-            upstream_endpoint=state.upstream_endpoint,
-            restore_required=state.restore_required,
-            started_at=state.started_at,
-            expires_at=state.expires_at,
-            updated_at=shadow_learning_session_timestamp(),
-            restore_attempt_count=state.restore_attempt_count + 1,
-            last_restore_attempt_at=shadow_learning_session_timestamp(),
-            last_restore_error=restore_error or error,
-            status="restore_failed",
-        )
-        await self._async_save_shadow_learning_session_state(failed_state)
-        return False
+        await self._async_clear_shadow_learning_session_state()
+        _OP_AUTHORITY.release(entry_id, token)
+        return True
 
     async def _async_reconcile_proxy_capture_session(
         self,
@@ -8923,6 +8813,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             collector_control_allowed=self.collector_actions_enabled,
             collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
             collector_connected=bool(snapshot.connected),
+            endpoint_tools_allowed=self.collector_endpoint_tools_allowed,
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(
                 current_endpoint
@@ -9215,6 +9106,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             collector_control_allowed=self.collector_actions_enabled,
             collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
             collector_connected=bool(snapshot.connected),
+            endpoint_tools_allowed=self.collector_endpoint_tools_allowed,
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(snapshot.values.get("collector_server_endpoint") or ""),
             upstream_endpoint=self.proxy_capture_upstream_endpoint,

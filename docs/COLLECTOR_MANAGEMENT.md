@@ -132,7 +132,10 @@ Use this after changing collector networking, or when the collector stopped resp
 
 This is a support tool. Most users do not need it for normal operation.
 
-Use it only when a developer asks you to collect extra evidence.
+Use it only when a developer asks you to collect extra evidence. A new capture
+can start only while the collector uses the **Home Assistant only** connection
+profile. If a capture was already started, its stop or recovery action remains
+available until the original collector connection is restored.
 
 For the full user guide, see [Collector Proxy Capture](PROXY_CAPTURE.md).
 

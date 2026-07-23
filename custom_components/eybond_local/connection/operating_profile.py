@@ -126,6 +126,19 @@ class CollectorOperatingProfile:
 
         return self.profile != OPERATING_PROFILE_CUSTOM
 
+    @property
+    def endpoint_tools_allowed(self) -> bool:
+        """Return whether temporary endpoint-owning tools may start.
+
+        Proxy capture and shadow learning are maintenance transactions, not
+        operating profiles. Both take exclusive ownership of the collector
+        route, and proxy capture may temporarily redirect it. New transactions
+        start only from the stable Home-Assistant-owned baseline. Their
+        stop/recovery paths intentionally do not consult this property.
+        """
+
+        return self.profile == OPERATING_PROFILE_HA_ONLY
+
 
 def resolve_collector_operating_profile(
     *,

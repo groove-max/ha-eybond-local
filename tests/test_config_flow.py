@@ -5883,7 +5883,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "connection",
                 "runtime",
-                "shadow_learning",
                 "collector_wifi",
                 "diagnostics",
             ],
@@ -5983,6 +5982,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_options_init_menu_keeps_shadow_learning_for_factory_collector(self) -> None:
         options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=False),
@@ -5996,7 +6001,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
 
-    async def test_runtime_identity_unlocks_factory_tools_for_legacy_unknown_entry(self) -> None:
+    async def test_callback_profile_keeps_endpoint_tools_locked(self) -> None:
         options = self._make_options_flow()
         options._config_entry.data = {
             **dict(options._config_entry.data),
@@ -6023,8 +6028,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "create_support_package"
             )
 
-        self.assertIn("shadow_learning", menu["menu_options"])
-        self.assertIn("proxy_capture", diagnostics)
+        self.assertNotIn("shadow_learning", menu["menu_options"])
+        self.assertNotIn("proxy_capture", diagnostics)
         self.assertFalse(options._collector_capabilities().ha_only_required)
 
     async def test_options_init_offers_repair_for_degraded_virtual_bridge(self) -> None:
@@ -6563,7 +6568,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "create_support_package",
                 "reload_local_metadata",
-                "proxy_capture",
             ],
         )
         self.assertNotIn("diagnostic_commands", result["menu_options"])
@@ -6701,8 +6705,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("create_support_package", menu_options)
 
     async def test_diagnostics_menu_keeps_proxy_capture_for_factory_collector(self) -> None:
-        # Item 3 fail-safe: a factory collector keeps proxy capture.
+        # A factory collector exposes proxy capture from the stable HA-only
+        # baseline.
         options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=False),
@@ -6713,6 +6724,56 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             options.hass.config.config_dir = tempdir
             menu_options = options._diagnostics_menu_options("create_support_package")
+
+        self.assertIn("proxy_capture", menu_options)
+
+    async def test_diagnostics_menu_hides_proxy_capture_in_callback_profile(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            menu_options = options._diagnostics_menu_options(
+                "create_support_package"
+            )
+
+        self.assertNotIn("proxy_capture", menu_options)
+
+    async def test_active_proxy_remains_visible_after_profile_drift(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            proxy_capture_overview=types.SimpleNamespace(
+                can_stop=True,
+                critical_phase=False,
+            ),
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            menu_options = options._diagnostics_menu_options(
+                "create_support_package"
+            )
 
         self.assertIn("proxy_capture", menu_options)
 
@@ -7384,6 +7445,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_diagnostics_menu_exposes_rollback_for_active_local_override(self) -> None:
         options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
         workflow = {
             f"support_workflow_{key}": value
             for key, value in build_support_workflow_state(
@@ -7851,10 +7918,36 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def _wizard_options_flow(self) -> EybondLocalOptionsFlow:
         options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(values={}),
         )
         return options
+
+    async def test_control_discovery_callback_profile_routes_to_profile_choice(
+        self,
+    ) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(values={}),
+        )
+
+        result = await options.async_step_shadow_learning()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "connection")
+        self.assertIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
 
     async def test_control_discovery_entry_shows_consent_not_action_dropdown(self) -> None:
         options = self._wizard_options_flow()

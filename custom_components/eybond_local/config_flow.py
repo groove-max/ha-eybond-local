@@ -9675,10 +9675,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             menu_options = [
                 "connection",
                 "runtime",
-                "shadow_learning",
                 "collector_wifi",
                 "diagnostics",
             ]
+            if self._collector_operating_profile().endpoint_tools_allowed:
+                menu_options.insert(2, "shadow_learning")
 
         # RECOVERY takes priority OVER the capability filter: a degraded entry
         # (recovery marker present) offers the repair FIRST -- even a virtual
@@ -9750,7 +9751,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     {
                         OPERATING_PROFILE_SMARTESS_AND_HA: (
                             "The collector normally remains connected to SmartESS. "
-                            "Home Assistant asks it to connect when data is needed."
+                            "Home Assistant asks it to connect when data is needed. "
+                            "Temporary traffic capture and control discovery require "
+                            "the Home Assistant only profile."
                         ),
                         OPERATING_PROFILE_HA_ONLY: (
                             "The collector connects directly to Home Assistant. "
@@ -11591,6 +11594,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     "Ensure the entry is loaded and the inverter has been detected, then try again.",
                 ),
             )
+
+        if not self._collector_operating_profile().endpoint_tools_allowed:
+            return await self.async_step_connection()
 
         errors: dict[str, str] = {}
         consent = bool((user_input or {}).get("shadow_learning_confirm_cloud_write", False))
@@ -13446,11 +13452,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         for that is ``collector_connected`` -- the live collector->proxy socket,
         which is STABLE for the duration of a scan (it is the separate *upstream*
         proxy->cloud socket that is short-lived, not this one). If the collector
-        reboots after the endpoint switch and reconnects onto the real server, or
-        reverts mid-scan, ``collector_connected`` drops and control must stop
-        immediately. A "reached us once" signal is NOT acceptable here: it stays
-        true after a revert and let probing continue onto the real server, which
-        turned off the user's inverter output.
+        disconnects from the learning route or its endpoint changes away from
+        Home Assistant mid-scan, ``collector_connected`` drops and control must
+        stop immediately. A "reached us once" signal is NOT acceptable here: it
+        stays true after a route loss and could let probing continue outside the
+        learning proxy.
         """
 
         status = self._shadow_learning_route_status(coordinator)
@@ -14396,11 +14402,21 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if rollback_paths.paths and "rollback_local_metadata" not in menu_options:
             menu_options.append("rollback_local_metadata")
 
-        # Proxy capture redirects the collector callback (FC=3 param 21) to
-        # record provider traffic. A virtual bridge has no upstream provider
-        # side to capture — omit it for a detected bridge. Fail-safe: factory
-        # collectors / unanswered probes keep proxy capture exactly as before.
-        if self._collector_capabilities().proxy_capture:
+        # Proxy capture is a temporary endpoint-owning transaction, not a third
+        # operating mode. New sessions start only from the stable HA-only
+        # baseline. An already-active or recovering session remains visible so
+        # the user can always stop/finalize it even if the profile later drifted.
+        profile_allows_start = (
+            self._collector_operating_profile().endpoint_tools_allowed
+        )
+        overview = getattr(coordinator, "proxy_capture_overview", None)
+        active_or_recoverable = bool(
+            getattr(overview, "can_stop", False)
+            or getattr(overview, "critical_phase", False)
+        )
+        if self._collector_capabilities().proxy_capture and (
+            profile_allows_start or active_or_recoverable
+        ):
             menu_options.append("proxy_capture")
         return menu_options
 
