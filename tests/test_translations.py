@@ -76,9 +76,44 @@ class TranslationShapeTests(unittest.TestCase):
                 self.assertIn("connection_strategy_inbound", dynamic)
                 self.assertIn("connection_strategy_callback_on_demand", dynamic)
                 self.assertIn("connection_strategy_bridge_note", dynamic)
-                self.assertIn("operating_profile_smartess_and_ha", dynamic)
+                self.assertIn("operating_profile_cloud_and_ha", dynamic)
                 self.assertIn("operating_profile_ha_only", dynamic)
                 self.assertIn("operating_profile_custom", dynamic)
+
+    def test_product_operating_profile_is_cloud_neutral(self) -> None:
+        """SmartESS remains a provider name, never the general operating mode."""
+
+        for path in TRANSLATION_FILES:
+            with self.subTest(path=path.name):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                options = payload["options"]
+                product_strings = (
+                    options["step"]["init"]["menu_options"]["connection"],
+                    options["step"]["init"]["menu_options"]["proxy_capture"],
+                    options["step"]["connection"]["title"],
+                    options["step"]["connection"]["data_description"][
+                        "connection_strategy"
+                    ],
+                    payload["entity"]["sensor"]["collector_operation_mode"][
+                        "state"
+                    ]["smartess_cloud_home_assistant"],
+                )
+                for value in product_strings:
+                    self.assertNotIn("SmartESS", value)
+
+        for path in FLOW_TRANSLATION_FILES:
+            with self.subTest(path=path.name):
+                dynamic = json.loads(path.read_text(encoding="utf-8"))["common"][
+                    "dynamic"
+                ]
+                self.assertNotIn("operating_profile_smartess_and_ha", dynamic)
+                for key in (
+                    "operating_profile_cloud_and_ha",
+                    "operating_profile_summary_smartess_cloud_home_assistant",
+                    "operating_profile_summary_home_assistant_only",
+                    "connection_strategy_risk_inbound",
+                ):
+                    self.assertNotIn("SmartESS", dynamic[key])
 
     def test_listener_rediscovery_action_is_translated(self) -> None:
         for path in TRANSLATION_FILES:

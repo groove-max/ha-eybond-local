@@ -8,8 +8,8 @@ strict projection of the existing authorities:
 * ``RecoveryContract`` -- whether an inbound route was actually verified;
 * collector capabilities -- whether a cloud side can exist at all.
 
-Keeping this projection neutral prevents UI wording such as "SmartESS + Home
-Assistant" from becoming another writer that can drift from the wire state.
+Keeping this projection neutral prevents a particular vendor application from
+becoming another architecture axis that can drift from the wire state.
 """
 
 from __future__ import annotations
@@ -33,12 +33,15 @@ from .connection_policy import (
 from .recovery_contract import RecoveryContract
 
 
-OPERATING_PROFILE_SMARTESS_AND_HA = "smartess_cloud_home_assistant"
+# The persisted token predates this neutral projection and is retained for
+# compatibility.  The domain name is intentionally provider-neutral: SmartESS
+# is only one of the cloud applications used by EyeBond collectors.
+OPERATING_PROFILE_CLOUD_AND_HA = "smartess_cloud_home_assistant"
 OPERATING_PROFILE_HA_ONLY = "home_assistant_only"
 OPERATING_PROFILE_CUSTOM = "custom"
 OPERATING_PROFILES = frozenset(
     {
-        OPERATING_PROFILE_SMARTESS_AND_HA,
+        OPERATING_PROFILE_CLOUD_AND_HA,
         OPERATING_PROFILE_HA_ONLY,
         OPERATING_PROFILE_CUSTOM,
     }
@@ -93,7 +96,7 @@ class CollectorOperatingProfile:
 
         if reason == PROFILE_REASON_CALLBACK_EXTERNAL:
             valid = (
-                profile == OPERATING_PROFILE_SMARTESS_AND_HA
+                profile == OPERATING_PROFILE_CLOUD_AND_HA
                 and strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
                 and policy == ENDPOINT_CONTROL_EXTERNAL
             )
@@ -173,7 +176,7 @@ def resolve_collector_operating_profile(
         and policy == ENDPOINT_CONTROL_EXTERNAL
         and not ha_only_required
     ):
-        profile = OPERATING_PROFILE_SMARTESS_AND_HA
+        profile = OPERATING_PROFILE_CLOUD_AND_HA
         reason = PROFILE_REASON_CALLBACK_EXTERNAL
     elif (
         strategy == CONNECTION_STRATEGY_INBOUND
@@ -222,7 +225,7 @@ __all__ = [
     "CollectorOperatingProfile",
     "OPERATING_PROFILE_CUSTOM",
     "OPERATING_PROFILE_HA_ONLY",
-    "OPERATING_PROFILE_SMARTESS_AND_HA",
+    "OPERATING_PROFILE_CLOUD_AND_HA",
     "collector_operating_profile_from_entry",
     "resolve_collector_operating_profile",
 ]

@@ -420,9 +420,10 @@
         "title": "Параметри EyeBond Local",
         "description": "Виберіть, чим саме ви хочете керувати для цього запису.{bridge_note}",
         "menu_options": {
-          "connection": "Підключення колектора та SmartESS",
+          "connection": "Підключення колектора та хмари",
           "runtime": "Опитування та визначення інвертора",
           "shadow_learning": "Розширити підтримку пристрою",
+          "proxy_capture": "Тимчасовий хмарний проксі та захоплення трафіку",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "collector_uart": "Змінити швидкість UART інвертора",
           "inverter_protocol": "Вибрати протокол інвертора",
@@ -433,13 +434,13 @@
         }
       },
       "connection": {
-        "title": "Підключення колектора та SmartESS",
+        "title": "Підключення колектора та хмари",
         "description": "**Поточний профіль:** {current_profile}\n\n{profile_summary}\n\nВиберіть бажаний результат. Перед збереженням змін Home Assistant перевірить підключення колектора.",
         "data": {
           "connection_strategy": "Профіль роботи"
         },
         "data_description": {
-          "connection_strategy": "SmartESS + Home Assistant зберігає підключення колектора до зовнішнього сервісу та запитує з’єднання з Home Assistant за потреби. Лише Home Assistant спрямовує колектор безпосередньо до Home Assistant і припиняє звичайне надсилання даних у SmartESS."
+          "connection_strategy": "Хмара + Home Assistant зберігає підключення колектора до зовнішнього сервісу та запитує з’єднання з Home Assistant за потреби. Лише Home Assistant спрямовує колектор безпосередньо до Home Assistant і припиняє звичайне надсилання даних у хмару."
         }
       },
       "inverter_protocol": {
@@ -743,7 +744,7 @@
       "collector_operation_mode": {
         "name": "Профіль роботи колектора",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + Home Assistant",
+          "smartess_cloud_home_assistant": "Хмара + Home Assistant",
           "home_assistant_only": "Лише Home Assistant",
           "custom": "Нестандартне налаштування"
         }

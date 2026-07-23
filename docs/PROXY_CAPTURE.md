@@ -23,6 +23,7 @@ Make sure:
 
 - the collector has stable Wi-Fi;
 - Home Assistant can already reach the collector;
+- the collector uses the **Home Assistant only** operating profile;
 - you are ready to keep the capture short;
 - you can check that the vendor app still works afterward if you use one.
 
@@ -45,10 +46,11 @@ You can also open:
 1. **Settings → Devices & Services**
 2. **EyeBond Local**
 3. **Configure**
-4. **Diagnostics and service tools**
-5. **Collector traffic capture**
+4. **Temporary cloud proxy and traffic capture**
 
-This screen is useful when you want to watch the live capture status or download the result immediately.
+The option appears only when a new capture can safely start. If a capture is
+already active or needs recovery, the option remains visible until Home
+Assistant finishes stopping it and restoring the collector route.
 
 <p align="center"><img src="images/proxy-capture-running.png" alt="Running proxy capture session with timer and live log" width="720"></p>
 

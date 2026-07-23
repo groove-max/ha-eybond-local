@@ -29,16 +29,17 @@ After the device is added, you can change the collector Wi-Fi from the collector
 
 If you change the collector network and it receives a new IP address, removing and adding the integration again can be the simplest way to pick up the new address cleanly.
 
-## Collector connection and SmartESS
+## Collector connection and cloud
 
 The normal user choice describes the result you want, not an internal polling
 method:
 
-### SmartESS + Home Assistant
+### Cloud + Home Assistant
 
-Choose this when the collector should remain usable in SmartESS.
+Choose this when the collector should remain usable in its vendor cloud or app,
+such as SmartESS or SmartValue.
 
-- the collector normally keeps its external SmartESS endpoint
+- the collector normally keeps its external cloud endpoint
 - Home Assistant asks it to connect when local data is needed
 - the vendor app can continue receiving data
 
@@ -47,7 +48,7 @@ Choose this when the collector should remain usable in SmartESS.
 Choose this when the collector should connect directly to Home Assistant.
 
 - Home Assistant keeps a permanent collector connection
-- normal SmartESS reporting stops
+- normal cloud reporting stops
 - a previously confirmed external endpoint is remembered when possible so a
   later verified switch can offer it for restoration
 
@@ -67,7 +68,7 @@ Pointing a collector at Home Assistant, or restoring its previous server, are
 - **Restore previous collector endpoint** — puts the collector's server back to
   what it was before, and hands control of that endpoint back to you.
 
-You can change the result later from **Collector connection and SmartESS**.
+You can change the result later from **Collector connection and cloud**.
 Polling and inverter detection remain on a separate screen.
 
 > The older writable **Collector Operation Mode** is retired. The similarly
@@ -93,10 +94,10 @@ appears, the diagnostics report a clear reason:
 
 ## Control mode is a different setting
 
-Do not confuse **Collector connection and SmartESS** with **Control Mode**.
+Do not confuse **Collector connection and cloud** with **Control Mode**.
 
-- **Collector connection and SmartESS** decides whether the collector normally
-  uses SmartESS or connects directly to Home Assistant.
+- **Collector connection and cloud** decides whether the collector normally
+  uses its cloud service or connects directly to Home Assistant.
 - **Control Mode** decides how much write access Home Assistant gets on the inverter side.
 
 The control modes are:

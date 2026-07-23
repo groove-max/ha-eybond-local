@@ -6012,6 +6012,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
+            proxy_capture_overview=types.SimpleNamespace(
+                can_start=True,
+                can_stop=False,
+                critical_phase=False,
+            ),
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=False),
                 values={},
@@ -6021,6 +6026,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await options.async_step_init()
 
         self.assertIn("shadow_learning", result["menu_options"])
+        self.assertIn("proxy_capture", result["menu_options"])
+        self.assertLess(
+            result["menu_options"].index("proxy_capture"),
+            result["menu_options"].index("diagnostics"),
+        )
         self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
 
@@ -6052,8 +6062,30 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertNotIn("shadow_learning", menu["menu_options"])
+        self.assertNotIn("proxy_capture", menu["menu_options"])
         self.assertNotIn("proxy_capture", diagnostics)
         self.assertFalse(options._collector_capabilities().ha_only_required)
+
+    async def test_active_proxy_cleanup_remains_on_main_menu_after_capability_drift(
+        self,
+    ) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            proxy_capture_overview=types.SimpleNamespace(
+                can_start=False,
+                can_stop=True,
+                critical_phase=False,
+            ),
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=True),
+                values={"collector_virtual_bridge": True},
+            ),
+        )
+
+        menu = await options.async_step_init()
+
+        self.assertIn("proxy_capture", menu["menu_options"])
+        self.assertNotIn("shadow_learning", menu["menu_options"])
 
     async def test_options_init_offers_repair_for_degraded_virtual_bridge(self) -> None:
         # Recovery beats capability filtering: a DEGRADED virtual bridge (recovery
@@ -6727,9 +6759,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("proxy_capture", menu_options)
         self.assertIn("create_support_package", menu_options)
 
-    async def test_diagnostics_menu_keeps_proxy_capture_for_factory_collector(self) -> None:
-        # A factory collector exposes proxy capture from the stable HA-only
-        # baseline.
+    async def test_proxy_capture_is_exposed_from_main_menu_not_diagnostics(self) -> None:
         options = self._make_options_flow()
         options._config_entry.data.update(
             {
@@ -6738,6 +6768,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
+            proxy_capture_overview=types.SimpleNamespace(
+                can_start=True,
+                can_stop=False,
+                critical_phase=False,
+            ),
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=False),
                 values={},
@@ -6747,8 +6782,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             options.hass.config.config_dir = tempdir
             menu_options = options._diagnostics_menu_options("create_support_package")
+        main_menu = await options.async_step_init()
 
-        self.assertIn("proxy_capture", menu_options)
+        self.assertNotIn("proxy_capture", menu_options)
+        self.assertIn("proxy_capture", main_menu["menu_options"])
 
     async def test_diagnostics_menu_hides_proxy_capture_in_callback_profile(self) -> None:
         options = self._make_options_flow()
@@ -6792,13 +6829,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        with tempfile.TemporaryDirectory() as tempdir:
-            options.hass.config.config_dir = tempdir
-            menu_options = options._diagnostics_menu_options(
-                "create_support_package"
-            )
+        menu = await options.async_step_init()
 
-        self.assertIn("proxy_capture", menu_options)
+        self.assertIn("proxy_capture", menu["menu_options"])
 
     async def test_options_runtime_step_hides_operation_mode_selector_for_bridge(self) -> None:
         # The polling form contains no connection profile control for any
@@ -6857,7 +6890,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(CONF_CONNECTION_STRATEGY, connection["data_schema"].schema)
         self.assertIn(
             connection["description_placeholders"]["current_profile"],
-            {"SmartESS + Home Assistant", "Home Assistant only", "Custom configuration"},
+            {"Cloud + Home Assistant", "Home Assistant only", "Custom configuration"},
         )
 
     async def test_options_runtime_step_forces_inbound_for_bridge_on_submit(self) -> None:
@@ -7085,6 +7118,24 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["proxy_capture_user_plan"],
         )
         self.assertEqual(result["description_placeholders"]["proxy_capture_saved_result_section"], "")
+
+    async def test_proxy_capture_deep_link_routes_to_profile_choice_when_blocked(
+        self,
+    ) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            proxy_capture_overview=types.SimpleNamespace(
+                can_start=False,
+                can_stop=False,
+                critical_phase=False,
+            ),
+            data=types.SimpleNamespace(collector=None, values={}),
+        )
+
+        result = await options.async_step_proxy_capture()
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "connection")
 
     async def test_show_proxy_capture_status_step_renders_current_status(self) -> None:
         options = self._make_options_flow()
@@ -7524,7 +7575,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["menu_options"][0], "create_support_package")
         self.assertIn("reload_local_metadata", result["menu_options"])
         self.assertIn("rollback_local_metadata", result["menu_options"])
-        self.assertIn("proxy_capture", result["menu_options"])
+        self.assertNotIn("proxy_capture", result["menu_options"])
         self.assertNotIn("advanced_metadata", result["menu_options"])
 
     async def test_rollback_local_metadata_runs_coordinator_action(self) -> None:

@@ -37,7 +37,7 @@ Check these first:
 - The collector has stable Wi-Fi.
 - The collector uses the **Home Assistant only** connection profile. Control
   discovery temporarily owns its endpoint and is not started from the
-  SmartESS + Home Assistant profile.
+  Cloud + Home Assistant profile.
 - Home Assistant can read live data from the inverter.
 - You know the cloud/app username and password for this device, if the learning
   flow asks for them.

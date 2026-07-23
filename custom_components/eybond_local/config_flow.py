@@ -69,7 +69,7 @@ from .connection.operating_profile import (
     CollectorOperatingProfile,
     OPERATING_PROFILE_CUSTOM,
     OPERATING_PROFILE_HA_ONLY,
-    OPERATING_PROFILE_SMARTESS_AND_HA,
+    OPERATING_PROFILE_CLOUD_AND_HA,
     collector_operating_profile_from_entry,
 )
 from .connection.strategy_transition_context import (
@@ -1120,7 +1120,7 @@ def _connection_strategy_selector(
     - ``callback_on_demand``: HA asks the collector to connect (a single UDP
       trigger per connect attempt).
 
-    This replaces the old "SmartESS cloud + Home Assistant / Home Assistant only"
+    This replaces the old "Cloud + Home Assistant / Home Assistant only"
     (Cloud+HA / HA-only) wording as the main user-facing choice.
     """
 
@@ -9606,13 +9606,30 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ha_only_required=self._collector_capabilities().ha_only_required,
         )
 
+    def _proxy_capture_menu_available(self, coordinator=None) -> bool:
+        """Return whether proxy capture must be reachable from the main menu.
+
+        ``ProxyCaptureOverview`` is the single readiness authority: its
+        ``can_start`` already includes collector capability and the stable
+        HA-only baseline. An existing or recovering session always remains
+        reachable because cleanup is a lifecycle obligation.
+        """
+
+        coordinator = coordinator or self._coordinator()
+        overview = getattr(coordinator, "proxy_capture_overview", None)
+        return bool(
+            getattr(overview, "can_start", False)
+            or getattr(overview, "can_stop", False)
+            or getattr(overview, "critical_phase", False)
+        )
+
     def _operating_profile_label(self, profile: str) -> str:
         """Return one localized product-level operating-profile label."""
 
         labels = {
-            OPERATING_PROFILE_SMARTESS_AND_HA: self._tr(
-                "common.dynamic.operating_profile_smartess_and_ha",
-                "SmartESS + Home Assistant",
+            OPERATING_PROFILE_CLOUD_AND_HA: self._tr(
+                "common.dynamic.operating_profile_cloud_and_ha",
+                "Cloud + Home Assistant",
             ),
             OPERATING_PROFILE_HA_ONLY: self._tr(
                 "common.dynamic.operating_profile_ha_only",
@@ -9686,6 +9703,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             if self._collector_operating_profile().endpoint_tools_allowed:
                 menu_options.insert(2, "shadow_learning")
 
+        if self._proxy_capture_menu_available():
+            menu_options.insert(menu_options.index("diagnostics"), "proxy_capture")
+
         # RECOVERY takes priority OVER the capability filter: a degraded entry
         # (recovery marker present) offers the repair FIRST -- even a virtual
         # bridge can be degraded, and the bridge branch must NEVER drop it.
@@ -9742,8 +9762,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                             "Home Assistant only",
                         ),
                         self._tr(
-                            "common.dynamic.operating_profile_smartess_and_ha",
-                            "SmartESS + Home Assistant",
+                            "common.dynamic.operating_profile_cloud_and_ha",
+                            "Cloud + Home Assistant",
                         ),
                     )
                 }
@@ -9754,15 +9774,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "profile_summary": self._tr(
                     f"common.dynamic.operating_profile_summary_{profile.profile}",
                     {
-                        OPERATING_PROFILE_SMARTESS_AND_HA: (
-                            "The collector normally remains connected to SmartESS. "
+                        OPERATING_PROFILE_CLOUD_AND_HA: (
+                            "The collector normally remains connected to its cloud service. "
                             "Home Assistant asks it to connect when data is needed. "
                             "Temporary traffic capture and control discovery require "
                             "the Home Assistant only profile."
                         ),
                         OPERATING_PROFILE_HA_ONLY: (
                             "The collector connects directly to Home Assistant. "
-                            "SmartESS does not receive its data."
+                            "Its cloud service does not receive its data."
                         ),
                         OPERATING_PROFILE_CUSTOM: (
                             "The saved connection settings do not match either "
@@ -10630,7 +10650,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "target_strategy": self._operating_profile_label(
                     OPERATING_PROFILE_HA_ONLY
                     if target == CONNECTION_STRATEGY_INBOUND
-                    else OPERATING_PROFILE_SMARTESS_AND_HA
+                    else OPERATING_PROFILE_CLOUD_AND_HA
                 ),
                 "connection_strategy_risk": risk_note,
                 "connection_strategy_rollback": rollback_note,
@@ -13573,6 +13593,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ),
             )
 
+        if not self._proxy_capture_menu_available(coordinator):
+            return await self.async_step_connection()
+
         errors: dict[str, str] = {}
         action = ""
         touch_proxy_capture_lease = getattr(coordinator, "async_touch_proxy_capture_lease", None)
@@ -14394,7 +14417,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
 
     def _diagnostics_menu_options(self, primary_action: str) -> list[str]:
-        coordinator = self._coordinator()
         rollback_paths = self._local_metadata_rollback_paths()
         menu_options: list[str] = [
             "create_support_package",
@@ -14413,22 +14435,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if rollback_paths.paths and "rollback_local_metadata" not in menu_options:
             menu_options.append("rollback_local_metadata")
 
-        # Proxy capture is a temporary endpoint-owning transaction, not a third
-        # operating mode. New sessions start only from the stable HA-only
-        # baseline. An already-active or recovering session remains visible so
-        # the user can always stop/finalize it even if the profile later drifted.
-        profile_allows_start = (
-            self._collector_operating_profile().endpoint_tools_allowed
-        )
-        overview = getattr(coordinator, "proxy_capture_overview", None)
-        active_or_recoverable = bool(
-            getattr(overview, "can_stop", False)
-            or getattr(overview, "critical_phase", False)
-        )
-        if self._collector_capabilities().proxy_capture and (
-            profile_allows_start or active_or_recoverable
-        ):
-            menu_options.append("proxy_capture")
         return menu_options
 
     def _cloud_evidence_export_available(self, coordinator) -> bool:

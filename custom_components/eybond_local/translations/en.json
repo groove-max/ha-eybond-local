@@ -420,9 +420,10 @@
         "title": "EyeBond Local Options",
         "description": "Choose what you want to manage for this entry.{bridge_note}",
         "menu_options": {
-          "connection": "Collector connection and SmartESS",
+          "connection": "Collector connection and cloud",
           "runtime": "Polling and inverter detection",
           "shadow_learning": "Expand device support",
+          "proxy_capture": "Temporary cloud proxy and traffic capture",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
           "inverter_protocol": "Choose inverter protocol",
@@ -433,13 +434,13 @@
         }
       },
       "connection": {
-        "title": "Collector connection and SmartESS",
+        "title": "Collector connection and cloud",
         "description": "**Current profile:** {current_profile}\n\n{profile_summary}\n\nChoose the result you want. Home Assistant will verify the collector connection before saving a change.",
         "data": {
           "connection_strategy": "Operating profile"
         },
         "data_description": {
-          "connection_strategy": "SmartESS + Home Assistant keeps the collector on its external service and requests a Home Assistant connection when needed. Home Assistant only makes the collector connect directly to Home Assistant and stops normal SmartESS reporting."
+          "connection_strategy": "Cloud + Home Assistant keeps the collector on its external service and requests a Home Assistant connection when needed. Home Assistant only makes the collector connect directly to Home Assistant and stops normal cloud reporting."
         }
       },
       "inverter_protocol": {
@@ -743,7 +744,7 @@
       "collector_operation_mode": {
         "name": "Collector operating profile",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + Home Assistant",
+          "smartess_cloud_home_assistant": "Cloud + Home Assistant",
           "home_assistant_only": "Home Assistant only",
           "custom": "Custom configuration"
         }

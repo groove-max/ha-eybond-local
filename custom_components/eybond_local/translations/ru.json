@@ -420,9 +420,10 @@
         "title": "Параметры EyeBond Local",
         "description": "Выберите, чем именно вы хотите управлять для этой записи.{bridge_note}",
         "menu_options": {
-          "connection": "Подключение коллектора и SmartESS",
+          "connection": "Подключение коллектора и облака",
           "runtime": "Опрос и определение инвертора",
           "shadow_learning": "Расширить поддержку устройства",
+          "proxy_capture": "Временный облачный прокси и захват трафика",
           "collector_wifi": "Сменить Wi-Fi коллектора",
           "collector_uart": "Сменить скорость UART инвертора",
           "inverter_protocol": "Выбрать протокол инвертора",
@@ -433,13 +434,13 @@
         }
       },
       "connection": {
-        "title": "Подключение коллектора и SmartESS",
+        "title": "Подключение коллектора и облака",
         "description": "**Текущий профиль:** {current_profile}\n\n{profile_summary}\n\nВыберите желаемый результат. Перед сохранением изменений Home Assistant проверит подключение коллектора.",
         "data": {
           "connection_strategy": "Профиль работы"
         },
         "data_description": {
-          "connection_strategy": "SmartESS + Home Assistant сохраняет подключение коллектора к внешнему сервису и запрашивает соединение с Home Assistant по необходимости. Только Home Assistant направляет коллектор напрямую в Home Assistant и прекращает обычную передачу данных в SmartESS."
+          "connection_strategy": "Облако + Home Assistant сохраняет подключение коллектора к внешнему сервису и запрашивает соединение с Home Assistant по необходимости. Только Home Assistant направляет коллектор напрямую в Home Assistant и прекращает обычную передачу данных в облако."
         }
       },
       "inverter_protocol": {
@@ -743,7 +744,7 @@
       "collector_operation_mode": {
         "name": "Профиль работы коллектора",
         "state": {
-          "smartess_cloud_home_assistant": "SmartESS + Home Assistant",
+          "smartess_cloud_home_assistant": "Облако + Home Assistant",
           "home_assistant_only": "Только Home Assistant",
           "custom": "Нестандартная конфигурация"
         }

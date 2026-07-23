@@ -16,7 +16,7 @@ from custom_components.eybond_local.connection.operating_profile import (  # noq
     CollectorOperatingProfile,
     OPERATING_PROFILE_CUSTOM,
     OPERATING_PROFILE_HA_ONLY,
-    OPERATING_PROFILE_SMARTESS_AND_HA,
+    OPERATING_PROFILE_CLOUD_AND_HA,
     collector_operating_profile_from_entry,
     resolve_collector_operating_profile,
 )
@@ -37,7 +37,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
 
         self.assertEqual(
             profile.profile,
-            OPERATING_PROFILE_SMARTESS_AND_HA,
+            OPERATING_PROFILE_CLOUD_AND_HA,
         )
         self.assertTrue(profile.stable)
         self.assertFalse(profile.endpoint_tools_allowed)
@@ -113,7 +113,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(profile.profile, OPERATING_PROFILE_SMARTESS_AND_HA)
+        self.assertEqual(profile.profile, OPERATING_PROFILE_CLOUD_AND_HA)
 
     def test_direct_constructor_is_strict(self) -> None:
         valid = CollectorOperatingProfile(
@@ -159,7 +159,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
 
     def test_direct_constructor_rejects_cross_field_contradictions(self) -> None:
         valid = CollectorOperatingProfile(
-            profile=OPERATING_PROFILE_SMARTESS_AND_HA,
+            profile=OPERATING_PROFILE_CLOUD_AND_HA,
             connection_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
             endpoint_control_policy=ENDPOINT_CONTROL_EXTERNAL,
             reason="callback_external",
@@ -240,6 +240,51 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertNotIn("_stage_connection_strategy_transition", runtime_source or "")
         self.assertIn("_stage_connection_strategy_transition", connection_source or "")
         self.assertIn("async_step_strategy_transition", connection_source or "")
+
+    def test_proxy_menu_uses_one_runtime_readiness_authority(self) -> None:
+        path = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "config_flow.py"
+        )
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        options_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "EybondLocalOptionsFlow"
+        )
+
+        def _method_source(name: str) -> str:
+            method = next(
+                node
+                for node in options_class.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            )
+            return ast.get_source_segment(source, method) or ""
+
+        availability = _method_source("_proxy_capture_menu_available")
+        init_step = _method_source("async_step_init")
+        proxy_step = _method_source("async_step_proxy_capture")
+        diagnostics_menu = _method_source("_diagnostics_menu_options")
+
+        self.assertIn("proxy_capture_overview", availability)
+        self.assertIn("can_start", availability)
+        self.assertIn("can_stop", availability)
+        self.assertIn("critical_phase", availability)
+        for duplicate_authority in (
+            "_collector_operating_profile",
+            "_collector_capabilities",
+            "connection_strategy",
+            "endpoint_control_policy",
+        ):
+            self.assertNotIn(duplicate_authority, availability)
+        self.assertIn("_proxy_capture_menu_available", init_step)
+        self.assertIn("_proxy_capture_menu_available", proxy_step)
+        self.assertNotIn('"proxy_capture"', diagnostics_menu)
 
     def test_endpoint_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
         coordinator_path = (
