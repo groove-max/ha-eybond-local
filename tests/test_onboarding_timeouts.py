@@ -17,7 +17,6 @@ from custom_components.eybond_local.onboarding.timeouts import (  # noqa: E402
     OnboardingDeadlineExceeded,
     auto_scan_timeout_seconds,
     deep_scan_timeout_seconds,
-    default_deep_driver_sweep_seconds,
     estimate_deep_scan_seconds,
     manual_probe_timeout_seconds,
     manual_probe_watchdog_timeout_seconds,
@@ -54,11 +53,8 @@ class OnboardingTimeoutPolicyTests(unittest.TestCase):
         )
 
     def test_deep_scan_budget_has_no_driver_sweep_input(self) -> None:
-        sweep = default_deep_driver_sweep_seconds()
-
-        # Driver budgets still exist for the optional non-config-flow detector,
-        # but cannot enter collector-only full-network search calculations.
-        self.assertGreaterEqual(sweep, 60.0)
+        # Driver budgets belong to runtime detection and cannot enter
+        # collector-only full-network search calculations.
         self.assertNotIn(
             "driver_sweep_seconds",
             inspect.signature(estimate_deep_scan_seconds).parameters,

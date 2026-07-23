@@ -949,7 +949,6 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
                     discovery_timeout=0.4,
                     connect_timeout=4.0,
                     heartbeat_timeout=0.2,
-                    enrich_runtime_details=False,
                 ),
                 timeout=_HARNESS_TIMEOUT,
             )
@@ -1138,7 +1137,6 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
                     discovery_timeout=0.3,
                     connect_timeout=4.0,
                     heartbeat_timeout=0.1,
-                    enrich_runtime_details=False,
                 ),
                 timeout=_HARNESS_TIMEOUT,
             )
@@ -1283,20 +1281,14 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
             tcp_bind_ip="127.0.0.1",
             first_heartbeat_delay=0.05,
         )
-        with patch.object(
-            OnboardingDetector,
-            "_async_detect_driver_with_retries",
-            new=AsyncMock(
-                side_effect=AssertionError(
-                    "collector-only setup scan must not probe inverter drivers"
-                )
-            ),
-        ) as driver_probe:
-            results, stale_sid, post_silent = await self._scan_target(
-                target,
-                route,
-                s2_udp,
-            )
+        self.assertFalse(
+            hasattr(OnboardingDetector, "_async_detect_driver_with_retries")
+        )
+        results, stale_sid, post_silent = await self._scan_target(
+            target,
+            route,
+            s2_udp,
+        )
 
         result = _result_with_pn(results, TARGET_PN)
         self.assertIsNotNone(result)
@@ -1305,7 +1297,6 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
         self.assertEqual(result.detection.reason, "collector_identity_only_scan")
         self.assertEqual(result.collector.ip, route)
         self.assertIn(stale_sid, post_silent)
-        driver_probe.assert_not_awaited()
 
     async def test_strong_fc2_session_is_accepted_full_pn(self) -> None:
         """B: S2 announces a STRONG framed FC=2 identity as its first bytes (and

@@ -11,26 +11,12 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
-from ..canonical_telemetry import apply_canonical_measurements
-from ..drivers.read_result import coerce_driver_read_result
-from ..collector.at_runtime import query_runtime_collector_at_values
-from ..collector.capabilities import (
-    collector_capability_profile,
-    parse_esp_collector_hardware_token,
-)
-from ..collector.cloud_family import (
-    apply_collector_cloud_family_observation,
-    collector_cloud_family_observation_from_endpoint,
-)
 from ..collector.discovery import (
     DiscoveryProbeResult,
     async_send_callback_trigger,
     async_send_callback_trigger_replies,
 )
-from ..collector.parameter_registry import RUNTIME_COLLECTOR_PARAMETERS, query_runtime_collector_values
-from ..collector.smartess_local import SmartEssLocalSession, SmartEssProtocolDescriptor
 from ..collector.transport import (
-    SharedCollectorAtTransport,
     SharedEybondTransport,
     _acquire_shared_listener,
     _release_shared_listener,
@@ -46,28 +32,10 @@ from ..const import (
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_TCP_PORT,
     DEFAULT_UDP_PORT,
-    DRIVER_HINT_AUTO,
-)
-from ..metadata.smartess_protocol_catalog_loader import SmartEssProtocolCatalogEntry, load_smartess_protocol_catalog
-from .link_sweep import (
-    async_run_link_baud_sweep,
-    catalog_link_baud_hints,
-    driver_keys_for_link_baud,
-    is_silent_detection_error,
-    parse_reported_baud,
-)
-from .driver_detection import (
-    DetectedDriverContext,
-    DriverCandidateScan,
-    async_detect_inverter,
-    async_detect_inverter_candidates,
-    driver_keys_for_profile_prefixes,
 )
 from .timeouts import (
-    DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     ExtendableOnboardingDeadline,
     OnboardingDeadline,
-    default_deep_driver_sweep_seconds,
 )
 from .silent_scan_probe import (
     DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
@@ -101,35 +69,6 @@ _BROADCAST_FANOUT_SETTLE_TIMEOUT = 3.0
 _BROADCAST_FANOUT_POLL_INTERVAL = 0.1
 DETECTION_DEPTH_FAST = "fast"
 DETECTION_DEPTH_DEEP = "deep"
-_DEEP_SWEEP_FINALIZE_MARGIN = 10.0
-_ONBOARDING_RUNTIME_DETAIL_KEYS = {
-    "battery_connected",
-    "battery_connection_state",
-    "battery_percent",
-    "collector_pn",
-    "collector_signal_strength",
-    "collector_signal_strength_raw",
-    "collector_signal_strength_source",
-    "collector_server_endpoint",
-    "collector_cloud_family",
-    "collector_cloud_family_source",
-    "collector_cloud_family_confidence",
-    "output_rating_active_power",
-    "rated_power",
-    # Virtual-bridge verdict carried from FC=2 parameter 6
-    # (collector_hardware_version="esp-collector/<version>/<platform...>") so
-    # the confirm step can gate the collector operation-mode UI before the
-    # entry exists.
-    "collector_virtual_bridge",
-    "collector_bridge_kind",
-    "collector_bridge_version",
-}
-
-_ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS = tuple(
-    definition
-    for definition in RUNTIME_COLLECTOR_PARAMETERS
-    if definition.parameter != 41
-)
 
 
 def _collector_identity_matches(left: str, right: str) -> bool:
@@ -157,44 +96,6 @@ def _result_has_collector_identity(result: OnboardingResult) -> bool:
     return bool(str(getattr(info, "collector_pn", "") or "").strip())
 
 
-def _apply_bridge_hardware_token_to_collector(collector: Any, hardware_version: object) -> None:
-    """Carry a positive hardware-version bridge token into CollectorInfo."""
-
-    token = parse_esp_collector_hardware_token(hardware_version)
-    if collector is None or not token.is_bridge:
-        return
-    collector.collector_virtual_bridge = True
-    collector.collector_bridge_kind = "esp-collector"
-    if token.version:
-        collector.collector_bridge_version = token.version
-
-
-def _apply_collector_cloud_endpoint_details_to_collector(
-    collector: Any,
-    details: dict[str, object],
-) -> None:
-    """Carry an observed CLDSRVHOST1 endpoint/family verdict into CollectorInfo."""
-
-    if collector is None:
-        return
-    endpoint = str(details.get("collector_server_endpoint") or "").strip()
-    if endpoint:
-        collector.collector_server_endpoint = endpoint
-        apply_collector_cloud_family_observation(
-            collector,
-            collector_cloud_family_observation_from_endpoint(endpoint),
-        )
-    family = str(details.get("collector_cloud_family") or "").strip()
-    if family:
-        collector.collector_cloud_family = family
-        collector.collector_cloud_family_source = str(
-            details.get("collector_cloud_family_source") or ""
-        ).strip()
-        collector.collector_cloud_family_confidence = str(
-            details.get("collector_cloud_family_confidence") or ""
-        ).strip()
-
-
 @dataclass(frozen=True, slots=True)
 class DiscoveryTarget:
     """One onboarding discovery target.
@@ -216,34 +117,6 @@ class DiscoveryTarget:
     # times out on) the target; otherwise a valid responder disappears whenever
     # a sibling wins the serialized callback-identity phase.
     observed_probe: DiscoveryProbeResult | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SmartEssOnboardingProbe:
-    """Best-effort SmartESS collector metadata captured during onboarding."""
-
-    collector_version: str = ""
-    protocol_descriptor: SmartEssProtocolDescriptor | None = None
-    known_protocol: SmartEssProtocolCatalogEntry | None = None
-
-    @property
-    def selected_device_address(self) -> int | None:
-        if self.known_protocol is None or not self.known_protocol.device_addresses:
-            return None
-        return self.known_protocol.device_addresses[0]
-
-
-def _smartess_preferred_driver_keys(
-    smartess_probe: SmartEssOnboardingProbe | None,
-) -> tuple[str, ...]:
-    """Derive the driver probe-order hint from SmartESS collector metadata."""
-
-    if smartess_probe is None or smartess_probe.known_protocol is None:
-        return ()
-    known = smartess_probe.known_protocol
-    return driver_keys_for_profile_prefixes(
-        (known.profile_name, known.raw_profile_name)
-    )
 
 
 def _already_configured_result(target: DiscoveryTarget, depth: str) -> OnboardingResult:
@@ -526,7 +399,7 @@ async def async_probe_fallback_targets(
 
 
 class OnboardingDetector:
-    """Run one-shot EyeBond collector discovery and driver probing for setup flows."""
+    """Run one-shot EyeBond collector discovery for setup flows."""
 
     def __init__(
         self,
@@ -536,7 +409,6 @@ class OnboardingDetector:
         tcp_port: int = DEFAULT_TCP_PORT,
         udp_port: int = DEFAULT_UDP_PORT,
         heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
-        driver_hint: str = DRIVER_HINT_AUTO,
         request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
     ) -> None:
         self._connection = connection or EybondConnectionSpec(
@@ -548,7 +420,6 @@ class OnboardingDetector:
             heartbeat_interval=heartbeat_interval,
             request_timeout=request_timeout,
         )
-        self._driver_hint = driver_hint
 
     async def async_passive_detect(
         self,
@@ -611,12 +482,10 @@ class OnboardingDetector:
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
-        enrich_runtime_details: bool = True,
-        identify_collector_only: bool = False,
         cleanup_new_shared_connection: bool = False,
         total_timeout: float | None = None,
         concurrency: int = _TARGET_DETECTION_CONCURRENCY,
-        return_after_first_match: bool = False,
+        return_after_first_identity: bool = False,
         skip_probe_ips: frozenset[str] = frozenset(),
         deadline: OnboardingDeadline | ExtendableOnboardingDeadline | None = None,
     ) -> tuple[OnboardingResult, ...]:
@@ -640,8 +509,6 @@ class OnboardingDetector:
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
-                            enrich_runtime_details=enrich_runtime_details,
-                            identify_collector_only=identify_collector_only,
                             cleanup_new_shared_connection=cleanup_new_shared_connection,
                             detection_state=state,
                             depth=state.depth,
@@ -699,13 +566,7 @@ class OnboardingDetector:
             for task in done:
                 result = task.result()
                 results.append(result)
-                if return_after_first_match and (
-                    result.match is not None
-                    or (
-                        identify_collector_only
-                        and _result_has_collector_identity(result)
-                    )
-                ):
+                if return_after_first_identity and _result_has_collector_identity(result):
                     should_stop = True
             if should_stop:
                 stopped_after_first_match = True
@@ -795,10 +656,8 @@ class OnboardingDetector:
                         discovery_timeout=discovery_timeout,
                         connect_timeout=connect_timeout,
                         heartbeat_timeout=heartbeat_timeout,
-                        enrich_runtime_details=False,
-                        identify_collector_only=True,
                         total_timeout=deadline.remaining_seconds(),
-                        return_after_first_match=return_after_first_identity,
+                        return_after_first_identity=return_after_first_identity,
                         skip_probe_ips=skip_probe_ips,
                         deadline=deadline,
                     )
@@ -826,10 +685,8 @@ class OnboardingDetector:
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
-                            enrich_runtime_details=False,
-                            identify_collector_only=True,
                             total_timeout=deadline.remaining_seconds(),
-                            return_after_first_match=return_after_first_identity,
+                            return_after_first_identity=return_after_first_identity,
                             skip_probe_ips=skip_probe_ips,
                             deadline=deadline,
                         )
@@ -846,16 +703,14 @@ class OnboardingDetector:
                 )
 
                 deduped = self._dedupe_results(aggregated)
-                best = deduped[0] if deduped else None
-                if best is not None and _result_has_collector_identity(best):
+                if any(_result_has_collector_identity(result) for result in deduped):
                     aggregated = list(deduped)
                     break
                 if attempt_index < max(1, attempts) - 1:
                     await deadline.sleep(attempt_delay)
 
             deduped = self._dedupe_results(aggregated)
-            best = deduped[0] if deduped else None
-            if best is None or not _result_has_collector_identity(best):
+            if not any(_result_has_collector_identity(result) for result in deduped):
                 fallback_targets = await self._async_auto_unicast_fallback_targets(
                     resolved_targets=targets,
                     results=deduped,
@@ -870,10 +725,8 @@ class OnboardingDetector:
                             discovery_timeout=discovery_timeout,
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
-                            enrich_runtime_details=False,
-                            identify_collector_only=True,
                             total_timeout=deadline.remaining_seconds(),
-                            return_after_first_match=return_after_first_identity,
+                            return_after_first_identity=return_after_first_identity,
                             skip_probe_ips=skip_probe_ips,
                             deadline=deadline,
                         )
@@ -993,10 +846,8 @@ class OnboardingDetector:
             discovery_timeout=discovery_timeout,
             connect_timeout=connect_timeout,
             heartbeat_timeout=heartbeat_timeout,
-            enrich_runtime_details=False,
-            identify_collector_only=True,
             total_timeout=deadline.remaining_seconds(),
-            return_after_first_match=False,
+            return_after_first_identity=False,
             skip_probe_ips=skip_probe_ips,
             deadline=deadline,
         )
@@ -1181,8 +1032,6 @@ class OnboardingDetector:
         discovery_timeout: float,
         connect_timeout: float,
         heartbeat_timeout: float,
-        enrich_runtime_details: bool = True,
-        identify_collector_only: bool = False,
         cleanup_new_shared_connection: bool = False,
         detection_state: _TargetDetectionState | None = None,
         deadline: OnboardingDeadline | None = None,
@@ -1396,246 +1245,27 @@ class OnboardingDetector:
             if not heartbeat_seen:
                 warnings.append("collector_heartbeat_not_observed")
 
-            if identify_collector_only:
-                # Config-entry onboarding has one responsibility here: identify
-                # the collector and preserve the exact callback-session/route
-                # capability required by admission.  Inverter probing belongs to
-                # the runtime after that entry owns the session; doing it here as
-                # well creates a second authority and multiplies scan latency by
-                # every driver/collector pair.
-                if admission_kwargs:
-                    preserve_observed_session_id = silent_identity.session_id
-                return _with_detection_evidence(
-                    OnboardingResult(
-                        collector=candidate,
-                        connection_type=CONNECTION_TYPE_EYBOND,
-                        connection_mode=target.source,
-                        warnings=tuple(warnings),
-                        next_action="confirm_collector",
-                        last_error="collector_detected_without_driver",
-                        **admission_kwargs,
-                    ),
-                    depth=depth,
-                    status="collector_only",
-                    reason="collector_identity_only_scan",
-                )
-
-            smartess_probe = await _async_probe_smartess_onboarding(transport)
-            if candidate.collector is not None and smartess_probe is not None:
-                _apply_smartess_probe_to_collector(candidate.collector, smartess_probe)
-
-            sweep_deadline = deadline
-            if depth == DETECTION_DEPTH_DEEP:
-                # Each connected target gets its own sweep budget so one slow
-                # target cannot starve the identification of another. On an
-                # extendable scan deadline this ADMITS the collector: the
-                # shared budget grows by one full sweep (up to the hard
-                # ceiling), so ten connected collectors get ten sweeps instead
-                # of starving on a budget sized for one.
-                sweep_budget = default_deep_driver_sweep_seconds()
-                ensure_remaining = getattr(deadline, "ensure_remaining", None)
-                if callable(ensure_remaining):
-                    ensure_remaining(sweep_budget + _DEEP_SWEEP_FINALIZE_MARGIN)
-                sweep_deadline = (
-                    deadline.nested(sweep_budget)
-                    if deadline is not None
-                    else OnboardingDeadline.from_timeout(sweep_budget)
-                )
-            sweep_outcome = None
-            try:
-                scan = await self._async_detect_driver_with_retries(
-                    transport,
-                    depth=depth,
-                    deadline=sweep_deadline,
-                    preferred_driver_keys=_smartess_preferred_driver_keys(smartess_probe),
-                )
-            except TimeoutError:
-                if candidate.collector is not None:
-                    await self._async_enrich_collector_bridge_details(
-                        transport,
-                        candidate.collector,
-                        collector_ip=candidate.ip,
-                    )
-                if admission_kwargs:
-                    preserve_observed_session_id = silent_identity.session_id
-                return _with_detection_evidence(
-                    OnboardingResult(
-                        collector=candidate,
-                        connection_type=CONNECTION_TYPE_EYBOND,
-                        connection_mode=target.source,
-                        warnings=tuple(warnings),
-                        next_action="manual_driver_selection",
-                        last_error="target_detection_timeout",
-                        **admission_kwargs,
-                    ),
-                    depth=depth,
-                    status="target_timeout",
-                    reason="driver_detection_timeout",
-                    budget_exhausted=True,
-                )
-            except RuntimeError as exc:
-                scan = None
-                exc_silent = getattr(exc, "silent", None)
-                if exc_silent is None:
-                    exc_silent = is_silent_detection_error(str(exc))
-                if depth == DETECTION_DEPTH_DEEP and exc_silent:
-                    sweep_outcome = await self._async_attempt_link_baud_sweep(
-                        transport,
-                        deadline=deadline,
-                        preferred_driver_keys=_smartess_preferred_driver_keys(smartess_probe),
-                    )
-                if sweep_outcome is not None and sweep_outcome.matched:
-                    scan = sweep_outcome.scan
-                    warnings = [
-                        *warnings,
-                        "link_baud_changed",
-                    ]
-                else:
-                    if candidate.collector is not None:
-                        await self._async_enrich_collector_bridge_details(
-                            transport,
-                            candidate.collector,
-                            collector_ip=candidate.ip,
-                        )
-                    silent_details: dict[str, Any] = {}
-                    exc_probe_log = tuple(getattr(exc, "probe_log", ()) or ())
-                    if exc_probe_log:
-                        silent_details["probe_log"] = list(exc_probe_log)
-                    if exc_silent:
-                        silent_details["link_baud_hints"] = list(catalog_link_baud_hints())
-                    if sweep_outcome is not None:
-                        silent_details["link_baud_sweep"] = sweep_outcome.as_details()
-                    if admission_kwargs:
-                        preserve_observed_session_id = silent_identity.session_id
-                    return _with_detection_evidence(
-                        OnboardingResult(
-                            collector=candidate,
-                            connection_type=CONNECTION_TYPE_EYBOND,
-                            connection_mode=target.source,
-                            warnings=tuple(warnings),
-                            next_action="manual_driver_selection",
-                            last_error=str(exc),
-                            **admission_kwargs,
-                        ),
-                        depth=depth,
-                        status="collector_only",
-                        reason=str(exc),
-                        details=silent_details or None,
-                    )
-
-            if not scan.candidates:
-                # Deep sweep ran out of budget before any driver confirmed.
-                # A silent target usually lands HERE, not in the RuntimeError
-                # branch: on a dead UART every probe burns its full timeout,
-                # so the sweep budget exhausts before the registry completes.
-                # The link baud walk must therefore trigger from this branch
-                # too when the probe log shows no observed response at all.
-                real_probes = tuple(
-                    entry
-                    for entry in scan.probe_log
-                    if entry.get("outcome") != "skipped_budget_exhausted"
-                )
-                # Only probes that actually RAN can testify to silence: a log
-                # of budget-skipped entries means the flashed speed was never
-                # tried, and walking baud rates from that would rewrite the
-                # UART of a collector we never listened to.
-                scan_silent = bool(real_probes) and not any(
-                    entry.get("saw_response") for entry in real_probes
-                )
-                if depth == DETECTION_DEPTH_DEEP and scan_silent:
-                    sweep_outcome = await self._async_attempt_link_baud_sweep(
-                        transport,
-                        deadline=deadline,
-                        preferred_driver_keys=_smartess_preferred_driver_keys(smartess_probe),
-                    )
-                if sweep_outcome is not None and sweep_outcome.matched:
-                    scan = sweep_outcome.scan
-                    warnings = [*warnings, "link_baud_changed"]
-                else:
-                    if candidate.collector is not None:
-                        await self._async_enrich_collector_bridge_details(
-                            transport,
-                            candidate.collector,
-                            collector_ip=candidate.ip,
-                        )
-                    budget_details: dict[str, Any] = {}
-                    if scan.probe_log:
-                        budget_details["probe_log"] = list(scan.probe_log)
-                    if scan_silent:
-                        budget_details["link_baud_hints"] = list(catalog_link_baud_hints())
-                    if sweep_outcome is not None:
-                        budget_details["link_baud_sweep"] = sweep_outcome.as_details()
-                    if admission_kwargs:
-                        preserve_observed_session_id = silent_identity.session_id
-                    return _with_detection_evidence(
-                        OnboardingResult(
-                            collector=candidate,
-                            connection_type=CONNECTION_TYPE_EYBOND,
-                            connection_mode=target.source,
-                            warnings=tuple(warnings),
-                            next_action="manual_driver_selection",
-                            last_error="target_detection_timeout",
-                            **admission_kwargs,
-                        ),
-                        depth=depth,
-                        status="target_timeout",
-                        reason="driver_detection_budget_exhausted",
-                        budget_exhausted=True,
-                        details=budget_details or None,
-                    )
-
-            context = scan.candidates[0]
-            alternative_contexts = tuple(scan.candidates[1:])
-            if smartess_probe is not None:
-                _apply_smartess_probe_to_match(context.match.details, smartess_probe)
-                _apply_smartess_probe_to_match(context.inverter.details, smartess_probe)
-                for alternative in alternative_contexts:
-                    _apply_smartess_probe_to_match(alternative.match.details, smartess_probe)
-                    _apply_smartess_probe_to_match(alternative.inverter.details, smartess_probe)
-            if enrich_runtime_details:
-                await self._async_enrich_onboarding_runtime_details(
-                    transport,
-                    context,
-                    collector_ip=candidate.ip,
-                    collector=candidate.collector,
-                )
-
-            details: dict[str, Any] = {
-                "candidate_driver_count": 1 + len(alternative_contexts),
-                "candidate_drivers": [
-                    context.match.driver_key,
-                    *[alternative.match.driver_key for alternative in alternative_contexts],
-                ],
-            }
-            if scan.probe_log:
-                details["probe_log"] = list(scan.probe_log)
-            if sweep_outcome is not None and sweep_outcome.matched:
-                details["link_baud_sweep"] = sweep_outcome.as_details()
+            # Config-entry onboarding has one responsibility here: identify the
+            # collector and preserve the exact callback-session/route capability
+            # required by admission. Inverter probing belongs to runtime after
+            # the entry owns the session.
             if admission_kwargs:
                 preserve_observed_session_id = silent_identity.session_id
             return _with_detection_evidence(
                 OnboardingResult(
                     collector=candidate,
-                    match=context.match,
-                    alternative_matches=tuple(
-                        alternative.match for alternative in alternative_contexts
-                    ),
                     connection_type=CONNECTION_TYPE_EYBOND,
                     connection_mode=target.source,
                     warnings=tuple(warnings),
-                    next_action="create_entry",
+                    next_action="confirm_collector",
+                    last_error="collector_detected_without_driver",
                     **admission_kwargs,
                 ),
                 depth=depth,
-                status=(
-                    "driver_choice_required"
-                    if alternative_contexts
-                    else "matched"
-                ),
-                reason=context.match.driver_key,
-                budget_exhausted=scan.budget_exhausted,
-                details=details,
+                status="collector_only",
+                reason="collector_identity_only_scan",
             )
+
         finally:
             if cleanup_new_shared_connection:
                 try:
@@ -1655,334 +1285,6 @@ class OnboardingDetector:
                 )
             else:
                 await transport.stop()
-
-    async def _async_detect_driver_with_retries(
-        self,
-        transport: Any,
-        *,
-        depth: str = DETECTION_DEPTH_FAST,
-        deadline: OnboardingDeadline | None = None,
-        preferred_driver_keys: tuple[str, ...] = (),
-        allowed_driver_keys: tuple[str, ...] = (),
-    ) -> DriverCandidateScan:
-        """Retry one-shot driver probing when the collector responds too early."""
-
-        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
-        last_error: RuntimeError | None = None
-        attempts = max(1, int(policy.driver_detection_attempts))
-        for attempt in range(attempts):
-            try:
-                if depth == DETECTION_DEPTH_DEEP:
-                    return await async_detect_inverter_candidates(
-                        transport,
-                        driver_hint=self._driver_hint,
-                        depth=depth,
-                        remaining_seconds=(
-                            deadline.remaining_seconds if deadline is not None else None
-                        ),
-                        preferred_driver_keys=preferred_driver_keys,
-                        allowed_driver_keys=allowed_driver_keys,
-                    )
-                context = await async_detect_inverter(
-                    transport,
-                    driver_hint=self._driver_hint,
-                    depth=depth,
-                    preferred_driver_keys=preferred_driver_keys,
-                    remaining_seconds=(
-                        deadline.remaining_seconds if deadline is not None else None
-                    ),
-                )
-                probe_log = tuple(
-                    entry
-                    for entry in context.inverter.details.get("probe_log", ())
-                    if isinstance(entry, dict)
-                )
-                return DriverCandidateScan(candidates=(context,), probe_log=probe_log)
-            except RuntimeError as exc:
-                last_error = exc
-                if attempt >= attempts - 1 or not _is_retryable_detection_error(str(exc)):
-                    raise
-                await asyncio.sleep(max(0.0, float(policy.driver_retry_delay)))
-        raise last_error or RuntimeError("no_supported_driver_matched")
-
-    async def _async_attempt_link_baud_sweep(
-        self,
-        transport: Any,
-        *,
-        deadline: OnboardingDeadline | None,
-        preferred_driver_keys: tuple[str, ...] = (),
-    ):
-        """Walk catalog baud rates on a runtime-UART-capable esp bridge.
-
-        Returns a ``LinkBaudSweepOutcome`` or ``None`` when the collector is
-        not eligible (factory collector, fixed-UART build, no FC channel, or
-        no catalog hints to try).
-        """
-
-        if not hasattr(transport, "async_send_collector"):
-            return None
-        candidate_bauds = catalog_link_baud_hints()
-        if not candidate_bauds:
-            return None
-
-        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
-        query_timeout = max(1.0, float(policy.collector_query_timeout))
-        session = SmartEssLocalSession(transport)
-
-        try:
-            hardware = await asyncio.wait_for(
-                session.query_collector(6), timeout=query_timeout
-            )
-        except Exception as exc:
-            logger.debug("Link baud sweep: hardware token read failed error=%s", exc)
-            return None
-        token = parse_esp_collector_hardware_token(getattr(hardware, "text", ""))
-        if not token.is_bridge:
-            return None
-        profile = collector_capability_profile(
-            virtual_bridge=True,
-            hardware_version=getattr(hardware, "text", ""),
-        )
-        if not profile.uart_runtime_speed_change:
-            logger.debug(
-                "Link baud sweep skipped: platform %s has fixed UART", token.platform
-            )
-            return None
-
-        async def read_baud() -> int | None:
-            try:
-                response = await asyncio.wait_for(
-                    session.query_collector(34), timeout=query_timeout
-                )
-            except Exception as exc:
-                logger.debug("Link baud sweep: baud read failed error=%s", exc)
-                return None
-            return parse_reported_baud(getattr(response, "text", ""))
-
-        async def set_baud(baud: int) -> bool:
-            try:
-                response = await asyncio.wait_for(
-                    session.set_collector(34, str(baud)), timeout=query_timeout
-                )
-            except Exception as exc:
-                logger.debug("Link baud sweep: set %s failed error=%s", baud, exc)
-                return False
-            return int(getattr(response, "code", 1)) == 0
-
-        sweep_budget = default_deep_driver_sweep_seconds()
-
-        def admit() -> bool:
-            ensure_remaining = getattr(deadline, "ensure_remaining", None)
-            if callable(ensure_remaining):
-                try:
-                    ensure_remaining(sweep_budget + _DEEP_SWEEP_FINALIZE_MARGIN)
-                except Exception:
-                    return False
-                return True
-            if deadline is not None:
-                remaining = deadline.remaining_seconds()
-                return remaining is None or remaining > sweep_budget
-            return True
-
-        async def run_sweep(baud: int):
-            allowed = driver_keys_for_link_baud(baud)
-            if not allowed:
-                return None
-            sweep_deadline = (
-                deadline.nested(sweep_budget)
-                if deadline is not None
-                else OnboardingDeadline.from_timeout(sweep_budget)
-            )
-            try:
-                return await self._async_detect_driver_with_retries(
-                    transport,
-                    depth=DETECTION_DEPTH_DEEP,
-                    deadline=sweep_deadline,
-                    preferred_driver_keys=preferred_driver_keys,
-                    allowed_driver_keys=allowed,
-                )
-            except (TimeoutError, RuntimeError) as exc:
-                logger.debug(
-                    "Link baud sweep: no driver at %s error=%s", baud, exc
-                )
-                return None
-
-        return await async_run_link_baud_sweep(
-            candidate_bauds=candidate_bauds,
-            read_baud=read_baud,
-            set_baud=set_baud,
-            run_sweep=run_sweep,
-            admit=admit,
-        )
-
-    async def _async_enrich_collector_bridge_details(
-        self,
-        transport: Any,
-        collector,
-        *,
-        collector_ip: str,
-    ) -> None:
-        """Best-effort bridge detection for collector-only results."""
-
-        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
-        at_timeout = min(self._connection.request_timeout, policy.collector_query_timeout)
-        if at_timeout <= 0:
-            return
-
-        details: dict[str, object] = {}
-        if hasattr(transport, "async_send_collector"):
-            try:
-                details.update(
-                    await asyncio.wait_for(
-                        query_runtime_collector_values(
-                            SmartEssLocalSession(transport),
-                            parameters=_ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS,
-                        ),
-                        timeout=at_timeout,
-                    )
-                )
-            except Exception as exc:
-                logger.debug(
-                    "Onboarding collector bridge FC query failed ip=%s error=%s",
-                    collector_ip,
-                    exc,
-                )
-        try:
-            at_transport = SharedCollectorAtTransport(
-                host=_LISTENER_BIND_HOST,
-                port=self._connection.tcp_port,
-                request_timeout=at_timeout,
-                collector_ip=collector_ip,
-            )
-            await at_transport.start()
-            try:
-                details.update(
-                    await asyncio.wait_for(
-                        query_runtime_collector_at_values(at_transport),
-                        timeout=at_timeout,
-                    )
-                )
-            finally:
-                await at_transport.stop()
-        except Exception as exc:
-            logger.debug(
-                "Onboarding collector bridge AT query failed ip=%s error=%s",
-                collector_ip,
-                exc,
-            )
-            return
-
-        _apply_collector_cloud_endpoint_details_to_collector(collector, details)
-        _apply_bridge_hardware_token_to_collector(
-            collector,
-            details.get("collector_hardware_version"),
-        )
-
-    async def _async_enrich_onboarding_runtime_details(
-        self,
-        transport: Any,
-        context: DetectedDriverContext,
-        *,
-        collector_ip: str,
-        collector: CollectorInfo | None = None,
-    ) -> None:
-        """Best-effort collector/inverter reads used only to enrich onboarding UI data."""
-
-        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
-        deadline = OnboardingDeadline.from_timeout(policy.runtime_enrichment_timeout)
-        details: dict[str, object] = {}
-
-        if hasattr(transport, "async_send_collector"):
-            try:
-                details.update(
-                    await deadline.wait_for(
-                        query_runtime_collector_values(
-                            SmartEssLocalSession(transport),
-                            parameters=_ONBOARDING_RUNTIME_COLLECTOR_PARAMETERS,
-                        ),
-                        timeout_seconds=policy.collector_query_timeout,
-                    )
-                )
-            except Exception as exc:
-                logger.debug("Onboarding collector FC query failed ip=%s error=%s", collector_ip, exc)
-
-        at_timeout = deadline.bounded_timeout(policy.collector_query_timeout)
-        try:
-            if at_timeout is not None and at_timeout > 0:
-                at_transport = SharedCollectorAtTransport(
-                    host=_LISTENER_BIND_HOST,
-                    port=self._connection.tcp_port,
-                    request_timeout=min(self._connection.request_timeout, at_timeout),
-                    collector_ip=collector_ip,
-                )
-                await at_transport.start()
-                try:
-                    details.update(
-                        await deadline.wait_for(
-                            query_runtime_collector_at_values(at_transport),
-                            timeout_seconds=at_timeout,
-                        )
-                    )
-                except Exception as exc:
-                    logger.debug("Onboarding collector AT query failed ip=%s error=%s", collector_ip, exc)
-                finally:
-                    await at_transport.stop()
-        except Exception as exc:
-            logger.debug("Onboarding collector AT transport unavailable ip=%s error=%s", collector_ip, exc)
-
-        _apply_collector_cloud_endpoint_details_to_collector(collector, details)
-        hardware_token = parse_esp_collector_hardware_token(
-            details.get("collector_hardware_version")
-        )
-        if hardware_token.is_bridge:
-            _apply_bridge_hardware_token_to_collector(
-                collector,
-                details.get("collector_hardware_version"),
-            )
-            details["collector_virtual_bridge"] = True
-            details["collector_bridge_kind"] = "esp-collector"
-            if hardware_token.version:
-                details["collector_bridge_version"] = hardware_token.version
-
-        try:
-            runtime_read = await deadline.wait_for(
-                context.driver.async_read_values(transport, context.inverter),
-                timeout_seconds=policy.driver_onboarding_read_timeout,
-            )
-            runtime_values = coerce_driver_read_result(
-                runtime_read, driver_key=context.inverter.driver_key
-            ).values
-        except Exception as exc:
-            logger.debug(
-                "Onboarding inverter runtime read failed model=%s serial=%s error=%s",
-                context.inverter.model_name,
-                context.inverter.serial_number,
-                exc,
-            )
-        else:
-            apply_canonical_measurements(
-                context.inverter.driver_key,
-                runtime_values,
-                variant_key=context.inverter.variant_key,
-            )
-            for key in _ONBOARDING_RUNTIME_DETAIL_KEYS:
-                value = runtime_values.get(key)
-                if value not in (None, ""):
-                    details[key] = value
-
-        if not details:
-            return
-
-        filtered_details = {
-            key: value
-            for key, value in details.items()
-            if key in _ONBOARDING_RUNTIME_DETAIL_KEYS and value not in (None, "")
-        }
-        if not filtered_details:
-            return
-
-        context.inverter.details.update(filtered_details)
-        context.match.details.update(filtered_details)
 
     async def _async_expand_broadcast_targets(
         self,
@@ -2454,95 +1756,3 @@ def _result_priority(result: OnboardingResult) -> tuple[int, int, int, int]:
         1 if result.collector is not None and result.collector.connected else 0,
         1 if result.collector is not None and result.collector.udp_reply else 0,
     )
-
-
-def _is_retryable_detection_error(error: str) -> bool:
-    """Return whether one onboarding probe error is likely transient."""
-
-    return any(
-        marker in error
-        for marker in (
-            "response_too_short",
-            "collector_disconnected",
-            "crc_mismatch",
-            "unexpected_length",
-        )
-    )
-
-
-async def _async_probe_smartess_onboarding(transport: Any) -> SmartEssOnboardingProbe | None:
-    """Collect SmartESS query 5 and query 14 metadata without affecting onboarding success."""
-
-    session = SmartEssLocalSession(transport)
-    collector_version = ""
-    protocol_descriptor: SmartEssProtocolDescriptor | None = None
-    known_protocol: SmartEssProtocolCatalogEntry | None = None
-
-    try:
-        collector_version = await session.query_collector_version()
-    except Exception as exc:
-        logger.debug("SmartESS onboarding query 5 failed error=%s", exc)
-
-    try:
-        protocol_descriptor = await session.query_protocol_descriptor()
-        known_protocol = load_smartess_protocol_catalog().protocols.get(protocol_descriptor.asset_id)
-    except Exception as exc:
-        logger.debug("SmartESS onboarding query 14 failed error=%s", exc)
-
-    if not collector_version and protocol_descriptor is None:
-        return None
-
-    return SmartEssOnboardingProbe(
-        collector_version=collector_version,
-        protocol_descriptor=protocol_descriptor,
-        known_protocol=known_protocol,
-    )
-
-
-def _apply_smartess_probe_to_collector(
-    collector: Any,
-    probe: SmartEssOnboardingProbe,
-) -> None:
-    """Persist SmartESS onboarding metadata onto collector info."""
-
-    if probe.collector_version:
-        collector.smartess_collector_version = probe.collector_version
-
-    descriptor = probe.protocol_descriptor
-    if descriptor is not None:
-        collector.smartess_protocol_raw_id = descriptor.raw_id
-        collector.smartess_protocol_asset_id = descriptor.asset_id
-        collector.smartess_protocol_asset_name = descriptor.asset_name
-        collector.smartess_protocol_suffix = descriptor.suffix
-
-    if probe.known_protocol is not None:
-        collector.smartess_protocol_profile_key = probe.known_protocol.profile_key
-        collector.smartess_protocol_name = (
-            probe.known_protocol.proto_name or collector.smartess_protocol_asset_name
-        )
-        collector.smartess_device_address = probe.selected_device_address
-
-
-def _apply_smartess_probe_to_match(
-    details: dict[str, Any],
-    probe: SmartEssOnboardingProbe,
-) -> None:
-    """Persist SmartESS onboarding metadata onto one details mapping."""
-
-    if probe.collector_version:
-        details.setdefault("smartess_collector_version", probe.collector_version)
-
-    descriptor = probe.protocol_descriptor
-    if descriptor is not None:
-        details.setdefault("smartess_protocol_raw_id", descriptor.raw_id)
-        details.setdefault("smartess_protocol_asset_id", descriptor.asset_id)
-        details.setdefault("smartess_protocol_asset_name", descriptor.asset_name)
-        if descriptor.suffix:
-            details.setdefault("smartess_protocol_suffix", descriptor.suffix)
-
-    if probe.known_protocol is not None:
-        details.setdefault("smartess_profile_key", probe.known_protocol.profile_key)
-        if probe.known_protocol.proto_name:
-            details.setdefault("smartess_protocol_name", probe.known_protocol.proto_name)
-        if probe.selected_device_address is not None:
-            details.setdefault("smartess_device_address", probe.selected_device_address)

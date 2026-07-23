@@ -9,13 +9,8 @@ from .manager import OnboardingManager
 
 def create_onboarding_manager(
     connection: ConnectionSpec,
-    *,
-    driver_hint: str,
 ) -> OnboardingManager:
     """Create the concrete onboarding manager for one connection branch."""
 
     branch = get_connection_branch_for_spec(connection)
-    return branch.create_onboarding_manager(
-        connection,
-        driver_hint=driver_hint,
-    )
+    return branch.create_onboarding_manager(connection)

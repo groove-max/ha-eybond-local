@@ -3686,7 +3686,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 self._current_connection_type(),
                 dict(self._auto_connection_defaults(), **effective_input),
             ),
-            driver_hint=DRIVER_HINT_AUTO,
         )
         shared_passive_results = self._shared_registry_scan_results()
         listener_passive_results = await self._async_passive_scan_results(

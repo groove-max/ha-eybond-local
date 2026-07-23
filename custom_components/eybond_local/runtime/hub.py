@@ -50,11 +50,19 @@ from ..drivers.command_support import (
     seed_unsupported_commands,
 )
 from ..drivers.registry import iter_drivers
-from ..onboarding.driver_detection import (
+from .driver_detection import (
     DetectedDriverContext,
     DriverSweepNoMatch,
     async_detect_inverter,
     async_detect_inverter_candidates,
+)
+from .link_baud_sweep import (
+    RuntimeLinkBaudChannel,
+    async_run_link_baud_sweep,
+    catalog_link_baud_hints,
+    default_runtime_driver_sweep_seconds,
+    driver_keys_for_link_baud,
+    parse_reported_baud,
 )
 from ..link_models import EybondLinkRoute
 from ..link_transport import async_send_payload, select_payload_route
@@ -532,6 +540,7 @@ class EybondHub:
         self._inverter: DetectedInverter | None = None
         self._inverter_protocol_candidates: tuple[RuntimeInverterCandidate, ...] = ()
         self._inverter_protocol_candidate_generation = -1
+        self._link_baud_sweep_generation = -1
         self._inverter_binding_needs_live_detection_refresh = False
         self._inverter_binding_refresh_attempts = 0
         self._inverter_identity_conflict = ""
@@ -2488,6 +2497,97 @@ class EybondHub:
             require_heartbeat=True,
         )
 
+    async def _async_attempt_runtime_link_baud_sweep(
+        self,
+        *,
+        detection_generation: int,
+    ):
+        """Try alternate inverter UART speeds once on one owned ESP session.
+
+        This is the runtime successor to the old onboarding deep-scan sweep.
+        It is deliberately unavailable to the default first-match strategy and
+        is entered only after a full driver sweep proved total UART silence.
+        """
+
+        if self._driver_detection_strategy != DRIVER_DETECTION_FULL_SCAN:
+            return None
+        if detection_generation != self._owned_session_generation():
+            return None
+        if self._link_baud_sweep_generation == detection_generation:
+            return None
+
+        transport = self._link_manager.transport
+        if not hasattr(transport, "async_send_collector"):
+            return None
+
+        # Claim this physical-session generation before the first await. Two
+        # concurrent refreshes may not both rewrite the same collector UART.
+        self._link_baud_sweep_generation = detection_generation
+        hardware = self._collector_metadata_service.merged_values().get(
+            "collector_hardware_version"
+        )
+        if type(hardware) is not str or hardware != hardware.strip():
+            return None
+        if not collector_capability_profile_from_runtime(
+            hardware_version=hardware
+        ).uart_runtime_speed_change:
+            return None
+        channel = RuntimeLinkBaudChannel(
+            transport,
+            request_timeout=self._connection.request_timeout,
+        )
+
+        def same_session() -> bool:
+            return self._owned_session_generation() == detection_generation
+
+        async def read_baud() -> int | None:
+            if not same_session():
+                return None
+            return await channel.async_read_current_baud()
+
+        async def set_baud(baud: int) -> bool:
+            if not same_session():
+                return False
+            return await channel.async_set_baud(baud)
+
+        sweep_deadline = monotonic() + default_runtime_driver_sweep_seconds()
+
+        def remaining_seconds() -> float:
+            return max(0.0, sweep_deadline - monotonic())
+
+        async def run_sweep(baud: int):
+            if not same_session():
+                return None
+            allowed = driver_keys_for_link_baud(baud)
+            if not allowed:
+                return None
+            try:
+                return await async_detect_inverter_candidates(
+                    transport,
+                    driver_hint=DRIVER_HINT_AUTO,
+                    allowed_driver_keys=allowed,
+                    remaining_seconds=remaining_seconds,
+                )
+            except DriverSweepNoMatch:
+                return None
+
+        outcome = await async_run_link_baud_sweep(
+            candidate_bauds=catalog_link_baud_hints(),
+            read_baud=read_baud,
+            set_baud=set_baud,
+            run_sweep=run_sweep,
+            admit=lambda: same_session() and remaining_seconds() > 0,
+        )
+        if outcome.matched:
+            logger.info(
+                "Runtime full scan matched inverter after UART speed change "
+                "original=%s matched=%s",
+                outcome.original_baud,
+                outcome.matched_baud,
+            )
+            return outcome.scan
+        return None
+
     async def _async_detect_driver(self) -> str:
         detection_generation = self._owned_session_generation()
         existing_driver_key = str(
@@ -2563,7 +2663,13 @@ class EybondHub:
                 budget_exhausted=False,
                 generation=detection_generation,
             )
-            return str(exc)
+            if not (detect_all_candidates and exc.silent):
+                return str(exc)
+            detection_result = await self._async_attempt_runtime_link_baud_sweep(
+                detection_generation=detection_generation,
+            )
+            if detection_result is None:
+                return str(exc)
         except RuntimeError as exc:
             return str(exc)
         finally:

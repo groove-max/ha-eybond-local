@@ -29,7 +29,6 @@ class OnboardingFactoryTests(unittest.TestCase):
                 heartbeat_interval=60,
                 request_timeout=5.0,
             ),
-            driver_hint="auto",
         )
 
         self.assertIsInstance(manager, OnboardingDetector)
@@ -52,17 +51,11 @@ class OnboardingFactoryTests(unittest.TestCase):
             "custom_components.eybond_local.onboarding.factory.get_connection_branch_for_spec",
             return_value=branch,
         ) as get_branch:
-            manager = create_onboarding_manager(
-                connection,
-                driver_hint="auto",
-            )
+            manager = create_onboarding_manager(connection)
 
         self.assertIs(manager, branch.create_onboarding_manager.return_value)
         get_branch.assert_called_once_with(connection)
-        branch.create_onboarding_manager.assert_called_once_with(
-            connection,
-            driver_hint="auto",
-        )
+        branch.create_onboarding_manager.assert_called_once_with(connection)
 
 
 if __name__ == "__main__":

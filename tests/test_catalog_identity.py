@@ -25,7 +25,7 @@ from custom_components.eybond_local.metadata.device_catalog_loader import (  # n
     clear_device_catalog_cache,
 )
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
-from custom_components.eybond_local.onboarding.driver_detection import (  # noqa: E402
+from custom_components.eybond_local.runtime.driver_detection import (  # noqa: E402
     async_detect_inverter,
     async_detect_inverter_candidates,
 )
@@ -294,7 +294,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(_LinkDownDriver(),),
         ):
             with self.assertRaises(RuntimeError) as ctx:
@@ -316,7 +316,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(_NeverProbedDriver(),),
         ):
             with self.assertRaises(RuntimeError) as ctx:
@@ -368,7 +368,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(_LinkDownDriver(), _MatchingDriver()),
         ):
             context = await async_detect_inverter(object(), driver_hint="auto")
@@ -401,7 +401,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(
                 _MatchingDriver("pi30", "pi30", 0x0994),
                 _MatchingDriver("modbus_smg", "modbus_smg", 1),
@@ -451,7 +451,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
         remaining_values = iter([5.0, 0.0])
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(
                 _MatchingDriver("pi30", "pi30", 0x0994),
                 _MatchingDriver("modbus_smg", "modbus_smg", 1),
@@ -498,7 +498,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("signature pre-pass must be skipped when hinted")
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(
                 _MatchingDriver("modbus_smg", "modbus_smg", 1),
                 _MatchingDriver("pi30", "pi30", 0x0994),
@@ -546,7 +546,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return self.signature_match
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(
                 _Driver("modbus_smg", False),
                 _Driver("pi30", True),
@@ -592,7 +592,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(
                 _MatchingDriver("pi30", "pi30", 0x0994),
                 _MatchingDriver("modbus_smg", "modbus_smg", 1),
@@ -611,7 +611,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_driver_keys_for_profile_prefixes_maps_catalog_and_direct_keys(self) -> None:
-        from custom_components.eybond_local.onboarding.driver_detection import (
+        from custom_components.eybond_local.runtime.driver_detection import (
             driver_keys_for_profile_prefixes,
         )
 
@@ -642,7 +642,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                 return False
 
         with patch(
-            "custom_components.eybond_local.onboarding.driver_detection.iter_drivers",
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
             return_value=(_NeverProbedDriver(),),
         ):
             scan = await async_detect_inverter_candidates(

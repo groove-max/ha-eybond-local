@@ -157,27 +157,6 @@ def estimate_deep_scan_seconds(
     )
 
 
-def default_deep_driver_sweep_seconds() -> float:
-    """Return the worst-case single-target driver sweep duration.
-
-    Derived from the registered drivers' own signature and probe budgets, so
-    the deep-scan time budget follows the driver registry instead of a
-    hand-maintained constant that silently goes stale when drivers are added
-    or their probe budgets change.
-    """
-
-    from ..drivers.registry import iter_drivers  # local import: keeps module load light
-
-    total = 0.0
-    for driver in iter_drivers("auto"):
-        for attribute in ("signature_timeout", "probe_timeout"):
-            try:
-                value = float(getattr(driver, attribute, 0.0) or 0.0)
-            except (TypeError, ValueError):
-                value = 0.0
-            total += max(0.0, value)
-    return total
-
 
 class ExtendableOnboardingDeadline:
     """Deadline that grows as newly discovered work is admitted.

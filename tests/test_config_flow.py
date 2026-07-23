@@ -4169,10 +4169,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             await flow._async_do_scan()
 
         build_spec.assert_called_once()
-        create_manager.assert_called_once_with(
-            sentinel.connection_spec,
-            driver_hint="auto",
-        )
+        create_manager.assert_called_once_with(sentinel.connection_spec)
 
     async def test_do_scan_collects_every_target_in_one_quick_scan_attempt(self) -> None:
         flow = self._make_flow()

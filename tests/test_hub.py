@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 import asyncio
 import sys
 import unittest
@@ -25,7 +25,7 @@ from custom_components.eybond_local.models import (
     ProbeTarget,
     RuntimeSnapshot,
 )
-from custom_components.eybond_local.onboarding.driver_detection import (
+from custom_components.eybond_local.runtime.driver_detection import (
     DetectedDriverContext,
     DriverCandidateScan,
     DriverSweepNoMatch,
@@ -2822,6 +2822,184 @@ class RuntimeStateMachineTests(unittest.TestCase):
             )
 
         asyncio.run(_run())
+
+    def test_full_scan_silence_adopts_runtime_uart_sweep_match(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            context = self._candidate_context(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model="Hybrid 5K",
+            )
+            failure = DriverSweepNoMatch(
+                "pi30:probe_timeout",
+                silent=True,
+                probe_log=(
+                    {
+                        "driver": "pi30",
+                        "elapsed_ms": 45000,
+                        "outcome": "probe_timeout",
+                        "saw_response": False,
+                    },
+                ),
+            )
+            recovered = DriverCandidateScan(candidates=(context,))
+
+            with (
+                patch(
+                    "custom_components.eybond_local.runtime.hub."
+                    "async_detect_inverter_candidates",
+                    side_effect=failure,
+                ),
+                patch.object(
+                    hub,
+                    "_async_attempt_runtime_link_baud_sweep",
+                    new=AsyncMock(return_value=recovered),
+                ) as baud_sweep,
+            ):
+                result = await hub._async_detect_driver()
+
+            self.assertEqual(result, "")
+            baud_sweep.assert_awaited_once_with(detection_generation=7)
+            self.assertIs(hub._driver, context.driver)
+            self.assertIs(hub._inverter, context.inverter)
+
+        asyncio.run(_run())
+
+    def test_first_match_silence_never_changes_runtime_uart(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=False)
+            failure = DriverSweepNoMatch(
+                "pi30:probe_timeout",
+                silent=True,
+            )
+            with (
+                patch(
+                    "custom_components.eybond_local.runtime.hub."
+                    "async_detect_inverter",
+                    side_effect=failure,
+                ),
+                patch.object(
+                    hub,
+                    "_async_attempt_runtime_link_baud_sweep",
+                    new=AsyncMock(
+                        side_effect=AssertionError(
+                            "first-match detection must not change UART"
+                        )
+                    ),
+                ),
+            ):
+                result = await hub._async_detect_driver()
+
+            self.assertEqual(result, "pi30:probe_timeout")
+
+        asyncio.run(_run())
+
+    def test_runtime_uart_sweep_is_once_per_owned_esp_session(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            hub._link_manager.transport = SimpleNamespace(
+                async_send_collector=AsyncMock()
+            )
+            hub._collector_metadata_service.framed_values = {
+                "collector_hardware_version": "esp-collector/0.1.5/ESP32"
+            }
+            context = self._candidate_context(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model="Hybrid 5K",
+            )
+            recovered = DriverCandidateScan(candidates=(context,))
+            channel = AsyncMock()
+            channel.async_read_current_baud.return_value = 2400
+            channel.async_set_baud.return_value = True
+
+            with (
+                patch(
+                    "custom_components.eybond_local.runtime.hub."
+                    "RuntimeLinkBaudChannel",
+                    return_value=channel,
+                ),
+                patch(
+                    "custom_components.eybond_local.runtime.hub."
+                    "catalog_link_baud_hints",
+                    return_value=(2400, 9600),
+                ),
+                patch(
+                    "custom_components.eybond_local.runtime.hub."
+                    "driver_keys_for_link_baud",
+                    return_value=("pi30",),
+                ),
+                patch(
+                    "custom_components.eybond_local.runtime.hub."
+                    "async_detect_inverter_candidates",
+                    return_value=recovered,
+                ) as detect,
+            ):
+                first = await hub._async_attempt_runtime_link_baud_sweep(
+                    detection_generation=7
+                )
+                second = await hub._async_attempt_runtime_link_baud_sweep(
+                    detection_generation=7
+                )
+
+            self.assertIs(first, recovered)
+            self.assertIsNone(second)
+            channel.async_set_baud.assert_awaited_once_with(9600)
+            detect.assert_awaited_once()
+
+        asyncio.run(_run())
+
+    def test_runtime_uart_sweep_never_writes_factory_collector(self) -> None:
+        asyncio.run(
+            self._assert_runtime_uart_hardware_is_read_only(
+                "Eybond Wi-Fi DTU V2.4"
+            )
+        )
+
+    def test_runtime_uart_sweep_never_writes_bk72xx_bridge(self) -> None:
+        asyncio.run(
+            self._assert_runtime_uart_hardware_is_read_only(
+                "esp-collector/0.1.5/BK72xx/RTL87xx"
+            )
+        )
+
+    async def _assert_runtime_uart_hardware_is_read_only(
+        self,
+        hardware_text: str,
+    ) -> None:
+        hub = self._hub(full_scan=True)
+        hub._link_manager.owned_session_generation = 7
+        hub._link_manager.transport = SimpleNamespace(
+            async_send_collector=AsyncMock()
+        )
+        hub._collector_metadata_service.framed_values = {
+            "collector_hardware_version": hardware_text
+        }
+
+        with (
+            patch(
+                "custom_components.eybond_local.runtime.hub."
+                "RuntimeLinkBaudChannel",
+            ) as channel_type,
+            patch(
+                "custom_components.eybond_local.runtime.hub."
+                "async_detect_inverter_candidates",
+                new=AsyncMock(
+                    side_effect=AssertionError(
+                        "unsupported collector must not enter UART re-sweep"
+                    )
+                ),
+            ),
+        ):
+            result = await hub._async_attempt_runtime_link_baud_sweep(
+                detection_generation=7
+            )
+
+        self.assertIsNone(result)
+        channel_type.assert_not_called()
 
     # 1. detected inverter + first poll timeout keeps inverter identity.
     def test_first_poll_timeout_after_detection_keeps_inverter_identity(self) -> None:

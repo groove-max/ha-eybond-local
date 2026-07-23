@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import asyncio
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -11,9 +14,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.onboarding.link_sweep import (  # noqa: E402
+from custom_components.eybond_local.runtime.link_baud_sweep import (  # noqa: E402
+    RuntimeLinkBaudChannel,
     async_run_link_baud_sweep,
     catalog_link_baud_hints,
+    default_runtime_driver_sweep_seconds,
     is_silent_detection_error,
     parse_reported_baud,
 )
@@ -26,7 +31,7 @@ class _Scan:
 
 class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
     def test_sweep_no_match_carries_silent_verdict(self) -> None:
-        from custom_components.eybond_local.onboarding.driver_detection import (
+        from custom_components.eybond_local.runtime.driver_detection import (
             DriverSweepNoMatch,
         )
 
@@ -40,7 +45,7 @@ class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tricky.silent)
 
     async def test_response_tracking_transport_observes_payloads(self) -> None:
-        from custom_components.eybond_local.onboarding.driver_detection import (
+        from custom_components.eybond_local.runtime.driver_detection import (
             _ResponseTrackingTransport,
         )
 
@@ -70,7 +75,7 @@ class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
         # (drivers swallow their own errors and return None).
         from custom_components.eybond_local.fixtures.transport import FixtureTransport
         from custom_components.eybond_local.models import ProbeTarget
-        from custom_components.eybond_local.onboarding.driver_detection import (
+        from custom_components.eybond_local.runtime.driver_detection import (
             DriverSweepNoMatch,
             async_detect_inverter_candidates,
         )
@@ -92,7 +97,7 @@ class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_fully_dead_link_is_silent(self) -> None:
         from custom_components.eybond_local.fixtures.transport import FixtureTransport
         from custom_components.eybond_local.models import ProbeTarget
-        from custom_components.eybond_local.onboarding.driver_detection import (
+        from custom_components.eybond_local.runtime.driver_detection import (
             DriverSweepNoMatch,
             async_detect_inverter_candidates,
         )
@@ -124,7 +129,7 @@ class SilenceClassifierTests(unittest.TestCase):
 
 class CatalogHintTests(unittest.TestCase):
     def test_driver_keys_for_link_baud_restrict_the_resweep(self) -> None:
-        from custom_components.eybond_local.onboarding.link_sweep import (
+        from custom_components.eybond_local.runtime.link_baud_sweep import (
             driver_keys_for_link_baud,
         )
 
@@ -144,6 +149,9 @@ class CatalogHintTests(unittest.TestCase):
         self.assertIn(9600, hints)   # smg / srne / aohai
         self.assertIn(19200, hints)  # must
 
+    def test_runtime_sweep_budget_is_derived_from_registered_drivers(self) -> None:
+        self.assertGreaterEqual(default_runtime_driver_sweep_seconds(), 60.0)
+
 
 class ParseReportedBaudTests(unittest.TestCase):
     def test_parses_bare_and_framed_values(self) -> None:
@@ -152,6 +160,33 @@ class ParseReportedBaudTests(unittest.TestCase):
         self.assertIsNone(parse_reported_baud(""))
         self.assertIsNone(parse_reported_baud("NONE,8"))
         self.assertIsNone(parse_reported_baud("0"))
+
+
+class RuntimeLinkBaudChannelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_channel_owns_parameter_34_read_and_write(self) -> None:
+        session = AsyncMock()
+        session.query_collector.return_value = SimpleNamespace(
+            code=0,
+            parameter=34,
+            text="9600,8,1,NONE",
+        )
+        session.set_collector.return_value = SimpleNamespace(
+            status=0,
+            parameter=34,
+        )
+        with patch(
+            "custom_components.eybond_local.runtime.link_baud_sweep."
+            "CollectorWireManagementSession",
+            return_value=session,
+        ):
+            channel = RuntimeLinkBaudChannel(object(), request_timeout=5.0)
+            current = await channel.async_read_current_baud()
+            changed = await channel.async_set_baud(2400)
+
+        self.assertEqual(current, 9600)
+        self.assertTrue(changed)
+        session.query_collector.assert_awaited_once_with(34)
+        session.set_collector.assert_awaited_once_with(34, "2400")
 
 
 class BaudSweepTests(unittest.IsolatedAsyncioTestCase):
@@ -236,6 +271,28 @@ class BaudSweepTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.attempted_bauds, (19200,))
         self.assertEqual(set_calls, [9600, 19200, 115200])
 
+    async def test_single_unconfirmed_write_still_restores_original(self) -> None:
+        set_calls: list[int] = []
+
+        async def set_baud(baud):
+            set_calls.append(baud)
+            return baud == 2400
+
+        outcome = await async_run_link_baud_sweep(
+            candidate_bauds=(9600,),
+            read_baud=lambda: asyncio.sleep(0, result=2400),
+            set_baud=set_baud,
+            run_sweep=lambda _baud: asyncio.sleep(
+                0,
+                result=_Scan(candidates=("must-not-run",)),
+            ),
+        )
+
+        self.assertFalse(outcome.matched)
+        self.assertEqual(outcome.attempted_bauds, ())
+        self.assertEqual(set_calls, [9600, 2400])
+        self.assertTrue(outcome.restored)
+
     async def test_unreadable_original_baud_fails_closed(self) -> None:
         # Without a known original speed the sweep cannot restore anything,
         # so it must not touch the collector at all.
@@ -288,6 +345,74 @@ class BaudSweepTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(outcome.matched)
         # One attempt admitted, then the budget said no; restore still runs.
         self.assertEqual(set_calls, [2400, 115200])
+
+    async def test_cancellation_restores_original_under_repeated_cancel(self) -> None:
+        set_calls: list[int] = []
+        sweep_started = asyncio.Event()
+        restore_started = asyncio.Event()
+        release_restore = asyncio.Event()
+
+        async def read_baud():
+            return 2400
+
+        async def set_baud(baud):
+            set_calls.append(baud)
+            if baud == 2400:
+                restore_started.set()
+                await release_restore.wait()
+            return True
+
+        async def run_sweep(_baud):
+            sweep_started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(
+            async_run_link_baud_sweep(
+                candidate_bauds=(9600,),
+                read_baud=read_baud,
+                set_baud=set_baud,
+                run_sweep=run_sweep,
+            )
+        )
+        await sweep_started.wait()
+        task.cancel()
+        await restore_started.wait()
+        task.cancel()
+        release_restore.set()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(task.cancelled())
+        self.assertEqual(set_calls, [9600, 2400])
+
+    async def test_cancellation_during_first_write_still_restores_original(self) -> None:
+        set_calls: list[int] = []
+        first_write_started = asyncio.Event()
+
+        async def read_baud():
+            return 2400
+
+        async def set_baud(baud):
+            set_calls.append(baud)
+            if baud == 9600:
+                first_write_started.set()
+                await asyncio.Event().wait()
+            return True
+
+        task = asyncio.create_task(
+            async_run_link_baud_sweep(
+                candidate_bauds=(9600,),
+                read_baud=read_baud,
+                set_baud=set_baud,
+                run_sweep=lambda _baud: asyncio.sleep(0),
+            )
+        )
+        await first_write_started.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(set_calls, [9600, 2400])
 
 
 class BudgetStarvedSilenceTests(unittest.TestCase):

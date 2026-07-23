@@ -1,4 +1,4 @@
-"""Generic driver-probing helpers independent of one physical transport."""
+"""Runtime inverter-driver probing independent of one physical transport."""
 
 from __future__ import annotations
 

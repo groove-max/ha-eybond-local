@@ -17,13 +17,11 @@ from custom_components.eybond_local.onboarding.detection import (
     DETECTION_DEPTH_DEEP,
     DETECTION_DEPTH_FAST,
     DiscoveryTarget,
-    DetectedDriverContext,
-    DriverCandidateScan,
     OnboardingDetector,
     async_probe_fallback_targets,
     build_unicast_fallback_targets,
 )
-from custom_components.eybond_local.onboarding.driver_detection import _build_driver_match
+from custom_components.eybond_local.runtime.driver_detection import _build_driver_match
 from custom_components.eybond_local.onboarding.timeouts import OnboardingDeadline
 from custom_components.eybond_local.models import DetectedInverter
 from custom_components.eybond_local.models import (
@@ -33,9 +31,7 @@ from custom_components.eybond_local.models import (
     OnboardingResult,
     ProbeTarget,
 )
-from custom_components.eybond_local.drivers.pi30 import Pi30Driver
 from custom_components.eybond_local.drivers.smg import SmgModbusDriver
-from custom_components.eybond_local.collector.protocol import EybondHeader
 from custom_components.eybond_local.collector.discovery import DiscoveryProbeResult
 
 
@@ -363,7 +359,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(detect_targets.await_count, 1)
         self.assertEqual(detect_targets.await_args.kwargs["depth"], DETECTION_DEPTH_FAST)
-        self.assertTrue(detect_targets.await_args.kwargs["return_after_first_match"])
+        self.assertTrue(detect_targets.await_args.kwargs["return_after_first_identity"])
         probe_targets.assert_not_awaited()
         self.assertEqual(
             {result.collector.ip for result in results if result.collector is not None},
@@ -437,13 +433,9 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 source="broadcast",
                 ip="192.168.1.55",
                 connected=True,
-            ),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632500000001",
-                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
+                collector=CollectorInfo(
+                    collector_pn="E50000200000000001",
+                ),
             ),
             connection_mode="broadcast",
         )
@@ -682,43 +674,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results, ())
         detect_targets.assert_awaited_once()
 
-    async def test_auto_detect_can_skip_runtime_enrichment(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-
-        with (
-            patch.object(
-                detector,
-                "_async_detect_targets",
-                new=AsyncMock(return_value=()),
-            ) as detect_targets,
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
-                new=AsyncMock(return_value=()),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
-                new=AsyncMock(
-                    return_value=(
-                        DiscoveryProbeResult(
-                            target_ip="192.168.1.255",
-                            message="set>server=192.168.1.50:8899;",
-                            local_port=40000,
-                            reply="rsp>server=1;",
-                            reply_from="192.168.1.55:40000",
-                        ),
-                    )
-                ),
-            ),
-        ):
-            results = await detector.async_auto_detect(
-                discovery_target="192.168.1.255",
-                attempts=1,
-            )
-
-        self.assertEqual(results, ())
-        detect_targets.assert_awaited_once()
-        self.assertFalse(detect_targets.await_args.kwargs["enrich_runtime_details"])
-
     async def test_deep_detect_appends_unicast_fallback_results_after_broadcast_match(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         broadcast_result = OnboardingResult(
@@ -770,9 +725,9 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(detect_targets.await_count, 2)
         self.assertEqual(detect_targets.await_args_list[0].kwargs["depth"], DETECTION_DEPTH_DEEP)
-        self.assertFalse(detect_targets.await_args_list[0].kwargs["return_after_first_match"])
+        self.assertFalse(detect_targets.await_args_list[0].kwargs["return_after_first_identity"])
         self.assertEqual(detect_targets.await_args_list[1].kwargs["depth"], DETECTION_DEPTH_DEEP)
-        self.assertFalse(detect_targets.await_args_list[1].kwargs["return_after_first_match"])
+        self.assertFalse(detect_targets.await_args_list[1].kwargs["return_after_first_identity"])
         self.assertEqual(
             {result.collector.ip for result in results if result.collector is not None},
             {"192.168.1.55", "192.168.1.14"},
@@ -811,6 +766,14 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(hasattr(OnboardingDetector, "async_handoff_detect"))
         self.assertFalse(hasattr(OnboardingDetector, "async_detect_targets"))
+        self.assertFalse(
+            hasattr(OnboardingDetector, "_async_detect_driver_with_retries")
+        )
+        self.assertFalse(hasattr(OnboardingDetector, "_async_attempt_link_baud_sweep"))
+        self.assertNotIn(
+            "driver_hint",
+            inspect.signature(OnboardingDetector).parameters,
+        )
         for method in (
             OnboardingDetector.async_auto_detect,
             OnboardingDetector.async_deep_detect,
@@ -818,6 +781,24 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             params = set(inspect.signature(method).parameters)
             self.assertNotIn("enrich_runtime_details", params)
             self.assertNotIn("identify_collector_only", params)
+
+        integration_root = (
+            REPO_ROOT / "custom_components" / "eybond_local"
+        )
+        onboarding_source = (
+            integration_root / "onboarding" / "eybond.py"
+        ).read_text(encoding="utf-8")
+        self.assertFalse(
+            (integration_root / "onboarding" / "driver_detection.py").exists()
+        )
+        self.assertNotIn("driver_detection", onboarding_source)
+        self.assertNotIn("link_baud_sweep", onboarding_source)
+        self.assertTrue(
+            (integration_root / "runtime" / "driver_detection.py").exists()
+        )
+        self.assertTrue(
+            (integration_root / "runtime" / "link_baud_sweep.py").exists()
+        )
 
     async def test_detect_target_builds_transport_without_session_protocol(self) -> None:
         # _async_detect_target must NOT pass any session protocol / probe lease to
@@ -1062,15 +1043,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             async def wait_until_heartbeat(self, timeout: float) -> bool:
                 return True
 
-        detected = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="553555355535552",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-            details={"protocol_id": "PI30"},
-        )
-
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
@@ -1085,25 +1057,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(
-                    return_value=DriverCandidateScan(candidates=(
-                        DetectedDriverContext(
-                        driver=Pi30Driver(),
-                        inverter=detected,
-                        match=DriverMatch(
-                            driver_key="pi30",
-                            protocol_family="pi30",
-                            model_name="PowMr 4.2kW",
-                            serial_number="553555355535552",
-                            probe_target=detected.probe_target,
-                        ),
-                    ),
-                    ),)
-                ),
-            ),
         ):
             result = await detector._async_detect_target(
                 target,
@@ -1113,8 +1066,8 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result.connection_mode, "broadcast")
-        self.assertEqual(result.next_action, "create_entry")
-        self.assertIsNotNone(result.match)
+        self.assertEqual(result.next_action, "confirm_collector")
+        self.assertIsNone(result.match)
         self.assertEqual(result.collector.ip, "192.168.1.255")
         self.assertEqual(FakeTransport.instances[0].collector_ip, "192.168.1.255")
 
@@ -1143,15 +1096,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             async def wait_until_heartbeat(self, timeout: float) -> bool:
                 return False
 
-        detected = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="553555355535552",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-            details={"protocol_id": "PI30"},
-        )
-
         with (
             patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
             patch(
@@ -1166,25 +1110,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(
-                    return_value=DriverCandidateScan(candidates=(
-                        DetectedDriverContext(
-                        driver=Pi30Driver(),
-                        inverter=detected,
-                        match=DriverMatch(
-                            driver_key="pi30",
-                            protocol_family="pi30",
-                            model_name="PowMr 4.2kW",
-                            serial_number="553555355535552",
-                            probe_target=detected.probe_target,
-                        ),
-                    ),
-                    ),)
-                ),
-            ),
         ):
             result = await detector._async_detect_target(
                 target,
@@ -1195,136 +1120,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("collector_heartbeat_not_observed", result.warnings)
 
-    async def test_detect_target_does_not_wrap_driver_detection_in_global_timeout(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        target = DiscoveryTarget(ip="192.168.1.14", source="known_ip")
-
-        class FakeTransport:
-            def __init__(
-                self,
-                *,
-                host: str,
-                port: int,
-                request_timeout: float,
-                heartbeat_interval: float,
-                collector_ip: str,
-            ) -> None:
-                self.collector_ip = collector_ip
-                self.collector_info = CollectorInfo(remote_ip=collector_ip)
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-            def set_collector_ip(self, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-
-            async def wait_until_connected(self, timeout: float) -> bool:
-                return True
-
-            async def wait_until_heartbeat(self, timeout: float) -> bool:
-                return True
-
-        detected = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="553555355535552",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-            details={"protocol_id": "PI30"},
-        )
-        context = DetectedDriverContext(
-            driver=Pi30Driver(),
-            inverter=detected,
-            match=DriverMatch(
-                driver_key="pi30",
-                protocol_family="pi30",
-                model_name="PowMr 4.2kW",
-                serial_number="553555355535552",
-                probe_target=detected.probe_target,
-            ),
-        )
-
-        async def fail_if_called(*args, **kwargs):
-            raise AssertionError("driver detection must not be wrapped in asyncio.wait_for")
-
-        with (
-            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
-                new=AsyncMock(
-                    return_value=DiscoveryProbeResult(
-                        target_ip="192.168.1.14",
-                        message="set>server=192.168.1.50:8899;",
-                        local_port=40000,
-                        reply="rsp>server=2;",
-                        reply_from="192.168.1.14:58899",
-                    )
-                ),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond._async_probe_smartess_onboarding",
-                new=AsyncMock(return_value=None),
-            ),
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(return_value=DriverCandidateScan(candidates=(context,))),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.asyncio.wait_for",
-                new=fail_if_called,
-            ),
-        ):
-            result = await detector._async_detect_target(
-                target,
-                discovery_timeout=0.1,
-                connect_timeout=0.1,
-                heartbeat_timeout=0.1,
-                enrich_runtime_details=False,
-            )
-
-        self.assertEqual(result.next_action, "create_entry")
-        self.assertIsNotNone(result.match)
-
-    async def test_driver_detection_receives_detection_depth(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        detected = DetectedInverter(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="SMG 6200",
-            serial_number="92632500000001",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-        )
-        context = DetectedDriverContext(
-            driver=SmgModbusDriver(),
-            inverter=detected,
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632500000001",
-                probe_target=detected.probe_target,
-            ),
-        )
-
-        with patch(
-            "custom_components.eybond_local.onboarding.eybond.async_detect_inverter_candidates",
-            new=AsyncMock(return_value=DriverCandidateScan(candidates=(context,))),
-        ) as detect_candidates:
-            result = await detector._async_detect_driver_with_retries(
-                object(),
-                depth=DETECTION_DEPTH_DEEP,
-            )
-
-        self.assertIs(result.candidates[0], context)
-        self.assertEqual(result.candidates[1:], ())
-        detect_candidates.assert_awaited_once()
-        self.assertEqual(detect_candidates.await_args.kwargs["depth"], DETECTION_DEPTH_DEEP)
-        self.assertEqual(detect_candidates.await_args.kwargs["preferred_driver_keys"], ())
-
     async def test_targets_cancelled_after_first_match_are_not_timeouts(self) -> None:
         from custom_components.eybond_local.onboarding.presentation import (
             scan_result_status_code,
@@ -1334,19 +1129,15 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         fast_target = DiscoveryTarget(ip="192.168.1.20", source="subnet_unicast")
         slow_target = DiscoveryTarget(ip="192.168.1.21", source="subnet_unicast")
 
-        matched_result = OnboardingResult(
+        identified_result = OnboardingResult(
             collector=CollectorCandidate(
                 target_ip="192.168.1.20",
                 source="subnet_unicast",
                 ip="192.168.1.20",
                 connected=True,
-            ),
-            match=DriverMatch(
-                driver_key="pi30",
-                protocol_family="pi30",
-                model_name="PI30 4200",
-                serial_number="X1",
-                probe_target=ProbeTarget(devcode=0x0102, collector_addr=255, device_addr=0),
+                collector=CollectorInfo(
+                    collector_pn="E50000200000000001",
+                ),
             ),
             connection_mode="subnet_unicast",
         )
@@ -1354,7 +1145,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         async def _detect_target(target, **kwargs):
             state = kwargs.get("detection_state")
             if target.ip == fast_target.ip:
-                return matched_result
+                return identified_result
             # The slow target has already produced a replied candidate when
             # it gets cancelled.
             if state is not None:
@@ -1370,12 +1161,15 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(detector, "_async_detect_target", new=_detect_target):
             results = await detector._async_detect_targets(
                 (fast_target, slow_target),
-                return_after_first_match=True,
+                return_after_first_identity=True,
                 total_timeout=20.0,
             )
 
         by_ip = {result.collector.ip: result for result in results}
-        self.assertIsNotNone(by_ip["192.168.1.20"].match)
+        self.assertEqual(
+            by_ip["192.168.1.20"].collector.collector.collector_pn,
+            "E50000200000000001",
+        )
 
         cancelled = by_ip["192.168.1.21"]
         self.assertEqual(cancelled.last_error, "cancelled_first_match_found")
@@ -1408,553 +1202,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.detection.status, "already_configured")
             self.assertEqual(result.next_action, "")
 
-    async def test_smartess_metadata_seeds_preferred_driver_keys(self) -> None:
-        from custom_components.eybond_local.onboarding.eybond import (
-            SmartEssOnboardingProbe,
-            _smartess_preferred_driver_keys,
-        )
-
-        self.assertEqual(_smartess_preferred_driver_keys(None), ())
-        self.assertEqual(_smartess_preferred_driver_keys(SmartEssOnboardingProbe()), ())
-
-        probe = SmartEssOnboardingProbe(
-            known_protocol=types.SimpleNamespace(
-                profile_name="pi30_ascii/models/smartess_0925_compat.json",
-                raw_profile_name="smartess_local/models/0925.json",
-            )
-        )
-        self.assertEqual(
-            _smartess_preferred_driver_keys(probe),
-            ("pi30", "smartess_local"),
-        )
-
-    async def test_deep_driver_detection_returns_alternative_contexts(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        pi30 = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="VMII-NXPW5KW",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=255, device_addr=0),
-        )
-        smg = DetectedInverter(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="SMG-compatible",
-            serial_number="VMII-NXPW5KW",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-        )
-        contexts = (
-            DetectedDriverContext(
-                driver=Pi30Driver(),
-                inverter=pi30,
-                match=DriverMatch(
-                    driver_key="pi30",
-                    protocol_family="pi30",
-                    model_name="PowMr 4.2kW",
-                    serial_number="VMII-NXPW5KW",
-                    probe_target=pi30.probe_target,
-                ),
-            ),
-            DetectedDriverContext(
-                driver=SmgModbusDriver(),
-                inverter=smg,
-                match=DriverMatch(
-                    driver_key="modbus_smg",
-                    protocol_family="modbus_smg",
-                    model_name="SMG-compatible",
-                    serial_number="VMII-NXPW5KW",
-                    probe_target=smg.probe_target,
-                ),
-            ),
-        )
-
-        with patch(
-            "custom_components.eybond_local.onboarding.eybond.async_detect_inverter_candidates",
-            new=AsyncMock(return_value=DriverCandidateScan(candidates=contexts)),
-        ):
-            scan = await detector._async_detect_driver_with_retries(
-                object(),
-                depth=DETECTION_DEPTH_DEEP,
-            )
-
-        self.assertFalse(scan.budget_exhausted)
-        self.assertEqual(scan.candidates[0].match.driver_key, "pi30")
-        self.assertEqual(
-            [context.match.driver_key for context in scan.candidates[1:]],
-            ["modbus_smg"],
-        )
-
-    async def test_deep_target_admission_extends_extendable_scan_deadline(self) -> None:
-        from custom_components.eybond_local.onboarding.timeouts import (
-            ExtendableOnboardingDeadline,
-        )
-
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        target = DiscoveryTarget(ip="192.168.1.14", source="subnet_unicast")
-
-        class FakeTransport:
-            def __init__(self, *, host, port, request_timeout, heartbeat_interval, collector_ip) -> None:
-                self.collector_ip = collector_ip
-                self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-            def set_collector_ip(self, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-
-            async def wait_until_connected(self, timeout: float) -> bool:
-                return True
-
-            async def wait_until_heartbeat(self, timeout: float) -> bool:
-                return True
-
-        detected = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PI30 4200",
-            serial_number="X1",
-            probe_target=ProbeTarget(devcode=0x0102, collector_addr=255, device_addr=0),
-        )
-        context = DetectedDriverContext(
-            driver=Pi30Driver(),
-            inverter=detected,
-            match=DriverMatch(
-                driver_key="pi30",
-                protocol_family="pi30",
-                model_name="PI30 4200",
-                serial_number="X1",
-                probe_target=detected.probe_target,
-            ),
-        )
-        # Almost exhausted scan budget: without admission the sweep would starve.
-        deadline = ExtendableOnboardingDeadline(
-            base_timeout_seconds=1.0,
-            hard_ceiling_seconds=600.0,
-        )
-
-        with (
-            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
-                new=AsyncMock(
-                    return_value=DiscoveryProbeResult(
-                        target_ip="192.168.1.14",
-                        message="set>server=192.168.1.50:8899;",
-                        local_port=40000,
-                        reply="rsp>server=2;",
-                        reply_from="192.168.1.14:58899",
-                    )
-                ),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond._async_probe_smartess_onboarding",
-                new=AsyncMock(return_value=None),
-            ),
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(return_value=DriverCandidateScan(candidates=(context,))),
-            ) as retries,
-        ):
-            result = await detector._async_detect_target(
-                target,
-                depth=DETECTION_DEPTH_DEEP,
-                discovery_timeout=0.1,
-                connect_timeout=0.1,
-                heartbeat_timeout=0.1,
-                enrich_runtime_details=False,
-                deadline=deadline,
-            )
-
-        self.assertIsNotNone(result.match)
-        # Admission reserved a full sweep budget on the shared deadline.
-        self.assertGreater(deadline.remaining_seconds(), 60.0)
-        # The per-target sweep deadline handed to the sweep is bounded.
-        sweep_deadline = retries.await_args.kwargs["deadline"]
-        self.assertIsNotNone(sweep_deadline.remaining_seconds())
-
-    async def test_detect_target_collects_smartess_metadata_on_successful_match(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")
-
-        class FakeTransport:
-            def __init__(self, *, host: str, port: int, request_timeout: float, heartbeat_interval: float, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-                self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-            def set_collector_ip(self, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-
-            async def wait_until_connected(self, timeout: float) -> bool:
-                return True
-
-            async def wait_until_heartbeat(self, timeout: float) -> bool:
-                return True
-
-            async def async_send_collector(
-                self,
-                *,
-                fcode: int,
-                payload: bytes = b"",
-                devcode: int = 0,
-                collector_addr: int = 1,
-            ) -> tuple[EybondHeader, bytes]:
-                responses = {
-                    (2, b"\x05"): b"\x00\x051.2.3",
-                    (2, b"\x0e"): b"\x00\x0e0925#SD-HYM-4862HWP",
-                }
-                response = responses[(fcode, payload)]
-                return (
-                    EybondHeader(
-                        tid=1,
-                        devcode=devcode,
-                        wire_len=len(response) + 2,
-                        devaddr=collector_addr,
-                        fcode=fcode,
-                    ),
-                    response,
-                )
-
-        detected = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="553555355535552",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-            details={},
-        )
-
-        with (
-            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
-                new=AsyncMock(
-                    return_value=DiscoveryProbeResult(
-                        target_ip="192.168.1.255",
-                        message="set>server=192.168.1.50:8899;",
-                        local_port=40000,
-                        reply="rsp>server=2;",
-                        reply_from="192.168.1.14:58899",
-                    )
-                ),
-            ),
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(
-                    return_value=DriverCandidateScan(candidates=(
-                        DetectedDriverContext(
-                        driver=Pi30Driver(),
-                        inverter=detected,
-                        match=DriverMatch(
-                            driver_key="pi30",
-                            protocol_family="pi30",
-                            model_name="PowMr 4.2kW",
-                            serial_number="553555355535552",
-                            probe_target=detected.probe_target,
-                            details={},
-                        ),
-                    ),
-                    ),)
-                ),
-            ),
-        ):
-            result = await detector._async_detect_target(
-                target,
-                discovery_timeout=0.1,
-                connect_timeout=0.1,
-                heartbeat_timeout=0.1,
-            )
-
-        assert result.collector is not None
-        assert result.collector.collector is not None
-        assert result.match is not None
-        self.assertEqual(result.collector.collector.smartess_collector_version, "1.2.3")
-        self.assertEqual(result.collector.collector.smartess_protocol_asset_id, "0925")
-        self.assertEqual(result.collector.collector.smartess_protocol_profile_key, "smartess_0925")
-        self.assertEqual(result.collector.collector.smartess_device_address, 5)
-        self.assertEqual(result.match.details["smartess_collector_version"], "1.2.3")
-        self.assertEqual(result.match.details["smartess_protocol_asset_id"], "0925")
-        self.assertEqual(result.match.details["smartess_profile_key"], "smartess_0925")
-        self.assertEqual(result.match.details["smartess_device_address"], 5)
-
-    async def test_detect_target_enriches_successful_match_with_runtime_probe_values(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")
-
-        class FakeTransport:
-            def __init__(
-                self,
-                *,
-                host: str,
-                port: int,
-                request_timeout: float,
-                heartbeat_interval: float,
-                collector_ip: str,
-            ) -> None:
-                self.collector_ip = collector_ip
-                self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-            def set_collector_ip(self, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-
-            async def wait_until_connected(self, timeout: float) -> bool:
-                return True
-
-            async def wait_until_heartbeat(self, timeout: float) -> bool:
-                return True
-
-            async def async_send_collector(
-                self,
-                *,
-                fcode: int,
-                payload: bytes = b"",
-                devcode: int = 0,
-                collector_addr: int = 1,
-            ) -> tuple[EybondHeader, bytes]:
-                return (
-                    EybondHeader(
-                        tid=1,
-                        devcode=devcode,
-                        wire_len=2,
-                        devaddr=collector_addr,
-                        fcode=fcode,
-                    ),
-                    b"\x00\x00",
-                )
-
-        class FakeCollectorAtTransport:
-            instances: list["FakeCollectorAtTransport"] = []
-
-            def __init__(self, *, host: str, port: int, request_timeout: float, collector_ip: str) -> None:
-                self.host = host
-                self.port = port
-                self.request_timeout = request_timeout
-                self.collector_ip = collector_ip
-                FakeCollectorAtTransport.instances.append(self)
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-        class FakeDriver:
-            async def async_read_values(self, transport, inverter, **kwargs):
-                return {
-                    "battery_connected": True,
-                    "battery_connection_state": "Connected",
-                    "battery_percent": 78,
-                    "output_rating_active_power": 4200,
-                }
-
-        detected = DetectedInverter(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="553555355535552",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0),
-            details={},
-        )
-
-        with (
-            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.SharedCollectorAtTransport",
-                FakeCollectorAtTransport,
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
-                new=AsyncMock(
-                    return_value=DiscoveryProbeResult(
-                        target_ip="192.168.1.255",
-                        message="set>server=192.168.1.50:8899;",
-                        local_port=40000,
-                        reply="rsp>server=2;",
-                        reply_from="192.168.1.14:58899",
-                    )
-                ),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond._async_probe_smartess_onboarding",
-                new=AsyncMock(return_value=None),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.query_runtime_collector_values",
-                new=AsyncMock(
-                    return_value={
-                        "collector_ssid": "HomeWiFi",
-                        "collector_signal_strength": -111,
-                        "collector_signal_strength_source": "gprs_csq",
-                        "collector_signal_strength_raw": "1",
-                    }
-                ),
-            ) as query_fc,
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.query_runtime_collector_at_values",
-                new=AsyncMock(
-                    return_value={
-                        "collector_server_endpoint": "iot.eybond.com,18899,TCP",
-                        "collector_cloud_family": "valuecloud_at",
-                        "collector_cloud_family_source": "endpoint_host",
-                        "collector_cloud_family_confidence": "high",
-                        "collector_signal_strength": -67,
-                        "collector_signal_strength_source": "wifi_rssi",
-                        "collector_signal_strength_raw": "-67",
-                    }
-                ),
-            ) as query_at,
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(
-                    return_value=DriverCandidateScan(candidates=(
-                        DetectedDriverContext(
-                        driver=FakeDriver(),
-                        inverter=detected,
-                        match=DriverMatch(
-                            driver_key="pi30",
-                            protocol_family="pi30",
-                            model_name="PowMr 4.2kW",
-                            serial_number="553555355535552",
-                            probe_target=detected.probe_target,
-                            details={},
-                        ),
-                    ),
-                    ),)
-                ),
-            ),
-        ):
-            result = await detector._async_detect_target(
-                target,
-                discovery_timeout=0.1,
-                connect_timeout=0.1,
-                heartbeat_timeout=0.1,
-            )
-
-        assert result.match is not None
-        self.assertNotIn("collector_ssid", result.match.details)
-        self.assertEqual(result.match.details["collector_signal_strength"], -67)
-        self.assertEqual(result.match.details["collector_signal_strength_source"], "wifi_rssi")
-        self.assertEqual(result.match.details["collector_signal_strength_raw"], "-67")
-        self.assertEqual(result.match.details["collector_server_endpoint"], "iot.eybond.com,18899,TCP")
-        self.assertEqual(result.match.details["collector_cloud_family"], "valuecloud_at")
-        self.assertEqual(result.match.details["collector_cloud_family_source"], "endpoint_host")
-        self.assertEqual(result.match.details["collector_cloud_family_confidence"], "high")
-        assert result.collector is not None
-        assert result.collector.collector is not None
-        self.assertEqual(result.collector.collector.collector_server_endpoint, "iot.eybond.com,18899,TCP")
-        self.assertEqual(result.collector.collector.collector_cloud_family, "valuecloud_at")
-        self.assertIs(result.match.details["battery_connected"], True)
-        self.assertEqual(result.match.details["battery_connection_state"], "Connected")
-        self.assertEqual(result.match.details["battery_percent"], 78)
-        self.assertEqual(result.match.details["output_rating_active_power"], 4200)
-        self.assertEqual(FakeCollectorAtTransport.instances[0].collector_ip, "192.168.1.255")
-        query_fc.assert_awaited_once()
-        fc_parameters = query_fc.await_args.kwargs["parameters"]
-        self.assertNotIn(41, [definition.parameter for definition in fc_parameters])
-        query_at.assert_awaited_once()
-
-    async def test_detect_target_keeps_smartess_metadata_when_no_driver_matches(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        target = DiscoveryTarget(ip="192.168.1.255", source="broadcast")
-
-        class FakeTransport:
-            def __init__(self, *, host: str, port: int, request_timeout: float, heartbeat_interval: float, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-                self.collector_info = CollectorInfo(remote_ip="192.168.1.14")
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-            def set_collector_ip(self, collector_ip: str) -> None:
-                self.collector_ip = collector_ip
-
-            async def wait_until_connected(self, timeout: float) -> bool:
-                return True
-
-            async def wait_until_heartbeat(self, timeout: float) -> bool:
-                return True
-
-            async def async_send_collector(
-                self,
-                *,
-                fcode: int,
-                payload: bytes = b"",
-                devcode: int = 0,
-                collector_addr: int = 1,
-            ) -> tuple[EybondHeader, bytes]:
-                responses = {
-                    (2, b"\x05"): b"\x00\x052.0.1",
-                    (2, b"\x0e"): b"\x00\x0e0911#PVInverter",
-                }
-                response = responses[(fcode, payload)]
-                return (
-                    EybondHeader(
-                        tid=1,
-                        devcode=devcode,
-                        wire_len=len(response) + 2,
-                        devaddr=collector_addr,
-                        fcode=fcode,
-                    ),
-                    response,
-                )
-
-        with (
-            patch("custom_components.eybond_local.onboarding.eybond.SharedEybondTransport", FakeTransport),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger",
-                new=AsyncMock(
-                    return_value=DiscoveryProbeResult(
-                        target_ip="192.168.1.255",
-                        message="set>server=192.168.1.50:8899;",
-                        local_port=40000,
-                        reply="rsp>server=2;",
-                        reply_from="192.168.1.14:58899",
-                    )
-                ),
-            ),
-            patch.object(
-                detector,
-                "_async_detect_driver_with_retries",
-                new=AsyncMock(side_effect=RuntimeError("no_supported_driver_matched")),
-            ),
-        ):
-            result = await detector._async_detect_target(
-                target,
-                discovery_timeout=0.1,
-                connect_timeout=0.1,
-                heartbeat_timeout=0.1,
-            )
-
-        self.assertEqual(result.next_action, "manual_driver_selection")
-        self.assertEqual(result.last_error, "no_supported_driver_matched")
-        assert result.collector is not None
-        assert result.collector.collector is not None
-        self.assertEqual(result.collector.collector.smartess_collector_version, "2.0.1")
-        self.assertEqual(result.collector.collector.smartess_protocol_asset_id, "0911")
-        self.assertEqual(result.collector.collector.smartess_protocol_profile_key, "smartess_0911")
-        self.assertEqual(result.collector.collector.smartess_device_address, 3)
 
     async def test_detect_targets_returns_connected_collector_when_target_deadline_expires(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")

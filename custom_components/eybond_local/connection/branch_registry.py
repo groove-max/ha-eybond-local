@@ -164,15 +164,10 @@ def _create_eybond_runtime_manager(
 
 def _create_eybond_onboarding_manager(
     connection: ConnectionSpec,
-    *,
-    driver_hint: str,
 ) -> OnboardingManager:
     if not isinstance(connection, EybondConnectionSpec):
         raise ValueError(f"connection_spec_branch_mismatch:{CONNECTION_TYPE_EYBOND}:{type(connection).__name__}")
-    return OnboardingDetector(
-        connection=connection,
-        driver_hint=driver_hint,
-    )
+    return OnboardingDetector(connection=connection)
 
 
 _CONNECTION_BRANCHES: dict[str, ConnectionBranch] = {

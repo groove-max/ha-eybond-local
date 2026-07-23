@@ -250,7 +250,7 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await service.stop()
 
-    async def test_modbus_smg_readonly_preset_produces_positive_detection_match(self) -> None:
+    async def test_modbus_smg_onboarding_admits_collector_without_driver_probe(self) -> None:
         scenario = resolve_scenario(
             preset=PRESET_MODBUS_SMG_READONLY,
             profile=CollectorProfile(
@@ -265,14 +265,15 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self._detect_with_scenario(scenario)
 
-        self.assertIsNotNone(result.match)
-        self.assertEqual(result.next_action, "create_entry")
-        self.assertEqual(result.match.driver_key, "modbus_smg")
-        self.assertEqual(result.match.model_name, "SMG 6200")
-        self.assertEqual(result.match.serial_number, "SMG11K240001")
+        self.assertIsNone(result.match)
+        self.assertEqual(result.next_action, "confirm_collector")
         self.assertTrue(result.collector.connected)
-        self.assertEqual(result.collector.collector.smartess_collector_version, "8.50.12.3")
-        self.assertEqual(result.collector.collector.smartess_protocol_asset_id, "0942")
+        self.assertEqual(
+            result.collector.collector.collector_pn,
+            "E5000099990002",
+        )
+        self.assertEqual(result.collector.collector.smartess_collector_version, "")
+        self.assertEqual(result.collector.collector.smartess_protocol_asset_id, "")
 
     async def test_first_heartbeat_delay_can_reproduce_warning_without_breaking_match(self) -> None:
         scenario = resolve_scenario(
@@ -292,13 +293,11 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
             heartbeat_timeout=0.05,
         )
 
-        # A briefly-silent framed collector is now IDENTIFIED by the onboarding
-        # silent-identity probe (one FC=2 parameter-2 read on its exact socket)
-        # during the connect window, rather than waiting on the delayed
-        # heartbeat. Detection still matches; because identification no longer
-        # depends on the heartbeat, the "collector_heartbeat_not_observed"
-        # diagnostic warning is superseded by a clean match.
-        self.assertIsNotNone(result.match)
+        # A briefly-silent framed collector is identified by one exact-session
+        # FC=2 read. Inverter probing is deferred to runtime after the entry is
+        # created, so onboarding returns a collector-only result.
+        self.assertIsNone(result.match)
+        self.assertEqual(result.next_action, "confirm_collector")
         self.assertTrue(result.collector.connected)
 
     async def test_reverse_connect_delay_can_hold_result_at_not_connected(self) -> None:
@@ -319,7 +318,7 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.last_error, "collector_not_connected")
         self.assertEqual(result.next_action, "manual_input")
 
-    async def test_fc4_timeout_mode_keeps_collector_connected_but_unmatched(self) -> None:
+    async def test_fc4_timeout_does_not_affect_collector_only_onboarding(self) -> None:
         scenario = resolve_scenario(
             preset=PRESET_MODBUS_SMG_READONLY,
             profile=CollectorProfile(mode=PRESET_MODBUS_SMG_READONLY),
@@ -335,7 +334,7 @@ class FakeCollectorServiceScenarioTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result.match)
         self.assertTrue(result.collector.connected)
-        self.assertEqual(result.next_action, "manual_driver_selection")
+        self.assertEqual(result.next_action, "confirm_collector")
 
     async def test_nat_peer_mode_creates_multiple_sessions_from_same_source_ip(self) -> None:
         tcp_port = _free_tcp_port()
