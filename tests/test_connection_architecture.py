@@ -43,8 +43,8 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
         )
         self.assertFalse(cp.resolve_proxy_enabled({}, {}))
 
-    def test_smartess_and_ha_legacy_maps_to_callback_on_demand(self) -> None:
-        data = {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA}
+    def test_cloud_and_ha_legacy_maps_to_callback_on_demand(self) -> None:
+        data = {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA}
         self.assertEqual(
             cp.resolve_connection_strategy(data, {}),
             C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
@@ -156,7 +156,7 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
 
     def test_migrate_entry_axes_fills_all_three(self) -> None:
         axes = cp.migrate_entry_axes(
-            {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA}, {}
+            {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA}, {}
         )
         self.assertEqual(
             axes[C.CONF_CONNECTION_STRATEGY], C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
@@ -419,7 +419,7 @@ class MigrationInvariantTests(unittest.TestCase):
         entry = types.SimpleNamespace(
             entry_id="e1",
             version=1,
-            data={C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA},
+            data={C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA},
             options={},
         )
         self.assertTrue(self._run_migrate(entry))
@@ -768,7 +768,7 @@ class CanonicalConnectionStrategyOwnerTests(unittest.TestCase):
         # still describe the old mode.
         data = {
             C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
-            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
             C.CONF_COLLECTOR_PN: "PNCANONICAL0001",
         }
 
@@ -894,7 +894,7 @@ class MigrationMatrixTests(unittest.TestCase):
     def test_A_factory_cloud_ha_maps_to_callback_on_demand_external(self) -> None:
         result = cp.simulate_migration(
             {
-                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
                 # A stale callback_listener onboarding artifact must NOT force inbound.
                 C.CONF_CONNECTION_MODE: "callback_listener",
             },
@@ -962,7 +962,7 @@ class MigrationMatrixTests(unittest.TestCase):
     # an axis or a forced payload route.
     def test_E_valuecloud_metadata_preserved_and_not_forced_route(self) -> None:
         data = {
-            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
             C.CONF_COLLECTOR_CLOUD_FAMILY: "valuecloud",
             "collector_session_protocol": "at_text",
         }
@@ -983,7 +983,7 @@ class MigrationMatrixTests(unittest.TestCase):
         entry = types.SimpleNamespace(
             entry_id="legacy-1",
             version=1,
-            data={C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA},
+            data={C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA},
             options={},
         )
         self.assertTrue(self._run_migrate(entry))
@@ -1018,7 +1018,7 @@ class MigrationMatrixTests(unittest.TestCase):
     # G. Migration must not touch persisted inverter identity fields.
     def test_G_migration_preserves_detected_identity_fields(self) -> None:
         data = {
-            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
             C.CONF_DETECTED_MODEL: "SMG 6200",
             C.CONF_DETECTED_SERIAL: "92632500000001",
         }
@@ -1035,7 +1035,7 @@ class MigrationMatrixTests(unittest.TestCase):
             data={
                 C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
                 C.CONF_ENDPOINT_CONTROL_POLICY: C.ENDPOINT_CONTROL_EXTERNAL,
-                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
                 C.CONF_COLLECTOR_PN: "V00ABC1234567890",
             },
             options={},
@@ -1059,7 +1059,7 @@ class MigrationMatrixTests(unittest.TestCase):
             version=2,
             data={
                 C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
-                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
                 C.CONF_ENDPOINT_WRITTEN_VALUE: "192.168.1.50,18899,TCP",
             },
             options={},
@@ -1077,7 +1077,7 @@ class MigrationMatrixTests(unittest.TestCase):
         data = {
             C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
             C.CONF_CONNECTION_STRATEGY_EVIDENCE: "reboot_reconnect",
-            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
         }
         self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
         # Without the evidence the same shape is still corrected.
@@ -1089,7 +1089,7 @@ class MigrationMatrixTests(unittest.TestCase):
 
     def test_migration_diagnostics_expose_sources_and_status(self) -> None:
         diag = cp.migration_diagnostics(
-            {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA}, {}
+            {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA}, {}
         )
         for key in (
             "migration_status",
@@ -1107,7 +1107,7 @@ class MigrationMatrixTests(unittest.TestCase):
             {
                 C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
                 C.CONF_ENDPOINT_CONTROL_POLICY: C.ENDPOINT_CONTROL_EXTERNAL,
-                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+                C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
                 C.CONF_COLLECTOR_PN: "PNCANONICAL0002",
             },
             {},
@@ -1189,7 +1189,7 @@ class OfflinePnLessCallbackMigrationTests(unittest.TestCase):
         # Item 6: a genuinely-explicit inbound value on a manual/known-IP entry is
         # NOT flipped to callback_on_demand by the corrective re-migration just
         # because the legacy connection_mode looks user-triggered. The correction
-        # is reserved for the cloud-primary SmartESS+HA mis-migration shape.
+        # is reserved for the legacy cloud-primary mis-migration shape.
         data = {
             C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND,
             C.CONF_CONNECTION_MODE: "known_ip",
@@ -1247,7 +1247,7 @@ class OperationModeIsNotStrategyAuthorityGuardTests(unittest.TestCase):
         # callback_on_demand. Operation mode is not the strategy authority.
         for op_mode in (
             C.COLLECTOR_OPERATION_HA_ONLY,
-            C.COLLECTOR_OPERATION_SMARTESS_AND_HA,
+            C.COLLECTOR_OPERATION_CLOUD_AND_HA,
             "",
         ):
             for conn_mode in ("manual", "known_ip"):

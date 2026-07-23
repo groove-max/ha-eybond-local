@@ -29,7 +29,7 @@ from typing import Any
 
 from ..const import (
     COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
+    COLLECTOR_OPERATION_CLOUD_AND_HA,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_COLLECTOR_PN,
     CONF_ENTRY_ROLE,
@@ -139,7 +139,7 @@ def _derive_connection_strategy(
         _first_present(CONF_CONNECTION_MODE, data, options) or ""
     ).strip()
 
-    if operation_mode == COLLECTOR_OPERATION_SMARTESS_AND_HA:
+    if operation_mode == COLLECTOR_OPERATION_CLOUD_AND_HA:
         # Cloud-primary factory collector: it normally points at the vendor cloud,
         # so Home Assistant borrows a callback session on demand (one UDP trigger
         # per attempt) rather than waiting for an inbound dial-in.
@@ -404,7 +404,7 @@ def correct_migrated_connection_strategy(
     """Return a corrected connection strategy for a provably-broken entry, else None.
 
     A v2 migration derived ``connection_strategy=inbound`` for a cloud-primary
-    factory collector (operation mode SmartESS+HA) because a stale
+    factory collector (legacy cloud+HA operation mode) because a stale
     ``callback_listener`` connection_mode used to take precedence over the
     operation mode. Such an entry can never connect as inbound: the collector
     points at the vendor cloud and will not dial Home Assistant on its own, so HA
@@ -412,7 +412,7 @@ def correct_migrated_connection_strategy(
 
     The correction is deliberately NARROW (item 6):
 
-    - It applies ONLY to the cloud-primary SmartESS+HA shape. It is NOT extended
+    - It applies ONLY to the legacy cloud-primary shape. It is NOT extended
       to manual/known-IP entries: those are user-triggered callback collectors
       whose strategy is decided by derivation/verification, and a genuinely
       explicit ``inbound`` value there is never overwritten just because the
@@ -455,12 +455,12 @@ def correct_migrated_connection_strategy(
     operation_mode = str(
         _first_present(CONF_COLLECTOR_OPERATION_MODE, data, options) or ""
     ).strip()
-    # Correct ONLY the cloud-primary SmartESS+HA shape: a factory collector that
+    # Correct ONLY the legacy cloud-primary shape: a factory collector that
     # points at the vendor cloud and can never dial in as inbound. This is
     # deliberately NOT extended to manual/known-IP: those are user-triggered
     # callback collectors whose strategy is decided by derivation/verification,
     # and a genuinely-explicit inbound value there must not be flipped (item 6).
-    if operation_mode != COLLECTOR_OPERATION_SMARTESS_AND_HA:
+    if operation_mode != COLLECTOR_OPERATION_CLOUD_AND_HA:
         return None
     return CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
 
@@ -549,7 +549,7 @@ def _connection_strategy_source(
     ).strip()
     if operation_mode == COLLECTOR_OPERATION_HA_ONLY:
         return "derived_operation_mode_ha_only"
-    if operation_mode == COLLECTOR_OPERATION_SMARTESS_AND_HA:
+    if operation_mode == COLLECTOR_OPERATION_CLOUD_AND_HA:
         return "derived_operation_mode_cloud"
     if str(_first_present(CONF_CONNECTION_MODE, data, options) or "").strip() == _CONNECTION_MODE_CALLBACK_LISTENER:
         return "derived_connection_mode_callback_listener"

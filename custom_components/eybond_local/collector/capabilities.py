@@ -5,12 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..const import (
-    COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
-)
-
-
 COLLECTOR_KIND_UNKNOWN = "unknown"
 COLLECTOR_KIND_FACTORY_EYBOND = "factory_eybond"
 COLLECTOR_KIND_ESP_EYBOND_BRIDGE = "esp_eybond_bridge"
@@ -57,7 +51,7 @@ class CollectorCapabilityProfile:
 
     collector_kind: str
     virtual_bridge: bool
-    allowed_operation_modes: tuple[str, ...]
+    cloud_connection_supported: bool
     cloud_profile_key: str
     cloud_evidence: bool
     proxy_capture: bool
@@ -69,16 +63,15 @@ class CollectorCapabilityProfile:
 
     @property
     def ha_only_required(self) -> bool:
-        return self.allowed_operation_modes == (COLLECTOR_OPERATION_HA_ONLY,)
+        """Return whether the collector has no supported vendor-cloud side."""
+
+        return not self.cloud_connection_supported
 
 
 FACTORY_COLLECTOR_CAPABILITIES = CollectorCapabilityProfile(
     collector_kind=COLLECTOR_KIND_FACTORY_EYBOND,
     virtual_bridge=False,
-    allowed_operation_modes=(
-        COLLECTOR_OPERATION_SMARTESS_AND_HA,
-        COLLECTOR_OPERATION_HA_ONLY,
-    ),
+    cloud_connection_supported=True,
     cloud_profile_key="",
     cloud_evidence=True,
     proxy_capture=True,
@@ -92,7 +85,7 @@ FACTORY_COLLECTOR_CAPABILITIES = CollectorCapabilityProfile(
 UNKNOWN_COLLECTOR_CAPABILITIES = CollectorCapabilityProfile(
     collector_kind=COLLECTOR_KIND_UNKNOWN,
     virtual_bridge=False,
-    allowed_operation_modes=(COLLECTOR_OPERATION_HA_ONLY,),
+    cloud_connection_supported=False,
     cloud_profile_key="",
     cloud_evidence=False,
     proxy_capture=False,
@@ -127,7 +120,7 @@ def collector_capability_profile(
     return CollectorCapabilityProfile(
         collector_kind=COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
         virtual_bridge=True,
-        allowed_operation_modes=(COLLECTOR_OPERATION_HA_ONLY,),
+        cloud_connection_supported=False,
         cloud_profile_key=str(cloud_profile_key or "local_only").strip() or "local_only",
         cloud_evidence=False,
         proxy_capture=False,

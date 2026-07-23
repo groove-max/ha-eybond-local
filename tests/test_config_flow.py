@@ -333,7 +333,6 @@ from custom_components.eybond_local.collector.capabilities import (
 )
 from custom_components.eybond_local.const import (
     COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
@@ -3665,7 +3664,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_confirm_step_hides_operation_mode_selector_for_detected_bridge(self) -> None:
-        # Item 1: a detected bridge forces HA-only and hides the SmartESS+HA /
+        # Item 1: a detected bridge forces HA-only and hides the cloud+HA /
         # HA-only choice, showing an informational note instead.
         flow = self._make_flow()
         flow._selected_result = self._bridge_confirm_result(is_bridge=True)
@@ -14304,8 +14303,10 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         callback_note = callback_form["description_placeholders"]["connection_strategy_risk"]
 
         self.assertNotEqual(inbound_note, callback_note)
-        # Inbound warns about pointing the collector at HA / cloud reachability.
-        self.assertIn("SmartESS", inbound_note)
+        # Inbound warns about pointing the collector at HA / cloud reachability
+        # without naming one vendor application as the whole cloud platform.
+        self.assertIn("cloud service", inbound_note)
+        self.assertNotIn("SmartESS", inbound_note)
         # Callback is honest about the current boundary: only a previously
         # saved endpoint is restored automatically, while an unknown target
         # requires an explicit catalog/manual choice before any mutation.

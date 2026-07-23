@@ -164,7 +164,7 @@ def _install_coordinator_stubs() -> None:
     const.DEFAULT_PROXY_CAPTURE_DURATION_MINUTES = 10
     const.DEFAULT_TCP_PORT = 8899
     const.DEFAULT_UDP_PORT = 48899
-    const.COLLECTOR_OPERATION_SMARTESS_AND_HA = "smartess_cloud_home_assistant"
+    const.COLLECTOR_OPERATION_CLOUD_AND_HA = "smartess_cloud_home_assistant"
     const.COLLECTOR_OPERATION_HA_ONLY = "home_assistant_only"
     const.CONTROL_MODE_AUTO = "auto"
     const.CONTROL_MODE_FULL = "full"
@@ -2337,7 +2337,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
     def test_reconcile_integration_managed_aligns_to_ha_regardless_of_operation_mode(self) -> None:
         # Phase 5: the reconcile targets Home Assistant purely from
         # endpoint_control_policy=integration_managed. The legacy operation mode
-        # (here SmartESS+HA) is no longer consulted, and the endpoint is never
+        # (here the legacy cloud+HA mode) is no longer consulted, and the endpoint is never
         # auto-restored to the previous/cloud endpoint here.
         async def _run() -> None:
             endpoint_writes: list[str] = []

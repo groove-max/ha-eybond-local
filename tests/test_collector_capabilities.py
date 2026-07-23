@@ -21,10 +21,6 @@ from custom_components.eybond_local.collector.capabilities import (  # noqa: E40
     collector_profile_entry_fields,
     parse_esp_collector_hardware_token,
 )
-from custom_components.eybond_local.const import (  # noqa: E402
-    COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
-)
 
 
 class CollectorCapabilityProfileTests(unittest.TestCase):
@@ -33,10 +29,8 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_FACTORY_EYBOND)
         self.assertFalse(profile.virtual_bridge)
-        self.assertEqual(
-            profile.allowed_operation_modes,
-            (COLLECTOR_OPERATION_SMARTESS_AND_HA, COLLECTOR_OPERATION_HA_ONLY),
-        )
+        self.assertTrue(profile.cloud_connection_supported)
+        self.assertFalse(profile.ha_only_required)
         self.assertTrue(profile.cloud_evidence)
         self.assertTrue(profile.proxy_capture)
         self.assertTrue(profile.shadow_learning)
@@ -48,7 +42,7 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_ESP_EYBOND_BRIDGE)
         self.assertTrue(profile.virtual_bridge)
-        self.assertEqual(profile.allowed_operation_modes, (COLLECTOR_OPERATION_HA_ONLY,))
+        self.assertFalse(profile.cloud_connection_supported)
         self.assertTrue(profile.ha_only_required)
         self.assertFalse(profile.cloud_evidence)
         self.assertFalse(profile.proxy_capture)
@@ -106,6 +100,8 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
 
         self.assertFalse(profile.virtual_bridge)
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_UNKNOWN)
+        self.assertFalse(profile.cloud_connection_supported)
+        self.assertTrue(profile.ha_only_required)
         self.assertFalse(profile.proxy_capture)
 
     def test_persisted_inverter_identity_keeps_factory_capabilities(self) -> None:
@@ -145,6 +141,18 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         self.assertFalse(profile.virtual_bridge)
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_UNKNOWN)
         self.assertFalse(profile.proxy_capture)
+
+    def test_live_capability_model_has_no_legacy_operation_modes(self) -> None:
+        source = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "collector"
+            / "capabilities.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("allowed_operation_modes", source)
+        self.assertNotIn("COLLECTOR_OPERATION_", source)
 
 
 if __name__ == "__main__":

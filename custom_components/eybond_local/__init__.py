@@ -1397,7 +1397,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     operation mode. Such an entry can never connect as inbound (the collector
     points at the vendor cloud and never dials Home Assistant), so it is corrected
     to ``callback_on_demand``. The correction is narrow: only the cloud-primary
-    SmartESS+HA shape is touched (never manual/known-IP), so a genuinely-explicit
+    cloud+HA shape is touched (never manual/known-IP), so a genuinely-explicit
     inbound value is never overwritten just because the legacy connection_mode
     looks user-triggered. No endpoint is ever written during migration.
 

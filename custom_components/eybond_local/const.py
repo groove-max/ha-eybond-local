@@ -153,11 +153,14 @@ CONTROL_MODE_AUTO = "auto"
 CONTROL_MODE_READ_ONLY = "read_only"
 CONTROL_MODE_FULL = "full"
 DEFAULT_CONTROL_MODE = CONTROL_MODE_AUTO
-COLLECTOR_OPERATION_SMARTESS_AND_HA = "smartess_cloud_home_assistant"
+# Legacy persisted operation-mode token. The historical value is retained
+# byte-for-byte for older entries; only the Python name is provider-neutral
+# because this state applies to any supported EyeBond cloud, not only SmartESS.
+COLLECTOR_OPERATION_CLOUD_AND_HA = "smartess_cloud_home_assistant"
 COLLECTOR_OPERATION_HA_ONLY = "home_assistant_only"
-DEFAULT_COLLECTOR_OPERATION_MODE = COLLECTOR_OPERATION_SMARTESS_AND_HA
+DEFAULT_COLLECTOR_OPERATION_MODE = COLLECTOR_OPERATION_CLOUD_AND_HA
 COLLECTOR_OPERATION_MODES = {
-	COLLECTOR_OPERATION_SMARTESS_AND_HA,
+	COLLECTOR_OPERATION_CLOUD_AND_HA,
 	COLLECTOR_OPERATION_HA_ONLY,
 }
 

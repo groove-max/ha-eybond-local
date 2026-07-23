@@ -29,7 +29,7 @@ from custom_components.eybond_local.const import (  # noqa: E402
 
 
 class CollectorOperatingProfileTests(unittest.TestCase):
-    def test_callback_external_is_smartess_and_ha(self) -> None:
+    def test_callback_external_is_cloud_and_ha(self) -> None:
         profile = resolve_collector_operating_profile(
             connection_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
             endpoint_control_policy=ENDPOINT_CONTROL_EXTERNAL,
