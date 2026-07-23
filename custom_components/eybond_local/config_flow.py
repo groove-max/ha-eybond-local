@@ -9754,7 +9754,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             description_placeholders={
                 "current_profile": self._operating_profile_label(profile.profile),
                 "profile_summary": self._tr(
-                    f"common.dynamic.operating_profile_summary_{profile.profile}",
+                    {
+                        OPERATING_PROFILE_CLOUD_AND_HA: (
+                            "common.dynamic.operating_profile_summary_cloud_and_ha"
+                        ),
+                        OPERATING_PROFILE_HA_ONLY: (
+                            "common.dynamic.operating_profile_summary_home_assistant_only"
+                        ),
+                        OPERATING_PROFILE_CUSTOM: (
+                            "common.dynamic.operating_profile_summary_custom"
+                        ),
+                    }[profile.profile],
                     {
                         OPERATING_PROFILE_CLOUD_AND_HA: (
                             "The collector normally remains connected to its cloud service. "

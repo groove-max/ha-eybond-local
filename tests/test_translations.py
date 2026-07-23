@@ -107,9 +107,14 @@ class TranslationShapeTests(unittest.TestCase):
                     "dynamic"
                 ]
                 self.assertNotIn("operating_profile_smartess_and_ha", dynamic)
+                self.assertNotIn(
+                    "operating_profile_summary_smartess_cloud_home_assistant",
+                    dynamic,
+                )
+                self.assertNotIn("collector_operation_smartess_and_ha", dynamic)
                 for key in (
                     "operating_profile_cloud_and_ha",
-                    "operating_profile_summary_smartess_cloud_home_assistant",
+                    "operating_profile_summary_cloud_and_ha",
                     "operating_profile_summary_home_assistant_only",
                     "connection_strategy_risk_inbound",
                 ):
