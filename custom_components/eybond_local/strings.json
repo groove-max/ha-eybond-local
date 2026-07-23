@@ -118,7 +118,7 @@
       },
       "confirm": {
         "title": "Add Device",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",
@@ -132,7 +132,7 @@
       },
       "confirm_without_cloud_assist": {
         "title": "Add Device",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",
@@ -482,7 +482,7 @@
       },
       "runtime": {
         "title": "Polling and inverter detection",
-        "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",

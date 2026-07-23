@@ -195,7 +195,7 @@
       "operating_profile_summary_smartess_cloud_home_assistant": "Колектор зазвичай залишається підключеним до свого хмарного сервісу. Home Assistant запитує його підключення, коли потрібні дані. Для захоплення трафіку або виявлення елементів керування спочатку перейдіть до профілю «Лише Home Assistant».",
       "operating_profile_summary_home_assistant_only": "Колектор підключається безпосередньо до Home Assistant. Його хмарний сервіс не отримує дані.",
       "operating_profile_summary_custom": "Збережені параметри підключення не відповідають жодному штатному профілю. Виберіть потрібний профіль, щоб виконати перевірений перехід.",
-      "collector_operation_mode_bridge_note": "Локальний міст — він сам підключається до Home Assistant.",
+      "collector_connection_bridge_note": "Локальний міст — він сам підключається до Home Assistant.",
       "connection_strategy_inbound": "Колектор сам підключається до Home Assistant",
       "connection_strategy_callback_on_demand": "Запитувати підключення колектора за потреби",
       "connection_strategy_bridge_note": "Це локальний міст — він сам підключається до Home Assistant, тож тут немає чого обирати.",

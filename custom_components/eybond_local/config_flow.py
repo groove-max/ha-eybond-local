@@ -127,12 +127,10 @@ from .const import (
     CONTROL_MODE_AUTO,
     CONTROL_MODE_FULL,
     CONTROL_MODE_READ_ONLY,
-    COLLECTOR_OPERATION_HA_ONLY,
     CONNECTION_STRATEGIES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
     CONNECTION_TYPE_EYBOND,
-    DEFAULT_COLLECTOR_OPERATION_MODE,
     DEFAULT_CONTROL_MODE,
     CONF_DISCOVERY_INTERVAL,
     CONF_DISCOVERY_TARGET,
@@ -2183,7 +2181,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._ble_fw_version_by_address: dict[str, str] = {}
         self._ble_wifi_scan_attempted_addresses: set[str] = set()
         self._ble_wifi_scan_failed_addresses: set[str] = set()
-        self._collector_operation_mode = ""
         self._collector_original_server_endpoint = ""
         self._collector_current_server_endpoint = ""
         self._collector_target_server_endpoint = ""
@@ -4330,29 +4327,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 or detection_strategy not in DRIVER_DETECTION_STRATEGIES
             ):
                 errors[CONF_DRIVER_DETECTION_STRATEGY] = "invalid_selection"
-            if self._selected_result_is_passive_callback():
-                mode = COLLECTOR_OPERATION_HA_ONLY
-            elif is_bridge:
-                mode = COLLECTOR_OPERATION_HA_ONLY
-            else:
-                # Ignore any stale/hidden operation-mode value posted by an old
-                # form. The mode can be changed later in the options flow.
-                mode = self._collector_operation_mode or DEFAULT_COLLECTOR_OPERATION_MODE
+            requires_ha_endpoint = (
+                self._selected_result_is_passive_callback() or is_bridge
+            )
             if errors:
                 pass
-            elif (
-                mode == COLLECTOR_OPERATION_HA_ONLY
-                and self._selected_result_is_passive_callback()
-            ):
-                self._collector_operation_mode = mode
+            elif self._selected_result_is_passive_callback():
                 self._collector_endpoint_bind_applied = True
                 return await self._async_create_entry_from_result(flat_input)
             if (
                 not errors
-                and mode == COLLECTOR_OPERATION_HA_ONLY
+                and requires_ha_endpoint
                 and not self._collector_endpoint_bind_applied
             ):
-                self._collector_operation_mode = mode
                 self._reset_collector_endpoint_binding_state()
                 try:
                     # For a bridge, writing the HA server endpoint is still how
@@ -4370,18 +4357,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     self._collector_endpoint_bind_applied = True
                     return await self._async_create_entry_from_result(flat_input)
             elif not errors:
-                self._collector_operation_mode = mode
                 return await self._async_create_entry_from_result(flat_input)
 
-        description_placeholders = dict(self._collector_operation_placeholders())
+        description_placeholders = dict(self._collector_connection_placeholders())
         if is_bridge:
-            description_placeholders["collector_operation_mode_note"] = self._tr(
-                "common.dynamic.collector_operation_mode_bridge_note",
-                "Local bridge — always Home Assistant only; it has no SmartESS "
-                "cloud side.",
+            description_placeholders["collector_connection_note"] = self._tr(
+                "common.dynamic.collector_connection_bridge_note",
+                "Local bridge — it connects to Home Assistant on its own.",
             )
         else:
-            description_placeholders.setdefault("collector_operation_mode_note", "")
+            description_placeholders.setdefault("collector_connection_note", "")
         schema: dict[Any, Any] = {
             vol.Required(
                 CONF_DRIVER_DETECTION_STRATEGY,
@@ -5690,10 +5675,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 is_passive_callback
                 or (
                     self._collector_endpoint_bind_applied
-                    and (
-                        collector_capabilities.ha_only_required
-                        or self._collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
-                    )
+                    and collector_capabilities.ha_only_required
                 )
             )
         )
@@ -5763,7 +5745,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         remembered_endpoint = str(self._collector_original_server_endpoint or "").strip()
         target_endpoint = str(self._collector_target_server_endpoint or self._collector_callback_target_endpoint()).strip()
         if (
-            self._collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
+            self._collector_endpoint_bind_applied
             and remembered_endpoint
             and remembered_endpoint != target_endpoint
         ):
@@ -8155,7 +8137,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             "peer_label": self._peer_label(),
         }
 
-    def _collector_operation_placeholders(self) -> dict[str, str]:
+    def _collector_connection_placeholders(self) -> dict[str, str]:
         if self._selected_result is None:
             return {}
         placeholders = self._result_placeholders(self._selected_result)
@@ -10170,7 +10152,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     control_mode=control_mode,
                     confidence=self._config_entry.data.get(CONF_DETECTION_CONFIDENCE, "none"),
                 ),
-                "collector_operation_mode_note": "",
+                "collector_connection_note": "",
             },
         )
 
@@ -10621,7 +10603,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             risk_note = self._tr(
                 "common.dynamic.connection_strategy_risk_inbound",
                 "This points the collector's callback endpoint at Home "
-                "Assistant. Its cloud (SmartESS) may stop receiving data, and "
+                "Assistant. Its cloud service may stop receiving data, and "
                 "the Home Assistant host and port you enter must be genuinely "
                 "reachable from the collector, including through any NAT or "
                 "port-forwarding. If they are not, the collector can end up "

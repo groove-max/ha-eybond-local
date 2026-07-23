@@ -118,7 +118,7 @@
       },
       "confirm": {
         "title": "Додати пристрій",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",
@@ -132,7 +132,7 @@
       },
       "confirm_without_cloud_assist": {
         "title": "Додати пристрій",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",
@@ -482,7 +482,7 @@
       },
       "runtime": {
         "title": "Опитування та визначення інвертора",
-        "description": "**{model_name}** — серійний номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "description": "**{model_name}** — серійний номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",

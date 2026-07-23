@@ -195,7 +195,7 @@
       "operating_profile_summary_smartess_cloud_home_assistant": "The collector normally remains connected to its cloud service. Home Assistant asks it to connect when data is needed. Switch to Home Assistant only to use temporary traffic capture or control discovery.",
       "operating_profile_summary_home_assistant_only": "The collector connects directly to Home Assistant. Its cloud service does not receive its data.",
       "operating_profile_summary_custom": "The saved connection settings do not match either normal profile. Choose the intended profile to run a verified transition.",
-      "collector_operation_mode_bridge_note": "Local bridge — it connects to Home Assistant on its own.",
+      "collector_connection_bridge_note": "Local bridge — it connects to Home Assistant on its own.",
       "connection_strategy_inbound": "Collector connects to Home Assistant on its own",
       "connection_strategy_callback_on_demand": "Ask the collector to connect when needed",
       "connection_strategy_bridge_note": "This is a local bridge — it connects to Home Assistant on its own, so there is nothing to choose here.",

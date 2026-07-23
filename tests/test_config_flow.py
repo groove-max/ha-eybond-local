@@ -3567,9 +3567,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"][CONF_SMARTESS_PROFILE_KEY], "smartess_0925")
         self.assertEqual(result["data"][CONF_SMARTESS_DEVICE_ADDRESS], 5)
 
-    async def test_confirm_step_remembers_original_endpoint_after_ha_only_binding(self) -> None:
+    async def test_confirm_step_remembers_original_endpoint_after_endpoint_binding(self) -> None:
         flow = self._make_flow()
-        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
         flow._collector_endpoint_bind_applied = True
         flow._collector_original_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
         flow._collector_target_server_endpoint = "192.168.1.50,18899,TCP"
@@ -3593,7 +3592,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         result = await flow.async_step_confirm(
             {
-                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
                 "poll_interval": 15,
             }
         )
@@ -3680,7 +3678,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("poll_interval", result["data_schema"].schema)
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertTrue(
-            result["description_placeholders"]["collector_operation_mode_note"].strip()
+            result["description_placeholders"]["collector_connection_note"].strip()
         )
 
     async def test_confirm_step_hides_operation_mode_selector_for_bridge_collector_info(self) -> None:
@@ -3711,7 +3709,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step_id"], "confirm")
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertTrue(
-            result["description_placeholders"]["collector_operation_mode_note"].strip()
+            result["description_placeholders"]["collector_connection_note"].strip()
         )
 
     async def test_confirm_step_refreshes_collector_only_bridge_capability_from_hardware_token(self) -> None:
@@ -3880,7 +3878,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirm_step_does_not_persist_original_endpoint_for_bridge(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._collector_only_bridge_result()
-        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
         flow._collector_endpoint_bind_applied = True
         flow._collector_original_server_endpoint = "ess.eybond.com"
         flow._collector_target_server_endpoint = "192.168.1.50,8899,TCP"
@@ -3927,7 +3924,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertEqual(
-            result["description_placeholders"]["collector_operation_mode_note"], ""
+            result["description_placeholders"]["collector_connection_note"], ""
         )
 
     async def test_confirm_step_bridge_refused_endpoint_write_does_not_hard_fail(self) -> None:
@@ -6850,7 +6847,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
         self.assertEqual(
-            result["description_placeholders"]["collector_operation_mode_note"], ""
+            result["description_placeholders"]["collector_connection_note"], ""
         )
 
     async def test_options_runtime_step_hides_operation_mode_selector_for_bridge_entry_data(self) -> None:
@@ -6867,7 +6864,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
         self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
         self.assertEqual(
-            result["description_placeholders"]["collector_operation_mode_note"], ""
+            result["description_placeholders"]["collector_connection_note"], ""
         )
 
     async def test_connection_profile_has_its_own_options_step(self) -> None:
@@ -10297,7 +10294,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         flow._selected_result.collector.session_protocol = ""
-        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
 
         def _run_terminal(_pn, terminal, *, recovery):
             self.assertIs(recovery.callback_proof, transaction.terminal_input.callback_proof)
@@ -10489,7 +10485,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=False
         )
-        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
 
         with patch.object(
             flow,
@@ -10510,7 +10505,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=False
         )
-        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
         flow._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
         flow._recovery_terminal = self._verified_inbound_terminal()
 
@@ -10531,7 +10525,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=True
         )
-        flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
 
         with patch.object(
             flow,

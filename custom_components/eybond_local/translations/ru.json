@@ -118,7 +118,7 @@
       },
       "confirm": {
         "title": "Добавить устройство",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Поиск протокола инвертора",
           "poll_mode": "Режим обновления сенсоров",
@@ -132,7 +132,7 @@
       },
       "confirm_without_cloud_assist": {
         "title": "Добавить устройство",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Поиск протокола инвертора",
           "poll_mode": "Режим обновления сенсоров",
@@ -482,7 +482,7 @@
       },
       "runtime": {
         "title": "Опрос и определение инвертора",
-        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_connection_note}",
         "data": {
           "driver_detection_strategy": "Поиск протокола инвертора",
           "poll_mode": "Режим обновления сенсоров",

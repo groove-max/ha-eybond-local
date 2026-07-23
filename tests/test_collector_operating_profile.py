@@ -322,6 +322,21 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
             self.assertNotIn("DEFAULT_COLLECTOR_OPERATION_MODE", decision)
             self.assertNotIn("collector_operation_mode ==", decision)
 
+    def test_config_flow_has_no_hidden_operation_mode_state(self) -> None:
+        path = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "config_flow.py"
+        )
+        source = path.read_text(encoding="utf-8")
+
+        self.assertNotIn("self._collector_operation_mode", source)
+        self.assertNotIn("COLLECTOR_OPERATION_HA_ONLY", source)
+        self.assertNotIn("DEFAULT_COLLECTOR_OPERATION_MODE", source)
+        self.assertNotIn("collector_operation_mode_note", source)
+        self.assertIn("self._collector_endpoint_bind_applied", source)
+
     def test_endpoint_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
         coordinator_path = (
             REPO_ROOT

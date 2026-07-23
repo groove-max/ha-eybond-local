@@ -195,7 +195,7 @@
       "operating_profile_summary_smartess_cloud_home_assistant": "Коллектор обычно остаётся подключённым к своему облачному сервису. Home Assistant запрашивает его подключение, когда нужны данные. Для захвата трафика или обнаружения элементов управления сначала переключитесь в профиль «Только Home Assistant».",
       "operating_profile_summary_home_assistant_only": "Коллектор подключается напрямую к Home Assistant. Его облачный сервис не получает данные.",
       "operating_profile_summary_custom": "Сохранённые параметры подключения не соответствуют ни одному штатному профилю. Выберите нужный профиль, чтобы выполнить проверенный переход.",
-      "collector_operation_mode_bridge_note": "Локальный мост — он сам подключается к Home Assistant.",
+      "collector_connection_bridge_note": "Локальный мост — он сам подключается к Home Assistant.",
       "connection_strategy_inbound": "Коллектор сам подключается к Home Assistant",
       "connection_strategy_callback_on_demand": "Запрашивать подключение коллектора при необходимости",
       "connection_strategy_bridge_note": "Это локальный мост — он сам подключается к Home Assistant, поэтому здесь нечего выбирать.",
