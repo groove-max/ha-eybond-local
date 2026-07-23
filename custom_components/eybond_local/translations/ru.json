@@ -50,15 +50,6 @@
           "ble_action": "Выберите, должно ли это отправление обновить список коллекторов, обновить список Wi-Fi сетей для выбранного коллектора или записать в него введённые Wi-Fi параметры."
         }
       },
-      "deep_scan": {
-        "title": "Поиск во всей локальной сети",
-        "description": "Home Assistant проверит каждый адрес в выбранной IPv4-сети через **{selected_scan_interface}**.\n\n**Сеть:** {deep_scan_network}\n**Адресов для проверки:** {deep_scan_target_count}\n\n{deep_scan_warning}",
-        "menu_options": {
-          "start_deep_scan": "Проверить всю сеть",
-          "change_scan_interface": "Изменить интерфейс сканирования",
-          "manual": "Ручная настройка"
-        }
-      },
       "scanning": {
         "title": "Сканирование сети",
         "description": "Поиск совместимых устройств в локальной сети через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
@@ -232,7 +223,6 @@
         "title": "Расширенная настройка",
         "description": "Используйте эти варианты, если автоматический поиск не нашёл устройство.",
         "menu_options": {
-          "deep_scan": "Поиск во всей локальной сети",
           "change_scan_interface": "Сменить сетевой интерфейс",
           "manual": "Ввести адрес вручную",
           "refresh_scan": "Сканировать снова"

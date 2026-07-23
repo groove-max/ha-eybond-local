@@ -1,11 +1,11 @@
-"""Attempt-scoped, exact-session identity resolution for the AUTOMATIC scan.
+"""Attempt-scoped, exact-session identity resolution for collector discovery.
 
-The automatic normal/deep scan must identify a callback collector on its EXACT
-session id whenever the peer-IP claim cannot -- e.g. a stale same-peer-IP socket
-of another route is parked -- regardless of whether the fresh session is fully
-silent, has volunteered a WEAK identity (a short framed heartbeat PN), or has
-already volunteered a STRONG identity. All three are handled by ONE selector over
-the union of the listener's public session observations, keyed by session id.
+The unified scan must identify a callback collector on its EXACT session id
+whenever the peer-IP claim cannot -- e.g. a stale same-peer-IP socket of another
+route is parked -- regardless of whether the fresh session is fully silent, has
+volunteered a WEAK identity (a short framed heartbeat PN), or has already
+volunteered a STRONG identity. All three are handled by ONE selector over the
+union of the listener's public session observations, keyed by session id.
 It does so WITHOUT any of the things that would make it unsafe:
 
 * it never selects a session by peer IP, socket order or PN prefix -- only ONE

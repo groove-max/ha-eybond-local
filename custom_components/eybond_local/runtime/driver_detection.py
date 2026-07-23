@@ -119,7 +119,7 @@ async def _ordered_driver_targets(
     A metadata hint (SmartESS protocol profile) names the driver the collector
     itself reports, so it outranks the signature pre-pass — and skipping that
     pre-pass saves its per-driver probe budget, which matters inside the
-    shared deep-scan deadline.
+    shared full-driver-scan deadline.
 
     ``allowed_driver_keys`` must restrict the set BEFORE the signature
     pre-pass: a restricted re-sweep (the link baud walk) would otherwise

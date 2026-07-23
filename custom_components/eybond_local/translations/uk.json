@@ -50,15 +50,6 @@
           "ble_action": "Виберіть, чи має це надсилання оновити список колекторів, оновити список Wi-Fi мереж для вибраного колектора, чи записати в нього введені Wi-Fi параметри."
         }
       },
-      "deep_scan": {
-        "title": "Пошук у всій локальній мережі",
-        "description": "Home Assistant перевірить кожну адресу у вибраній IPv4-мережі через **{selected_scan_interface}**.\n\n**Мережа:** {deep_scan_network}\n**Адрес для перевірки:** {deep_scan_target_count}\n\n{deep_scan_warning}",
-        "menu_options": {
-          "start_deep_scan": "Перевірити всю мережу",
-          "change_scan_interface": "Змінити інтерфейс сканування",
-          "manual": "Ручне налаштування"
-        }
-      },
       "scanning": {
         "title": "Сканування мережі",
         "description": "Пошук сумісних пристроїв у локальній мережі через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
@@ -232,7 +223,6 @@
         "title": "Розширене налаштування",
         "description": "Скористайтеся цими варіантами, якщо автоматичний пошук не знайшов пристрій.",
         "menu_options": {
-          "deep_scan": "Пошук у всій локальній мережі",
           "change_scan_interface": "Змінити мережевий інтерфейс",
           "manual": "Ввести адресу вручну",
           "refresh_scan": "Сканувати знову"

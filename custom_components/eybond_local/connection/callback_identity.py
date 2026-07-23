@@ -7,14 +7,14 @@ runs exactly this transaction, so none of them re-assembles the proof.
 
 Why it exists
 -------------
-The callback paths used to establish the TCP session and then run the full
-``detector.async_auto_detect`` driver sweep BEFORE any durable identity was
-confirmed. Identity was inferred afterwards from whatever PN that sweep happened
-to surface. The sweep costs tens of seconds, fans out extra UDP probes, and
-routinely outlives the very session it is meant to identify -- so the attempt
-ended in ``callback_timeout``/``callback_trigger_interference`` and the caller
-looped. Identity is cheap and authoritative: one read on the socket the
-collector just opened. It must not be held hostage to driver detection.
+The callback paths used to establish the TCP session and then run a full driver
+sweep BEFORE any durable identity was confirmed. Identity was inferred
+afterwards from whatever PN that sweep happened to surface. The sweep costs
+tens of seconds, fans out extra UDP probes, and routinely outlives the very
+session it is meant to identify -- so the attempt ended in
+``callback_timeout``/``callback_trigger_interference`` and the caller looped.
+Identity is cheap and authoritative: one read on the socket the collector just
+opened. It must not be held hostage to driver detection.
 
 Scope -- deliberately narrow
 ----------------------------

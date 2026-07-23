@@ -14,8 +14,6 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.onboarding.detection import (
-    DETECTION_DEPTH_DEEP,
-    DETECTION_DEPTH_FAST,
     DiscoveryTarget,
     OnboardingDetector,
     async_probe_fallback_targets,
@@ -71,7 +69,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             "async_probe_fallback_targets",
             new=AsyncMock(return_value=replies),
         ):
-            fallback = await detector._async_auto_unicast_fallback_targets(
+            fallback = await detector._async_unicast_fallback_targets(
                 resolved_targets=(
                     DiscoveryTarget(ip="192.168.1.255", source="broadcast"),
                     DiscoveryTarget(ip="192.168.1.51", source="broadcast"),
@@ -120,7 +118,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             "async_probe_fallback_targets",
             new=AsyncMock(return_value=replies),
         ):
-            fallback = await detector._async_auto_unicast_fallback_targets(
+            fallback = await detector._async_unicast_fallback_targets(
                 resolved_targets=(
                     DiscoveryTarget(ip="192.168.1.255", source="broadcast"),
                 ),
@@ -306,18 +304,18 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targets[-1], DiscoveryTarget(ip="192.168.1.254", source="subnet_unicast"))
         self.assertNotIn(DiscoveryTarget(ip="192.168.1.50", source="subnet_unicast"), targets)
 
-    def test_build_unicast_fallback_targets_respects_selected_network(self) -> None:
-        targets = build_unicast_fallback_targets(
-            server_ip="192.168.1.50",
-            network_cidr="192.168.0.0/16",
+    def test_unicast_fallback_api_cannot_expand_beyond_local_24(self) -> None:
+        import inspect
+
+        params = inspect.signature(build_unicast_fallback_targets).parameters
+        self.assertNotIn("network_cidr", params)
+        targets = build_unicast_fallback_targets(server_ip="192.168.1.50")
+        self.assertEqual(
+            {target.ip.rsplit(".", 1)[0] for target in targets},
+            {"192.168.1"},
         )
 
-        self.assertEqual(len(targets), 65533)
-        self.assertEqual(targets[0], DiscoveryTarget(ip="192.168.0.1", source="subnet_unicast"))
-        self.assertEqual(targets[-1], DiscoveryTarget(ip="192.168.255.254", source="subnet_unicast"))
-        self.assertNotIn(DiscoveryTarget(ip="192.168.1.50", source="subnet_unicast"), targets)
-
-    async def test_auto_detect_keeps_broadcast_results_without_unicast_fallback(self) -> None:
+    async def test_scan_runs_bounded_unicast_fallback_after_broadcast_identity(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         broadcast_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -355,18 +353,16 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
         ):
-            results = await detector.async_auto_detect(discovery_target="192.168.1.255", attempts=1)
+            results = await detector.async_scan(discovery_target="192.168.1.255")
 
         self.assertEqual(detect_targets.await_count, 1)
-        self.assertEqual(detect_targets.await_args.kwargs["depth"], DETECTION_DEPTH_FAST)
-        self.assertTrue(detect_targets.await_args.kwargs["return_after_first_identity"])
-        probe_targets.assert_not_awaited()
+        probe_targets.assert_awaited_once()
         self.assertEqual(
             {result.collector.ip for result in results if result.collector is not None},
             {"192.168.1.55"},
         )
 
-    async def test_auto_detect_does_not_append_local_unicast_fallback_results_after_broadcast_reply(self) -> None:
+    async def test_scan_keeps_broadcast_and_unicast_fallback_results(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         broadcast_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -392,7 +388,9 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 detector,
                 "_async_detect_targets",
-                new=AsyncMock(return_value=(broadcast_result,)),
+                new=AsyncMock(
+                    side_effect=[(broadcast_result,), (fallback_result,)]
+                ),
             ) as detect_targets,
             patch(
                 "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
@@ -413,16 +411,15 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
         ):
-            results = await detector.async_auto_detect(
+            results = await detector.async_scan(
                 discovery_target="192.168.1.255",
-                attempts=1,
             )
 
-        self.assertEqual(detect_targets.await_count, 1)
-        probe_targets.assert_not_awaited()
+        self.assertEqual(detect_targets.await_count, 2)
+        probe_targets.assert_awaited_once()
         self.assertEqual(
             {result.collector.ip for result in results if result.collector is not None},
-            {"192.168.1.55"},
+            {"192.168.1.55", "192.168.1.14"},
         )
 
     async def test_auto_detect_fans_out_additional_broadcast_callbacks(self) -> None:
@@ -479,10 +476,13 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
                 new=AsyncMock(return_value=()),
             ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
+                new=AsyncMock(return_value=()),
+            ),
         ):
-            results = await detector.async_auto_detect(
+            results = await detector.async_scan(
                 discovery_target="192.168.1.255",
-                attempts=1,
             )
 
         acquire_listener.assert_awaited_once()
@@ -588,10 +588,13 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
+            patch(
+                "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
+                new=AsyncMock(return_value=()),
+            ),
         ):
-            results = await detector.async_auto_detect(
+            results = await detector.async_scan(
                 discovery_target="192.168.1.255",
-                attempts=1,
             )
 
         self.assertEqual(detect_targets.await_count, 1)
@@ -665,98 +668,13 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
         ):
-            results = await detector.async_auto_detect(
+            results = await detector.async_scan(
                 discovery_target="192.168.1.255",
-                attempts=1,
                 total_timeout=9.0,
             )
 
         self.assertEqual(results, ())
         detect_targets.assert_awaited_once()
-
-    async def test_deep_detect_appends_unicast_fallback_results_after_broadcast_match(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-        broadcast_result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.255",
-                source="broadcast",
-                ip="192.168.1.55",
-                connected=True,
-            ),
-            match=DriverMatch(
-                driver_key="modbus_smg",
-                protocol_family="modbus_smg",
-                model_name="SMG 6200",
-                serial_number="92632500000001",
-                probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-            ),
-            connection_mode="broadcast",
-        )
-        fallback_result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.14",
-                source="subnet_unicast",
-                ip="192.168.1.14",
-                connected=True,
-            ),
-            connection_mode="subnet_unicast",
-        )
-
-        with (
-            patch.object(
-                detector,
-                "_async_detect_targets",
-                new=AsyncMock(side_effect=[(broadcast_result,), (fallback_result,)]),
-            ) as detect_targets,
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
-                new=AsyncMock(return_value=(DiscoveryTarget(ip="192.168.1.14", source="subnet_unicast"),)),
-            ),
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_send_callback_trigger_replies",
-                new=AsyncMock(return_value=()),
-            ),
-        ):
-            results = await detector.async_deep_detect(
-                discovery_target="192.168.1.255",
-                unicast_network_cidr="192.168.0.0/16",
-                attempts=1,
-            )
-
-        self.assertEqual(detect_targets.await_count, 2)
-        self.assertEqual(detect_targets.await_args_list[0].kwargs["depth"], DETECTION_DEPTH_DEEP)
-        self.assertFalse(detect_targets.await_args_list[0].kwargs["return_after_first_identity"])
-        self.assertEqual(detect_targets.await_args_list[1].kwargs["depth"], DETECTION_DEPTH_DEEP)
-        self.assertFalse(detect_targets.await_args_list[1].kwargs["return_after_first_identity"])
-        self.assertEqual(
-            {result.collector.ip for result in results if result.collector is not None},
-            {"192.168.1.55", "192.168.1.14"},
-        )
-
-    async def test_deep_detect_accepts_total_timeout_kwarg(self) -> None:
-        detector = OnboardingDetector(server_ip="192.168.1.50")
-
-        with (
-            patch.object(
-                detector,
-                "async_auto_detect",
-                new=AsyncMock(return_value=()),
-            ) as auto_detect,
-            patch(
-                "custom_components.eybond_local.onboarding.eybond.async_probe_fallback_targets",
-                new=AsyncMock(return_value=()),
-            ) as probe_targets,
-        ):
-            results = await detector.async_deep_detect(
-                discovery_target="192.168.1.255",
-                unicast_network_cidr="192.168.0.0/16",
-                attempts=1,
-                total_timeout=9.0,
-            )
-
-        self.assertEqual(results, ())
-        auto_detect.assert_awaited_once()
-        probe_targets.assert_awaited_once()
 
     def test_public_scan_contract_is_collector_only(self) -> None:
         # Architectural guard: config-flow onboarding has no switch that can
@@ -774,13 +692,13 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             "driver_hint",
             inspect.signature(OnboardingDetector).parameters,
         )
-        for method in (
-            OnboardingDetector.async_auto_detect,
-            OnboardingDetector.async_deep_detect,
-        ):
-            params = set(inspect.signature(method).parameters)
-            self.assertNotIn("enrich_runtime_details", params)
-            self.assertNotIn("identify_collector_only", params)
+        self.assertFalse(hasattr(OnboardingDetector, "async_auto_detect"))
+        self.assertFalse(hasattr(OnboardingDetector, "async_deep_detect"))
+        params = set(inspect.signature(OnboardingDetector.async_scan).parameters)
+        self.assertNotIn("enrich_runtime_details", params)
+        self.assertNotIn("identify_collector_only", params)
+        self.assertNotIn("attempts", params)
+        self.assertNotIn("return_after_first_identity", params)
 
         integration_root = (
             REPO_ROOT / "custom_components" / "eybond_local"
@@ -799,6 +717,30 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             (integration_root / "runtime" / "link_baud_sweep.py").exists()
         )
+
+    def test_unified_scan_has_no_deep_flow_or_public_detector_surface(self) -> None:
+        import json
+
+        integration_root = REPO_ROOT / "custom_components" / "eybond_local"
+        config_source = (integration_root / "config_flow.py").read_text(
+            encoding="utf-8"
+        )
+        manager_source = (integration_root / "onboarding" / "manager.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("async_step_deep_scan", config_source)
+        self.assertNotIn("SETUP_MODE_DEEP_SCAN", config_source)
+        self.assertNotIn("async_auto_detect", manager_source)
+        self.assertNotIn("async_deep_detect", manager_source)
+
+        for path in (
+            integration_root / "strings.json",
+            integration_root / "translations" / "en.json",
+            integration_root / "translations" / "ru.json",
+            integration_root / "translations" / "uk.json",
+        ):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("deep_scan", payload["config"]["step"])
 
     async def test_detect_target_builds_transport_without_session_protocol(self) -> None:
         # _async_detect_target must NOT pass any session protocol / probe lease to
@@ -936,7 +878,6 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(FakeTransport.instances[0].connected_timeout, 5.0)
         self.assertEqual(result.last_error, "collector_not_connected")
         self.assertIsNotNone(result.detection)
-        self.assertEqual(result.detection.depth, DETECTION_DEPTH_FAST)
         self.assertEqual(result.detection.status, "collector_not_connected")
         self.assertFalse(result.detection.budget_exhausted)
 
@@ -1120,11 +1061,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("collector_heartbeat_not_observed", result.warnings)
 
-    async def test_targets_cancelled_after_first_match_are_not_timeouts(self) -> None:
-        from custom_components.eybond_local.onboarding.presentation import (
-            scan_result_status_code,
-        )
-
+    async def test_detect_targets_finishes_inventory_after_first_identity(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")
         fast_target = DiscoveryTarget(ip="192.168.1.20", source="subnet_unicast")
         slow_target = DiscoveryTarget(ip="192.168.1.21", source="subnet_unicast")
@@ -1146,22 +1083,20 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             state = kwargs.get("detection_state")
             if target.ip == fast_target.ip:
                 return identified_result
-            # The slow target has already produced a replied candidate when
-            # it gets cancelled.
-            if state is not None:
-                state.candidate = CollectorCandidate(
+            await asyncio.sleep(0)
+            return OnboardingResult(
+                collector=CollectorCandidate(
                     target_ip=target.ip,
                     source=target.source,
                     ip=target.ip,
                     udp_reply="rsp>server=1;",
-                )
-            await asyncio.sleep(30)
-            raise AssertionError("slow target must be cancelled")
+                ),
+                connection_mode=target.source,
+            )
 
         with patch.object(detector, "_async_detect_target", new=_detect_target):
             results = await detector._async_detect_targets(
                 (fast_target, slow_target),
-                return_after_first_identity=True,
                 total_timeout=20.0,
             )
 
@@ -1171,12 +1106,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             "E50000200000000001",
         )
 
-        cancelled = by_ip["192.168.1.21"]
-        self.assertEqual(cancelled.last_error, "cancelled_first_match_found")
-        self.assertEqual(cancelled.detection.status, "cancelled_first_match_found")
-        self.assertFalse(cancelled.detection.budget_exhausted)
-        # It must not present as a detection timeout.
-        self.assertNotEqual(scan_result_status_code(cancelled), "detection_timeout")
+        self.assertEqual(by_ip["192.168.1.21"].collector.udp_reply, "rsp>server=1;")
 
     async def test_detect_targets_skips_probing_configured_collectors(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")

@@ -24,16 +24,6 @@ class OnboardingTimeoutPolicy:
     connect_timeout: float = 5.0
     connect_timeout_without_udp_reply: float = 0.75
     heartbeat_timeout: float = 2.0
-    auto_attempts: int = 3
-    auto_attempt_delay: float = 0.75
-    driver_detection_attempts: int = 3
-    driver_retry_delay: float = 0.35
-    pi30_qpi_probe_timeout: float = 1.0
-    smartess_probe_timeout: float = 3.0
-    smartess_query_timeout: float = 1.5
-    runtime_enrichment_timeout: float = 4.0
-    collector_query_timeout: float = 1.0
-    driver_onboarding_read_timeout: float = 2.0
     manual_total_timeout: float = 45.0
     # LINK budget for one callback identity transaction: how long we wait for the
     # collector to actually open a socket after our single trigger sequence. It
@@ -75,20 +65,11 @@ class OnboardingTimeoutPolicy:
     # return its partial result after its own deadline expires.  This is not
     # additional probe/driver-detection time.
     result_finalization_grace: float = 2.0
-    # Collector-only quick scan: broadcast/addressed discovery, callback session
-    # observation and exact-session identity. Inverter drivers are runtime work
-    # and consume none of this budget.
+    # One collector inventory: broadcast/addressed discovery, callback-session
+    # observation, exact-session identity and a bounded local /24 unicast
+    # fallback. Inverter drivers are runtime work and consume none of this
+    # budget.
     auto_total_timeout: float = 30.0
-    deep_scan_batch_timeout: float = 0.35
-    deep_scan_concurrency: int = 32
-    # One final post-sweep window for callbacks opened by the last unicast batch.
-    deep_scan_identity_settle_seconds: float = 5.0
-    deep_scan_timeout_buffer: float = 5.0
-    unicast_fallback_probe_timeout: float = 0.35
-    unicast_fallback_concurrency: int = 32
-    # Legacy non-collector deep-detection API guard. Config flow always requests
-    # collector-only discovery and therefore never adds this headroom.
-    deep_scan_hard_ceiling_seconds: float = 900.0
 
 
 DEFAULT_ONBOARDING_TIMEOUT_POLICY = OnboardingTimeoutPolicy()

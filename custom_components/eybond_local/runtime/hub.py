@@ -2504,7 +2504,7 @@ class EybondHub:
     ):
         """Try alternate inverter UART speeds once on one owned ESP session.
 
-        This is the runtime successor to the old onboarding deep-scan sweep.
+        This is the runtime successor to the old onboarding UART sweep.
         It is deliberately unavailable to the default first-match strategy and
         is entered only after a full driver sweep proved total UART silence.
         """

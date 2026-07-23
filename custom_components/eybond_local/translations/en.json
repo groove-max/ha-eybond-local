@@ -50,15 +50,6 @@
           "ble_action": "Choose whether this submit should refresh the collector list, refresh the Wi-Fi list for the selected collector, or apply the entered Wi-Fi settings to that collector."
         }
       },
-      "deep_scan": {
-        "title": "Search the full local network",
-        "description": "Home Assistant will check each address in the selected IPv4 network using **{selected_scan_interface}**.\n\n**Network:** {deep_scan_network}\n**Addresses to check:** {deep_scan_target_count}\n\n{deep_scan_warning}",
-        "menu_options": {
-          "start_deep_scan": "Search the full network",
-          "change_scan_interface": "Change scan interface",
-          "manual": "Manual setup"
-        }
-      },
       "scanning": {
         "title": "Scanning Network",
         "description": "Looking for compatible devices on the local network using **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
@@ -232,7 +223,6 @@
         "title": "Advanced setup",
         "description": "Use these options if the automatic scan did not find your device.",
         "menu_options": {
-          "deep_scan": "Search the full local network",
           "change_scan_interface": "Change network interface",
           "manual": "Enter address manually",
           "refresh_scan": "Scan again"

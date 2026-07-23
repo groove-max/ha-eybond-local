@@ -1,4 +1,4 @@
-"""EyeBond-specific onboarding discovery built on top of generic driver detection."""
+"""EyeBond-specific collector discovery for setup flows."""
 
 from __future__ import annotations
 
@@ -33,10 +33,7 @@ from ..const import (
     DEFAULT_TCP_PORT,
     DEFAULT_UDP_PORT,
 )
-from .timeouts import (
-    ExtendableOnboardingDeadline,
-    OnboardingDeadline,
-)
+from .timeouts import OnboardingDeadline
 from .silent_scan_probe import (
     DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
     SilentIdentityResolution,
@@ -67,8 +64,6 @@ _CONNECT_TIMEOUT_WITHOUT_UDP_REPLY = 0.75
 _TARGET_DETECTION_CONCURRENCY = 8
 _BROADCAST_FANOUT_SETTLE_TIMEOUT = 3.0
 _BROADCAST_FANOUT_POLL_INTERVAL = 0.1
-DETECTION_DEPTH_FAST = "fast"
-DETECTION_DEPTH_DEEP = "deep"
 
 
 def _collector_identity_matches(left: str, right: str) -> bool:
@@ -86,14 +81,6 @@ def _collector_identity_matches(left: str, right: str) -> bool:
         normalized_left.startswith(normalized_right)
         or normalized_right.startswith(normalized_left)
     )
-
-
-def _result_has_collector_identity(result: OnboardingResult) -> bool:
-    """Return whether one result identified a collector independently of a driver."""
-
-    collector = result.collector
-    info = collector.collector if collector is not None else None
-    return bool(str(getattr(info, "collector_pn", "") or "").strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +106,7 @@ class DiscoveryTarget:
     observed_probe: DiscoveryProbeResult | None = None
 
 
-def _already_configured_result(target: DiscoveryTarget, depth: str) -> OnboardingResult:
+def _already_configured_result(target: DiscoveryTarget) -> OnboardingResult:
     """Mark one target as owned by an existing entry without probing it.
 
     Probing a configured collector would steal its callback session from the
@@ -139,7 +126,6 @@ def _already_configured_result(target: DiscoveryTarget, depth: str) -> Onboardin
             next_action="",
             last_error="already_configured",
         ),
-        depth=depth,
         status="already_configured",
         reason="configured_entry_owns_collector",
     )
@@ -171,14 +157,12 @@ def _collector_candidate_from_target(target: DiscoveryTarget) -> CollectorCandid
 @dataclass(slots=True)
 class _TargetDetectionState:
     target: DiscoveryTarget
-    depth: str = DETECTION_DEPTH_FAST
     candidate: CollectorCandidate | None = None
 
 
 def _with_detection_evidence(
     result: OnboardingResult,
     *,
-    depth: str,
     status: str,
     reason: str = "",
     budget_exhausted: bool = False,
@@ -189,7 +173,6 @@ def _with_detection_evidence(
     return replace(
         result,
         detection=TargetDetectionEvidence(
-            depth=depth,
             status=status,
             reason=reason,
             budget_exhausted=budget_exhausted,
@@ -217,15 +200,13 @@ def build_unicast_fallback_targets(
     *,
     server_ip: str,
     collector_ip: str = "",
-    network_cidr: str = "",
 ) -> tuple[DiscoveryTarget, ...]:
-    """Build one unicast sweep target list for broadcast-unfriendly networks."""
+    """Build the bounded local-/24 fallback for broadcast-unfriendly networks."""
 
     return tuple(
         iter_unicast_fallback_targets(
             server_ip=server_ip,
             collector_ip=collector_ip,
-            network_cidr=network_cidr,
         )
     )
 
@@ -234,15 +215,14 @@ def iter_unicast_fallback_targets(
     *,
     server_ip: str,
     collector_ip: str = "",
-    network_cidr: str = "",
 ):
-    """Yield one unicast sweep target list for the selected IPv4 network."""
+    """Yield the bounded local-/24 fallback targets."""
 
     if collector_ip:
         return
 
     try:
-        network = ipaddress.ip_network(network_cidr or f"{server_ip}/24", strict=False)
+        network = ipaddress.ip_network(f"{server_ip}/24", strict=False)
     except ValueError:
         return
 
@@ -424,7 +404,6 @@ class OnboardingDetector:
     async def async_passive_detect(
         self,
         *,
-        depth: str = DETECTION_DEPTH_FAST,
         collector_ip: str = "",
         discovery_target: str = "",
         discovery_targets: Sequence[DiscoveryTarget] | None = None,
@@ -459,7 +438,6 @@ class OnboardingDetector:
                 listener=listener,
                 discovery_targets=targets,
                 results=(),
-                depth=depth,
                 passive_only=True,
                 listener_port=self._connection.tcp_port,
             )
@@ -478,16 +456,14 @@ class OnboardingDetector:
         self,
         targets: Sequence[DiscoveryTarget],
         *,
-        depth: str = DETECTION_DEPTH_FAST,
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
         cleanup_new_shared_connection: bool = False,
         total_timeout: float | None = None,
         concurrency: int = _TARGET_DETECTION_CONCURRENCY,
-        return_after_first_identity: bool = False,
         skip_probe_ips: frozenset[str] = frozenset(),
-        deadline: OnboardingDeadline | ExtendableOnboardingDeadline | None = None,
+        deadline: OnboardingDeadline | None = None,
     ) -> tuple[OnboardingResult, ...]:
         """Run one-shot detection against a list of discovery targets."""
 
@@ -511,7 +487,6 @@ class OnboardingDetector:
                             heartbeat_timeout=heartbeat_timeout,
                             cleanup_new_shared_connection=cleanup_new_shared_connection,
                             detection_state=state,
-                            depth=state.depth,
                             deadline=deadline,
                         )
                     )
@@ -533,21 +508,19 @@ class OnboardingDetector:
                             next_action="manual_input",
                             last_error=str(exc),
                         ),
-                        depth=state.depth,
                         status="error",
                         reason=str(exc),
                     )
 
         for target in targets:
             if target.ip and target.ip in skip_probe_ips:
-                results.append(_already_configured_result(target, depth))
+                results.append(_already_configured_result(target))
                 continue
-            state = _TargetDetectionState(target=target, depth=depth)
+            state = _TargetDetectionState(target=target)
             task = asyncio.create_task(_run_target(state), name=f"eybond_detect_{target.ip}")
             task_states[task] = state
 
         pending = set(task_states)
-        stopped_after_first_match = False
         while pending:
             remaining = deadline.remaining_seconds()
             if remaining is not None and remaining <= 0:
@@ -558,19 +531,12 @@ class OnboardingDetector:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:
-                # The wait timed out against a STALE snapshot of the deadline:
-                # a target admitted mid-wait may have extended it. Loop and
-                # re-snapshot — the top-of-loop guard is the real terminator.
+                # Re-snapshot the fixed shared deadline; the top-of-loop guard
+                # is the single terminator for unfinished inventory targets.
                 continue
-            should_stop = False
             for task in done:
                 result = task.result()
                 results.append(result)
-                if return_after_first_identity and _result_has_collector_identity(result):
-                    should_stop = True
-            if should_stop:
-                stopped_after_first_match = True
-                break
 
         if pending:
             for task in pending:
@@ -578,33 +544,31 @@ class OnboardingDetector:
             await asyncio.gather(*pending, return_exceptions=True)
             for task in pending:
                 state = task_states[task]
-                if stopped_after_first_match:
-                    # Deliberately cancelled because another target already
-                    # matched — not a timeout, and it must not read like one.
-                    results.append(self._cancelled_after_match_result_for_state(state))
-                else:
-                    results.append(self._timeout_result_for_state(state))
+                results.append(self._timeout_result_for_state(state))
 
         return tuple(self._dedupe_results(results))
 
-    async def async_auto_detect(
+    async def async_scan(
         self,
         *,
-        depth: str = DETECTION_DEPTH_FAST,
         collector_ip: str = "",
         discovery_target: str = DEFAULT_DISCOVERY_TARGET,
         discovery_targets: Sequence[DiscoveryTarget] | None = None,
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
-        attempts: int = 3,
-        attempt_delay: float = 0.75,
         total_timeout: float | None = None,
-        return_after_first_identity: bool = True,
         skip_probe_ips: frozenset[str] = frozenset(),
-        deadline: OnboardingDeadline | ExtendableOnboardingDeadline | None = None,
+        deadline: OnboardingDeadline | None = None,
     ) -> tuple[OnboardingResult, ...]:
-        """Run the default collector-identification discovery order."""
+        """Return one bounded inventory of collectors on the local /24.
+
+        The scan has one product meaning and one execution order: broadcast,
+        already-observed callback sessions, concrete routes learned from that
+        fan-out, then a bounded direct-unicast fallback across the local /24.
+        It always finishes the inventory instead of stopping after the first
+        identity. Inverter protocols are runtime work after entry creation.
+        """
 
         if deadline is None:
             deadline = OnboardingDeadline.from_timeout(total_timeout)
@@ -624,235 +588,114 @@ class OnboardingDetector:
                 )
             except Exception as exc:
                 logger.debug(
-                    "Quick-scan fan-out listener unavailable host=%s port=%s error=%s",
+                    "Collector-scan fan-out listener unavailable host=%s port=%s error=%s",
                     _LISTENER_BIND_HOST,
                     self._connection.tcp_port,
                     exc,
                 )
         aggregated: list[OnboardingResult] = []
         try:
-            for attempt_index in range(max(1, attempts)):
-                targets = await self._async_expand_broadcast_targets(
-                    targets,
-                    discovery_timeout=discovery_timeout,
-                    deadline=deadline,
-                )
+            targets = await self._async_expand_broadcast_targets(
+                targets,
+                discovery_timeout=discovery_timeout,
+                deadline=deadline,
+            )
 
-                fanout_targets = await self._async_wait_for_fanout_targets(
-                    listener=listener,
-                    discovery_targets=targets,
-                    results=aggregated,
-                    timeout=deadline.bounded_timeout(
-                        min(connect_timeout, _BROADCAST_FANOUT_SETTLE_TIMEOUT)
-                    ),
-                )
-                targets = _dedupe_discovery_targets((*targets, *fanout_targets))
+            fanout_targets = await self._async_wait_for_fanout_targets(
+                listener=listener,
+                discovery_targets=targets,
+                results=aggregated,
+                timeout=deadline.bounded_timeout(
+                    min(connect_timeout, _BROADCAST_FANOUT_SETTLE_TIMEOUT)
+                ),
+            )
+            targets = _dedupe_discovery_targets((*targets, *fanout_targets))
 
-                detection_targets = _concrete_detection_targets(targets)
-                if detection_targets:
-                    results = await self._async_detect_targets(
+            detection_targets = _concrete_detection_targets(targets)
+            if detection_targets:
+                aggregated.extend(
+                    await self._async_detect_targets(
                         detection_targets,
-                        depth=depth,
                         discovery_timeout=discovery_timeout,
                         connect_timeout=connect_timeout,
                         heartbeat_timeout=heartbeat_timeout,
                         total_timeout=deadline.remaining_seconds(),
-                        return_after_first_identity=return_after_first_identity,
                         skip_probe_ips=skip_probe_ips,
                         deadline=deadline,
                     )
-                    aggregated.extend(results)
-
-                late_fanout_targets = await self._async_wait_for_fanout_targets(
-                    listener=listener,
-                    discovery_targets=targets,
-                    results=aggregated,
-                    timeout=deadline.bounded_timeout(
-                        min(connect_timeout, _BROADCAST_FANOUT_SETTLE_TIMEOUT)
-                    ),
                 )
-                late_fanout_targets = tuple(
-                    target
-                    for target in late_fanout_targets
-                    if target.ip not in {known.ip for known in _concrete_detection_targets(targets)}
-                )
-                if late_fanout_targets:
-                    targets = _dedupe_discovery_targets((*targets, *late_fanout_targets))
-                    aggregated.extend(
-                        await self._async_detect_targets(
-                            late_fanout_targets,
-                            depth=depth,
-                            discovery_timeout=discovery_timeout,
-                            connect_timeout=connect_timeout,
-                            heartbeat_timeout=heartbeat_timeout,
-                            total_timeout=deadline.remaining_seconds(),
-                            return_after_first_identity=return_after_first_identity,
-                            skip_probe_ips=skip_probe_ips,
-                            deadline=deadline,
-                        )
-                    )
 
+            late_fanout_targets = await self._async_wait_for_fanout_targets(
+                listener=listener,
+                discovery_targets=targets,
+                results=aggregated,
+                timeout=deadline.bounded_timeout(
+                    min(connect_timeout, _BROADCAST_FANOUT_SETTLE_TIMEOUT)
+                ),
+            )
+            late_fanout_targets = tuple(
+                target
+                for target in late_fanout_targets
+                if target.ip not in {
+                    known.ip for known in _concrete_detection_targets(targets)
+                }
+            )
+            if late_fanout_targets:
+                targets = _dedupe_discovery_targets(
+                    (*targets, *late_fanout_targets)
+                )
                 aggregated.extend(
-                    self._session_inventory_results(
-                        listener=listener,
-                        discovery_targets=targets,
-                        results=aggregated,
-                        depth=depth,
-                        listener_port=self._connection.tcp_port,
+                    await self._async_detect_targets(
+                        late_fanout_targets,
+                        discovery_timeout=discovery_timeout,
+                        connect_timeout=connect_timeout,
+                        heartbeat_timeout=heartbeat_timeout,
+                        total_timeout=deadline.remaining_seconds(),
+                        skip_probe_ips=skip_probe_ips,
+                        deadline=deadline,
                     )
                 )
 
-                deduped = self._dedupe_results(aggregated)
-                if any(_result_has_collector_identity(result) for result in deduped):
-                    aggregated = list(deduped)
-                    break
-                if attempt_index < max(1, attempts) - 1:
-                    await deadline.sleep(attempt_delay)
-
-            deduped = self._dedupe_results(aggregated)
-            if not any(_result_has_collector_identity(result) for result in deduped):
-                fallback_targets = await self._async_auto_unicast_fallback_targets(
-                    resolved_targets=targets,
-                    results=deduped,
-                    discovery_timeout=discovery_timeout,
-                    deadline=deadline,
-                )
-                if fallback_targets:
-                    aggregated.extend(
-                        await self._async_detect_targets(
-                            fallback_targets,
-                            depth=depth,
-                            discovery_timeout=discovery_timeout,
-                            connect_timeout=connect_timeout,
-                            heartbeat_timeout=heartbeat_timeout,
-                            total_timeout=deadline.remaining_seconds(),
-                            return_after_first_identity=return_after_first_identity,
-                            skip_probe_ips=skip_probe_ips,
-                            deadline=deadline,
-                        )
-                    )
-                    deduped = self._dedupe_results(aggregated)
             aggregated.extend(
                 self._session_inventory_results(
                     listener=listener,
                     discovery_targets=targets,
                     results=aggregated,
-                    depth=depth,
                     listener_port=self._connection.tcp_port,
                 )
             )
-            deduped = self._dedupe_results(aggregated)
-            return tuple(deduped)
-        finally:
-            if listener is not None:
-                await _release_shared_listener(listener)
 
-    async def async_deep_detect(
-        self,
-        *,
-        collector_ip: str = "",
-        discovery_target: str = DEFAULT_DISCOVERY_TARGET,
-        discovery_targets: Sequence[DiscoveryTarget] | None = None,
-        unicast_network_cidr: str = "",
-        discovery_timeout: float = 1.5,
-        connect_timeout: float = 5.0,
-        heartbeat_timeout: float = 2.0,
-        attempts: int = 3,
-        attempt_delay: float = 0.75,
-        total_timeout: float | None = None,
-        skip_probe_ips: frozenset[str] = frozenset(),
-    ) -> tuple[OnboardingResult, ...]:
-        """Identify collectors across broadcast and the selected IPv4 network."""
-
-        # Driver sweeps and their extendable headroom belong to runtime. The
-        # onboarding deadline is therefore only the bounded collector scan.
-        deadline = OnboardingDeadline.from_timeout(total_timeout)
-        resolved_targets = tuple(
-            discovery_targets
-            or build_default_discovery_targets(
-                collector_ip=collector_ip,
-                discovery_target=discovery_target,
-            )
-        )
-        aggregated = list(
-            await self.async_auto_detect(
-                depth=DETECTION_DEPTH_DEEP,
-                collector_ip=collector_ip,
-                discovery_target=discovery_target,
-                discovery_targets=resolved_targets,
+            fallback_targets = await self._async_unicast_fallback_targets(
+                resolved_targets=targets,
+                results=self._dedupe_results(aggregated),
                 discovery_timeout=discovery_timeout,
-                connect_timeout=connect_timeout,
-                heartbeat_timeout=heartbeat_timeout,
-                attempts=attempts,
-                attempt_delay=attempt_delay,
-                total_timeout=deadline.remaining_seconds(),
-                return_after_first_identity=False,
-                skip_probe_ips=skip_probe_ips,
                 deadline=deadline,
             )
-        )
-
-        listener = None
-        try:
-            listener = await _acquire_shared_listener(
-                _LISTENER_BIND_HOST,
-                self._connection.tcp_port,
-            )
-        except Exception as exc:
-            logger.debug(
-                "Deep-scan fallback listener unavailable host=%s port=%s error=%s",
-                _LISTENER_BIND_HOST,
-                self._connection.tcp_port,
-                exc,
-            )
-        try:
-            fallback_timeout = deadline.bounded_timeout(
-                min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT)
-            )
-            if fallback_timeout is not None and fallback_timeout <= 0:
-                replied_targets = ()
-            else:
-                replied_targets = await async_probe_fallback_targets(
-                    bind_ip=self._connection.server_ip,
-                    advertised_server_ip=self._connection.effective_advertised_server_ip,
-                    advertised_server_port=self._connection.effective_advertised_tcp_port,
-                    udp_port=self._connection.udp_port,
-                    targets=iter_unicast_fallback_targets(
-                        server_ip=self._connection.server_ip,
-                        collector_ip=collector_ip,
-                        network_cidr=unicast_network_cidr,
-                    ),
-                    timeout=fallback_timeout or min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT),
-                    identity_listener_host=_LISTENER_BIND_HOST,
-                    identity_listener_port=self._connection.tcp_port,
-                    identity_wait_seconds=DEFAULT_SILENT_IDENTITY_WAIT_SECONDS,
+            if fallback_targets:
+                aggregated.extend(
+                    await self._async_detect_targets(
+                        fallback_targets,
+                        discovery_timeout=discovery_timeout,
+                        connect_timeout=connect_timeout,
+                        heartbeat_timeout=heartbeat_timeout,
+                        total_timeout=deadline.remaining_seconds(),
+                        skip_probe_ips=skip_probe_ips,
+                        deadline=deadline,
+                    )
                 )
+
+            aggregated.extend(
+                self._session_inventory_results(
+                    listener=listener,
+                    discovery_targets=targets,
+                    results=aggregated,
+                    listener_port=self._connection.tcp_port,
+                )
+            )
+            return tuple(self._dedupe_results(aggregated))
         finally:
             if listener is not None:
                 await _release_shared_listener(listener)
-        if not replied_targets:
-            return tuple(self._dedupe_results(aggregated))
-
-        preserved_reply_ips = _observed_route_reply_ips(aggregated)
-        replied_targets = tuple(
-            target for target in replied_targets if target.ip not in preserved_reply_ips
-        )
-        if not replied_targets:
-            return tuple(self._dedupe_results(aggregated))
-
-        fallback_results = await self._async_detect_targets(
-            replied_targets,
-            depth=DETECTION_DEPTH_DEEP,
-            discovery_timeout=discovery_timeout,
-            connect_timeout=connect_timeout,
-            heartbeat_timeout=heartbeat_timeout,
-            total_timeout=deadline.remaining_seconds(),
-            return_after_first_identity=False,
-            skip_probe_ips=skip_probe_ips,
-            deadline=deadline,
-        )
-        aggregated.extend(fallback_results)
-        return tuple(self._dedupe_results(aggregated))
 
     async def _async_trigger_connect_identify(
         self,
@@ -1028,7 +871,6 @@ class OnboardingDetector:
         self,
         target: DiscoveryTarget,
         *,
-        depth: str = DETECTION_DEPTH_FAST,
         discovery_timeout: float,
         connect_timeout: float,
         heartbeat_timeout: float,
@@ -1134,7 +976,6 @@ class OnboardingDetector:
                         next_action="manual_input",
                         last_error="callback_causality_lease_busy",
                     ),
-                    depth=depth,
                     status="callback_causality_lease_busy",
                     reason="callback_causality_lease_busy",
                 )
@@ -1151,7 +992,6 @@ class OnboardingDetector:
                         next_action="manual_input",
                         last_error="collector_not_connected",
                     ),
-                    depth=depth,
                     status="collector_not_connected",
                     reason="reverse_tcp_not_connected",
                 )
@@ -1207,7 +1047,6 @@ class OnboardingDetector:
                             next_action="manual_input",
                             last_error="collector_identity_mismatch",
                         ),
-                        depth=depth,
                         status="collector_identity_mismatch",
                         reason="probed_identity_conflicts_with_activated_session",
                     )
@@ -1261,7 +1100,6 @@ class OnboardingDetector:
                     last_error="collector_detected_without_driver",
                     **admission_kwargs,
                 ),
-                depth=depth,
                 status="collector_only",
                 reason="collector_identity_only_scan",
             )
@@ -1415,7 +1253,7 @@ class OnboardingDetector:
 
         return tuple(expanded)
 
-    async def _async_auto_unicast_fallback_targets(
+    async def _async_unicast_fallback_targets(
         self,
         *,
         resolved_targets: Sequence[DiscoveryTarget],
@@ -1438,7 +1276,6 @@ class OnboardingDetector:
             targets=iter_unicast_fallback_targets(
                 server_ip=self._connection.server_ip,
                 collector_ip="",
-                network_cidr="",
             ),
             timeout=timeout or min(discovery_timeout, _UNICAST_FALLBACK_PROBE_TIMEOUT),
             identity_listener_host=_LISTENER_BIND_HOST,
@@ -1503,41 +1340,9 @@ class OnboardingDetector:
                 next_action=next_action,
                 last_error="target_detection_timeout",
             ),
-            depth=state.depth,
             status="target_timeout",
             reason="deadline_exhausted",
             budget_exhausted=True,
-        )
-
-    @staticmethod
-    def _cancelled_after_match_result_for_state(
-        state: _TargetDetectionState,
-    ) -> OnboardingResult:
-        """Result for a probe cancelled because another target already matched.
-
-        Unlike a timeout this is not a failure: the candidate keeps whatever
-        was learned (reply, connection), no budget-exhausted flag is raised,
-        and the evidence names the real cause for diagnostics.
-        """
-
-        candidate = state.candidate
-        if candidate is None:
-            candidate = _collector_candidate_from_target(state.target)
-            next_action = "manual_input"
-        else:
-            next_action = "manual_driver_selection" if candidate.connected else "manual_input"
-
-        return _with_detection_evidence(
-            OnboardingResult(
-                collector=candidate,
-                connection_type=CONNECTION_TYPE_EYBOND,
-                connection_mode=state.target.source,
-                next_action=next_action,
-                last_error="cancelled_first_match_found",
-            ),
-            depth=state.depth,
-            status="cancelled_first_match_found",
-            reason="another_target_matched_first",
         )
 
     @staticmethod
@@ -1578,7 +1383,6 @@ class OnboardingDetector:
         listener: Any,
         discovery_targets: Sequence[DiscoveryTarget],
         results: Sequence[OnboardingResult],
-        depth: str = DETECTION_DEPTH_FAST,
         passive_only: bool = False,
         listener_port: int = 0,
     ) -> tuple[OnboardingResult, ...]:
@@ -1685,7 +1489,6 @@ class OnboardingDetector:
                         last_error="collector_detected_without_driver",
                         observed_session=observed_session,
                     ),
-                    depth=depth,
                     status="collector_only",
                     reason="callback_session_inventory",
                     details={

@@ -273,7 +273,6 @@ from .connection.callback_continuation import (
 from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 from .onboarding.timeouts import (
     auto_scan_timeout_seconds as _onboarding_auto_scan_timeout_seconds,
-    deep_scan_timeout_seconds as _onboarding_deep_scan_timeout_seconds,
 )
 from .support.cloud_evidence_providers import (
     CloudEvidenceContext,
@@ -309,7 +308,6 @@ CONF_CONFIRM_COLLECTOR_UART_APPLY = "confirm_collector_uart_apply"
 # error and NOTHING downstream runs (no endpoint write / reboot / UDP / commit).
 CONF_CONFIRM_CONNECTION_STRATEGY_RISK = "confirm_connection_strategy_risk"
 CONF_CONFIRM_REDISCOVER_DEVICES = "confirm_rediscover_devices"
-CONF_SETUP_MODE = "setup_mode"
 CONF_BLE_ADDRESS = "ble_address"
 CONF_BLE_ACTION = "ble_action"
 CONF_WIFI_SSID = "wifi_ssid"
@@ -324,10 +322,6 @@ COLLECTOR_UART_ACTION_REFRESH = "refresh"
 COLLECTOR_UART_ACTION_APPLY = "apply"
 COLLECTOR_UART_BAUDRATES = ("2400", "4800", "9600", "19200", "38400", "57600", "115200")
 CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE = "smartess_cloud_mode"
-SETUP_MODE_AUTO = "auto"
-SETUP_MODE_BLUETOOTH = "bluetooth"
-SETUP_MODE_DEEP_SCAN = "deep_scan"
-SETUP_MODE_MANUAL = "manual"
 COLLECTOR_NETWORK_ALREADY_CONNECTED = "already_connected"
 COLLECTOR_NETWORK_NEEDS_BLUETOOTH = "needs_bluetooth"
 MANUAL_CONFIRM_ACTION_PROBE_AGAIN = "manual_probe_again"
@@ -1498,32 +1492,6 @@ def _sanitize_pending_collector_ip(
     return candidate
 
 
-def _network_target_count(network_cidr: str, *, exclude: set[str] | None = None) -> int:
-    try:
-        network = ipaddress.ip_network(network_cidr, strict=False)
-    except ValueError:
-        return 0
-
-    total = int(network.num_addresses)
-    if network.prefixlen < 31:
-        total = max(0, total - 2)
-
-    excluded_count = 0
-    for ip in exclude or set():
-        if not ip:
-            continue
-        try:
-            address = ipaddress.ip_address(ip)
-        except ValueError:
-            continue
-        if address not in network:
-            continue
-        if network.prefixlen < 31 and address in {network.network_address, network.broadcast_address}:
-            continue
-        excluded_count += 1
-    return max(0, total - excluded_count)
-
-
 def _is_ipv4(ip: str) -> bool:
     try:
         socket.inet_aton(ip)
@@ -2168,7 +2136,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._selected_result_collector_capabilities_attempted = False
         self._scan_task: asyncio.Task | None = None
         self._scan_error: bool = False
-        self._scan_mode = SETUP_MODE_AUTO
         self._scan_timeout_seconds = _AUTO_SCAN_TIMEOUT
         self._scan_started_monotonic: float | None = None
         self._scan_progress_stage = "preparing"
@@ -3393,7 +3360,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         single_interface = len(self._interface_options) == 1
 
         def _start_auto_scan() -> ConfigFlowResult:
-            self._set_scan_mode(SETUP_MODE_AUTO)
             self._reset_scan_progress()
             return self.async_step_scanning()
 
@@ -3594,37 +3560,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             description_placeholders=self._bluetooth_setup_placeholders(),
         )
 
-    @_with_translation_bundle
-    async def async_step_deep_scan(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        self._set_scan_mode(SETUP_MODE_DEEP_SCAN)
-        plan = self._deep_scan_plan()
-        if plan["network_cidr"] and plan["target_count"] and not plan["large_subnet"]:
-            # A known, normally sized network needs no confirmation step; the
-            # menu remains only where the user must decide something: a large
-            # subnet (long scan), or an unknown network (change interface /
-            # go manual).
-            return await self.async_step_start_deep_scan()
-        menu_options = ["start_deep_scan"]
-        if len(self._interface_options) > 1:
-            menu_options.append("change_scan_interface")
-        menu_options.append("manual")
-        return self.async_show_menu(
-            step_id="deep_scan",
-            menu_options=menu_options,
-            description_placeholders=self._deep_scan_placeholders(),
-        )
-
-    async def async_step_start_deep_scan(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        self._set_scan_mode(SETUP_MODE_DEEP_SCAN)
-        self._reset_scan_progress()
-        return await self.async_step_scanning()
-
     # ---- step: scanning (progress indicator) ----
 
     @_with_translation_bundle
@@ -3675,11 +3610,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         effective_input = self._auto_config
         server_ip = str(effective_input.get(CONF_SERVER_IP, self._local_ip) or self._local_ip)
         discovery_targets = self._scan_discovery_targets()
-        deep_scan_plan = self._deep_scan_plan()
         scan_timeout = self._scan_timeout_seconds
         detector_timeout = max(5.0, scan_timeout - 5.0)
-        if self._scan_mode != SETUP_MODE_DEEP_SCAN:
-            detector_timeout = min(detector_timeout, 40.0)
         self._scan_progress_stage = "discovering"
         detector = create_onboarding_manager(
             build_connection_spec_from_values(
@@ -3713,34 +3645,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         progress_updater = asyncio.create_task(self._async_update_scan_progress_loop())
         try:
             async with _async_timeout(scan_timeout):
-                if self._scan_mode == SETUP_MODE_DEEP_SCAN:
-                    results = await detector.async_deep_detect(
-                        discovery_targets=discovery_targets,
-                        unicast_network_cidr=deep_scan_plan["network_cidr"],
-                        total_timeout=detector_timeout,
-                        skip_probe_ips=skip_probe_ips,
-                    )
-                else:
-                    results = await detector.async_auto_detect(
-                        discovery_targets=discovery_targets,
-                        attempts=1,
-                        total_timeout=detector_timeout,
-                        # This flow renders an inventory, not a one-device
-                        # shortcut.  Let every target already discovered in the
-                        # bounded quick-scan batch finish; otherwise the first
-                        # inverter match cancels the sibling route and makes
-                        # .51/.55 alternate between scans.
-                        return_after_first_identity=False,
-                        skip_probe_ips=skip_probe_ips,
-                    )
+                results = await detector.async_scan(
+                    discovery_targets=discovery_targets,
+                    total_timeout=detector_timeout,
+                    skip_probe_ips=skip_probe_ips,
+                )
         except TimeoutError:
             logger.warning(
-                "%s scan timed out after %.1fs server_ip=%s discovery_targets=%s network=%s",
-                self._scan_mode,
+                "Collector scan timed out after %.1fs server_ip=%s discovery_targets=%s",
                 scan_timeout,
                 server_ip,
                 ",".join(target.ip for target in discovery_targets),
-                deep_scan_plan["network_cidr"] or "-",
             )
             self._scan_progress_stage = "finalizing"
             self._autodetect_results = {}
@@ -3925,7 +3840,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Power-user fallbacks when auto-scan did not find the device."""
 
-        menu_options: list[str] = ["deep_scan"]
+        menu_options: list[str] = []
         if len(self._interface_options) > 1:
             menu_options.append("change_scan_interface")
         menu_options.append("manual")
@@ -3957,7 +3872,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 errors.update(input_errors)
             else:
                 self._auto_config.update(user_input)
-                self._set_scan_mode(self._scan_mode)
                 self._reset_scan_progress()
                 return await self.async_step_scanning()
 
@@ -3984,7 +3898,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         await self._async_ensure_network_defaults()
         if not self._auto_config:
             self._auto_config = self._auto_connection_defaults()
-        self._set_scan_mode(self._scan_mode)
         self._reset_scan_progress()
         return await self.async_step_scanning()
 
@@ -7927,10 +7840,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         selected_ip = str(server_ip or self._auto_config.get(CONF_SERVER_IP, self._local_ip) or self._local_ip)
         return selected_ip or self._tr("common.dynamic.unknown", "Unknown")
 
-    def _selected_interface_network(self, server_ip: str | None = None) -> str:
-        interface = self._selected_interface_option(server_ip)
-        return str(interface.get("network", "") if interface is not None else "").strip()
-
     def _selected_interface_broadcast(self, server_ip: str | None = None) -> str:
         interface = self._selected_interface_option(server_ip)
         broadcast = str(interface.get("broadcast", "") if interface is not None else "").strip()
@@ -7946,27 +7855,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         addresses = [selected_broadcast] if selected_broadcast else [DEFAULT_DISCOVERY_TARGET]
         return tuple(DiscoveryTarget(ip=address, source="broadcast") for address in addresses if address)
 
-    def _deep_scan_plan(self) -> dict[str, Any]:
-        network_cidr = self._selected_interface_network()
-        server_ip = str(self._auto_config.get(CONF_SERVER_IP, self._local_ip) or self._local_ip)
-        target_count = _network_target_count(network_cidr, exclude={server_ip}) if network_cidr else 0
-        return {
-            "network_cidr": network_cidr,
-            "target_count": target_count,
-            "large_subnet": target_count > 253,
-            "timeout_seconds": _onboarding_deep_scan_timeout_seconds(
-                target_count,
-                policy=_ONBOARDING_TIMEOUT_POLICY,
-            ),
-        }
-
-    def _set_scan_mode(self, mode: str) -> None:
-        self._scan_mode = mode
-        if mode == SETUP_MODE_DEEP_SCAN:
-            self._scan_timeout_seconds = self._deep_scan_plan()["timeout_seconds"]
-            return
-        self._scan_timeout_seconds = _AUTO_SCAN_TIMEOUT
-
     def _auto_connection_defaults(self) -> dict[str, Any]:
         """Return branch-aware defaults for the auto-scan flow."""
 
@@ -7979,18 +7867,13 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return defaults
 
     def _refresh_scan_action_label(self) -> str:
-        """Return a context-aware label for repeating the current search."""
+        """Return the label for repeating the single collector search."""
 
-        if self._scan_mode == SETUP_MODE_DEEP_SCAN:
-            return self._tr(
-                "common.dynamic.scan_results_action_refresh_deep",
-                "Search the full network again",
-            )
         return self._scan_action_label("refresh_scan", "Refresh scan results")
 
     def _scan_action_label(self, action: str, default: str) -> str:
-        # deep_scan / change_scan_interface / manual moved under the
-        # advanced_setup submenu; resolve their labels from either step.
+        # change_scan_interface / manual live under the advanced_setup submenu;
+        # resolve their labels from either step.
         label = self._tr(f"config.step.scan_results.menu_options.{action}", "")
         if not label:
             label = self._tr(f"config.step.advanced_setup.menu_options.{action}", "")
@@ -8058,16 +7941,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 },
             ),
             "scan_progress_hint": self._tr(
-                (
-                    "common.dynamic.scan_progress_hint_deep"
-                    if self._scan_mode == SETUP_MODE_DEEP_SCAN
-                    else "common.dynamic.scan_progress_hint"
-                ),
-                (
-                    "Home Assistant is checking the full selected IPv4 network. Large networks can take longer."
-                    if self._scan_mode == SETUP_MODE_DEEP_SCAN
-                    else "Quick scan sends the initial discovery probe and waits for collectors on the selected local network to answer."
-                ),
+                "common.dynamic.scan_progress_hint",
+                "Home Assistant is looking for collectors on the selected local network.",
             ),
         }
 
@@ -8193,37 +8068,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "Choose which Home Assistant interface the {peer_label} should connect back to.",
                 {"peer_label": self._peer_label()},
             ),
-        }
-
-    def _deep_scan_placeholders(self) -> dict[str, str]:
-        plan = self._deep_scan_plan()
-        network_cidr = plan["network_cidr"]
-        target_count = plan["target_count"]
-        if not network_cidr:
-            warning = self._tr(
-                "common.dynamic.deep_scan_warning_unknown_network",
-                "Home Assistant did not report the subnet mask for this interface, so only the currently reachable local subnet can be checked.",
-            )
-        elif target_count <= 0:
-            warning = self._tr(
-                "common.dynamic.deep_scan_warning_empty_network",
-                "The selected interface does not expose any additional IPv4 addresses to probe beyond Home Assistant itself.",
-            )
-        elif plan["large_subnet"]:
-            warning = self._tr(
-                "common.dynamic.deep_scan_warning_long",
-                "Every remaining address is checked directly. Networks larger than /24 can take a while.",
-            )
-        else:
-            warning = self._tr(
-                "common.dynamic.deep_scan_warning_short",
-                "After the initial broadcast, Home Assistant checks the remaining addresses in this IPv4 network directly.",
-            )
-        return {
-            "selected_scan_interface": self._selected_interface_label(),
-            "deep_scan_network": network_cidr or self._tr("common.dynamic.unknown", "Unknown"),
-            "deep_scan_target_count": str(target_count),
-            "deep_scan_warning": warning,
         }
 
     def _welcome_description_placeholders(self) -> dict[str, str]:
@@ -8954,12 +8798,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         already_added_count = 0
         selected_ip = self._auto_config.get(CONF_SERVER_IP, self._local_ip)
         refresh_action_label = self._refresh_scan_action_label()
-        deep_scan_action_label = self._scan_action_label(
-            "deep_scan", "Search the full local network"
-        )
         manual_action_label = self._scan_action_label("manual", "Manual setup")
         selected_label = self._selected_interface_label(selected_ip)
-        deep_scan_available = True
         for _, result in results:
             existing_entry = self._existing_entry_for_result(result)
             if existing_entry is not None:
@@ -8977,75 +8817,42 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "common.dynamic.scan_no_results_summary",
                 "No compatible devices were found.",
             )
-            if deep_scan_available:
-                next_hint = self._tr(
-                    "common.dynamic.scan_no_results_next_with_deep",
-                    "Use **{refresh_action_label}** to try again, **{deep_scan_action_label}** to scan the full local network, or **{manual_action_label}** to switch to manual setup.",
-                    {
-                        "refresh_action_label": refresh_action_label,
-                        "deep_scan_action_label": deep_scan_action_label,
-                        "manual_action_label": manual_action_label,
-                    },
-                )
-            else:
-                next_hint = self._tr(
-                    "common.dynamic.scan_no_results_next",
-                    "Use **{refresh_action_label}** to try again, or **{manual_action_label}** to switch to manual setup.",
-                    {
-                        "refresh_action_label": refresh_action_label,
-                        "manual_action_label": manual_action_label,
-                    },
-                )
+            next_hint = self._tr(
+                "common.dynamic.scan_no_results_next",
+                "Use **{refresh_action_label}** to try again, or **{manual_action_label}** to enter an address manually.",
+                {
+                    "refresh_action_label": refresh_action_label,
+                    "manual_action_label": manual_action_label,
+                },
+            )
         elif available_count == 0 and already_added_count == detected_count:
             scan_summary = self._tr(
                 "common.dynamic.scan_all_added_summary",
                 "Found **{detected_count}** device candidate(s), but all of them are already configured.",
                 {"detected_count": detected_count},
             )
-            if deep_scan_available:
-                next_hint = self._tr(
-                    "common.dynamic.scan_all_added_next_with_deep",
-                    "Use **{refresh_action_label}** to look again, **{deep_scan_action_label}** to search the full local network, or **{manual_action_label}** if you intentionally need a different connection path.",
-                    {
-                        "refresh_action_label": refresh_action_label,
-                        "deep_scan_action_label": deep_scan_action_label,
-                        "manual_action_label": manual_action_label,
-                    },
-                )
-            else:
-                next_hint = self._tr(
-                    "common.dynamic.scan_all_added_next",
-                    "Use **{refresh_action_label}** to look again, or **{manual_action_label}** if you intentionally need a different connection path.",
-                    {
-                        "refresh_action_label": refresh_action_label,
-                        "manual_action_label": manual_action_label,
-                    },
-                )
+            next_hint = self._tr(
+                "common.dynamic.scan_all_added_next",
+                "Use **{refresh_action_label}** to look again, or **{manual_action_label}** to enter a different address.",
+                {
+                    "refresh_action_label": refresh_action_label,
+                    "manual_action_label": manual_action_label,
+                },
+            )
         elif available_count == 0:
             scan_summary = self._tr(
                 "common.dynamic.scan_none_addable_summary",
                 "Found **{detected_count}** search result(s), but none is ready to add yet.",
                 {"detected_count": detected_count},
             )
-            if deep_scan_available:
-                next_hint = self._tr(
-                    "common.dynamic.scan_none_addable_next_with_deep",
-                    "Use **{refresh_action_label}** to try again, **{deep_scan_action_label}** to check the full local network, or **{manual_action_label}** to override the connection settings.",
-                    {
-                        "refresh_action_label": refresh_action_label,
-                        "deep_scan_action_label": deep_scan_action_label,
-                        "manual_action_label": manual_action_label,
-                    },
-                )
-            else:
-                next_hint = self._tr(
-                    "common.dynamic.scan_none_addable_next",
-                    "Use **{refresh_action_label}** to try again, or **{manual_action_label}** to override the connection settings.",
-                    {
-                        "refresh_action_label": refresh_action_label,
-                        "manual_action_label": manual_action_label,
-                    },
-                )
+            next_hint = self._tr(
+                "common.dynamic.scan_none_addable_next",
+                "Select a responding address, use **{refresh_action_label}** to try again, or **{manual_action_label}** to enter an address manually.",
+                {
+                    "refresh_action_label": refresh_action_label,
+                    "manual_action_label": manual_action_label,
+                },
+            )
         else:
             scan_summary = self._tr(
                 "common.dynamic.scan_addable_summary",

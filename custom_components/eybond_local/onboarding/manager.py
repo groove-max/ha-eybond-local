@@ -13,7 +13,6 @@ class OnboardingManager(Protocol):
     async def async_passive_detect(
         self,
         *,
-        depth: str = "fast",
         collector_ip: str = "",
         discovery_target: str = "",
         discovery_targets: Sequence[Any] | None = None,
@@ -21,10 +20,9 @@ class OnboardingManager(Protocol):
     ) -> tuple[OnboardingResult, ...]:
         ...
 
-    async def async_auto_detect(
+    async def async_scan(
         self,
         *,
-        depth: str = "fast",
         skip_probe_ips: frozenset[str] = frozenset(),
         collector_ip: str = "",
         discovery_target: str = "",
@@ -32,26 +30,6 @@ class OnboardingManager(Protocol):
         discovery_timeout: float = 1.5,
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
-        attempts: int = 3,
-        attempt_delay: float = 0.75,
         total_timeout: float | None = None,
-        return_after_first_identity: bool = True,
-    ) -> tuple[OnboardingResult, ...]:
-        ...
-
-    async def async_deep_detect(
-        self,
-        *,
-        collector_ip: str = "",
-        discovery_target: str = "",
-        discovery_targets: Sequence[Any] | None = None,
-        unicast_network_cidr: str = "",
-        discovery_timeout: float = 1.5,
-        connect_timeout: float = 5.0,
-        heartbeat_timeout: float = 2.0,
-        attempts: int = 3,
-        attempt_delay: float = 0.75,
-        total_timeout: float | None = None,
-        skip_probe_ips: frozenset[str] = frozenset(),
     ) -> tuple[OnboardingResult, ...]:
         ...

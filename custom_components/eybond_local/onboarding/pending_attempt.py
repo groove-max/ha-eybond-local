@@ -6,7 +6,7 @@ settings onto a transaction request and maps the transaction's typed outcome
 onto the pending status values the options flow shows. It owns no part of the
 proof itself.
 
-It used to run ``detector.async_auto_detect`` -- the full driver sweep -- purely
+It used to run the onboarding detector -- including its old driver sweep -- purely
 to learn which PN answered, before any identity was confirmed. That cost tens of
 seconds per attempt, outlived the session it was identifying, and left the entry
 looping on callback_timeout. A pending entry needs the collector's identity and

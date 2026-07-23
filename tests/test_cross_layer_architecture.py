@@ -255,7 +255,7 @@ class CallbackIdentityIsolationGuardTests(unittest.TestCase):
         code = _code_identifiers(source) | _imported_modules(source)
         for banned in (
             # driver detection must not exist before identity is confirmed
-            "async_auto_detect",
+            "async_scan",
             "async_deep_detect",
             "create_onboarding_manager",
             "driver_detection",

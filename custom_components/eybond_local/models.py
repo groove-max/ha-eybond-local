@@ -581,7 +581,6 @@ class DetectedInverter:
 class TargetDetectionEvidence:
     """Structured evidence for one onboarding target probe."""
 
-    depth: str = "fast"
     status: str = "unknown"
     reason: str = ""
     budget_exhausted: bool = False

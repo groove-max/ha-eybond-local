@@ -280,7 +280,6 @@ from custom_components.eybond_local.config_flow import (
     CONF_CONFIRM_COLLECTOR_UART_APPLY,
     CONF_CONFIRM_COLLECTOR_WIFI_APPLY,
     CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE,
-    CONF_SETUP_MODE,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
     CONF_RESULT_KEY,
@@ -293,7 +292,6 @@ from custom_components.eybond_local.config_flow import (
     SHADOW_LEARNING_MODE_ENUM_SWEEP,
     SHADOW_LEARNING_MODE_MANUAL,
     SHADOW_LEARNING_MODE_SUPPORT_ONLY,
-    SETUP_MODE_DEEP_SCAN,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED,
@@ -836,7 +834,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
         self.assertEqual(flow._scan_discovery_targets()[0].ip, "192.168.255.255")
-        self.assertEqual(flow._deep_scan_plan()["network_cidr"], "192.168.0.0/16")
 
     async def test_user_step_skips_welcome_for_single_connection_type(self) -> None:
         flow = self._make_flow()
@@ -1105,7 +1102,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Выберите", hint)
         self.assertNotIn("Home Assistant will use", hint)
 
-    async def test_auto_step_starts_scanning_when_setup_mode_is_auto(self) -> None:
+    async def test_auto_step_starts_unified_scan(self) -> None:
         flow = self._make_flow()
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
 
@@ -1114,7 +1111,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow.async_step_scanning = _fake_scanning
 
-        result = await flow.async_step_auto({"server_ip": "192.168.1.50", CONF_SETUP_MODE: "auto"})
+        result = await flow.async_step_auto({"server_ip": "192.168.1.50"})
 
         self.assertEqual(result["type"], "progress")
         self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
@@ -1128,7 +1125,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow.async_step_scanning = _fake_scanning
 
-        result = await flow.async_step_auto({"server_ip": "192.168.1.104", CONF_SETUP_MODE: "auto"})
+        result = await flow.async_step_auto({"server_ip": "192.168.1.104"})
 
         self.assertEqual(result["type"], "progress")
         self.assertEqual(flow._auto_config["server_ip"], "192.168.1.50")
@@ -2557,50 +2554,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "progress")
         self.assertEqual(result["step_id"], "scanning")
 
-    async def test_deep_scan_autostarts_for_known_normal_network(self) -> None:
-        flow = self._make_flow()
-        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
-        flow._interface_options = [
-            {
-                "name": "wlan0",
-                "ip": "192.168.1.50",
-                "label": "wlan0 - 192.168.1.50",
-                "network": "192.168.1.0/24",
-                "broadcast": "192.168.1.255",
-            },
-        ]
-
-        with patch.object(
-            flow,
-            "async_step_start_deep_scan",
-            new=AsyncMock(return_value={"type": "progress", "step_id": "scanning"}),
-        ) as start:
-            result = await flow.async_step_deep_scan()
-
-        start.assert_awaited_once()
-        self.assertEqual(result["step_id"], "scanning")
-
-    async def test_deep_scan_large_subnet_shows_confirm_menu_without_duration_estimates(self) -> None:
-        flow = self._make_flow()
-        flow.hass.config.language = "uk"
-        flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
-        flow._interface_options = [
-            {
-                "name": "wlan0",
-                "ip": "192.168.1.50",
-                "label": "wlan0 - 192.168.1.50",
-                "network": "192.168.0.0/16",
-                "broadcast": "192.168.255.255",
-            },
-        ]
-
-        result = await flow.async_step_deep_scan()
-
-        self.assertEqual(result["step_id"], "deep_scan")
-        self.assertEqual(result["description_placeholders"]["deep_scan_target_count"], "65533")
-        self.assertNotIn("deep_scan_duration", result["description_placeholders"])
-        self.assertTrue(result["description_placeholders"]["deep_scan_warning"])
-
     async def test_change_scan_interface_preserves_connection_type(self) -> None:
         flow = self._make_flow()
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
@@ -2631,16 +2584,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ["action:refresh_scan", "action:advanced_setup"],
         )
 
-    async def test_advanced_setup_submenu_exposes_deep_and_manual(self) -> None:
+    async def test_advanced_setup_submenu_exposes_manual_and_refresh_only(self) -> None:
         flow = self._make_flow()
 
         result = await flow.async_step_advanced_setup()
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "advanced_setup")
-        self.assertIn("deep_scan", result["menu_options"])
-        self.assertIn("manual", result["menu_options"])
-        self.assertIn("refresh_scan", result["menu_options"])
+        self.assertEqual(result["menu_options"], ["manual", "refresh_scan"])
 
     async def test_advanced_setup_offers_change_interface_with_multiple(self) -> None:
         flow = self._make_flow()
@@ -2655,7 +2606,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_scan_results_always_offers_advanced_setup(self) -> None:
         flow = self._make_flow()
-        flow._scan_mode = SETUP_MODE_DEEP_SCAN
 
         result = await flow.async_step_scan_results()
 
@@ -2704,23 +2654,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # The PN-carrying duplicate wins so the line shows the identity.
         self.assertEqual(merged.collector.collector.collector_pn, "Q0000000000001")
 
-    async def test_scan_results_refresh_label_names_deep_scan_after_deep_scan(self) -> None:
+    async def test_scan_results_refresh_label_names_unified_scan(self) -> None:
         flow = self._make_flow()
-        flow._scan_mode = SETUP_MODE_DEEP_SCAN
         flow._autodetect_results = {}
 
         self.assertEqual(
-            flow._refresh_scan_action_label(), "Search the full network again"
+            flow._refresh_scan_action_label(), "Refresh scan results"
         )
         placeholders = flow._scan_results_placeholders()
         self.assertIn(
-            "Search the full network again", placeholders["scan_next_hint"]
-        )
-
-        flow._scan_mode = "auto"
-        self.assertEqual(
-            flow._refresh_scan_action_label(),
             "Refresh scan results",
+            placeholders["scan_next_hint"],
         )
 
     async def test_scan_results_with_available_results_offers_direct_selection(self) -> None:
@@ -4143,7 +4087,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, **kwargs) -> None:
                 self.kwargs = kwargs
 
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 return (OnboardingResult(),)
 
         with patch("custom_components.eybond_local.config_flow.create_onboarding_manager", return_value=_FakeDetector()):
@@ -4156,7 +4100,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
 
         class _FakeDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 return ()
 
         with patch(
@@ -4171,12 +4115,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         build_spec.assert_called_once()
         create_manager.assert_called_once_with(sentinel.connection_spec)
 
-    async def test_do_scan_collects_every_target_in_one_quick_scan_attempt(self) -> None:
+    async def test_do_scan_uses_one_collector_inventory_contract(self) -> None:
         flow = self._make_flow()
         captured_kwargs: dict[str, object] = {}
 
         class _FakeDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 captured_kwargs.update(kwargs)
                 return ()
 
@@ -4186,18 +4130,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await flow._async_do_scan()
 
-        self.assertEqual(captured_kwargs["attempts"], 1)
+        self.assertNotIn("attempts", captured_kwargs)
         self.assertNotIn("enrich_runtime_details", captured_kwargs)
         self.assertNotIn("identify_collector_only", captured_kwargs)
+        self.assertNotIn("return_after_first_identity", captured_kwargs)
         self.assertEqual(
             captured_kwargs["total_timeout"],
             max(5.0, flow._scan_timeout_seconds - 5.0),
         )
-        self.assertLess(
-            captured_kwargs["total_timeout"],
-            config_flow_module._ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds,
-        )
-        self.assertFalse(captured_kwargs["return_after_first_identity"])
 
     async def test_do_scan_scopes_active_probe_against_passive_discovery(self) -> None:
         flow = self._make_flow()
@@ -4213,7 +4153,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 events.append("end")
 
         class _FakeDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 events.append("detect")
                 return ()
 
@@ -4251,7 +4191,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_passive_detect(self, **kwargs):
                 return (passive_result,)
 
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 self.auto_called = True
                 return ()
 
@@ -4316,7 +4256,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 # shared candidate source.
                 return ()
 
-            async def async_auto_detect(self, **_kwargs):
+            async def async_scan(self, **_kwargs):
                 return (active_result,)
 
         with patch(
@@ -4355,7 +4295,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_passive_detect(self, **kwargs):
                 return (passive_result,)
 
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 return ()
 
         progress_loop = AsyncMock(return_value=None)
@@ -4405,7 +4345,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_passive_detect(self, **kwargs):
                 return (passive_existing,)
 
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 return (active_new,)
 
         with patch(
@@ -4517,25 +4457,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
 
-    async def test_do_scan_keeps_deep_scan_collector_only(self) -> None:
-        flow = self._make_flow()
-        flow._set_scan_mode(SETUP_MODE_DEEP_SCAN)
-        captured_kwargs: dict[str, object] = {}
-
-        class _FakeDetector:
-            async def async_deep_detect(self, **kwargs):
-                captured_kwargs.update(kwargs)
-                return ()
-
-        with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
-            return_value=_FakeDetector(),
-        ):
-            await flow._async_do_scan()
-
-        self.assertNotIn("enrich_runtime_details", captured_kwargs)
-        self.assertNotIn("identify_collector_only", captured_kwargs)
-
     async def test_do_scan_preserves_new_collector_only_result_alongside_existing_matched_entry(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
         existing.data.update(
@@ -4579,7 +4500,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         class _FakeDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 return (matched_result, collector_only_result)
 
         with patch(
@@ -4630,7 +4551,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         class _FakeDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 return (collector_only_result, matched_result)
 
         with patch(
@@ -4738,7 +4659,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow.async_update_progress = seen_progress.append
 
         class _FakeDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 await asyncio.sleep(0.4)
                 return (
                     OnboardingResult(
@@ -4774,7 +4695,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
 
         class _SlowDetector:
-            async def async_auto_detect(self, **kwargs):
+            async def async_scan(self, **kwargs):
                 await asyncio.sleep(0.05)
                 return ()
 
@@ -4791,7 +4712,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     # ---- the manual callback attempt (the ONE identity transaction) ----
     #
-    # The old `_async_probe_manual_target` (detector.async_auto_detect before
+    # The old `_async_probe_manual_target` (detector.async_scan before
     # any identity) is gone: a manual callback attempt is exactly one identity
     # transaction and NO pre-entry driver detection. These tests pin the FLOW's
     # side of that contract -- request construction, routing, and "the passive
@@ -9693,7 +9614,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 connection_mode="callback_listener",
                 observed_session=observed,
                 detection=TargetDetectionEvidence(
-                    depth="fast",
                     status="collector_only",
                     reason="callback_session_inventory",
                 ),
@@ -10357,7 +10277,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 next_action="manual_driver_selection",
                 observed_session=observed,
                 detection=TargetDetectionEvidence(
-                    depth="fast",
                     status="collector_only",
                     reason="callback_session_inventory",
                     details={
@@ -10459,7 +10378,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             next_action="manual_driver_selection",
             observed_session=observed,
             detection=TargetDetectionEvidence(
-                depth="fast",
                 status="collector_only",
                 reason="callback_session_inventory",
             ),
@@ -12103,7 +12021,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                     "a callback attempt must never short-circuit on passive inventory"
                 )
 
-            async def async_auto_detect(self, **_kwargs):
+            async def async_scan(self, **_kwargs):
                 # Detection now runs AFTER identity is certified and outside the
                 # causality lease, so its own probes cannot decide identity.
                 ledger = get_callback_trigger_ledger()

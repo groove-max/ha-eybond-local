@@ -301,7 +301,7 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         )
         body = code.split('"""', 2)[-1]  # drop the module docstring
         for banned in (
-            "async_auto_detect",
+            "async_scan",
             "async_deep_detect",
             "create_onboarding_manager",
             "driver_detection",

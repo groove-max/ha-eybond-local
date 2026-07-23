@@ -214,17 +214,16 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
             # A collector-only result normally starts the unrelated /24 fallback
             # sweep. This regression concerns the broadcast->target handoff, so
             # keep the harness bounded after that production path completes.
-            detector._async_auto_unicast_fallback_targets = AsyncMock(
+            detector._async_unicast_fallback_targets = AsyncMock(
                 return_value=()
             )
             results = await asyncio.wait_for(
-                detector.async_auto_detect(
+                detector.async_scan(
                     # Source=broadcast exercises expansion even though the
                     # loopback route is unicast-addressable in this harness.
                     discovery_targets=(
                         DiscoveryTarget(ip=route, source="broadcast"),
                     ),
-                    attempts=1,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -289,11 +288,10 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
                 ),
             ):
                 results = await asyncio.wait_for(
-                    detector.async_auto_detect(
+                    detector.async_scan(
                         discovery_targets=(
                             DiscoveryTarget(ip="127.0.0.255", source="broadcast"),
                         ),
-                        attempts=1,
                         total_timeout=_HARNESS_TIMEOUT,
                     ),
                     timeout=_HARNESS_TIMEOUT + 2.0,
@@ -338,11 +336,10 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
                 udp_port=target_udp,
             )
             results = await asyncio.wait_for(
-                detector.async_auto_detect(
+                detector.async_scan(
                     discovery_targets=(
                         DiscoveryTarget(ip="127.0.0.1", source="unicast"),
                     ),
-                    attempts=1,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -799,7 +796,7 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
     async def test_route_hint_differs_from_tcp_peer_full_pn_no_owner_leak(
         self,
     ) -> None:
-        """A + B + C: full async_auto_detect. UDP route 127.0.0.2, TCP peer
+        """A + B + C: full async_scan. UDP route 127.0.0.2, TCP peer
         127.0.0.1, a stale S1 of route 127.0.0.3 on the SAME peer. The scan
         identifies S2 by its EXACT session id + full FC=2 PN; the route stays
         collector.ip and the owner, the TCP peer lives ONLY in
@@ -832,11 +829,10 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
                 server_ip="127.0.0.1", tcp_port=self._tcp_port, udp_port=s2_udp
             )
             results = await asyncio.wait_for(
-                detector.async_auto_detect(
+                detector.async_scan(
                     discovery_targets=(
                         DiscoveryTarget(ip=route_s2, source="unicast"),
                     ),
-                    attempts=1,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -1204,7 +1200,7 @@ class RouteVsPeerAndLifecycleTests(SilentScanIdentityHarness):
 
 
 class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
-    """Full ``async_auto_detect`` call graph for the weak-heartbeat and
+    """Full ``async_scan`` call graph for the weak-heartbeat and
     already-strong cases -- route != peer, stale same-peer S1 present."""
 
     async def _scan_target(
@@ -1230,9 +1226,8 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
                 server_ip="127.0.0.1", tcp_port=self._tcp_port, udp_port=s2_udp
             )
             results = await asyncio.wait_for(
-                detector.async_auto_detect(
+                detector.async_scan(
                     discovery_targets=(DiscoveryTarget(ip=route, source="unicast"),),
-                    attempts=1,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
