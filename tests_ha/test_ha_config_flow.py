@@ -169,11 +169,10 @@ async def test_options_flow_entry_is_not_loaded_requirement(
 async def test_runtime_options_commit_strategy_to_data_with_one_reload(
     hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime
 ) -> None:
-    """UNCHANGED strategy stays a plain options update with exactly one reload.
+    """Polling stays a plain options update with exactly one reload.
 
-    Since Batch 8 a CHANGED strategy no longer commits here at all (it routes
-    into the verified transition steps); submitting the CURRENT strategy keeps
-    the plain, single-reload options semantics this test pins.
+    The dedicated connection/profile step is the only UX entry into a verified
+    strategy transition. The runtime form does not carry that field at all.
     """
 
     from custom_components.eybond_local.connection.connection_policy import (
@@ -203,7 +202,6 @@ async def test_runtime_options_commit_strategy_to_data_with_one_reload(
         {
             "poll_mode": "auto",
             "control_mode": "read_only",
-            "connection_strategy": current_strategy,
             "connection": {
                 "server_ip": SYNTHETIC_SERVER_IP,
                 "collector_ip": SYNTHETIC_COLLECTOR_IP,

@@ -118,7 +118,6 @@ from ..const import (
     CONTROL_MODE_FULL,
     CONTROL_MODE_READ_ONLY,
     COLLECTOR_OPERATION_HA_ONLY,
-    COLLECTOR_OPERATION_SMARTESS_AND_HA,
     COLLECTOR_OPERATION_MODES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
@@ -142,6 +141,10 @@ from ..connection.connection_policy import (
     may_run_steady_reverse_discovery,
     resolve_connection_strategy,
     resolve_endpoint_control_policy,
+)
+from ..connection.operating_profile import (
+    CollectorOperatingProfile,
+    collector_operating_profile_from_entry,
 )
 from ..collector.entity_scope import is_collector_entity_key
 from ..control_policy import (
@@ -2369,34 +2372,49 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     @property
     def collector_operation_mode(self) -> str:
-        """Return the collector callback ownership mode.
+        """Return the compatibility sensor value for the operating profile.
 
-        CP2A: this is a READ-ONLY PROJECTION, no longer a standalone writable
-        authority. The single source of truth is the canonical connection
-        strategy:
+        The old writable operation mode is retired.  Keep this property only so
+        the existing entity unique ID remains stable; its value now comes from
+        the typed read-only profile and can honestly report ``custom`` when the
+        architecture axes do not describe either normal product state.
+        """
 
-        - ``inbound``            -> ``home_assistant_only``
-        - ``callback_on_demand`` -> ``smartess_cloud_home_assistant``
+        return self.collector_operating_profile.profile
 
-        A collector that can only be Home-Assistant-owned (``ha_only_required``)
-        always projects HA-only. For an entry that declares a canonical strategy
-        the persisted operation mode is IGNORED, so a stale ``options``/``data``
-        copy left over from an older save can never diverge from the transport
-        the runtime actually uses. Only legacy entries that predate the explicit
-        strategy axis fall back to the persisted-mode read (existing migration
-        compatibility).
+    @property
+    def collector_operating_profile(self) -> CollectorOperatingProfile:
+        """Return the current read-only user-facing operating profile."""
+
+        return collector_operating_profile_from_entry(
+            dict(self.config_entry.data),
+            dict(self.config_entry.options),
+            ha_only_required=self.collector_capabilities.ha_only_required,
+        )
+
+    @property
+    def collector_home_assistant_primary(self) -> bool:
+        """Return the legacy runtime routing decision.
+
+        This is intentionally NOT derived from the user-facing operating
+        profile.  Existing endpoint reconcile, capture, and shadow-learning
+        code consumes this boolean as an operational transport decision.  Batch
+        1 adds a read-only UX projection and must not change those wire
+        semantics; the dedicated endpoint-operation batch will replace this
+        legacy boundary explicitly.
         """
 
         if self.collector_capabilities.ha_only_required:
-            return COLLECTOR_OPERATION_HA_ONLY
+            return True
 
         data = self.config_entry.data
         options = self.config_entry.options
         if entry_declares_connection_strategy(data, options):
-            if self.connection_strategy == CONNECTION_STRATEGY_INBOUND:
-                return COLLECTOR_OPERATION_HA_ONLY
-            return COLLECTOR_OPERATION_SMARTESS_AND_HA
+            return self.connection_strategy == CONNECTION_STRATEGY_INBOUND
 
+        # Pre-schema entries had no explicit strategy. Preserve their exact
+        # operational fallback until migration/Batch 2 replaces the consumers;
+        # this value is never exposed as the new user-facing profile.
         mode = str(
             options.get(
                 CONF_COLLECTOR_OPERATION_MODE,
@@ -2408,14 +2426,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             or DEFAULT_COLLECTOR_OPERATION_MODE
         ).strip()
         if mode not in COLLECTOR_OPERATION_MODES:
-            return DEFAULT_COLLECTOR_OPERATION_MODE
-        return mode
-
-    @property
-    def collector_home_assistant_primary(self) -> bool:
-        """Return whether Home Assistant owns the collector callback endpoint."""
-
-        return self.collector_operation_mode == COLLECTOR_OPERATION_HA_ONLY
+            mode = DEFAULT_COLLECTOR_OPERATION_MODE
+        return mode == COLLECTOR_OPERATION_HA_ONLY
 
     @property
     def collector_callback_listener_required(self) -> bool:

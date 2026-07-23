@@ -115,7 +115,12 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
             self._listener, close_pending=True, close_payload=True, close_at=True
         )
 
-    async def _start_service(self, *, set_29_mode: str) -> FakeCollectorService:
+    async def _start_service(
+        self,
+        *,
+        set_29_mode: str,
+        reboot_reconnect_delay: float = 0.3,
+    ) -> FakeCollectorService:
         service = FakeCollectorService(
             listen_ip="127.0.0.1",
             udp_port=0,  # a REAL UDP listener on an ephemeral port
@@ -127,7 +132,7 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
                 preset="collector_only",
                 profile=CollectorProfile(pn=FULL_PN),
                 set_29_mode=set_29_mode,
-                reboot_reconnect_delay=0.3,
+                reboot_reconnect_delay=reboot_reconnect_delay,
             ),
         )
         await service.start()
@@ -274,13 +279,21 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         contract.write_to(data)
         self.assertIsNotNone(RecoveryContract.from_entry_data(data))
 
-    async def test_autonomous_reconnect_settles_for_inbound_with_zero_datagrams(
+    async def test_already_present_autonomous_reconnect_is_inbound_with_zero_datagrams(
         self,
     ) -> None:
-        """The collector re-dials on its own: the ARMED callback transaction
-        must keep the inbound proof from the same reset and never touch UDP."""
+        """An immediate autonomous successor wins the non-waiting inbound pass.
 
-        service = await self._start_service(set_29_mode="reboot")
+        An armed callback route deliberately does not add an arbitrary grace
+        period for a future autonomous reconnect. It does accept a successor
+        already visible when the old socket closes, preserving the zero-UDP
+        inbound proof.
+        """
+
+        service = await self._start_service(
+            set_29_mode="reboot",
+            reboot_reconnect_delay=0.0,
+        )
         old_session_id = await self._dial_in_and_wait(service)
         rx_before = service.discovery_rx_count
         generation_before = get_callback_trigger_ledger().snapshot_generation()

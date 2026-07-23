@@ -5880,7 +5880,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             result["menu_options"],
-            ["runtime", "shadow_learning", "collector_wifi", "diagnostics"],
+            [
+                "connection",
+                "runtime",
+                "shadow_learning",
+                "collector_wifi",
+                "diagnostics",
+            ],
         )
 
     async def test_options_runtime_ambiguity_requires_post_entry_protocol_choice(self) -> None:
@@ -6711,8 +6717,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("proxy_capture", menu_options)
 
     async def test_options_runtime_step_hides_operation_mode_selector_for_bridge(self) -> None:
-        # Item 1: the runtime options flow forces/hides the collector operation
-        # mode for a detected bridge, exactly like the onboarding confirm step.
+        # The polling form contains no connection profile control for any
+        # collector, including a bridge.
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
@@ -6725,8 +6731,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
-        self.assertTrue(
-            result["description_placeholders"]["collector_operation_mode_note"].strip()
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
+        self.assertEqual(
+            result["description_placeholders"]["collector_operation_mode_note"], ""
         )
 
     async def test_options_runtime_step_hides_operation_mode_selector_for_bridge_entry_data(self) -> None:
@@ -6741,13 +6748,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
-        self.assertTrue(
-            result["description_placeholders"]["collector_operation_mode_note"].strip()
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
+        self.assertEqual(
+            result["description_placeholders"]["collector_operation_mode_note"], ""
         )
 
-    async def test_options_runtime_step_shows_connection_strategy_selector_for_factory(self) -> None:
-        # Phase 4: the primary user choice is the connection-strategy selector,
-        # not the legacy Cloud+HA / HA-only operation mode.
+    async def test_connection_profile_has_its_own_options_step(self) -> None:
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(
@@ -6756,14 +6762,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        result = await options.async_step_runtime()
+        runtime = await options.async_step_runtime()
+        connection = await options.async_step_connection()
 
-        self.assertEqual(result["type"], "form")
-        self.assertIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
-        # The legacy operation-mode selector is no longer the primary choice.
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
-        self.assertEqual(
-            result["description_placeholders"]["collector_operation_mode_note"], ""
+        self.assertEqual(runtime["type"], "form")
+        self.assertNotIn(CONF_CONNECTION_STRATEGY, runtime["data_schema"].schema)
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, runtime["data_schema"].schema)
+        self.assertEqual(connection["type"], "form")
+        self.assertEqual(connection["step_id"], "connection")
+        self.assertIn(CONF_CONNECTION_STRATEGY, connection["data_schema"].schema)
+        self.assertIn(
+            connection["description_placeholders"]["current_profile"],
+            {"SmartESS + Home Assistant", "Home Assistant only", "Custom configuration"},
         )
 
     async def test_options_runtime_step_forces_inbound_for_bridge_on_submit(self) -> None:
@@ -6828,11 +6838,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge_result["type"], "form")
         self.assertNotIn(CONF_PROXY_ENABLED, bridge_result["data_schema"].schema)
 
-    async def test_options_runtime_step_routes_changed_strategy_to_transition(self) -> None:
-        # Batch 8: a CHANGED "how the collector connects" selection is an
-        # architectural transition. The runtime form must NOT write it — the
-        # user is routed to the dedicated verification steps instead, and the
-        # target strategy is persisted only by the transition authority.
+    async def test_connection_step_routes_changed_profile_to_transition(self) -> None:
+        # A changed product profile is still executed by the existing verified
+        # strategy-transition authority. The new UX step is not a second writer.
         options = self._make_options_flow()
         options._config_entry.options = {CONF_PROXY_ENABLED: True}
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -6842,22 +6850,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        submitted = {
-            "poll_interval": 15,
-            "control_mode": "auto",
-            "connection_strategy": CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-            "connection": {
-                "server_ip": "192.168.1.50",
-                "collector_ip": "192.168.1.55",
-                "tcp_port": 8899,
-                "udp_port": 58899,
-                "discovery_target": "192.168.1.255",
-                "discovery_interval": 3,
-                "heartbeat_interval": 60,
-                "driver_hint": "auto",
-            },
-        }
-        result = await options.async_step_runtime(dict(submitted))
+        result = await options.async_step_connection(
+            {CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
+        )
 
         # Routed to the explicit confirmation form; NOTHING was persisted.
         self.assertEqual(result["type"], "form")
@@ -6868,27 +6863,38 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
         self.assertEqual(options.hass.config_entries.updates, [])
-        # The submitted runtime settings are staged for the transition's
-        # success commit -- but ONLY the orthogonal options (poll / control),
-        # never topology or architecture axes like proxy_enabled.
         self.assertEqual(
             options._transition_target_strategy,
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
-        self.assertEqual(
-            set(options._transition_options_payload),
-            {
-                "driver_detection_strategy",
-                "poll_mode",
-                "poll_interval",
-                "control_mode",
-            },
-        )
-        self.assertNotIn(
-            CONF_PROXY_ENABLED, options._transition_options_payload
+        self.assertEqual(options._transition_options_payload, {})
+
+    async def test_custom_profile_same_strategy_does_not_silently_close(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data = {
+            **dict(options._config_entry.data),
+            CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+            "endpoint_control_policy": "external",
+        }
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
         )
 
-        # An UNCHANGED strategy submission stays a plain options update.
+        result = await options.async_step_connection(
+            {CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "connection")
+        self.assertEqual(result["errors"], {"base": "operating_profile_inconsistent"})
+        self.assertEqual(options.hass.config_entries.updates, [])
+        self.assertEqual(options._transition_target_strategy, "")
+
+    async def test_runtime_step_ignores_stale_posted_strategy(self) -> None:
+        # A cached old runtime form cannot bypass the dedicated profile step.
         unchanged = self._make_options_flow()
         unchanged._config_entry.options = {CONF_PROXY_ENABLED: True}
         unchanged._config_entry.runtime_data = types.SimpleNamespace(
@@ -6897,15 +6903,23 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 values={},
             ),
         )
-        from custom_components.eybond_local.connection.connection_policy import (
-            resolve_connection_strategy,
+        plain = await unchanged.async_step_runtime(
+            {
+                "poll_interval": 15,
+                "control_mode": "auto",
+                "connection_strategy": CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "connection": {
+                    "server_ip": "192.168.1.50",
+                    "collector_ip": "192.168.1.55",
+                    "tcp_port": 8899,
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 3,
+                    "heartbeat_interval": 60,
+                    "driver_hint": "auto",
+                },
+            }
         )
-
-        plain_input = dict(submitted)
-        plain_input["connection_strategy"] = resolve_connection_strategy(
-            unchanged._config_entry.data, unchanged._config_entry.options
-        )
-        plain = await unchanged.async_step_runtime(plain_input)
         self.assertEqual(plain["type"], "create_entry")
         self.assertNotIn(CONF_CONNECTION_STRATEGY, plain["data"])
         self.assertNotIn(CONF_CONNECTION_STRATEGY, unchanged._config_entry.options)
@@ -6918,6 +6932,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(updates), 1)
         self.assertIn("data", updates[0])
         self.assertIn("options", updates[0])
+        self.assertEqual(unchanged._transition_target_strategy, "")
 
     async def test_proxy_capture_step_shows_planner_status(self) -> None:
         options = self._make_options_flow()

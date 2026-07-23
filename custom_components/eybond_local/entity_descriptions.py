@@ -640,12 +640,13 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
     ),
     MeasurementDescription(
         key="collector_operation_mode",
-        name="Collector Operation Mode",
+        name="Collector Operating Profile",
         translation_key="collector_operation_mode",
         device_class="enum",
         options=(
             "smartess_cloud_home_assistant",
             "home_assistant_only",
+            "custom",
         ),
         icon="mdi:transit-connection-variant",
         diagnostic=False,

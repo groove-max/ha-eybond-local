@@ -64,6 +64,7 @@ class RuntimeFactoryTests(unittest.TestCase):
         branch.create_runtime_manager.assert_called_once_with(
             connection,
             driver_hint="auto",
+            driver_detection_strategy="first_match",
             connection_mode="known_ip",
         )
 

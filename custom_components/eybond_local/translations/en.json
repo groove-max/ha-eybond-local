@@ -384,6 +384,7 @@
       "shadow_learning_failed": "Control discovery action failed. Check details and confirmations, then try again.",
       "passive_discovery_unavailable": "Background discovery is not running. Reload the integration and try again.",
       "invalid_selection": "The selected option is no longer available.",
+      "operating_profile_inconsistent": "The saved connection state does not safely match this profile. Choose the other profile to run a verified transition, or use the offered recovery action first.",
       "callback_target_required": "An address is required to ask the collector to connect.",
       "connection_strategy_risk_unconfirmed": "You must confirm you understand the risks before switching the connection method.",
       "identity_not_confirmed": "That collector's identity could not be confirmed. Try again.",
@@ -419,7 +420,8 @@
         "title": "EyeBond Local Options",
         "description": "Choose what you want to manage for this entry.{bridge_note}",
         "menu_options": {
-          "runtime": "Connection and polling",
+          "connection": "Collector connection and SmartESS",
+          "runtime": "Polling and inverter detection",
           "shadow_learning": "Expand device support",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
@@ -428,6 +430,16 @@
           "strategy_transition_repair": "Finish the connection switch (recovery required)",
           "strategy_transition_activation_retry": "Load the verified connection",
           "strategy_transition_cancel": "Cancel"
+        }
+      },
+      "connection": {
+        "title": "Collector connection and SmartESS",
+        "description": "**Current profile:** {current_profile}\n\n{profile_summary}\n\nChoose the result you want. Home Assistant will verify the collector connection before saving a change.",
+        "data": {
+          "connection_strategy": "Operating profile"
+        },
+        "data_description": {
+          "connection_strategy": "SmartESS + Home Assistant keeps the collector on its external service and requests a Home Assistant connection when needed. Home Assistant only makes the collector connect directly to Home Assistant and stops normal SmartESS reporting."
         }
       },
       "inverter_protocol": {
@@ -468,20 +480,18 @@
         }
       },
       "runtime": {
-        "title": "Runtime Settings",
+        "title": "Polling and inverter detection",
         "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
-          "connection_strategy": "How the collector connects",
           "control_mode": "Control mode"
         },
         "data_description": {
           "driver_detection_strategy": "Fast mode stops at the first confirmed protocol. Full scan checks all supported protocols on the owned collector session.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
-          "connection_strategy": "\"Collector connects to Home Assistant on its own\" if the collector already points at Home Assistant — no callback is sent. \"Ask the collector to connect when needed\" sends the collector one connection request per attempt; use this for a collector that normally talks to its cloud.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
         },
         "sections": {
@@ -664,7 +674,7 @@
           "advertised_server_ip": "Home Assistant host the collector connects to",
           "advertised_tcp_port": "Port the collector connects to",
           "collector_ip": "Collector address (for the callback request)",
-          "confirm_connection_strategy_risk": "I understand the risks and want to switch the connection method"
+          "confirm_connection_strategy_risk": "I understand the risks and want to switch the operating profile"
         },
         "data_description": {
           "confirm_connection_strategy_risk": "Required. The switch will not start until this box is checked."
@@ -731,10 +741,11 @@
     },
     "sensor": {
       "collector_operation_mode": {
-        "name": "Collector operation mode",
+        "name": "Collector operating profile",
         "state": {
-          "smartess_cloud_home_assistant": "Cloud + HA",
-          "home_assistant_only": "Home Assistant only"
+          "smartess_cloud_home_assistant": "SmartESS + Home Assistant",
+          "home_assistant_only": "Home Assistant only",
+          "custom": "Custom configuration"
         }
       },
       "collector_poll_mode": {

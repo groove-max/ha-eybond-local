@@ -384,6 +384,7 @@
       "diagnostic_commands_failed": "Діагностичний сценарій неочікувано завершився помилкою. Перевірте журнал Home Assistant.",
       "passive_discovery_unavailable": "Фонове виявлення не запущено. Перезавантажте інтеграцію та повторіть спробу.",
       "invalid_selection": "Обраний варіант більше недоступний.",
+      "operating_profile_inconsistent": "Збережений стан підключення не відповідає цьому профілю. Оберіть інший профіль для перевіреного переходу або спочатку виконайте запропоноване відновлення.",
       "callback_target_required": "Для запиту підключення потрібна адреса колектора.",
       "connection_strategy_risk_unconfirmed": "Підтвердьте, що розумієте ризики, перш ніж перемикати спосіб підключення.",
       "identity_not_confirmed": "Не вдалося підтвердити ідентичність колектора. Спробуйте ще раз.",
@@ -419,7 +420,8 @@
         "title": "Параметри EyeBond Local",
         "description": "Виберіть, чим саме ви хочете керувати для цього запису.{bridge_note}",
         "menu_options": {
-          "runtime": "Підключення та опитування",
+          "connection": "Підключення колектора та SmartESS",
+          "runtime": "Опитування та визначення інвертора",
           "shadow_learning": "Розширити підтримку пристрою",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "collector_uart": "Змінити швидкість UART інвертора",
@@ -428,6 +430,16 @@
           "strategy_transition_repair": "Завершити перемикання підключення (потрібне відновлення)",
           "strategy_transition_activation_retry": "Завантажити перевірене підключення",
           "strategy_transition_cancel": "Скасувати"
+        }
+      },
+      "connection": {
+        "title": "Підключення колектора та SmartESS",
+        "description": "**Поточний профіль:** {current_profile}\n\n{profile_summary}\n\nВиберіть бажаний результат. Перед збереженням змін Home Assistant перевірить підключення колектора.",
+        "data": {
+          "connection_strategy": "Профіль роботи"
+        },
+        "data_description": {
+          "connection_strategy": "SmartESS + Home Assistant зберігає підключення колектора до зовнішнього сервісу та запитує з’єднання з Home Assistant за потреби. Лише Home Assistant спрямовує колектор безпосередньо до Home Assistant і припиняє звичайне надсилання даних у SmartESS."
         }
       },
       "inverter_protocol": {
@@ -468,20 +480,18 @@
         }
       },
       "runtime": {
-        "title": "Параметри роботи",
+        "title": "Опитування та визначення інвертора",
         "description": "**{model_name}** — серійний номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
           "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування",
-          "connection_strategy": "Як підключається колектор",
           "control_mode": "Режим керування"
         },
         "data_description": {
           "driver_detection_strategy": "Швидкий режим зупиняється після першого підтвердженого протоколу. Повне сканування перевіряє всі підтримувані протоколи через сесію цього колектора.",
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Лише для ручного режиму. Це цільовий інтервал між початками циклів опитування. Якщо пристрою потрібно більше часу на відповідь, EyeBond Local попередить про високе навантаження опитування; використовуйте автоматичний режим, щоб інтеграція сама вибрала безпечний інтервал.",
-          "connection_strategy": "«Колектор сам підключається до Home Assistant» — якщо колектор уже вказує на Home Assistant, запит на підключення не надсилається. «Запитувати підключення за потреби» надсилає колектору один запит на підключення за спробу; використовуйте для колектора, який зазвичай працює зі своєю хмарою.",
           "control_mode": "Авто вмикає перевірені елементи керування, коли впевненість виявлення висока. Лише читання вимикає все керування. Повний режим вмикає все."
         },
         "sections": {
@@ -664,7 +674,7 @@
           "advertised_server_ip": "Хост Home Assistant, до якого підключається колектор",
           "advertised_tcp_port": "Порт, до якого підключається колектор",
           "collector_ip": "Адреса колектора (для callback-запиту)",
-          "confirm_connection_strategy_risk": "Я розумію ризики і хочу перемкнути спосіб підключення"
+          "confirm_connection_strategy_risk": "Я розумію ризики й хочу змінити профіль роботи"
         },
         "data_description": {
           "confirm_connection_strategy_risk": "Обов'язково. Перемикання не почнеться, доки не встановлено прапорець."
@@ -731,10 +741,11 @@
     },
     "sensor": {
       "collector_operation_mode": {
-        "name": "Режим роботи колектора",
+        "name": "Профіль роботи колектора",
         "state": {
-          "smartess_cloud_home_assistant": "Cloud + HA",
-          "home_assistant_only": "Лише Home Assistant"
+          "smartess_cloud_home_assistant": "SmartESS + Home Assistant",
+          "home_assistant_only": "Лише Home Assistant",
+          "custom": "Нестандартне налаштування"
         }
       },
       "collector_poll_mode": {

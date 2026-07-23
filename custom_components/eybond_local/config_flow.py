@@ -65,6 +65,13 @@ from .connection.connection_policy import (
     resolve_connection_strategy,
 )
 from .connection.models import build_connection_spec, build_connection_spec_from_values
+from .connection.operating_profile import (
+    CollectorOperatingProfile,
+    OPERATING_PROFILE_CUSTOM,
+    OPERATING_PROFILE_HA_ONLY,
+    OPERATING_PROFILE_SMARTESS_AND_HA,
+    collector_operating_profile_from_entry,
+)
 from .connection.strategy_transition_context import (
     PROVENANCE_EXPLICIT_ADVERTISED,
     TransitionEndpointCandidate,
@@ -124,7 +131,6 @@ from .const import (
     CONNECTION_STRATEGIES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
-    DEFAULT_CONNECTION_STRATEGY,
     CONNECTION_TYPE_EYBOND,
     DEFAULT_COLLECTOR_OPERATION_MODE,
     DEFAULT_CONTROL_MODE,
@@ -9472,11 +9478,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         self._diagnostic_commands_result_path = ""
         self._diagnostic_publish_download_copy = False
         self._runtime_poll_interval_pending_input: dict[str, Any] = {}
-        # Verified strategy-transition state (Batch 8): the target the user
-        # picked on the runtime form, the runtime options that travel with the
-        # transition's success commit, and the progress task/result.
+        # Verified strategy-transition state: the target selected on the
+        # dedicated connection/profile step and the progress task/result.
         self._transition_target_strategy = ""
-        self._transition_topology_conflict = False
         self._transition_options_payload: dict[str, Any] = {}
         self._transition_task = None
         self._transition_result = None
@@ -9588,6 +9592,46 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             hardware_version=self._collector_uart_hardware_version,
         )
 
+    def _collector_operating_profile(self) -> CollectorOperatingProfile:
+        """Return the read-only user-facing profile for this entry."""
+
+        return collector_operating_profile_from_entry(
+            dict(self._config_entry.data),
+            dict(self._config_entry.options),
+            ha_only_required=self._collector_capabilities().ha_only_required,
+        )
+
+    def _operating_profile_label(self, profile: str) -> str:
+        """Return one localized product-level operating-profile label."""
+
+        labels = {
+            OPERATING_PROFILE_SMARTESS_AND_HA: self._tr(
+                "common.dynamic.operating_profile_smartess_and_ha",
+                "SmartESS + Home Assistant",
+            ),
+            OPERATING_PROFILE_HA_ONLY: self._tr(
+                "common.dynamic.operating_profile_ha_only",
+                "Home Assistant only",
+            ),
+            OPERATING_PROFILE_CUSTOM: self._tr(
+                "common.dynamic.operating_profile_custom",
+                "Custom configuration",
+            ),
+        }
+        return labels.get(profile, labels[OPERATING_PROFILE_CUSTOM])
+
+    def _stage_connection_strategy_transition(self, target: str) -> None:
+        """Stage one strategy target without creating a second authority."""
+
+        self._transition_target_strategy = target
+        self._transition_rollback_selection = None
+        self._transition_rollback_candidate_snapshot = None
+        self._transition_rollback_candidate_pinned = False
+        self._transition_options_payload = {}
+        self._transition_result = None
+        self._transition_task = None
+        self._transition_error = ""
+
     @_with_translation_bundle
     async def async_step_init(
         self,
@@ -9628,7 +9672,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "available.",
             )
         else:
-            menu_options = ["runtime", "shadow_learning", "collector_wifi", "diagnostics"]
+            menu_options = [
+                "connection",
+                "runtime",
+                "shadow_learning",
+                "collector_wifi",
+                "diagnostics",
+            ]
 
         # RECOVERY takes priority OVER the capability filter: a degraded entry
         # (recovery marker present) offers the repair FIRST -- even a virtual
@@ -9643,6 +9693,77 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             step_id="init",
             menu_options=menu_options,
             description_placeholders={"bridge_note": bridge_note},
+        )
+
+    @_with_translation_bundle
+    async def async_step_connection(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose the product operating profile, then use the one transition authority."""
+
+        capabilities = self._collector_capabilities()
+        if capabilities.ha_only_required:
+            return await self.async_step_init()
+
+        current_strategy = self._transition_current_strategy()
+        profile = self._collector_operating_profile()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            target = user_input.get(CONF_CONNECTION_STRATEGY)
+            if type(target) is not str or target not in CONNECTION_STRATEGIES:
+                errors[CONF_CONNECTION_STRATEGY] = "invalid_selection"
+            elif target == current_strategy:
+                if profile.stable:
+                    return self.async_create_entry(
+                        data=dict(self._config_entry.options)
+                    )
+                errors["base"] = "operating_profile_inconsistent"
+            else:
+                self._stage_connection_strategy_transition(target)
+                return await self.async_step_strategy_transition()
+
+        return self.async_show_form(
+            step_id="connection",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONNECTION_STRATEGY,
+                        default=current_strategy,
+                    ): _connection_strategy_selector(
+                        self._tr(
+                            "common.dynamic.operating_profile_ha_only",
+                            "Home Assistant only",
+                        ),
+                        self._tr(
+                            "common.dynamic.operating_profile_smartess_and_ha",
+                            "SmartESS + Home Assistant",
+                        ),
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "current_profile": self._operating_profile_label(profile.profile),
+                "profile_summary": self._tr(
+                    f"common.dynamic.operating_profile_summary_{profile.profile}",
+                    {
+                        OPERATING_PROFILE_SMARTESS_AND_HA: (
+                            "The collector normally remains connected to SmartESS. "
+                            "Home Assistant asks it to connect when data is needed."
+                        ),
+                        OPERATING_PROFILE_HA_ONLY: (
+                            "The collector connects directly to Home Assistant. "
+                            "SmartESS does not receive its data."
+                        ),
+                        OPERATING_PROFILE_CUSTOM: (
+                            "The saved connection settings do not match either "
+                            "normal profile. Choose the intended profile to run "
+                            "a verified transition."
+                        ),
+                    }[profile.profile],
+                ),
+            },
         )
 
     @_with_translation_bundle
@@ -9900,22 +10021,18 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     ) -> ConfigFlowResult:
         if not self._interface_options:
             self._interface_options = await self.hass.async_add_executor_job(_get_ipv4_interfaces)
-        # A detected bridge inherently dials Home Assistant on its own, so the
-        # connection-strategy selector is hidden for it and the submitted form
-        # carries no strategy value; force inbound.
-        capabilities = self._collector_capabilities()
-        is_bridge = capabilities.virtual_bridge
+        # The operating profile is edited only in ``async_step_connection``.
+        # Runtime/polling saves carry the unchanged strategy so this form can
+        # never look like (or accidentally become) a connection transition.
         errors: dict[str, str] = {}
         if user_input is not None:
             flat_input = _flatten_sections(user_input)
-            if is_bridge:
-                flat_input[CONF_CONNECTION_STRATEGY] = CONNECTION_STRATEGY_INBOUND
-            flat_input.setdefault(
-                CONF_CONNECTION_STRATEGY,
-                resolve_connection_strategy(
-                    self._config_entry.data,
-                    self._config_entry.options,
-                ),
+            # Ignore a stale/forged strategy field posted by an older cached
+            # runtime form. Only ``async_step_connection`` may stage a profile
+            # transition; polling is not a second writer.
+            flat_input[CONF_CONNECTION_STRATEGY] = resolve_connection_strategy(
+                self._config_entry.data,
+                self._config_entry.options,
             )
             flat_input.setdefault(
                 CONF_POLL_MODE,
@@ -9953,13 +10070,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ):
                     self._runtime_poll_interval_pending_input = dict(flat_input)
                     return await self.async_step_runtime_poll_interval()
-                committed = self._async_commit_runtime_options(flat_input)
-                if committed is not None:
-                    return committed
-                if self._transition_topology_conflict:
-                    errors["base"] = "topology_change_needs_separate_save"
-                else:
-                    return await self.async_step_strategy_transition()
+                return self._async_commit_runtime_options(flat_input)
 
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
         branch = get_connection_branch(connection_type)
@@ -9977,12 +10088,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             CONF_CONTROL_MODE,
             self._config_entry.data.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE),
         )
-        connection_strategy = resolve_connection_strategy(
-            self._config_entry.data,
-            self._config_entry.options,
-        )
-        if connection_strategy not in CONNECTION_STRATEGIES:
-            connection_strategy = DEFAULT_CONNECTION_STRATEGY
         detection_strategy = self._config_entry.options.get(
             CONF_DRIVER_DETECTION_STRATEGY,
             self._config_entry.data.get(
@@ -10011,24 +10116,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             schema_fields[vol.Required(CONF_POLL_INTERVAL, default=poll_interval)] = (
                 _poll_interval_selector(self._poll_policy_driver_key())
             )
-        if not is_bridge:
-            # A local bridge dials Home Assistant on its own (inbound), so the
-            # strategy selector is hidden and an informational note is shown.
-            schema_fields[
-                vol.Required(
-                    CONF_CONNECTION_STRATEGY,
-                    default=connection_strategy,
-                )
-            ] = _connection_strategy_selector(
-                self._tr(
-                    "common.dynamic.connection_strategy_inbound",
-                    "Collector connects to Home Assistant on its own",
-                ),
-                self._tr(
-                    "common.dynamic.connection_strategy_callback_on_demand",
-                    "Ask the collector to connect when needed",
-                ),
-            )
         schema_fields[vol.Required("connection")] = section(
             vol.Schema(
                 self._build_connection_fields_schema(
@@ -10055,15 +10142,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     control_mode=control_mode,
                     confidence=self._config_entry.data.get(CONF_DETECTION_CONFIDENCE, "none"),
                 ),
-                "collector_operation_mode_note": (
-                    self._tr(
-                        "common.dynamic.connection_strategy_bridge_note",
-                        "This is a local bridge — it connects to Home Assistant "
-                        "on its own, so there is nothing to choose here.",
-                    )
-                    if is_bridge
-                    else ""
-                ),
+                "collector_operation_mode_note": "",
             },
         )
 
@@ -10083,62 +10162,19 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         )
 
     def _async_commit_runtime_options(self, flat_input: dict[str, Any]) -> ConfigFlowResult:
-        """Persist the runtime form; a CHANGED strategy routes to verification.
-
-        An UNCHANGED "how the collector connects" selector keeps the plain
-        options-update semantics: one ``async_update_entry`` with data+options,
-        then the no-op terminal ``async_create_entry(data=options)`` (HA sees
-        no options change and schedules no second reload).
-
-        A CHANGED strategy is an architectural transition and can NO LONGER be
-        written here (Batch 8): the user is routed into the dedicated
-        confirmation/progress/result steps, and the target strategy is
-        persisted only by the transition authority after a full verified
-        proof. The other submitted runtime settings travel WITH the
-        transition's success commit so everything lands in one reload.
-        """
+        """Persist polling/runtime options without accepting a profile change."""
 
         options = self._build_runtime_options_from_flat_input(flat_input)
         current_strategy = resolve_connection_strategy(
             self._config_entry.data,
             self._config_entry.options,
         )
-        strategy = str(
-            flat_input.get(CONF_CONNECTION_STRATEGY, current_strategy) or ""
-        ).strip()
-        if strategy in CONNECTION_STRATEGIES and strategy != current_strategy:
-            if self._runtime_topology_changed(options):
-                # Typed refusal (Batch 8): a connection-topology change cannot
-                # be staged and PROVEN against the old runtime spec in the same
-                # step. Ask the user to save the connection settings first
-                # (reload), then switch the strategy separately.
-                self._transition_topology_conflict = True
-                return None
-            # Stage ONLY the orthogonal runtime options (poll / control) that
-            # travel with the transition's success commit. Topology is never
-            # carried through the transition payload.
-            self._transition_target_strategy = strategy
-            self._transition_rollback_selection = None
-            self._transition_rollback_candidate_snapshot = None
-            self._transition_rollback_candidate_pinned = False
-            self._transition_options_payload = {
-                key: options[key]
-                for key in (
-                    CONF_DRIVER_DETECTION_STRATEGY,
-                    CONF_POLL_MODE,
-                    CONF_POLL_INTERVAL,
-                    CONF_CONTROL_MODE,
-                )
-                if key in options
-            }
-            self._transition_result = None
-            self._transition_task = None
-            self._transition_error = ""
-            self._transition_topology_conflict = False
-            return None  # routed by the async caller below
         data = dict(self._config_entry.data)
-        if strategy in CONNECTION_STRATEGIES:
-            data[CONF_CONNECTION_STRATEGY] = strategy
+        if current_strategy in CONNECTION_STRATEGIES:
+            # Canonicalize a legacy entry while preserving its effective
+            # strategy. The runtime caller overwrites any stale posted strategy
+            # with this value before reaching this boundary.
+            data[CONF_CONNECTION_STRATEGY] = current_strategy
         current_driver_intent = str(
             self._config_entry.options.get(
                 CONF_DRIVER_HINT,
@@ -10162,35 +10198,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             options=options,
         )
         return self.async_create_entry(data=options)
-
-    def _runtime_topology_changed(self, submitted_options: dict[str, Any]) -> bool:
-        """Whether the runtime form changed any connection-topology field.
-
-        Topology (bind/server IP, TCP/UDP ports, collector target, advertised
-        host/port, discovery route) cannot be staged and simultaneously proven
-        against the OLD runtime spec during a strategy switch. A change here is
-        a typed refusal, not a silent stage.
-        """
-
-        topology_keys = (
-            CONF_SERVER_IP,
-            CONF_COLLECTOR_IP,
-            CONF_TCP_PORT,
-            CONF_UDP_PORT,
-            CONF_ADVERTISED_SERVER_IP,
-            CONF_ADVERTISED_TCP_PORT,
-            CONF_DISCOVERY_TARGET,
-            CONF_DISCOVERY_INTERVAL,
-            CONF_HEARTBEAT_INTERVAL,
-        )
-        current = dict(self._config_entry.data)
-        current.update(self._config_entry.options)
-        for key in topology_keys:
-            if key not in submitted_options:
-                continue
-            if str(submitted_options.get(key)) != str(current.get(key, "")):
-                return True
-        return False
 
     def _build_runtime_options_from_flat_input(self, flat_input: dict[str, Any]) -> dict[str, Any]:
         connection_type = self._config_entry.data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND)
@@ -10261,14 +10268,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 CONF_POLL_INTERVAL,
                 self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
             )
-            committed = self._async_commit_runtime_options(pending)
-            if committed is not None:
-                return committed
-            if not self._transition_topology_conflict:
-                return await self.async_step_strategy_transition()
-            # Topology changed alongside a strategy switch: bounce back to the
-            # runtime form so the user saves connection settings first.
-            return await self.async_step_runtime()
+            return self._async_commit_runtime_options(pending)
         return self.async_show_form(
             step_id="runtime_poll_interval",
             data_schema=vol.Schema(
@@ -10619,8 +10619,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             data_schema=vol.Schema(schema_fields),
             errors=errors,
             description_placeholders={
-                "target_strategy": self._tr(
-                    f"common.dynamic.connection_strategy_{target}", target
+                "target_strategy": self._operating_profile_label(
+                    OPERATING_PROFILE_HA_ONLY
+                    if target == CONNECTION_STRATEGY_INBOUND
+                    else OPERATING_PROFILE_SMARTESS_AND_HA
                 ),
                 "connection_strategy_risk": risk_note,
                 "connection_strategy_rollback": rollback_note,

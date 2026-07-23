@@ -156,8 +156,14 @@ class SupportBundleTests(unittest.TestCase):
                 "last_error": "",
                 "operating_mode": "Off-Grid",
             },
-            data={"collector_ip": "192.168.1.55", "collector_pn": "E5000020000000"},
-            options={"collector_operation_mode": "smartess_cloud_home_assistant"},
+            data={
+                "collector_ip": "192.168.1.55",
+                "collector_pn": "E5000020000000",
+                "connection_strategy": "callback_on_demand",
+                "endpoint_control_policy": "external",
+            },
+            # A stale legacy value must not drive the support projection.
+            options={"collector_operation_mode": "home_assistant_only"},
             profile_name="smg_modbus.json",
             register_schema_name="modbus_smg/models/smg_6200.json",
         )
@@ -180,6 +186,21 @@ class SupportBundleTests(unittest.TestCase):
         )
         self.assertIn("last_error", raw["roles"]["integration"]["values"])
         self.assertIn("operating_mode", raw["roles"]["inverter"]["values"])
+        self.assertNotIn("operation_mode", raw["roles"]["collector"]["identity"])
+        self.assertEqual(
+            raw["roles"]["collector"]["identity"]["operating_profile"],
+            "smartess_cloud_home_assistant",
+        )
+        self.assertEqual(
+            raw["roles"]["diagnostics"]["collector_identity"][
+                "operating_profile"
+            ],
+            {
+                "profile": "smartess_cloud_home_assistant",
+                "stable": True,
+                "reason": "callback_external",
+            },
+        )
 
     def test_builds_support_bundle_payload_with_descriptor_decision_shadow_evidence(self) -> None:
         descriptor_decision_shadow = {

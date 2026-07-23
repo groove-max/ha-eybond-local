@@ -1,9 +1,10 @@
 """Batch 8 acceptance: the verified strategy transition through REAL HA options.
 
 An inbound entry is live against the scripted fake collector over real
-loopback sockets. The user switches the runtime selector to
-``callback_on_demand``: the options flow must NOT write the strategy — it
-routes through the dedicated confirmation/progress steps, the ONE transition
+loopback sockets. The user chooses the SmartESS + Home Assistant profile on
+the dedicated connection screen (implemented by ``callback_on_demand``): the
+options flow must NOT write the strategy — it routes through the dedicated
+confirmation/progress steps, the ONE transition
 authority reboots the exact claimed session, the collector stays silent (its
 endpoint no longer volunteers), exactly ONE ``set>server`` unicast brings a
 new same-PN session, and only then the strategy + RecoveryContract land in
@@ -198,28 +199,15 @@ async def test_options_strategy_transition_inbound_to_callback(
             result = await options.async_init(entry.entry_id)
             assert result["type"] is FlowResultType.MENU, result
             result = await options.async_configure(
-                result["flow_id"], {"next_step_id": "runtime"}
+                result["flow_id"], {"next_step_id": "connection"}
             )
             assert result["type"] is FlowResultType.FORM, result
-            assert result["step_id"] == "runtime", result
+            assert result["step_id"] == "connection", result
 
             result = await options.async_configure(
                 result["flow_id"],
                 {
-                    "poll_interval": 15,
-                    "poll_mode": "auto",
-                    "control_mode": "auto",
                     "connection_strategy": "callback_on_demand",
-                    "connection": {
-                        "server_ip": "127.0.0.1",
-                        "collector_ip": "127.0.0.1",
-                        "tcp_port": tcp_port,
-                        "udp_port": udp_port,
-                        "discovery_target": "127.0.0.1",
-                        "discovery_interval": 3,
-                        "heartbeat_interval": 60,
-                        "driver_hint": "pi30",
-                    },
                 },
             )
             # The CHANGED strategy was NOT written: the dedicated
@@ -273,8 +261,9 @@ async def test_options_strategy_transition_inbound_to_callback(
             assert entry.data["connection_strategy"] == "callback_on_demand"
             contract = RecoveryContract.from_entry_data(entry.data)
             assert contract is not None and contract.callback_verified
-            # The runtime options travelled with the same commit.
-            assert entry.options.get("poll_interval") == 15
+            # Polling is an orthogonal screen and was not smuggled through the
+            # connection-profile transition.
+            assert "poll_interval" not in entry.options
             # The entry reloaded and is healthy under the new strategy.
             assert entry.state is ConfigEntryState.LOADED
     finally:

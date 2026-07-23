@@ -30,7 +30,7 @@ class EntityDescriptionsTests(unittest.TestCase):
         self.assertEqual(description.unit, "dBm")
         self.assertEqual(description.device_class, "signal_strength")
 
-    def test_collector_operation_mode_is_enabled_by_default_enum_sensor(self) -> None:
+    def test_collector_operating_profile_keeps_stable_entity_id(self) -> None:
         description = next(
             item for item in BASE_SENSOR_DESCRIPTIONS if item.key == "collector_operation_mode"
         )
@@ -38,6 +38,14 @@ class EntityDescriptionsTests(unittest.TestCase):
         self.assertTrue(description.enabled_default)
         self.assertEqual(description.device_class, "enum")
         self.assertEqual(description.translation_key, "collector_operation_mode")
+        self.assertEqual(
+            description.options,
+            (
+                "smartess_cloud_home_assistant",
+                "home_assistant_only",
+                "custom",
+            ),
+        )
 
     def test_only_collector_mode_sensor_is_exposed_in_base_sensor_descriptions(self) -> None:
         keys = {item.key for item in BASE_SENSOR_DESCRIPTIONS}

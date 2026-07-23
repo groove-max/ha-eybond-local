@@ -113,6 +113,34 @@ def _strategy_transition_state_diagnostics(data: dict[str, Any]) -> dict[str, An
     return state.diagnostics()
 
 
+def _operating_profile_diagnostics(
+    data: dict[str, Any],
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the bounded read-only profile, never the retired persisted mode."""
+
+    try:
+        from ..connection.operating_profile import (
+            OPERATING_PROFILE_CUSTOM,
+            collector_operating_profile_from_entry,
+        )
+
+        profile = collector_operating_profile_from_entry(data, options)
+    except Exception:  # pragma: no cover - support export must remain available
+        return {
+            # Keep support export available even if importing the projection
+            # itself failed before the constant was bound.
+            "profile": "custom",
+            "stable": False,
+            "reason": "projection_invalid",
+        }
+    return {
+        "profile": profile.profile,
+        "stable": profile.stable,
+        "reason": profile.reason,
+    }
+
+
 def _build_diagnostics_split(
     values: dict[str, Any],
     data: dict[str, Any],
@@ -153,6 +181,7 @@ def _build_diagnostics_split(
             "connection_strategy": axes.get("connection_strategy", ""),
             "connection_strategy_evidence": axes.get("connection_strategy_evidence", ""),
             "endpoint_control_policy": axes.get("endpoint_control_policy", ""),
+            "operating_profile": _operating_profile_diagnostics(data, options),
             # Recovery-required status, REDACTED: only the typed diagnostics
             # view (kind / timestamps / route-completeness), NEVER the raw
             # route/endpoint values the persisted record carries.
@@ -298,11 +327,12 @@ def _build_role_payloads(
     """Build an explicit role split while preserving the legacy runtime payload."""
 
     grouped_values = _split_runtime_values_by_role(values)
+    operating_profile = _operating_profile_diagnostics(data, options)
     collector_identity = {
         "collector_ip": data.get("collector_ip", ""),
         "collector_pn": (collector or {}).get("collector_pn") or data.get("collector_pn", ""),
         "cloud_family": data.get("collector_cloud_family", ""),
-        "operation_mode": options.get("collector_operation_mode") or data.get("collector_operation_mode", ""),
+        "operating_profile": operating_profile["profile"],
     }
     inverter_identity = {
         "driver_key": source_metadata.get("effective_owner_key") or (inverter or {}).get("driver_key", ""),

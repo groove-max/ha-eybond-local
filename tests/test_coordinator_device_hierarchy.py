@@ -2690,7 +2690,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         self.assertEqual(reverse_discovery_flags, [False])
 
-    def test_collector_operation_mode_forces_ha_only_for_runtime_bridge(self) -> None:
+    def test_bridge_with_legacy_cloud_axes_is_reported_custom(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             data={"collector_operation_mode": "smartess_cloud_home_assistant"},
@@ -2701,13 +2701,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             collector=types.SimpleNamespace(collector_virtual_bridge=True),
         )
 
-        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        self.assertEqual(coordinator.collector_operation_mode, "custom")
+        # The read-only UX profile does not alter the legacy runtime routing
+        # decision in this batch.
         self.assertTrue(coordinator.collector_home_assistant_primary)
 
-    def test_operation_mode_projects_inbound_ignoring_stale_cloud_mode(self) -> None:
-        # CP2A Test B: an entry that declares the canonical INBOUND strategy
-        # projects home_assistant_only, IGNORING a stale cloud operation mode
-        # left in both data and options by an older save.
+    def test_unproven_external_inbound_is_reported_custom(self) -> None:
+        # Inbound alone cannot claim the complete HA-only product profile when
+        # the integration neither owns the endpoint nor has an inbound proof.
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             data={
@@ -2721,7 +2722,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         # Precondition: a factory collector never forces HA-only by capability,
         # so the projection is driven purely by the canonical strategy.
         self.assertFalse(coordinator.collector_capabilities.ha_only_required)
-        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        self.assertEqual(coordinator.collector_operation_mode, "custom")
         self.assertTrue(coordinator.collector_home_assistant_primary)
 
     def test_operation_mode_projects_callback_ignoring_stale_ha_only_mode(self) -> None:
@@ -2743,9 +2744,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertFalse(coordinator.collector_home_assistant_primary)
 
-    def test_operation_mode_legacy_read_without_canonical_strategy(self) -> None:
-        # CP2A Test B: an OLD entry that declares NO canonical strategy keeps the
-        # legacy persisted-mode read (migration compatibility preserved).
+    def test_legacy_mode_without_proven_axes_is_reported_custom(self) -> None:
+        # The legacy field can derive transport compatibility, but it is not
+        # sufficient evidence for a normal user-facing operating profile.
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             data={
@@ -2756,7 +2757,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
         self.assertFalse(coordinator.collector_capabilities.ha_only_required)
-        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        self.assertEqual(coordinator.collector_operation_mode, "custom")
         self.assertTrue(coordinator.collector_home_assistant_primary)
 
     def _rollback_boundary_coordinator(self, *, data, options, values):
@@ -3539,9 +3540,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertTrue(data["collector_virtual_bridge"])
         self.assertTrue(options["collector_virtual_bridge"])
-        # HA-only is a runtime projection of the capability, not a persisted
-        # mode mutation.
-        self.assertEqual(coordinator.collector_operation_mode, "home_assistant_only")
+        # A bridge combined with legacy cloud/callback axes is not silently
+        # relabelled HA-only; the read-only profile reports the mismatch.
+        self.assertEqual(coordinator.collector_operation_mode, "custom")
 
     def test_runtime_bridge_sync_requests_reload_after_platform_setup(self) -> None:
         updates: list[dict[str, object]] = []

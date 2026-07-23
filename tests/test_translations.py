@@ -52,25 +52,33 @@ class TranslationShapeTests(unittest.TestCase):
                 self.assertEqual(invalid_steps, [])
 
     def test_connection_strategy_strings_exist_without_retired_proxy_toggle(self) -> None:
-        # The active connection-strategy labels remain in every HA-native
-        # bundle, while the unimplemented steady-proxy control is absent.
+        # The strategy implementation field is presented only in the dedicated
+        # operating-profile step; polling is not a second UX authority.
         for path in TRANSLATION_FILES:
             with self.subTest(path=path.name):
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 runtime = payload["options"]["step"]["runtime"]
-                self.assertIn("connection_strategy", runtime["data"])
+                connection = payload["options"]["step"]["connection"]
+                self.assertNotIn("connection_strategy", runtime["data"])
+                self.assertIn("connection_strategy", connection["data"])
                 self.assertNotIn("proxy_enabled", runtime["data"])
                 self.assertNotIn("proxy_enabled", runtime["data_description"])
-                self.assertIn("connection_strategy", runtime["data_description"])
+                self.assertIn(
+                    "connection_strategy", connection["data_description"]
+                )
 
     def test_phase4_connection_strategy_flow_labels_exist(self) -> None:
-        # The dynamic select-option labels exist in every flow_translations bundle.
+        # Product-level profile labels and technical compatibility labels both
+        # exist in every runtime translation bundle.
         for path in FLOW_TRANSLATION_FILES:
             with self.subTest(path=path.name):
                 dynamic = json.loads(path.read_text(encoding="utf-8"))["common"]["dynamic"]
                 self.assertIn("connection_strategy_inbound", dynamic)
                 self.assertIn("connection_strategy_callback_on_demand", dynamic)
                 self.assertIn("connection_strategy_bridge_note", dynamic)
+                self.assertIn("operating_profile_smartess_and_ha", dynamic)
+                self.assertIn("operating_profile_ha_only", dynamic)
+                self.assertIn("operating_profile_custom", dynamic)
 
     def test_listener_rediscovery_action_is_translated(self) -> None:
         for path in TRANSLATION_FILES:
